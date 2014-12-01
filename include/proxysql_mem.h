@@ -1,8 +1,8 @@
 #define L_SFC_MIN_ELEM_SIZE 8
-#define L_SFC_MID_ELEM_SIZE 64
-#define L_SFC_MAX_ELEM_SIZE 512
-#define L_SFP_ARRAY_MID 4
-#define L_SFP_ARRAY_LEN 7
+#define L_SFC_MID_ELEM_SIZE 128
+#define L_SFC_MAX_ELEM_SIZE 2048
+#define L_SFP_ARRAY_MID 5
+#define L_SFP_ARRAY_LEN 9
 #define L_SFC_MEM_BLOCK_SIZE 262144
 typedef struct _l_stack_t l_stack;
 typedef struct _l_super_free_chunk_t l_sfc;

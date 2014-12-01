@@ -72,9 +72,17 @@ void * __l_alloc(l_sfp *sfp, size_t size) {
   }
   void *p;
   int i;
+#ifdef __GNUC__
+	unsigned int x=size;
+	int j=__builtin_clz(x);
+	int k=__builtin_ffs(x);
+	i=(k+j==(sizeof(unsigned int)*8) ? j : sizeof(unsigned int)*8+1-k);
+	i=(i >= 4 ? i-4 : 0);
+#else
 	i= ( size<=L_SFC_MID_ELEM_SIZE ? L_SFP_ARRAY_MID-1 : L_SFP_ARRAY_LEN-1 );
   for ( ; i>=0 ; i-- ) {
     if ((size<<1)>sfp->sfc[i].elem_size || i==0) {
+#endif /* __GNUC__ */
       p=l_stack_pop(&sfp->sfc[i].stack);
       if (p) {
 				//assert((uintptr_t)p%(sfp->sfc[i].elem_size)==0);
@@ -88,8 +96,11 @@ void * __l_alloc(l_sfp *sfp, size_t size) {
       p=l_stack_pop(&sfp->sfc[i].stack);
 			//assert((uintptr_t)p%(sfp->sfc[i].elem_size)==0);
       return p;
+#ifdef __GNUC__
+#else
     }
   }
+#endif /* __GNUC__ */
   return NULL;
 }
 
@@ -113,9 +124,17 @@ void __l_free(l_sfp *sfp, size_t size, void *p) {
     return;
   }
   int i;
+#ifdef __GNUC__
+	unsigned int x=size;
+	int j=__builtin_clz(x);
+	int k=__builtin_ffs(x);
+	i=(k+j==(sizeof(unsigned int)*8) ? j : sizeof(unsigned int)*8+1-k);
+	i=(i >= 4 ? i-4 : 0);
+#else
 	i= ( size<=L_SFC_MID_ELEM_SIZE ? L_SFP_ARRAY_MID-1 : L_SFP_ARRAY_LEN-1 );	
   for ( ; i>=0 ; i-- ) {
     if ((size<<1)>sfp->sfc[i].elem_size || i==0) {
+#endif /* __GNUC__ */
 			//assert((uintptr_t)p%(sfp->sfc[i].elem_size)==0);
       l_stack_push(&sfp->sfc[i].stack,p);
 //      sfp->sfc[i].free_cnt++;
@@ -128,8 +147,11 @@ void __l_free(l_sfp *sfp, size_t size, void *p) {
 //      }
 
       return;
+#ifdef __GNUC__
+#else
     }
   }
+#endif /* __GNUC__ */
 }
 
 /*
