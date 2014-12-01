@@ -803,6 +803,7 @@ int main(int argc, const char * argv[]) {
 	GloMyAuth->add((char *)"default",(char *)"root",(char *)"");
 	GloMyAuth->add((char *)"default",(char *)"vegaicm",(char *)"password");
 
+		
 
 	do { /* nothing */ } while (load_ != 1);
 
