@@ -385,7 +385,8 @@ virtual void run() {
 							// create a new client connection
 							mypolls.fds[n].revents=0;
 							MySQL_Session *sess=create_new_session_and_client_data_stream(c);
-							sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
+							//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
+							sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
 							ioctl_FIONBIO(sess->client_fd, 1);
 							mypolls.add(POLLIN|POLLOUT, sess->client_fd, sess->client_myds, curtime);
 							proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_fd);

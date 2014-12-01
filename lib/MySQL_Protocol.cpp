@@ -601,9 +601,10 @@ static uint8_t server_language=33;
 static uint16_t server_status=1;
 static char *mysql_server_version = (char *)"5.1.30";
 
-
-void MySQL_Protocol::generate_server_handshake(MySQL_Data_Stream *myds) {
-	myds->DSS=STATE_SERVER_HANDSHAKE;
+/*
+//void MySQL_Protocol::generate_server_handshake(MySQL_Data_Stream *myds) {
+void MySQL_Protocol::generate_server_handshake() {
+	(*myds)->DSS=STATE_SERVER_HANDSHAKE;
   //proxy_mysql_thread_t *thrLD=pthread_getspecific(tsd_key);
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
   mysql_hdr myhdr;
@@ -651,19 +652,19 @@ void MySQL_Protocol::generate_server_handshake(MySQL_Data_Stream *myds) {
   memcpy(ptr+l, mysql_server_version, strlen(mysql_server_version)); l+=strlen(mysql_server_version)+1;
   memcpy(ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
 #ifdef MARIADB_BASE_VERSION
-  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
 #else
-  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct rand_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+0,8,(struct rand_struct *)&rand_st);
 #endif
 
   int i;
   for (i=0;i<8;i++) {
-    if (myds->myconn->myconn.scramble_buff[i]==0) {
-      myds->myconn->myconn.scramble_buff[i]='a';
+    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
+      (*myds)->myconn->myconn.scramble_buff[i]='a';
     }
   }
 
-  memcpy(ptr+l, myds->myconn->myconn.scramble_buff+0, 8); l+=8;
+  memcpy(ptr+l, (*myds)->myconn->myconn.scramble_buff+0, 8); l+=8;
   l+=1; //0x00
   memcpy(ptr+l,&server_capabilities, sizeof(server_capabilities)); l+=sizeof(server_capabilities);
   memcpy(ptr+l,&server_language, sizeof(server_language)); l+=sizeof(server_language);
@@ -672,27 +673,28 @@ void MySQL_Protocol::generate_server_handshake(MySQL_Data_Stream *myds) {
   l+=10; //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
 #ifdef MARIADB_BASE_VERSION
-  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
 #else
-  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct rand_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+8,12,(struct rand_struct *)&rand_st);
 #endif
   //create_random_string(scramble_buf+8,12,&rand_st);
 
   for (i=8;i<20;i++) {
-    if (myds->myconn->myconn.scramble_buff[i]==0) {
-      myds->myconn->myconn.scramble_buff[i]='a';
+    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
+      (*myds)->myconn->myconn.scramble_buff[i]='a';
     }
   }
 
-  memcpy(ptr+l, myds->myconn->myconn.scramble_buff+8, 12); l+=12;
+  memcpy(ptr+l, (*myds)->myconn->myconn.scramble_buff+8, 12); l+=12;
   l+=1; //0x00
   memcpy(ptr+l,"mysql_native_password",strlen("mysql_native_password"));
-	myds->PSarrayOUT->add((void *)ptr,size);
+	(*myds)->PSarrayOUT->add((void *)ptr,size);
 }
+*/
 
 
-
-bool MySQL_Protocol::generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+//bool MySQL_Protocol::generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigned int *len) {
 // FIXME : this function generates a not useful string. It is a placeholder for now
 
 	const char *stats=(char *)"Uptime: 1000  Threads: 1  Questions: 34221015  Slow queries: 0  Opens: 757  Flush tables: 1  Open tables: 185  Queries per second avg: 22.289";
@@ -713,7 +715,7 @@ bool MySQL_Protocol::generate_statistics_response(MySQL_Data_Stream *myds, bool 
 	//_ptr[l++]=statslen;
 	memcpy(_ptr+l,stats,statslen);	
 
-	if (send==true) { myds->PSarrayOUT->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -722,7 +724,8 @@ bool MySQL_Protocol::generate_statistics_response(MySQL_Data_Stream *myds, bool 
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_EOF(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status) {
+//bool MySQL_Protocol::generate_pkt_EOF(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status) {
+bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status) {
 	mysql_hdr myhdr;
 	myhdr.pkt_id=sequence_id;
 	myhdr.pkt_length=5;
@@ -736,13 +739,13 @@ bool MySQL_Protocol::generate_pkt_EOF(MySQL_Data_Stream *myds, bool send, void *
 	memcpy(_ptr+l, &status, sizeof(uint16_t));
 	
 	if (send==true) {
-		myds->PSarrayOUT->add((void *)_ptr,size);
-		switch (myds->DSS) {
+		(*myds)->PSarrayOUT->add((void *)_ptr,size);
+		switch ((*myds)->DSS) {
 			case STATE_COLUMN_DEFINITION:
-				myds->DSS=STATE_EOF1;
+				(*myds)->DSS=STATE_EOF1;
 				break;
 			case STATE_ROW:
-				myds->DSS=STATE_EOF2;
+				(*myds)->DSS=STATE_EOF2;
 				break;
 			default:
 				assert(0);
@@ -756,7 +759,8 @@ bool MySQL_Protocol::generate_pkt_EOF(MySQL_Data_Stream *myds, bool send, void *
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_ERR(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
+//bool MySQL_Protocol::generate_pkt_ERR(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
+bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
 	mysql_hdr myhdr;
 	uint32_t sql_message_len=( sql_message ? strlen(sql_message) : 0 );
 	myhdr.pkt_id=sequence_id;
@@ -773,11 +777,11 @@ bool MySQL_Protocol::generate_pkt_ERR(MySQL_Data_Stream *myds, bool send, void *
 	if (sql_message) memcpy(_ptr+l, sql_message, sql_message_len);
 	
 	if (send==true) {
-		myds->PSarrayOUT->add((void *)_ptr,size);
-		switch (myds->DSS) {
+		(*myds)->PSarrayOUT->add((void *)_ptr,size);
+		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
 			case STATE_QUERY_SENT:
-				myds->DSS=STATE_ERR;
+				(*myds)->DSS=STATE_ERR;
 				break;
 			default:
 				assert(0);
@@ -792,7 +796,8 @@ bool MySQL_Protocol::generate_pkt_ERR(MySQL_Data_Stream *myds, bool send, void *
 }
 
 
-bool MySQL_Protocol::generate_pkt_OK(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, unsigned int last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
+//bool MySQL_Protocol::generate_pkt_OK(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, unsigned int last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
+bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, unsigned int last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
 
 	char affected_rows_prefix;
 	uint8_t affected_rows_len=mysql_encode_length(affected_rows, &affected_rows_prefix);
@@ -826,11 +831,11 @@ bool MySQL_Protocol::generate_pkt_OK(MySQL_Data_Stream *myds, bool send, void **
 	if (msg) memcpy(_ptr+l, msg, msg_len);
 	
 	if (send==true) {
-		myds->PSarrayOUT->add((void *)_ptr,size);
-		switch (myds->DSS) {
+		(*myds)->PSarrayOUT->add((void *)_ptr,size);
+		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
 			case STATE_QUERY_SENT:
-				myds->DSS=STATE_OK;
+				(*myds)->DSS=STATE_OK;
 				break;
 			default:
 				assert(0);
@@ -844,7 +849,8 @@ bool MySQL_Protocol::generate_pkt_OK(MySQL_Data_Stream *myds, bool send, void **
 	return true;
 }
 
-bool MySQL_Protocol::generate_COM_QUIT(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+//bool MySQL_Protocol::generate_COM_QUIT(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_COM_QUIT(bool send, void **ptr, unsigned int *len) {
 	mysql_hdr myhdr;
 	myhdr.pkt_id=0;
 	myhdr.pkt_length=1;
@@ -856,14 +862,15 @@ bool MySQL_Protocol::generate_COM_QUIT(MySQL_Data_Stream *myds, bool send, void 
 	_ptr[l]=0x01; l++;
 	
 	if (send==true) {
-		myds->PSarrayOUT->add((void *)_ptr,size);
+		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 	}
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 	return true;
 }
 
-bool MySQL_Protocol::generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, char *schema) {
+//bool MySQL_Protocol::generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, char *schema) {
+bool MySQL_Protocol::generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema) {
 	uint32_t schema_len=strlen(schema);
 	mysql_hdr myhdr;
 	myhdr.pkt_id=0;
@@ -876,7 +883,7 @@ bool MySQL_Protocol::generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, vo
 	_ptr[l]=0x02; l++;
 	memcpy(_ptr+l, &schema, schema_len);
 	
-	if (send==true) { myds->PSarrayOUT->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -885,7 +892,8 @@ bool MySQL_Protocol::generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, vo
 	return true;
 }
 
-bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+//bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len) {
 	mysql_hdr myhdr;
 	myhdr.pkt_id=0;
 	myhdr.pkt_length=1;
@@ -896,7 +904,7 @@ bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void 
   int l=sizeof(mysql_hdr);
 	_ptr[l]=0x0e; l++;
 	
-	if (send==true) { myds->PSarrayOUT->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -905,7 +913,8 @@ bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void 
 	return true;
 }
 
-bool MySQL_Protocol::generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+//bool MySQL_Protocol::generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_COM_RESET_CONNECTION(bool send, void **ptr, unsigned int *len) {
 	mysql_hdr myhdr;
 	myhdr.pkt_id=0;
 	myhdr.pkt_length=1;
@@ -916,7 +925,7 @@ bool MySQL_Protocol::generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool
   int l=sizeof(mysql_hdr);
 	_ptr[l]=0x1f; l++;
 	
-	if (send==true) { myds->PSarrayOUT->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -925,7 +934,8 @@ bool MySQL_Protocol::generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_column_count(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
+//bool MySQL_Protocol::generate_pkt_column_count(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
+bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
 
 	char count_prefix;
 	uint8_t count_len=mysql_encode_length(count, &count_prefix);
@@ -949,7 +959,7 @@ bool MySQL_Protocol::generate_pkt_column_count(MySQL_Data_Stream *myds, bool sen
 
 	l+=write_encoded_length(_ptr+l, count, count_len, count_prefix);
 
-	if (send==true) { myds->PSarrayOUT->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -959,7 +969,8 @@ bool MySQL_Protocol::generate_pkt_column_count(MySQL_Data_Stream *myds, bool sen
 }
 
 
-bool MySQL_Protocol::generate_pkt_field(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
+//bool MySQL_Protocol::generate_pkt_field(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
+bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
 
 	char *def=(char *)"def";
 	uint32_t def_strlen=strlen(def);
@@ -1031,7 +1042,7 @@ bool MySQL_Protocol::generate_pkt_field(MySQL_Data_Stream *myds, bool send, void
 		l+=write_encoded_length_and_string(_ptr+l, strlen(defvalue), defvalue_length_len, defvalue_length_prefix, defvalue);
 	}
 
-	if (send==true) { myds->PSarrayOUT->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -1041,7 +1052,8 @@ bool MySQL_Protocol::generate_pkt_field(MySQL_Data_Stream *myds, bool send, void
 }
 
 
-bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+//bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsigned int *len) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating response handshake pkt\n");
   mysql_hdr myhdr;
   myhdr.pkt_id=1;
@@ -1080,7 +1092,7 @@ bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bo
 		+ strlen(userinfo->schemaname) + 1
 		+ strlen((char *)"mysql_native_password") + 1;
 
-	MYSQL &myc=myds->myconn->myconn;
+	MYSQL &myc=(*myds)->myconn->myconn;
 
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
   unsigned char *_ptr=(unsigned char *)l_alloc(size);
@@ -1111,7 +1123,7 @@ bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bo
 	l+=_tmp+1;
 	memcpy(_ptr+l,(char *)"mysql_native_password",strlen((char *)"mysql_native_password")+1);
 
-	if (send==true) { myds->PSarrayOUT->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -1121,7 +1133,8 @@ bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bo
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+//bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
@@ -1168,17 +1181,17 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, boo
 //#ifdef MARIADB_BASE_VERSION
 //  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
 //#else
-  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct rand_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+0,8,(struct rand_struct *)&rand_st);
 //#endif
 
   int i;
   for (i=0;i<8;i++) {
-    if (myds->myconn->myconn.scramble_buff[i]==0) {
-      myds->myconn->myconn.scramble_buff[i]='a';
+    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
+      (*myds)->myconn->myconn.scramble_buff[i]='a';
     }
   }
 
-  memcpy(_ptr+l, myds->myconn->myconn.scramble_buff+0, 8); l+=8;
+  memcpy(_ptr+l, (*myds)->myconn->myconn.scramble_buff+0, 8); l+=8;
   _ptr[l]=0x00; l+=1; //0x00
   memcpy(_ptr+l,&server_capabilities, sizeof(server_capabilities)); l+=sizeof(server_capabilities);
   memcpy(_ptr+l,&server_language, sizeof(server_language)); l+=sizeof(server_language);
@@ -1189,24 +1202,24 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, boo
 //#ifdef MARIADB_BASE_VERSION
 //  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
 //#else
-  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct rand_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+8,12,(struct rand_struct *)&rand_st);
 //#endif
   //create_random_string(scramble_buf+8,12,&rand_st);
 
   for (i=8;i<20;i++) {
-    if (myds->myconn->myconn.scramble_buff[i]==0) {
-      myds->myconn->myconn.scramble_buff[i]='a';
+    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
+      (*myds)->myconn->myconn.scramble_buff[i]='a';
     }
   }
 
-  memcpy(_ptr+l, myds->myconn->myconn.scramble_buff+8, 12); l+=12;
+  memcpy(_ptr+l, (*myds)->myconn->myconn.scramble_buff+8, 12); l+=12;
   l+=1; //0x00
   memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
 
 	if (send==true) {
-		myds->PSarrayOUT->add((void *)_ptr,size);
-		myds->DSS=STATE_SERVER_HANDSHAKE;
-		myds->sess->status=CONNECTING_CLIENT;
+		(*myds)->PSarrayOUT->add((void *)_ptr,size);
+		(*myds)->DSS=STATE_SERVER_HANDSHAKE;
+		(*myds)->sess->status=CONNECTING_CLIENT;
 	}
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
@@ -1217,7 +1230,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, boo
 }
 
 
-bool MySQL_Protocol::process_pkt_OK(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+//bool MySQL_Protocol::process_pkt_OK(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 
   if (len < 11) return false;
 
@@ -1227,7 +1241,7 @@ bool MySQL_Protocol::process_pkt_OK(MySQL_Data_Stream *myds, unsigned char *pkt,
 
 	if (len!=hdr.pkt_length+sizeof(mysql_hdr)) return false;
 
-	MYSQL &myc=myds->myconn->myconn;
+	MYSQL &myc=(*myds)->myconn->myconn;
 
 	uint64_t affected_rows;
 	uint64_t  insert_id;
@@ -1264,7 +1278,8 @@ bool MySQL_Protocol::process_pkt_OK(MySQL_Data_Stream *myds, unsigned char *pkt,
 	return true;
 }
 
-bool MySQL_Protocol::process_pkt_COM_QUERY(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+//bool MySQL_Protocol::process_pkt_COM_QUERY(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+bool MySQL_Protocol::process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
 
 	unsigned int _len=len-sizeof(mysql_hdr)-1;
@@ -1280,14 +1295,15 @@ bool MySQL_Protocol::process_pkt_COM_QUERY(MySQL_Data_Stream *myds, unsigned cha
 	return ret;
 }
 
-bool MySQL_Protocol::process_pkt_initial_handshake(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+//bool MySQL_Protocol::process_pkt_initial_handshake(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned int len) {
 	//return PKT_PARSED;
 	bool ret=false;
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	//Copy4B(&hdr,pkt);
 	pkt     += sizeof(mysql_hdr);
-	MYSQL &myc=myds->myconn->myconn;
+	MYSQL &myc=(*myds)->myconn->myconn;
 
 	if (*pkt != 0x0A || len < 33) goto exit_process_pkt_initial_handshake;
 
@@ -1345,7 +1361,8 @@ exit_process_pkt_initial_handshake:
 
 }
 
-bool MySQL_Protocol::process_pkt_handshake_response(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+//bool MySQL_Protocol::process_pkt_handshake_response(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
+bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
 	uint8_t charset;
 	uint32_t  capabilities;
@@ -1372,7 +1389,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(MySQL_Data_Stream *myds, uns
 	charset  = *(uint8_t *)pkt;
 	pkt     += 24;
 	if (len==sizeof(mysql_hdr)+32) {
-		myds->encrypted=true;
+		(*myds)->encrypted=true;
 		use_ssl=true;
 	} else {
 	user     = pkt;
@@ -1394,7 +1411,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(MySQL_Data_Stream *myds, uns
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			proxy_scramble(reply, myds->myconn->myconn.scramble_buff, password);
+			proxy_scramble(reply, (*myds)->myconn->myconn.scramble_buff, password);
 			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 				ret=true;
 			}
@@ -1411,7 +1428,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(MySQL_Data_Stream *myds, uns
 	if (use_ssl) return true;
 
 	if (ret==true) {
-		MYSQL &myc=myds->myconn->myconn;
+		MYSQL &myc=(*myds)->myconn->myconn;
 /*
 		myc.user=strdup((const char *)user);
 		if (password) myc.passwd=strdup(password);
@@ -1429,7 +1446,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(MySQL_Data_Stream *myds, uns
 
 
 		myc.options.max_allowed_packet=max_pkt;
-		myds->DSS=STATE_CLIENT_HANDSHAKE;
+		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
 		userinfo->username=l_strdup((const char *)user);
 		userinfo->password=l_strdup((const char *)password);

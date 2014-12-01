@@ -148,7 +148,8 @@ void *child_mysql(void *arg) {
 	fds[0].revents=0;	
 	fds[0].events=POLLIN|POLLOUT;	
 
-	sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
+	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
+	sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
 	
 	while (glovars.shutdown==0) {
 		if (myds->available_data_out()) {

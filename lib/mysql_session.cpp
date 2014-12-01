@@ -252,10 +252,10 @@ int MySQL_Session::handler() {
 			case CONNECTING_CLIENT:
 				switch (client_myds->DSS) {
 					case STATE_SERVER_HANDSHAKE:
-						if (myprot_client.process_pkt_handshake_response(client_myds,(unsigned char *)pkt.ptr,pkt.size)==true) {
+						if (myprot_client.process_pkt_handshake_response((unsigned char *)pkt.ptr,pkt.size)==true) {
 							l_free(pkt.size,pkt.ptr);
 							if (client_myds->encrypted==false) {
-								myprot_client.generate_pkt_OK(client_myds,true,NULL,NULL,2,0,0,0,0,NULL);
+								myprot_client.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
 								userinfo_server.set(&userinfo_client);
 								status=WAITING_CLIENT_DATA;
 								client_myds->DSS=STATE_SLEEP;
@@ -276,9 +276,9 @@ int MySQL_Session::handler() {
 						}
 						break;
 					case STATE_SSL_INIT:
-						if (myprot_client.process_pkt_handshake_response(client_myds,(unsigned char *)pkt.ptr,pkt.size)==true) {
+						if (myprot_client.process_pkt_handshake_response((unsigned char *)pkt.ptr,pkt.size)==true) {
 							l_free(pkt.size,pkt.ptr);
-							myprot_client.generate_pkt_OK(client_myds,true,NULL,NULL,3,0,0,0,0,NULL);
+							myprot_client.generate_pkt_OK(true,NULL,NULL,3,0,0,0,0,NULL);
 							userinfo_server.set(&userinfo_client);
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
@@ -300,7 +300,7 @@ int MySQL_Session::handler() {
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
 							if (admin==false) {
-								myprot_client.process_pkt_COM_QUERY(client_myds,(unsigned char *)pkt.ptr,pkt.size);
+								myprot_client.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
 								qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,false);
 								if (qpo) {
 									if (qpo->cache_ttl>0) {
@@ -377,13 +377,13 @@ int MySQL_Session::handler() {
 							case _MYSQL_COM_PING:
 								l_free(pkt.size,pkt.ptr);
 								client_myds->DSS=STATE_QUERY_SENT;
-								myprot_client.generate_pkt_OK(client_myds,true,NULL,NULL,1,0,0,2,0,NULL);
+								myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
 								client_myds->DSS=STATE_SLEEP;
 								break;
 							case _MYSQL_COM_STATISTICS:
 								l_free(pkt.size,pkt.ptr);
 								client_myds->DSS=STATE_QUERY_SENT;
-								myprot_client.generate_statistics_response(client_myds,true,NULL,NULL);
+								myprot_client.generate_statistics_response(true,NULL,NULL);
 								client_myds->DSS=STATE_SLEEP;	
 								break;
 							default:
@@ -431,9 +431,10 @@ int MySQL_Session::handler() {
 
 				switch (server_myds->DSS) {
 					case STATE_NOT_CONNECTED:
-						if (myprot_server.process_pkt_initial_handshake(server_myds,(unsigned char *)pkt.ptr,pkt.size)==true) {
+						if (myprot_server.process_pkt_initial_handshake((unsigned char *)pkt.ptr,pkt.size)==true) {
 							l_free(pkt.size,pkt.ptr);
-							myprot_server.generate_pkt_handshake_response(server_myds,true,NULL,NULL);
+							//myprot_server.generate_pkt_handshake_response(server_myds,true,NULL,NULL);
+							myprot_server.generate_pkt_handshake_response(true,NULL,NULL);
 							////status=WAITING_CLIENT_DATA;
 							server_myds->DSS=STATE_CLIENT_HANDSHAKE;
 						} else {
@@ -441,7 +442,7 @@ int MySQL_Session::handler() {
 						}
 						break;
 					case STATE_CLIENT_HANDSHAKE:
-						if (myprot_server.process_pkt_OK(server_myds,(unsigned char *)pkt.ptr,pkt.size)==true) {
+						if (myprot_server.process_pkt_OK((unsigned char *)pkt.ptr,pkt.size)==true) {
 							l_free(pkt.size,pkt.ptr);
 							server_myds->DSS=STATE_READY;
 							mybe->myconn=server_myds->myconn;
