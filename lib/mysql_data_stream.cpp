@@ -358,17 +358,26 @@ int MySQL_Data_Stream::buffer2array() {
 
 int MySQL_Data_Stream::array2buffer() {
 	int ret=0;
+	unsigned int idx=0;
+	bool cont=true;
 	if (queue_available(queueOUT)==0) return ret;
+	while (cont) {
 	if (queueOUT.partial==0) { // read a new packet
-        if (PSarrayOUT->len) {
+        if (PSarrayOUT->len-idx) {
         proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
     	    if (queueOUT.pkt.ptr) {
         	    l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
             	queueOUT.pkt.ptr=NULL;
    	 	    }
-			PSarrayOUT->remove_index(0,&queueOUT.pkt);
+			//PSarrayOUT->remove_index(0,&queueOUT.pkt);
+			memcpy(&queueOUT.pkt,PSarrayOUT->index(idx),sizeof(PtrSize_t));
+//			PtrSize_t *pts=PSarrayOUT->index(idx);
+//			queueOUT.pkt.ptr=pts->ptr;
+//			queueOUT.pkt.size=pts->size;
+			idx++;
         } else {
-            return ret;
+            cont=false;
+						continue;
         }
     }
     int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
@@ -386,6 +395,9 @@ int MySQL_Data_Stream::array2buffer() {
         queueOUT.partial=0;
 		pkts_sent+=1;
     }
+		}
+		//for (int i=0; i<idx; i++) { PSarrayOUT->remove_index(0,NULL); }
+		if (idx) PSarrayOUT->remove_index_range(0,idx);
     return ret;
 }
 

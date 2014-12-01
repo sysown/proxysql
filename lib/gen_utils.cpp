@@ -254,9 +254,9 @@ void PtrSizeArray::remove_index_fast(unsigned int i, PtrSize_t *ps) {
 }
 
 
-PtrSize_t * PtrSizeArray::index(unsigned int i) {
-	return &pdata[i];
-}
+//PtrSize_t * PtrSizeArray::index(unsigned int i) {
+//	return &pdata[i];
+//}
 
 void PtrSizeArray::copy_add(PtrSizeArray *psa, unsigned int from, unsigned int cnt) {
 	unsigned int i;

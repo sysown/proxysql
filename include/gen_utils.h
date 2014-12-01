@@ -65,7 +65,7 @@ class PtrSizeArray {
 	unsigned int len;
 	PtrSizeArray(unsigned int __size=0);
 	~PtrSizeArray();
-	PtrSize_t *index(unsigned int);
+	//PtrSize_t *index(unsigned int);
 
 //	void add(void *, unsigned int);
 	void add(void *p, unsigned int s) {
@@ -90,10 +90,20 @@ class PtrSizeArray {
 		len--;
 	};
 
-
+	void remove_index_range(unsigned int i, unsigned int s) {
+		if (i != (len-s)) {
+			memmove(pdata+i,pdata+i+s,(len-i-s)*sizeof(PtrSize_t));	
+		}
+		len-=s;
+	};
 
 	void remove_index_fast(unsigned int, PtrSize_t *);
 	void copy_add(PtrSizeArray *, unsigned int, unsigned int);
+
+	PtrSize_t * index(unsigned int i) {
+		return &pdata[i];
+	}
+
 };
 #endif /* __CLASS_PTR_ARRAY_H */
 
