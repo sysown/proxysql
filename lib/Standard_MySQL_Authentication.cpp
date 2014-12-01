@@ -6,14 +6,14 @@
 
 
 typedef struct _account_details_t {
-	char *domain;
+//	char *domain;
 	char *username;
 	char *password;
 } account_details_t;
 
 #define MYSQL_AUTHENTICATION_VERSION "0.1.0706"
 
-#define MY_SEPERATOR_HASH	"__uy1gf2doi3ujh4ge5__"
+//#define MY_SEPERATOR_HASH	"__uy1gf2doi3ujh4ge5__"
 
 typedef btree::btree_map<uint64_t, account_details_t *> BtMap;
 
@@ -35,12 +35,13 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		fprintf(stderr,"Standard MySQL Authentication rev. %s -- %s -- %s\n", MYSQL_AUTHENTICATION_VERSION, __FILE__, __TIMESTAMP__);
 	};
 
-	virtual bool add(char * domain, char * username, char * password) {
+	//virtual bool add(char * domain, char * username, char * password) {
+	virtual bool add(char * username, char * password) {
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
 		myhash->Init(1,2);
-		myhash->Update(domain,strlen(domain));
-		myhash->Update(MY_SEPERATOR_HASH,strlen(MY_SEPERATOR_HASH));
+//		myhash->Update(domain,strlen(domain));
+//		myhash->Update(MY_SEPERATOR_HASH,strlen(MY_SEPERATOR_HASH));
 		myhash->Update(username,strlen(username));
 		myhash->Final(&hash1,&hash2);
 		delete myhash;
@@ -52,13 +53,13 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 			account_details_t *ad=lookup->second;
 			cred_array.remove_fast(ad);
       bt_map.erase(lookup);
-			free(ad->domain);
+//			free(ad->domain);
 			free(ad->username);
 			free(ad->password);
 			free(ad);
     }
 		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
-		ad->domain=strdup(domain);
+//		ad->domain=strdup(domain);
 		ad->username=strdup(username);
 		ad->password=strdup(password);
     bt_map.insert(std::make_pair(hash1,ad));
@@ -68,13 +69,14 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		return true;
 	};
 
-	virtual bool del(char * domain, char * username) {
+	//virtual bool del(char * domain, char * username) {
+	virtual bool del(char * username) {
 		bool ret=false;
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
 		myhash->Init(1,2);
-		myhash->Update(domain,strlen(domain));
-		myhash->Update(MY_SEPERATOR_HASH,strlen(MY_SEPERATOR_HASH));
+//		myhash->Update(domain,strlen(domain));
+//		myhash->Update(MY_SEPERATOR_HASH,strlen(MY_SEPERATOR_HASH));
 		myhash->Update(username,strlen(username));
 		myhash->Final(&hash1,&hash2);
 		delete myhash;
@@ -86,7 +88,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 			account_details_t *ad=lookup->second;
 			cred_array.remove_fast(ad);
       bt_map.erase(lookup);
-			free(ad->domain);
+//			free(ad->domain);
 			free(ad->username);
 			free(ad->password);
 			free(ad);
@@ -99,13 +101,14 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 
 
 
-	virtual char * lookup(char * domain, char * username) {
+	//virtual char * lookup(char * domain, char * username) {
+	virtual char * lookup(char * username) {
 		char *ret=NULL;
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
 		myhash->Init(1,2);
-		myhash->Update(domain,strlen(domain));
-		myhash->Update(MY_SEPERATOR_HASH,strlen(MY_SEPERATOR_HASH));
+//		myhash->Update(domain,strlen(domain));
+//		myhash->Update(MY_SEPERATOR_HASH,strlen(MY_SEPERATOR_HASH));
 		myhash->Update(username,strlen(username));
 		myhash->Final(&hash1,&hash2);
 		delete myhash;
@@ -133,7 +136,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 				account_details_t *ad=lookup->second;
 				cred_array.remove_fast(ad);
       	bt_map.erase(lookup);
-				free(ad->domain);
+//				free(ad->domain);
 				free(ad->username);
 				free(ad->password);
 				free(ad);

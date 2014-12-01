@@ -9,13 +9,13 @@ class MySQL_Authentication {
 	public:
 	MySQL_Authentication() {};
 	virtual ~MySQL_Authentication() {};
-	virtual bool add(char *, char *, char *) { return false; };
-	virtual bool del(char *, char *) { return false; };
+	virtual bool add(char *username, char *password) { return false; };
+	virtual bool del(char *username) { return false; };
 //	virtual bool reset(unsigned char *) { return false; };
 	virtual bool reset() { return false; };
 //	virtual bool refresh() { return false; };
 	virtual void print_version() {};
-	virtual char * lookup(char *, char *) {return NULL; };
+	virtual char * lookup(char *username) {return NULL; };
 };
 
 typedef MySQL_Authentication * create_MySQL_Authentication_t();

@@ -466,7 +466,7 @@ int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	char *password=GloMyAuth->lookup((char *)"default",(char *)user);
+	char *password=GloMyAuth->lookup((char *)user);
 	if (password==NULL) {
 		ret=PKT_ERROR;
 	} else {
@@ -1404,7 +1404,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	password=GloMyAuth->lookup((char *)"default",(char *)user);
+	password=GloMyAuth->lookup((char *)user);
 	if (password==NULL) {
 		ret=false;
 	} else {
