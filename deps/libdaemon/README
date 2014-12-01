@@ -1,0 +1,212 @@
+                                 libdaemon 0.14
+
+   Copyright 2003-2009 Lennart Poettering <mzqnrzba (at) 0pointer (dot)
+   de>
+     * [1]License
+     * [2]News
+     * [3]Overview
+     * [4]Current Status
+     * [5]Documentation
+     * [6]Requirements
+     * [7]Installation
+     * [8]Acknowledgements
+     * [9]Download
+
+License
+
+   This program is free software; you can redistribute it and/or modify it
+   under the terms of the GNU Lesser General Public License as published
+   by the Free Software Foundation, either version 2.1 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser
+   General Public License for more details.
+
+News
+
+   Sun Oct 18 2009:
+
+   [10]Version 0.14 released; changes include: add daemon_set_verbosity()
+   call; numerous updates
+
+   Tue Jul 29 2008:
+
+   [11]Version 0.13 released; changes include: add daemon_reset_sigs() and
+   daemon_unblock_sigs() calls for resetting signal handlers to sensible
+   states; improve error handling.
+
+   Tue Jul 10 2007:
+
+   [12]Version 0.12 released; changes include: make daemon_close_all()
+   actually work properly.
+
+   Fri Jun 22 2007:
+
+   [13]Version 0.11 released; changes include: automatically detect
+   whether lynx is installed; properly set errno on every error condition;
+   add new function daemon_close_all() to close all open file descriptors
+   except a given set; add daemon_logv(), which is identical to
+   daemon_log(), but takes a va_list argument; add daemon_execv() in
+   similar style; other fixes
+
+   Thu Nov 24 2005:
+
+   [14]Version 0.10 released; changes include: make logging compatible
+   with daemons running in a chroot() environment
+
+   Fri Nov 18 2005:
+
+   [15]Version 0.9 released; changes include: portability (FreeBSD,
+   NetBSD, OpenBSD, Darwin, Solaris, Cygwin); some minor header file
+   cleanups; fix access mode of PID files; other cleanups; license change
+   from GPL to LGPL
+
+   Sat Jun 4 2005:
+
+   [16]Version 0.8 released; changes include: proper PID file locking
+
+   Sat Dec 18 2004:
+
+   [17]Version 0.7 released; changes include: minor cleanups; C++
+   compatibility; gcc 2.95 compatiblity
+
+   Wed Apr 7 2004:
+
+   [18]Version 0.6 released; changes include: backgrounding fixes, minor
+   other stuff
+
+   Tue Feb 10 2004:
+
+   [19]Version 0.5 released; changes include: signal handling fix, forking
+   fix
+
+   Sat Jan 10 2004:
+
+   [20]Version 0.4 released; changes include: new module dexec.c; added
+   pkg-config support.
+
+   Mon Oct 20 2003:
+
+   [21]Version 0.3 released; changes include: documentation update, build
+   fixes, RPM spec file added, added new function int
+   daemon_pid_file_kill_wait().
+
+   Thu July 10 2003:
+
+   [22]Version 0.2 released; changes include: ugly umask error fix,
+   documentation update
+
+   Mon July 7 2003:
+
+   [23]Version 0.1 released
+
+Overview
+
+   libdaemon is a lightweight C library that eases the writing of UNIX
+   daemons. It consists of the following parts:
+     * A wrapper around fork() which does the correct daemonization
+       procedure of a process
+     * A wrapper around syslog() for simpler and compatible log output to
+       Syslog or STDERR
+     * An API for writing PID files
+     * An API for serializing UNIX signals into a pipe for usage with
+       select() or poll()
+     * An API for running subprocesses with STDOUT and STDERR redirected
+       to syslog.
+
+   APIs like these are used in most daemon software available. It is not
+   that simple to get it done right and code duplication is not a goal.
+
+   libdaemon is currently used by [24]ifplugd, [25]Avahi, [26]ivam2,
+   [27]Nautilus-Share and [28]aeswepd.
+
+Current Status
+
+   Version 0.14 is feature complete.
+
+Documentation
+
+   An extensive API reference is [29]available
+
+Requirements
+
+   libdaemon was developed and tested on Debian GNU/Linux "testing" from
+   July 2003, it should work on most other Linux distributions (and some
+   Unix versions) since it uses GNU Autoconf and GNU libtool for source
+   code configuration and shared library management.
+
+   libdaemon is known to work on modern Linux systems, FreeBSD, NetBSD,
+   OpenBSD, Darwin, Solaris and Windows/Cygwin.
+
+Installation
+
+   As this package is made with the GNU autotools you should run
+   ./configure inside the distribution directory for configuring the
+   source tree. After that you should run make for compilation and make
+   install (as root) for installation of libdaemon.
+
+   Please use gmake instead of traditional make for compilation on
+   non-Linux systems.
+
+Acknowledgements
+
+   Sebastien Estienne, for a lot of portability work.
+
+Download
+
+   The newest release is always available from
+   [30]http://0pointer.de/lennart/projects/libdaemon/
+
+   Get libdaemon's development sources from the [31]GIT [32]repository
+   ([33]gitweb):
+git clone git://git.0pointer.de/libdaemon
+
+   You may find an up to date Debian package of libdaemon on the
+   [34]Debian package repository.
+
+   If you want to be notified whenever I release a new version of this
+   software use the subscription feature of [35]Freshmeat.
+     __________________________________________________________________
+
+
+    Lennart Poettering <mzqnrzba (at) 0pointer (dot) de>, October 2009
+
+References
+
+   1. README#license
+   2. README#news
+   3. README#overview
+   4. README#status
+   5. README#documentation
+   6. README#requirements
+   7. README#installation
+   8. README#acks
+   9. README#download
+  10. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.14.tar.gz
+  11. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.13.tar.gz
+  12. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.12.tar.gz
+  13. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.11.tar.gz
+  14. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.10.tar.gz
+  15. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.9.tar.gz
+  16. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.8.tar.gz
+  17. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.7.tar.gz
+  18. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.6.tar.gz
+  19. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.5.tar.gz
+  20. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.4.tar.gz
+  21. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.3.tar.gz
+  22. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.2.tar.gz
+  23. http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.1.tar.gz
+  24. http://0pointer.de/lennart/projects/ifplugd/
+  25. http://freedesktop.org/Software/Avahi
+  26. http://0pointer.de/lennart/projects/ivam2/
+  27. http://gentoo.ovibes.net/nautilus-share/mediawiki-1.4.4/index.php/Accueil
+  28. http://0pointer.de/lennart/projects/aeswepd/
+  29. reference/html/index.html
+  30. http://0pointer.de/lennart/projects/libdaemon/
+  31. http://git.or.cz/
+  32. git://git.0pointer.de/libdaemon
+  33. http://git.0pointer.de/?p=libdaemon.git
+  34. http://packages.debian.org/libdaemon0
+  35. http://freshmeat.net/projects/libdaemon/

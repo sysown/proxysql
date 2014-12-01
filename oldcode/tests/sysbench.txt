@@ -1,0 +1,1 @@
+sysbench --num-threads=2 --max-requests=0 --max-time=10 --test=oltp --oltp-table-size=10000 --mysql-user=root --mysql-host=127.0.0.1 --mysql-db=test --db-ps-mode=disable --mysql-port=3306 --oltp-read-only run

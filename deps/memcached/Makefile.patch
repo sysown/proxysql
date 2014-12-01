@@ -1,0 +1,24 @@
+39,40c39,40
+< bin_PROGRAMS = memcached$(EXEEXT)
+< noinst_PROGRAMS = memcached-debug$(EXEEXT) sizes$(EXEEXT) \
+---
+> bin_PROGRAMS = libmemcached.a proxymemcached.so
+> noinst_PROGRAMS =  sizes$(EXEEXT) \
+432,437c432,441
+< memcached$(EXEEXT): $(memcached_OBJECTS) $(memcached_DEPENDENCIES) 
+< 	@rm -f memcached$(EXEEXT)
+< 	$(LINK) $(memcached_OBJECTS) $(memcached_LDADD) $(LIBS)
+< memcached-debug$(EXEEXT): $(memcached_debug_OBJECTS) $(memcached_debug_DEPENDENCIES) 
+< 	@rm -f memcached-debug$(EXEEXT)
+< 	$(memcached_debug_LINK) $(memcached_debug_OBJECTS) $(memcached_debug_LDADD) $(LIBS)
+---
+> #memcached$(EXEEXT): $(memcached_OBJECTS) $(memcached_DEPENDENCIES) 
+> #	@rm -f memcached$(EXEEXT)
+> #	$(LINK) $(memcached_OBJECTS) $(memcached_LDADD) $(LIBS)
+> #memcached-debug$(EXEEXT): $(memcached_debug_OBJECTS) $(memcached_debug_DEPENDENCIES) 
+> #	@rm -f memcached-debug$(EXEEXT)
+> #	$(memcached_debug_LINK) $(memcached_debug_OBJECTS) $(memcached_debug_LDADD) $(LIBS)
+> libmemcached.a: $(memcached_OBJECTS)
+> 	ar rcs libmemcached.a $(memcached_OBJECTS)
+> proxymemcached.so: $(memcached_OBJECTS)
+> 	$(CC) -shared -fPIC  -o $@ $(CFLAGS) $(memcached_OBJECTS) $(LIBS)

@@ -1,0 +1,20 @@
+111,115c111,115
+< void Mutex::Lock()         { SAFE_PTHREAD(pthread_rwlock_wrlock(&mutex_)); }
+< void Mutex::Unlock()       { SAFE_PTHREAD(pthread_rwlock_unlock(&mutex_)); }
+< bool Mutex::TryLock()      { return pthread_rwlock_trywrlock(&mutex_) == 0; }
+< void Mutex::ReaderLock()   { SAFE_PTHREAD(pthread_rwlock_rdlock(&mutex_)); }
+< void Mutex::ReaderUnlock() { SAFE_PTHREAD(pthread_rwlock_unlock(&mutex_)); }
+---
+> void Mutex::Lock()         { }
+> void Mutex::Unlock()       { }
+> bool Mutex::TryLock()      { return 0 == 0; }
+> void Mutex::ReaderLock()   { }
+> void Mutex::ReaderUnlock() { }
+125,127c125,127
+< void Mutex::Lock()         { SAFE_PTHREAD(pthread_mutex_lock(&mutex_)); }
+< void Mutex::Unlock()       { SAFE_PTHREAD(pthread_mutex_unlock(&mutex_)); }
+< bool Mutex::TryLock()      { return pthread_mutex_trylock(&mutex_) == 0; }
+---
+> void Mutex::Lock()         { }
+> void Mutex::Unlock()       { }
+> bool Mutex::TryLock()      { return 0 == 0; }

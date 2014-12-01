@@ -1,0 +1,139 @@
+Directories structure:
+deps        : external dependencies, that can be redistributed thanks to their license
+include     : header files
+include_old : old header files , will be removed in future
+lib         : directory where there is all the C++ code to generate libproxysql.a (archive file with all objects) and the various modules implemented as plugin compiled as shared libraries  
+lib_old     : old code that was previously in lib , will be removed in future
+oldcode     : old ProxySQL in C , will be removed in future
+src         : here there are only 2 C++ files: main.cpp and proxysql_global.cpp (used for global variables)
+test        : used for various testing, nothing interesting here , will be removed in future
+trash       : like "test"
+
+
+
+Dependencies :
+ProxySQL relies on the following libraries that are compilied as dependancies:
+- jemalloc (http://www.canonware.com/jemalloc/) : a general purpose malloc(3) implementation that emphasizes fragmentation avoidance and scalable concurrency support
+- libconfig (http://www.hyperrealm.com/libconfig/) : a simple library for processing structured configuration files
+- libdaemon : a lightweight C library that eases the process of writing UNIX daemons
+- mariadb-client-library : The MariaDB Native Client library (C driver) ; this is currently used only for headers
+- memcached : high-performance, distributed memory object caching system ; it has important changes implemented: a) compiled as shared library and not daemon, b) pthread_key_t item_lock_type_key is configured as __thread variable instead of a static variables . Memcached integration into ProxySQL is currently a simple proof of concept
+- re2 (https://code.google.com/p/re2/) : a fast, safe, thread-friendly alternative to backtracking regular expression engines like those used in PCRE, Perl, and Python . Important note:  re2 supports submatch extraction, but not backreferences . Because ProxySQL will process regular expression in an already thread-safe environment, re2 is patches to remove locking
+- sqlite3 (http://www.sqlite.org/) : software library that implements a self-contained, serverless, zero-configuration, transactional SQL database engine 
+
+
+
+
+
+
+Code in src:
+
+proxysql_global.cpp :
+This file only defines PROXYSQL_EXTERN , declaring all variables defined into proxysql_structs.h
+
+main.cpp (not complete decription):
+a) it defines all variables used to return objects defined as plugin
+b) declare __thread l_sfp *__thr_sfp : this is used by a custom memory allocator that is **per_thread**
+c) tune jemalloc : "xmalloc:true,lg_tcache_max:17"
+d) defines number of threads (hardcoded for now), FIXME
+e) defines the function mysql_worker_thread_func() that will later be called by each worker thread :
+  1) initializes __thr_sfp used by a custom memory allocator
+  2) points the worker function to what returned by create_MySQL_Thread() , that is returned by the shared library that provide this functionality
+  3) listens on TCP and Unix socket
+  4) waits all other threads watching the variable "load_"
+  5) run the worker
+  6) when the worker completes (because it received some shutdown command) it destroyes the worker and destroyes the customer memory allocator
+
+
+f) create a new (and only!) MySQL_Hostgroups and add some servers in it : hardcoded for now
+g) tried to open the config file : I think this is just a test, I need to check . FIXME
+h) processes the command line options that have priority over the context of the config file , for example the path to the config file itself
+i) processes the rest of the command line options and processes the config file
+j) loads proxymemcached.so (hardcoded for now), calls memcached_main_thread(), and this calls __memcached_main() after configuring "command line options" . Temporary disabled
+k) loads various plugin : Standard_Query_Cache.so , Standard_MySQL_Thread.so ,  Standard_Query_Processor.so , Standard_MySQL_Authentication.so , Standard_ProxySQL_Admin.so 
+l) initializes GloAdmin calling create_ProxySQL_Admin()
+m) initializes GloQPro calling create_Query_Processor() and creates the a rule hardcoded for now : FIXME
+n) opens sockets on TCP and Unix
+o) starts the mysql worker threads
+p) starts the Query Cache (GloQC) and starts a new thread that calls GloQC->purgeHash_thread() , a maintenance thread that purge old entries
+q) starts the MySQL Authentication module and adds some users, hardcoded for now : FIXME
+r) waits for all mysql worker threads to be running watching the variable "load_"
+s) loops waiting for glovars.shutdown==0 . Poor design, FIXME
+t) set shutdown=1 on all mysql worker threads and wait for them to return
+u) shutdown the Query Cache (GloQC) and waits the purge threads to return
+v) delete Query Cache (GloQC), Query Processor (GloQP) , MySQL Authentication (GLOMyAuth) , Admin (GloAdmin), Hostgroups (MyHostGroups)
+
+
+
+
+
+
+=====
+
+
+
+Important files in "include" :
+advanced_kv.h : not used, FIXME , delete
+btree*.h : A btree implementation of the STL set and map interfaces : https://code.google.com/p/cpp-btree/
+configfile.hpp : defines class ProxySQL_ConfigFile that uses libconfig
+cpp.h : includes most .h / .hpp files. This needs some clean up
+ezOptionParser.hpp : command-line parser class for C++ : http://ezoptionparser.sourceforge.net/
+fileutils.hpp : defines class FileUtils isReadable() and isWritable()
+gen_utils.h : defines classes PtrArray and PtrSizeArray (details below), and functions Proxy_file_exists() and Proxy_file_regular() (FIXME: these should be moved in FileUtils)
+MySQL_Authentication.hpp : virtual class MySQL_Authentication , (then implemented as plugin
+mysql_backend.h : defines several classes used for MySQL backends , more details below
+mysql_connection.h : defines class MySQL_Connection
+mysql_connection_pool.h : defines class MySQL_Connection_Pool and class MyConnArray, this used by MySQL_Connection_Pool
+mysql_data_stream.h : defines class MySQL_Data_Stream . This is used for low level handling of mysql connection, specifically: buffer management, handling of packets and resultset, setting status of connection 
+MySQL_Protocol.h : defines class MySQL_Protocol , class used to generate and validate MySQL packets
+mysql_session.h : defines class MySQL_Session , a high level structure that handle a single client session
+mysql_thread.h : defines virtual class MySQL_Thread (then implemented as plugin), used to handle all MySQL session, connections, backends, data streams, and also query cache . It also defines class ProxySQL_Poll , used by MySQL_Thread to check all sockets
+proxysql_admin.h : defines virtual class ProxySQL_Admin (then implemented as plugin), used to manage ProxySQL from an admin interface
+proxysql_atomic.h : functions to implement atomic operations, including read/write locks
+proxysql_debug.h : defines macro proxy_debug() and proxy_error() , used when debugging is enabled (#define DEBUG)
+proxysql_glovars.hpp : defines class ProxySQL_GlobalVariables , used for global variables and for the processing of config file and command line options
+proxysql.h : list of all header files
+proxysql_macros.h : a collection of few macros
+proxysql_mem.h : custom memory allocator using **per-thread** stacks. Memory allocated from per-thread stacks are **never** shared amoung threads.
+proxysql_session.hpp : unused , FIXME: to delete
+proxysql_structs.h : defines a lot of structures. The most important are _global_variable_entry_t (used to define any sort of global variable during the parsing of configuration) and _global_variables_t (global variables)
+query_cache.hpp : defines virtual class Query_Cache (then implemented as plugin)
+query_processor.hpp : defines virtual class Query_Processor (then implemented as plugin)
+safe_btree*.h : A btree implementation of the STL set and map interfaces : https://code.google.com/p/cpp-btree/
+shared_query_cache.h : currently it only defines some constants . FIXME: move these constants somewhere else
+simple_kv.h : defines class SimpleKV, key/value database implemented with btree. Can be created either with locking enabled (for multi-threads use) or disabled (for single-thread use)
+SpookyV2.h : class SpookyHash for very fast hashing functions : http://burtleburtle.net/bob/hash/spooky.html
+sqlite3db.h : several abstraction classes around SQLite3
+sqlite3.h : header file for SQLite3 : (http://www.sqlite.org/)
+valgrind.h : header file for valgrind , used for memory leak analysis (http://valgrind.org/)
+
+
+important files in "lib" :
+advanced_kv.cpp : not used, FIXME , delete
+configfile.cpp : implementation of class ProxySQL_ConfigFile to process config file
+debug.cpp : implementation of the debug module . It uses a table in GloVars.global.gdbg_lvl where each row defines a debugging module and the verbosity associated with it .
+	Currently it logs only to stderr, but future version will implement logging on an internal buffer and a background thread that will dump the buffer to disk. There is already some code ready for that.
+gen_utils.cpp : implementation of classes PtrArray and PtrSizeArray (details below), and functions Proxy_file_exists() and Proxy_file_regular() (FIXME: these should be moved in FileUtils)
+	PtrArray is a class with an array of pointers. It uses the custom per-thread memory allocator for the object itself: PtrArray created in a thread cannot be used into another thread. The array of pointers can either use the per-thread memory allocator (_use_l_alloc==true) , or the standard memory allocator .
+	PtrSizeArray is a similar implementation of PtrArray, but each element of the array is a pointer and the size of the memory pointed by it. It uses *only* **per-thread** memory allocator.
+global_variables.cpp : FIXME , maybe deprecated
+KV_Btree_Array.cpp : FIXME , maybe deprecated
+mysql_backend.cpp : implementation of class MySQL_Backend
+mysql_connection.cpp : implementation of class MySQL_Connection
+mysql_connection_pool.cpp : implementation of class MySQL_Connection_Pool and class MyConnArray, this used by MySQL_Connection_Pool
+mysql_data_stream.cpp : implementation of class MySQL_Data_Stream . This is used for low level handling of mysql connection, specifically: buffer management, handling of packets and resultset, setting status of connection . FIXME: there are functions here that operate at too high level and needs to be reimplemented somewhere else. Ex: myds_connect()
+mysql_protocol.c : FIXME , deprecated , to delete
+mysql_protocol.cpp : FIXME , maybe deprecated
+MySQL_Protocol.cpp : implementation of class MySQL_Protocol , class used to generate and validate MySQL packets
+mysql_session.cpp : implementation of class MySQL_Session , a high level structure that handle a single client session . A lot of execution path is decided based on the status of the session and of the various backends and data streams
+network.cpp : low level function to open and listen on sockets
+ProxySQL_GloVars.cpp : implementation of class ProxySQL_GlobalVariables , used for global variables and for the processing of config file and command line options
+proxysql_mem.cpp : custom memory allocator using **per-thread** stacks. Memory allocated from per-thread stacks are **never** shared amoung threads.
+simple_kv.cpp : implementation of class SimpleKV, key/value database implemented with btree. Can be created either with locking enabled (for multi-threads use) or disabled (for single-thread use)
+SpookyV2.cpp : class SpookyHash for very fast hashing functions : http://burtleburtle.net/bob/hash/spooky.html
+sqlite3.c : SQLite3 : (http://www.sqlite.org/)
+sqlite3db.cpp : several abstraction classes around SQLite3
+Standard*.cpp : Standard implementation of MySQL Authentication, MySQL Thread, Admin, Query Cache and Query Processor 
+
+
+

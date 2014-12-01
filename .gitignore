@@ -1,0 +1,84 @@
+# Object files
+*.o
+*.ko
+*.oo
+
+# Libraries
+*.lib
+*.a
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+
+oldcode/tests/connect_speed
+
+*.swp
+
+
+
+# SQLITE files
+*.db
+*.db-shm
+*.db-wal
+
+
+#pidfile and errorlog
+*.pid
+*.log
+*.err
+
+#binary
+proxysql
+
+#core
+core
+
+#config
+proxysql.cnf*
+
+jeprof*heap
+perf.data*
+
+notes.txt
+architecture.txt
+
+
+
+### DEPS
+
+#sqlite
+deps/sqlite3/sqlite-amalgamation-3080403/
+
+#jemalloc source
+deps/jemalloc/jemalloc-3.6.0/
+
+#libdaemon
+deps/libdaemon/libdaemon-0.14/
+
+#mariadb client library
+deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86/
+deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86_64/
+deps/mariadb-client-library/mariadb_client-2.0.0-src/
+
+#glib
+deps/glib/glib-2.40.0/
+
+#libevent
+deps/libevent/libevent-2.0.21-stable/
+
+#memcached
+deps/memcached/memcached-1.4.20/
+
+#libconfig
+deps/libconfig/libconfig-1.4.9/
+
+#re2
+deps/re2/re2/
