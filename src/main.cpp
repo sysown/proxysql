@@ -38,19 +38,6 @@ void (*__memcached_main)(int,char **);
 pthread_t memcached_pthread;
 
 
-/*
-typedef struct __aaa {
-	char *a;
-	char *b;
-} MyObject;
-
-
-struct classcomp {
-	bool operator() (char *a, char *b) const
-	{return strcmp(a,b); }
-};
-typedef btree::btree_map<char *, char *, classcomp> MyMap;
-*/
 
 using namespace std;
 
@@ -71,8 +58,6 @@ int listen_fd;
 int socket_fd;
 
 
-//#include "query_cache.h"
-//Shared_Query_Cache *SQC;
 Query_Cache *GloQC;
 MySQL_Authentication *GloMyAuth;
 Query_Processor *GloQPro;
@@ -555,8 +540,6 @@ int main(int argc, const char * argv[]) {
 }
 
 
-//	GloMyAuth->add((char *)"root",(char *)"", USERNAME_FRONTEND, false);
-//	GloMyAuth->add((char *)"vegaicm",(char *)"password", USERNAME_FRONTEND, false);
 
 {
 	GloAdmin = create_ProxySQL_Admin();
@@ -608,132 +591,9 @@ int main(int argc, const char * argv[]) {
 */
 
 
-//	setenv("G_SLICE","always-malloc",1);
-
-/*
-	{
-		unsigned int i,j;
-		void *p=NULL;
-		PtrArray *a=new PtrArray();
-		//GPtrArray *b=g_ptr_array_new();
-		PtrSizeArray *c=new PtrSizeArray();
-		for (j=0;j<100000;j++) {
-			//for (i=0;i<100;i++) a->add(p);
-			//for (i=0;i<100;i++) a->remove(NULL);
-			//for (i=0;i<100;i++) a->remove_index(0);
-			//for (i=0;i<100;i++) g_ptr_array_add(b,p);
-			//for (i=0;i<100;i++) g_ptr_array_remove(b,NULL);
-			//for (i=0;i<10000;i++) g_ptr_array_remove_index(b,0);
-			for (i=0;i<10000;i++) c->add(p,0);
-			for (i=0;i<10000;i++) c->remove_index_fast(0,NULL);
-		}
-		exit(0);
-	}
-*/
-
-/*
-	{
-		//GTree *tree=g_tree_new((GCompareFunc)g_ascii_strcasecmp);
-		GTree *tree=g_tree_new((GCompareFunc)g_strcmp0);
-		int i;
-	fast_srand(10);
-		for (i=0; i<1000000; i++) {
-			g_tree_insert( tree, gen_random_string(10), gen_random_string(20) );
-		}
-		printf( "%d\n", g_tree_nnodes( tree ) );
-		exit(0);
-	}
-
-*/
 
 
-/*
-{
-	GHashTable *hash=g_hash_table_new_full(g_str_hash, g_str_equal, free, free);
-	int i;
-	for (i=0; i<5000000; i++) {
-		g_hash_table_replace(hash, gen_random_string(4), gen_random_string(7));
-	}
-	exit(0);
-}
-*/
 
-
-{
-/*
-	//typedef multimap<char *, char *> tree_map;
-	//multimap<char *, char *, classcomp> tree_map;
-	//tree_map tree;
-	//tree_map.insert(gen_random_string(10), gen_random_string(20));
-
-	MyMap *obj_map = new MyMap;	
-	int i;
-
-	for (i=0; i<20000000; i++) {
-		char *s=gen_random_string(5);
-	//	MyMap::const_iterator lookup = obj_map->find(s);
-	//	if (lookup == obj_map->end()) {
-			obj_map->insert(std::make_pair(s, gen_random_string(7)));
-			//printf("%s\n", s);
-	//	}
-	}
-	printf("%d\n", (int)obj_map->size());
-	//MyMap::const_iterator lookup ;
-	btree::btree_map<char *, char *, classcomp>::iterator lookup ;
-	//btree::btree_map<char *a, char *b, classcomp>::iterator lookup ;
-	//btree::btree_map<char *, char *,classcomp>::iterator lookup ;
-
-//	while (obj_map->size()) {
-//      lookup = obj_map->begin();
-//	  if ( lookup != obj_map->end() ) {
-//		//cout << lookup.first << " ";
-//		//free((char *)lookup.first);
-//		free(lookup->first);
-//		free(lookup->second);
-//		obj_map->erase(lookup);
-//	 }
-//	}
- 
-	printf("%d\n", (int)obj_map->size());
-	exit(0);
-*/
-}
-/*
-	{
-	SimpleKV *skv=new SimpleKV();
-	int i;
-	for (i=0;i<2500000;i++) {
-	//char *a=gen_random_string(5);
-	//std::string *s=new string(a);
-	//free(a);
-	//std::string *s=new string();
-	//gen_random_stdstring(s,5);
-	skv->replace(gen_random_string(2), gen_random_string(7));
-	}
-	for (i=0;i<25;i++) {
-		char *a=gen_random_string(2);
-		fprintf(stdout,"%s\n", skv->lookup(a));
-		free(a);
-	}	
-*/
-/*
-	skv->insert(std::string("hello"),(char *)"olleh");
-	skv->insert("aieie",(char *)"1ahaha");
-	skv->insert("ciao",(char *)"2ahaha");
-	skv->insert("cazzo",strdup((char *)"3ahaha"));
-	//skv->replace((char *)"aieie",(char *)"5haha");
-	int i;
-	for (i=0;i<20000000;i++) {
-		string a="cazzo";
-		skv->replace(a,strdup((char *)"6haha"));
-	}
-*/
-/*
-	printf("%d\n", (int)skv->size());
-	delete skv;
-	exit(0);
-	}
-*/
 	//parse all the arguments and the config file
   //main_opts(cmd_option_entries, &argc, &argv, &__cmd_proxysql_config_file);
 
@@ -741,6 +601,7 @@ int main(int argc, const char * argv[]) {
 //  main_opts(&argc, (gchar ***)&argv);
 
 #ifdef DEBUG
+/*
 	GloVars.global.gdbg=true;
 	GloVars.__cmd_proxysql_foreground=1;
 
@@ -751,10 +612,7 @@ int main(int argc, const char * argv[]) {
 			GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_PROTOCOL].verbosity=7;
 		}
 	}
-
-//	gdbg_lvl[PROXY_DEBUG_NET].verbosity=0;
-//	gdbg_lvl[PROXY_DEBUG_MYSQL_PROTOCOL].verbosity=0;
-
+*/
 #endif /* DEBUG */
 
 
@@ -828,22 +686,8 @@ int main(int argc, const char * argv[]) {
 
 	//sleep(10);
 
-/*
-{
-	unsigned char *a;
-	unsigned char *b;
-	int i;
-	for (i=0; i<10000000; i++) {
-		a=(unsigned char *)gen_random_string(4);
-		b=(unsigned char *)gen_random_string(7);
-		SQC->set(a,5,b,8,2);
-	}
-	exit(0);
-}
-*/
-
-	while (glovars.shutdown==0) sleep(5);
-	sleep(2);
+	while (glovars.shutdown==0) sleep(5);   // FIXME: TERRIBLE UGLY
+	sleep(2);                               // FIXME: TERRIBLE UGLY
 //	diagnostic_all();
 //	sleep(1000);
 	
