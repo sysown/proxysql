@@ -554,8 +554,6 @@ int main(int argc, const char * argv[]) {
 //	}
 }
 
-	GloMyAuth = create_MySQL_Authentication();
-	GloMyAuth->print_version();
 
 //	GloMyAuth->add((char *)"root",(char *)"", USERNAME_FRONTEND, false);
 //	GloMyAuth->add((char *)"vegaicm",(char *)"password", USERNAME_FRONTEND, false);
@@ -568,6 +566,10 @@ int main(int argc, const char * argv[]) {
 //	GloAdmin->init();
 }
 
+	GloMyAuth = create_MySQL_Authentication();
+	GloMyAuth->print_version();
+
+	GloAdmin->init_users();
 
 {
 	GloQPro = create_Query_Processor();

@@ -11,6 +11,7 @@ class ProxySQL_Admin {
 	virtual const char *version() {return NULL;};
 	virtual void print_version() {};
 	virtual bool init() {return false;};
+	virtual void init_users() {};
 	virtual void admin_shutdown() {};
 };
 

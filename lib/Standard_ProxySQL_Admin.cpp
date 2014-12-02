@@ -126,6 +126,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual ~Standard_ProxySQL_Admin();
 	virtual void print_version();
 	virtual bool init();
+	virtual void init_users();
 	virtual void admin_shutdown();
 	bool is_command(std::string);
 };
@@ -426,7 +427,7 @@ bool Standard_ProxySQL_Admin::init() {
 	//fill_table__server_status(admindb);
 	//fill_table__server_status(configdb);
 
-	__refresh_users();
+	//__refresh_users();
 
 //	pthread_t admin_thr;
 	struct _main_args *arg=(struct _main_args *)malloc(sizeof(struct _main_args));
@@ -636,6 +637,9 @@ void Standard_ProxySQL_Admin::__attach_configdb_to_admindb() {
 }
 
 
+void Standard_ProxySQL_Admin::init_users() {
+	__refresh_users();
+}
 
 void Standard_ProxySQL_Admin::__refresh_users() {
 	__delete_inactive_users(USERNAME_BACKEND);
