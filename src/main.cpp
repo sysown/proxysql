@@ -554,6 +554,12 @@ int main(int argc, const char * argv[]) {
 //	}
 }
 
+	GloMyAuth = create_MySQL_Authentication();
+	GloMyAuth->print_version();
+
+//	GloMyAuth->add((char *)"root",(char *)"", USERNAME_FRONTEND, false);
+//	GloMyAuth->add((char *)"vegaicm",(char *)"password", USERNAME_FRONTEND, false);
+
 {
 	GloAdmin = create_ProxySQL_Admin();
 	GloAdmin->print_version();
@@ -797,11 +803,6 @@ int main(int argc, const char * argv[]) {
 	//pthread_create(&SQC_purge_thread_id, NULL, &SQC->purgeHash_thread , NULL);
 
 
-	GloMyAuth = create_MySQL_Authentication();
-	GloMyAuth->print_version();
-
-	GloMyAuth->add((char *)"root",(char *)"", USERNAME_FRONTEND, false);
-	GloMyAuth->add((char *)"vegaicm",(char *)"password", USERNAME_FRONTEND, false);
 
 		
 

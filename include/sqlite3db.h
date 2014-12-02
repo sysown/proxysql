@@ -67,7 +67,7 @@ class SQLite3_result {
 	void add_column_definition(int a, const char *b) {
 		SQLite3_column *cf=new SQLite3_column(a,b);
 		column_definition.push_back(cf);
-		columns++;
+		//columns++;
 	};
 	int add_row(sqlite3_stmt *stmt) {
 		int rc=sqlite3_step(stmt);

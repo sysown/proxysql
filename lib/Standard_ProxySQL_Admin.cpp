@@ -16,6 +16,8 @@
 
 #include "SpookyV2.h"
 
+extern MySQL_Authentication *GloMyAuth;
+
 //#define PANIC(msg)  { perror(msg); return -1; }
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -106,6 +108,10 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void __delete_disktable();
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_configdb_to_admindb();
+
+	void __add_active_users(enum cred_username_type usertype);
+	void __delete_inactive_users(enum cred_username_type usertype);
+	void __refresh_users();
 	
 	public:
 	Standard_ProxySQL_Admin();
@@ -403,6 +409,8 @@ bool Standard_ProxySQL_Admin::init() {
 	//fill_table__server_status(admindb);
 	//fill_table__server_status(configdb);
 
+	__refresh_users();
+
 //	pthread_t admin_thr;
 	struct _main_args *arg=(struct _main_args *)malloc(sizeof(struct _main_args));
 	arg->nfds=main_poll_nfds;
@@ -550,6 +558,60 @@ void Standard_ProxySQL_Admin::__attach_configdb_to_admindb() {
 	free(cmd);
 }
 
+
+
+void Standard_ProxySQL_Admin::__refresh_users() {
+	__delete_inactive_users(USERNAME_BACKEND);
+	__delete_inactive_users(USERNAME_FRONTEND);
+	__add_active_users(USERNAME_BACKEND);
+	__add_active_users(USERNAME_FRONTEND);
+}
+
+void Standard_ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *str=(char *)"SELECT username FROM main.mysql_users WHERE %s=1 AND active=0";
+	char *query=(char *)malloc(strlen(str)+15);
+	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
+	fprintf(stderr,"%s\n", query);	
+admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+      SQLite3_row *r=*it;
+			GloMyAuth->del(r->fields[0], usertype);
+		}
+	}
+//	if (error) free(error);
+	if (resultset) delete resultset;
+	free(query);
+}
+
+void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *str=(char *)"SELECT username,password,use_ssl FROM main.mysql_users WHERE %s=1 AND active=1";
+	char *query=(char *)malloc(strlen(str)+15);
+	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
+	fprintf(stderr,"%s\n", query);	
+admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+      SQLite3_row *r=*it;
+			GloMyAuth->add(r->fields[0], r->fields[1], usertype, (strcmp(r->fields[2],"1")==0 ? true : false) );
+		}
+	}
+//	if (error) free(error);
+	if (resultset) delete resultset;
+	free(query);
+}
 
 
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func() {
