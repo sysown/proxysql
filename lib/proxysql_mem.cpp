@@ -76,7 +76,7 @@ void * __l_alloc(l_sfp *sfp, size_t size) {
 	unsigned int x=size;
 	int j=__builtin_clz(x);
 	int k=__builtin_ffs(x);
-	i=(k+j==(sizeof(unsigned int)*8) ? j : sizeof(unsigned int)*8+1-k);
+	i=(k+j==(sizeof(unsigned int)*8) ? k : sizeof(unsigned int)*8+1-j);
 	i=(i >= 4 ? i-4 : 0);
 #else
 	i= ( size<=L_SFC_MID_ELEM_SIZE ? L_SFP_ARRAY_MID-1 : L_SFP_ARRAY_LEN-1 );
@@ -128,7 +128,7 @@ void __l_free(l_sfp *sfp, size_t size, void *p) {
 	unsigned int x=size;
 	int j=__builtin_clz(x);
 	int k=__builtin_ffs(x);
-	i=(k+j==(sizeof(unsigned int)*8) ? j : sizeof(unsigned int)*8+1-k);
+	i=(k+j==(sizeof(unsigned int)*8) ? k : sizeof(unsigned int)*8+1-j);
 	i=(i >= 4 ? i-4 : 0);
 #else
 	i= ( size<=L_SFC_MID_ELEM_SIZE ? L_SFP_ARRAY_MID-1 : L_SFP_ARRAY_LEN-1 );	

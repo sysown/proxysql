@@ -9,6 +9,7 @@ typedef struct _account_details_t {
 //	char *domain;
 	char *username;
 	char *password;
+	bool use_ssl;
 } account_details_t;
 
 #define MYSQL_AUTHENTICATION_VERSION "0.1.0706"
@@ -17,14 +18,23 @@ typedef struct _account_details_t {
 
 typedef btree::btree_map<uint64_t, account_details_t *> BtMap;
 
-class Standard_MySQL_Authentication: public MySQL_Authentication {
-	private:
+typedef struct _creds_group_t {
 	rwlock_t lock;
 	BtMap bt_map;
 	PtrArray cred_array;
+} creds_group_t;
+
+class Standard_MySQL_Authentication: public MySQL_Authentication {
+	private:
+	creds_group_t creds_backends;
+	creds_group_t creds_frontends;
+//	rwlock_t lock;
+//	BtMap bt_map;
+//	PtrArray cred_array;
 	public:
 	Standard_MySQL_Authentication() {
-		spinlock_rwlock_init(&lock);
+		spinlock_rwlock_init(&creds_backends.lock);
+		spinlock_rwlock_init(&creds_frontends.lock);
 	};
 
 	~Standard_MySQL_Authentication() {
@@ -36,7 +46,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 	};
 
 	//virtual bool add(char * domain, char * username, char * password) {
-	virtual bool add(char * username, char * password) {
+	virtual bool add(char * username, char * password, enum cred_username_type usertype) {
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
 		myhash->Init(1,2);
@@ -46,13 +56,15 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		myhash->Final(&hash1,&hash2);
 		delete myhash;
 
-		spin_wrlock(&lock);
+		creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	
+		spin_wrlock(&cg.lock);
 		btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
-		lookup = bt_map.find(hash1);
-		if (lookup != bt_map.end()) {
+		lookup = cg.bt_map.find(hash1);
+		if (lookup != cg.bt_map.end()) {
 			account_details_t *ad=lookup->second;
-			cred_array.remove_fast(ad);
-      bt_map.erase(lookup);
+			cg.cred_array.remove_fast(ad);
+      cg.bt_map.erase(lookup);
 //			free(ad->domain);
 			free(ad->username);
 			free(ad->password);
@@ -62,15 +74,15 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 //		ad->domain=strdup(domain);
 		ad->username=strdup(username);
 		ad->password=strdup(password);
-    bt_map.insert(std::make_pair(hash1,ad));
-		cred_array.add(ad);
-    spin_wrunlock(&lock);
+    cg.bt_map.insert(std::make_pair(hash1,ad));
+		cg.cred_array.add(ad);
+    spin_wrunlock(&cg.lock);
 
 		return true;
 	};
 
 	//virtual bool del(char * domain, char * username) {
-	virtual bool del(char * username) {
+	virtual bool del(char * username, enum cred_username_type usertype) {
 		bool ret=false;
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
@@ -81,20 +93,22 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		myhash->Final(&hash1,&hash2);
 		delete myhash;
 
-		spin_wrlock(&lock);
+		creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+
+		spin_wrlock(&cg.lock);
 		btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
-		lookup = bt_map.find(hash1);
-		if (lookup != bt_map.end()) {
+		lookup = cg.bt_map.find(hash1);
+		if (lookup != cg.bt_map.end()) {
 			account_details_t *ad=lookup->second;
-			cred_array.remove_fast(ad);
-      bt_map.erase(lookup);
+			cg.cred_array.remove_fast(ad);
+      cg.bt_map.erase(lookup);
 //			free(ad->domain);
 			free(ad->username);
 			free(ad->password);
 			free(ad);
 			ret=true;
 		}
-    spin_wrunlock(&lock);
+    spin_wrunlock(&cg.lock);
 
 		return ret;
 	};
@@ -102,7 +116,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 
 
 	//virtual char * lookup(char * domain, char * username) {
-	virtual char * lookup(char * username) {
+	virtual char * lookup(char * username, enum cred_username_type usertype) {
 		char *ret=NULL;
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
@@ -113,41 +127,50 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		myhash->Final(&hash1,&hash2);
 		delete myhash;
 
-		spin_rdlock(&lock);
+		creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+
+		spin_rdlock(&cg.lock);
 		btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
-		lookup = bt_map.find(hash1);
-		if (lookup != bt_map.end()) {
+		lookup = cg.bt_map.find(hash1);
+		if (lookup != cg.bt_map.end()) {
 			account_details_t *ad=lookup->second;
 			//ret=strdup(ad->password);
 			ret=l_strdup(ad->password);
 		}
-		spin_rdunlock(&lock);
+		spin_rdunlock(&cg.lock);
 		return ret;
 	}
 
 
-	virtual bool reset() {
-		spin_wrlock(&lock);
+	bool _reset(enum cred_username_type usertype) {
+
+		creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+
+		spin_wrlock(&cg.lock);
 		btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
 
-		while (bt_map.size()) {
-			lookup = bt_map.begin();
-			if ( lookup != bt_map.end() ) {
+		while (cg.bt_map.size()) {
+			lookup = cg.bt_map.begin();
+			if ( lookup != cg.bt_map.end() ) {
 				account_details_t *ad=lookup->second;
-				cred_array.remove_fast(ad);
-      	bt_map.erase(lookup);
+				cg.cred_array.remove_fast(ad);
+      	cg.bt_map.erase(lookup);
 //				free(ad->domain);
 				free(ad->username);
 				free(ad->password);
 				free(ad);
 			}
 		}
-		spin_wrunlock(&lock);
+		spin_wrunlock(&cg.lock);
 
 		return true;
 	};
 
-
+	virtual bool reset() {
+		_reset(USERNAME_BACKEND);
+		_reset(USERNAME_FRONTEND);
+		return true;
+	}
 };
 
 
