@@ -271,7 +271,7 @@ virtual MySQL_Session * create_new_session_and_client_data_stream(int _fd) {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
 	//sess->prot.generate_server_handshake(sess->client_myds);
 #ifdef DEBUG
-	sess->prot.dump_pkt=true;
+	sess->myprot_client.dump_pkt=true;
 #endif
 	sess->client_myds->myconn=new MySQL_Connection();  // 20141011
 	sess->client_myds->myconn->myds=sess->client_myds; // 20141011

@@ -42,7 +42,7 @@ CC=gcc
 CPP=g++
 #CC=clang
 
-DEBUG=-ggdb #-DDEBUG
+DEBUG=-ggdb -DDEBUG
 O0=-O0
 O2=-O2
 O1=-O1
