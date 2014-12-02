@@ -800,8 +800,8 @@ int main(int argc, const char * argv[]) {
 	GloMyAuth = create_MySQL_Authentication();
 	GloMyAuth->print_version();
 
-	GloMyAuth->add((char *)"root",(char *)"", USERNAME_FRONTEND);
-	GloMyAuth->add((char *)"vegaicm",(char *)"password", USERNAME_FRONTEND);
+	GloMyAuth->add((char *)"root",(char *)"", USERNAME_FRONTEND, false);
+	GloMyAuth->add((char *)"vegaicm",(char *)"password", USERNAME_FRONTEND, false);
 
 		
 

@@ -46,7 +46,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 	};
 
 	//virtual bool add(char * domain, char * username, char * password) {
-	virtual bool add(char * username, char * password, enum cred_username_type usertype) {
+	virtual bool add(char * username, char * password, enum cred_username_type usertype, bool use_ssl) {
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
 		myhash->Init(1,2);
@@ -74,6 +74,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 //		ad->domain=strdup(domain);
 		ad->username=strdup(username);
 		ad->password=strdup(password);
+		ad->use_ssl=use_ssl;
     cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array.add(ad);
     spin_wrunlock(&cg.lock);
@@ -116,7 +117,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 
 
 	//virtual char * lookup(char * domain, char * username) {
-	virtual char * lookup(char * username, enum cred_username_type usertype) {
+	virtual char * lookup(char * username, enum cred_username_type usertype, bool *use_ssl) {
 		char *ret=NULL;
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
@@ -136,6 +137,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 			account_details_t *ad=lookup->second;
 			//ret=strdup(ad->password);
 			ret=l_strdup(ad->password);
+			if (use_ssl) *use_ssl=ad->use_ssl;
 		}
 		spin_rdunlock(&cg.lock);
 		return ret;
