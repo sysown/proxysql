@@ -669,19 +669,6 @@ int main(int argc, const char * argv[]) {
 	do { /* nothing */ } while (load_ != 1);
 
 
-{
-	unsigned char *a;
-	unsigned char *b;
-	int i;
-	for (i=0; i<100; i++) {
-		a=(unsigned char *)gen_random_string(4);
-		b=(unsigned char *)gen_random_string(7);
-		GloQC->set(a,5,b,8,3);
-		free(a);
-		free(b);
-	}
-}
-
 	load_ = 0;
 
 	//sleep(10);
