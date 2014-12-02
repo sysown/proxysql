@@ -34,6 +34,9 @@ pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES "CREATE TABLE mysql_hostgroup_entries ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, FOREIGN KEY (hostname, port) REFERENCES servers (hostname, port) , FOREIGN KEY (hostgroup_id) REFERENCES mysql_hostgroups (hostgroup_id) , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
 
+#ifdef DEBUG
+#define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY, verbosity INT NOT NULL DEFAULT 0)"
+#endif /* DEBUG */
 __thread l_sfp *__thr_sfp=NULL;
 
 
@@ -103,6 +106,11 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	//void fill_table__server_status(SQLite3DB *db);
+
+#ifdef DEBUG
+	void flush_debug_levels_mem_to_db(SQLite3DB *db, bool replace);
+	int flush_debug_levels_db_to_mem(SQLite3DB *db);
+#endif /* DEBUG */
 
 	void __insert_or_ignore_maintable_select_disktable();
 	void __delete_disktable();
@@ -391,18 +399,27 @@ bool Standard_ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
+#ifdef DEBUG
+	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
+#endif /* DEBUG */
 
 //	insert_into_tables_defs(tables_defs_config,"mysql_server_status", ADMIN_SQLITE_TABLE_MYSQL_SERVER_STATUS);
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
+#ifdef DEBUG
+	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
+#endif /* DEBUG */
 
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);
 
 	__attach_configdb_to_admindb();
+#ifdef DEBUG
+	flush_debug_levels_mem_to_db(configdb, true);
+#endif /* DEBUG */
 	__insert_or_ignore_maintable_select_disktable();
 
 	
@@ -523,6 +540,57 @@ void Standard_ProxySQL_Admin::fill_table__server_status(SQLite3DB *db) {
 }
 */
 
+#ifdef DEBUG
+void Standard_ProxySQL_Admin::flush_debug_levels_mem_to_db(SQLite3DB *db, bool replace) {
+	int i;
+	char *a=NULL;
+	db->execute("DELETE FROM debug_levels WHERE verbosity=0");
+  if (replace) {
+    a=(char *)"REPLACE INTO debug_levels(module,verbosity) VALUES(\"%s\",%d)";
+  } else {
+    a=(char *)"INSERT OR IGNORE INTO debug_levels(module,verbosity) VALUES(\"%s\",%d)";
+  }
+  int l=strlen(a)+100;
+  for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
+    char *query=(char *)malloc(l);
+    sprintf(query, a, GloVars.global.gdbg_lvl[i].name, GloVars.global.gdbg_lvl[i].verbosity);
+    //proxy_debug(PROXY_DEBUG_SQLITE, 3, "SQLITE: %s\n",buff);
+    db->execute(query);
+    free(query);
+  }
+}
+#endif /* DEBUG */
+
+#ifdef DEBUG
+int Standard_ProxySQL_Admin::flush_debug_levels_db_to_mem(SQLite3DB *db) {
+  int i;
+  char *query="SELECT verbosity FROM debug_levels WHERE module=\"%s\"";
+  int l=strlen(query)+100;
+  int rownum=0;
+  int result;
+	sqlite3 *_db=db->get_db();
+  for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
+    sqlite3_stmt *statement;
+    char *buff=(char *)malloc(l);
+    sprintf(buff,query,GloVars.global.gdbg_lvl[i].name);
+    if(sqlite3_prepare_v2(_db, buff, -1, &statement, 0) != SQLITE_OK) {
+      proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on sqlite3_prepare_v2() running query \"%s\" : %s\n", buff, sqlite3_errmsg(_db));
+      sqlite3_finalize(statement);
+      free(buff);
+      return 0;
+    }
+    while ((result=sqlite3_step(statement))==SQLITE_ROW) {
+      GloVars.global.gdbg_lvl[i].verbosity=sqlite3_column_int(statement,0);
+      rownum++;
+    }
+    sqlite3_finalize(statement);
+    free(buff);
+  }
+  return rownum;
+}
+#endif /* DEBUG */
+
+
 void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
   admindb->execute("PRAGMA foreign_keys = OFF");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
@@ -530,6 +598,9 @@ void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 //  admindb->execute("INSERT OR IGNORE INTO main.query_rules SELECT * FROM disk.query_rules");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 //  admindb->execute("INSERT OR IGNORE INTO main.default_hostgroups SELECT * FROM disk.default_hostgroups");
+#ifdef DEBUG
+  admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+#endif /* DEBUG */
   admindb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -539,6 +610,9 @@ void Standard_ProxySQL_Admin::__delete_disktable() {
 //  admindb->execute("DELETE FROM disk.query_rules");
   admindb->execute("DELETE FROM disk.mysql_users");
 //  admindb->execute("DELETE FROM disk.default_hostgroups");
+#ifdef DEBUG
+  admindb->execute("DELETE FROM disk.debug_levels");
+#endif /* DEBUG */
 }
 
 void Standard_ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
@@ -547,6 +621,9 @@ void Standard_ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 //  admindb->execute("INSERT OR REPLACE INTO disk.query_rules SELECT * FROM main.query_rules");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 //  admindb->execute("INSERT OR REPLACE INTO disk.default_hostgroups SELECT * FROM main.default_hostgroups");
+#ifdef DEBUG
+  admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
+#endif /* DEBUG */
 }
 
 void Standard_ProxySQL_Admin::__attach_configdb_to_admindb() {

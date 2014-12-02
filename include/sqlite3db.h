@@ -101,7 +101,8 @@ class SQLite3DB {
 	char *url;
 	sqlite3 *db;
 	public:
-	char *get_url() { return url; }
+	char *get_url() const { return url; }
+	sqlite3 *get_db() const { return db; }
 	int assert_on_error;
 	SQLite3DB();
 	~SQLite3DB();
