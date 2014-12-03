@@ -48,7 +48,7 @@ OPTZ=$(O0)
 
 
 CFLAGS=-std=c++0x $(IDIRS) $(OPTZ) $(DEBUG)
-LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ljemalloc -levent -levent_pthreads -lconfig++ -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl
+LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ljemalloc -lconfig++ -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl
 #LIBS=-rdynamic -Wl,-Bstatic -lproxysql -ljemalloc -levent $(GLIB_LIB) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
