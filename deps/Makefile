@@ -1,41 +1,7 @@
 
 
-default: memcached libconfig libdaemon jemalloc mariadb_client re2
+default: libconfig libdaemon jemalloc mariadb_client re2
 .PHONY: default
-
-
-
-memcached/memcached/libmemcached.a:
-	cd memcached && rm -rf memcached-1.4.20
-	cd memcached && tar -zxf memcached-1.4.20.tar.gz
-	cd memcached/memcached && patch thread.c ../thread.c.patch
-	cd memcached/memcached && patch memcached.c ../memcached.c.patch
-	cd memcached/memcached && ./configure
-	cd memcached/memcached && sed -i -e 's/-O2 /-O2 -fPIC /' Makefile
-	cd memcached/memcached && patch Makefile ../Makefile.patch
-	cd memcached/memcached && make
-
-memcached: memcached/memcached/libmemcached.a
-
-
-#glib/glib/glib/.libs/libglib-2.0.a:
-#	cd glib && rm -rf glib-2.40.0
-#	cd glib && tar -xf glib-2.40.0.tar.xz
-#	cd glib/glib && ./configure --enable-static
-#	cd glib/glib && make
-#
-#glib: glib/glib/glib/.libs/libglib-2.0.a
-
-
-
-#libevent/libevent/.libs/libevent.a:
-#	cd libevent && rm -rf libevent-2.0.21-stable
-#	cd libevent && tar -zxf libevent-2.0.21-stable.tar.gz
-#	cd libevent/libevent && ./configure --disable-malloc-replacement --disable-openssl --disable-debug-mode
-#	cd libevent/libevent && make
-#
-#libevent: libevent/libevent/.libs/libevent.a
-
 
 
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a: 

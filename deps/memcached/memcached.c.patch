@@ -1,5 +1,0 @@
-5019c5019,5020
-< int main (int argc, char **argv) {
----
-> int memcached_main (int argc, char **argv);
-> int memcached_main (int argc, char **argv) {

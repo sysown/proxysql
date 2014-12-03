@@ -34,8 +34,8 @@ create_MySQL_Authentication_t * create_MySQL_Authentication = NULL;
 create_Query_Processor_t * create_Query_Processor = NULL;
 create_ProxySQL_Admin_t * create_ProxySQL_Admin = NULL;
 
-void (*__memcached_main)(int,char **);
-pthread_t memcached_pthread;
+//void (*__memcached_main)(int,char **);
+//pthread_t memcached_pthread;
 
 
 
@@ -152,7 +152,7 @@ void diagnostic_all() {
 	}
 }
 
-
+/*
 void * memcached_main_thread(void *arg) {
 	char **argv=(char **)malloc(sizeof(char *)*7);
 	argv[0]=(char *)"proxysql";
@@ -165,6 +165,7 @@ void * memcached_main_thread(void *arg) {
 //	(*__memcached_main)(7,argv);
 	return NULL;
 }
+*/
 
 void * mysql_worker_thread_func(void *arg) {
 
@@ -406,7 +407,7 @@ int main(int argc, const char * argv[]) {
 	dlerror();
 	char* dlsym_error = NULL;
 
-
+/*
 {
 	void * __memcached = dlopen("../deps/memcached/memcached/proxymemcached.so", RTLD_LAZY);
 	if (!__memcached) {
@@ -423,7 +424,7 @@ int main(int argc, const char * argv[]) {
 		pthread_create(&memcached_pthread, NULL, memcached_main_thread , NULL);
 	}
 }
-
+*/
 
 	create_QC_t* create_QC = NULL;
 

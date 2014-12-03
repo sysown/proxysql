@@ -1,4 +1,0 @@
-65c65
-< static pthread_key_t item_lock_type_key;
----
-> __thread pthread_key_t item_lock_type_key;
