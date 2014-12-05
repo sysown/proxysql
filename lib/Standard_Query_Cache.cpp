@@ -107,7 +107,7 @@ class KV_BtreeArray {
 	};
 
   ~KV_BtreeArray() {
-		fprintf(stderr,"Size of  KVBtreeArray:%d , freed_memory:%llu, cntGet:%llu, cntGetOK:%llu, cntSet:%llu, cntPurge:%llu, dataIN:%llu, dataOUT:%llu\n", cnt() , total_freed_memory, cntGet, cntGetOK, cntSet, cntPurge, dataIN, dataOUT);
+		fprintf(stderr,"Size of  KVBtreeArray:%d , freed_memory:%lu, cntGet:%lu, cntGetOK:%lu, cntSet:%lu, cntPurge:%lu, dataIN:%lu, dataOUT:%lu\n", cnt() , total_freed_memory, cntGet, cntGetOK, cntSet, cntPurge, dataIN, dataOUT);
 		empty();
 		QC_entry_t *qce=NULL;
 		while (ptrArray.len) {
@@ -166,7 +166,7 @@ class KV_BtreeArray {
 			__sync_fetch_and_add(&total_freed_memory,freed_memory);
 			__sync_fetch_and_sub(&size_values,freed_memory);
 			__sync_fetch_and_add(&cntPurge,removed_entries);
-			if (removed_entries) fprintf(stderr,"Removed: %llu, total: %llu, arraylen: %d\n", removed_entries, __sync_fetch_and_sub(&num_entries,0), ptrArray.len);
+			if (removed_entries) fprintf(stderr,"Removed: %lu, total: %lu, arraylen: %d\n", removed_entries, __sync_fetch_and_sub(&num_entries,0), ptrArray.len);
 		}
 	};
 

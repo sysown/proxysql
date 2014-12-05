@@ -6,6 +6,33 @@
 //}
 
 
+#ifdef DEBUG
+static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
+
+	if (GloVars.global.gdbg==0) return;
+	unsigned int i;
+	printf("DUMP %d bytes FROM %s\n", len, func);
+	for(i = 0; i < len; i++) {
+		if(isprint(_ptr[i])) printf("%c", _ptr[i]); else printf(".");
+		if (i>0 && (i%16==15 || i==len-1)) {
+			unsigned int j;
+			if (i%16!=15) {
+				j=15-i%16;
+				while (j--) printf(" ");
+			}
+			printf(" --- ");
+			for (j=(i==len-1 ? ((int)(i/16))*16 : i-15 ) ; j<=i; j++) {
+				printf("%02x ", _ptr[j]);
+			}
+			printf("\n");
+		}
+   }
+	printf("\n\n");
+	
+
+}
+#endif
+
 
 
 
@@ -371,6 +398,9 @@ int MySQL_Data_Stream::array2buffer() {
    	 	    }
 			//PSarrayOUT->remove_index(0,&queueOUT.pkt);
 			memcpy(&queueOUT.pkt,PSarrayOUT->index(idx),sizeof(PtrSize_t));
+#ifdef DEBUG
+			{ __dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size); }
+#endif
 //			PtrSize_t *pts=PSarrayOUT->index(idx);
 //			queueOUT.pkt.ptr=pts->ptr;
 //			queueOUT.pkt.size=pts->size;

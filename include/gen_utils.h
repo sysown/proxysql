@@ -75,6 +75,10 @@ class PtrSizeArray {
 		pdata[len].ptr=p;
 		pdata[len].size=s;
 		len++;
+//#ifdef DEBUG
+//		mysql_hdr *m=(mysql_hdr *)p;
+//		fprintf(stderr,"%u %u\n", m->pkt_id, m->pkt_length);
+//#endif /* DEBUG */
 	};
 
 

@@ -37,8 +37,10 @@ class SQLite3_row {
 	void add_fields(sqlite3_stmt *stmt) {
 		int i;
 		for (i=0;i<cnt;i++) {
-			fields[i]=strdup((char *)sqlite3_column_text(stmt,i));
 			sizes[i]=sqlite3_column_bytes(stmt,i);
+			const char *c=(char *)sqlite3_column_text(stmt,i);
+			fields[i]=( c ? strdup(c) : NULL);
+			//fields[i]=(sizes[i] ? strdup((char *)sqlite3_column_text(stmt,i)) : NULL);
 		}
 	};
 };
@@ -59,6 +61,7 @@ class SQLite3_column {
 class SQLite3_result {
 	public:
 	int columns;
+	int rows_count;
 	std::vector<SQLite3_column *> column_definition;
 	std::vector<SQLite3_row *> rows;
 	SQLite3_result() {
@@ -75,9 +78,11 @@ class SQLite3_result {
 		SQLite3_row *row=new SQLite3_row(columns);
 		row->add_fields(stmt);
 		rows.push_back(row);
+		rows_count++;
 		return SQLITE_ROW;		
 	};
 	SQLite3_result(sqlite3_stmt *stmt) {
+		rows_count=0;
 		columns=sqlite3_column_count(stmt);
 		for (int i=0; i<columns; i++) {
 			add_column_definition(sqlite3_column_type(stmt,i), sqlite3_column_name(stmt,i));

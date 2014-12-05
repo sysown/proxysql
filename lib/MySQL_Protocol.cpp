@@ -938,7 +938,7 @@ bool MySQL_Protocol::generate_COM_RESET_CONNECTION(bool send, void **ptr, unsign
 //bool MySQL_Protocol::generate_pkt_column_count(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
 bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
 
-	char count_prefix;
+	char count_prefix=0;
 	uint8_t count_len=mysql_encode_length(count, &count_prefix);
 
 	mysql_hdr myhdr;
@@ -1010,6 +1010,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 		+ org_table_len + org_table_strlen
 		+ name_len + name_strlen
 		+ org_name_len + org_name_strlen
+		+ 1  // filler
 		+ sizeof(uint16_t) // charset
 		+ sizeof(uint32_t) // column_length
 		+ sizeof(uint8_t)  // type
@@ -1018,7 +1019,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 		+ 2; // filler
 	if (field_list) {
 		myhdr.pkt_length += defvalue_length_len + strlen(defvalue);
-	}
+	} //else myhdr.pkt_length++;
 
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
   unsigned char *_ptr=(unsigned char *)l_alloc(size);
@@ -1033,7 +1034,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 	l+=write_encoded_length_and_string(_ptr+l, org_name_strlen, org_name_len, org_name_prefix, org_name);
 	_ptr[l]=0x0c; l++;
 	memcpy(_ptr+l,&charset,sizeof(uint16_t)); l+=sizeof(uint16_t);
-	memcpy(_ptr+l,&column_length,sizeof(uint16_t)); l+=sizeof(uint32_t);
+	memcpy(_ptr+l,&column_length,sizeof(uint32_t)); l+=sizeof(uint32_t);
 	_ptr[l]=type; l++;
 	memcpy(_ptr+l,&flags,sizeof(uint16_t)); l+=sizeof(uint16_t);
 	_ptr[l]=decimals; l++;
@@ -1041,8 +1042,9 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 	_ptr[l]=0x00; l++;
 	if (field_list) {
 		l+=write_encoded_length_and_string(_ptr+l, strlen(defvalue), defvalue_length_len, defvalue_length_prefix, defvalue);
-	}
-
+	} 
+	//else _ptr[l]=0x00;
+	//else fprintf(stderr,"current deflen=%d, defstrlen=%d, namelen=%d, namestrlen=%d, l=%d\n", def_len, def_strlen, name_len, name_strlen, l);
 	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
@@ -1052,6 +1054,39 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 	return true;
 }
 
+
+bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, int *fieldslen, char **fieldstxt) {
+	int col=0;
+	int rowlen=0;
+	for (col=0; col<colnums; col++) {
+		rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
+	}
+	mysql_hdr myhdr;
+	myhdr.pkt_id=sequence_id;
+	myhdr.pkt_length=rowlen;
+
+	unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+	unsigned char *_ptr=(unsigned char *)l_alloc(size);
+	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+	int l=sizeof(mysql_hdr);
+	for (col=0; col<colnums; col++) {
+		if (fieldstxt[col]) {
+			char length_prefix;
+			uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
+			l+=write_encoded_length_and_string(_ptr+l,fieldslen[col],length_len, length_prefix, fieldstxt[col]);
+		} else {
+			_ptr[l]=0xfb;
+			l++;
+		}
+	}
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
+	if (len) { *len=size; }
+	if (ptr) { *ptr=(void *)_ptr; }
+#ifdef DEBUG
+	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+#endif
+	return true;
+}
 
 //bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsigned int *len) {

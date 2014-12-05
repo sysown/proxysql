@@ -14,6 +14,7 @@ class MySQL_Protocol {
 #ifdef DEBUG
 	bool dump_pkt;
 #endif
+	MySQL_Data_Stream *get_myds() { return *myds; }
 	void init(MySQL_Data_Stream **, MySQL_Session_userinfo *, MySQL_Session *);
 	int pkt_handshake_client(unsigned char *, unsigned int);
 	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);
@@ -45,6 +46,7 @@ class MySQL_Protocol {
 	bool generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count);
 //	bool generate_pkt_field(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue);
 	bool generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue);
+	bool generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, int *fieldslen, char **fieldstxt);
 //	bool generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 	bool generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len);
 //	bool generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);

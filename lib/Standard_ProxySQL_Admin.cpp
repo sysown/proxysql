@@ -17,7 +17,7 @@
 #include "SpookyV2.h"
 
 extern MySQL_Authentication *GloMyAuth;
-
+extern ProxySQL_Admin *GloAdmin;
 //#define PANIC(msg)  { perror(msg); return -1; }
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -87,9 +87,6 @@ static uint32_t keyfromhash(uint32_t hash) {
 class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
-	SQLite3DB *admindb;	// in memory
-	SQLite3DB *monitordb;	// in memory
-	SQLite3DB *configdb; // on disk
 //SQLite3DB *db3;
 
 	std::vector<table_def_t *> *tables_defs_admin;
@@ -121,7 +118,11 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void __refresh_users();
 	
+
 	public:
+	SQLite3DB *admindb;	// in memory
+	SQLite3DB *monitordb;	// in memory
+	SQLite3DB *configdb; // on disk
 	Standard_ProxySQL_Admin();
 	virtual ~Standard_ProxySQL_Admin();
 	virtual void print_version();
@@ -129,6 +130,9 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual void init_users();
 	virtual void admin_shutdown();
 	bool is_command(std::string);
+	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
+
+//	virtual void admin_session_handler(MySQL_Session *sess);
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -144,7 +148,48 @@ typedef struct _main_args {
 
 
 
-void admin_session_handler(MySQL_Session *sess) {
+void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *pkt) {
+
+	char *error=NULL;
+	int cols;
+	int affected_rows;
+	SQLite3_result *resultset=NULL;
+	//char *query=(char *)"SELECT 1, 2, 3";
+	char *query=NULL;
+	query=(char *)l_alloc(pkt->size-sizeof(mysql_hdr));
+	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
+	query[pkt->size-sizeof(mysql_hdr)-1]=0;
+	fprintf(stderr,"%d : %s\n",pkt->size, query);
+	Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+	SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
+	l_free(pkt->size,query);
+/*
+	//MySQL_Protocol &myprot=sess->myprot_client;
+	sess->client_myds->DSS=STATE_QUERY_SENT;
+//	sess->myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+	sess->myprot_client.generate_pkt_column_count(true,NULL,NULL,1,1);
+	sess->myprot_client.generate_pkt_field(true,NULL,NULL,2,(char *)"",(char *)"",(char *)"",(char *)"alias",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,true,0,(char *)"");
+	sess->client_myds->DSS=STATE_COLUMN_DEFINITION;
+	sess->myprot_client.generate_pkt_EOF(true,NULL,NULL,3,0,0);
+	char **p=(char **)malloc(sizeof(char*));
+	int *l=(int *)malloc(sizeof(int*));
+	//p[0]="column test";
+	int st=rand()%32+2;
+	p[0]=(char *)malloc(st+1);
+	for (int i=0; i<st; i++) {
+		p[0][i]='a'+rand()%25;
+	}
+	p[0][st]='\0';
+	l[0]=strlen(p[0]);
+	sess->client_myds->DSS=STATE_ROW;
+	sess->myprot_client.generate_pkt_row(true,NULL,NULL,4,1,l,p);
+	sess->myprot_client.generate_pkt_EOF(true,NULL,NULL,5,0,2);
+	sess->client_myds->DSS=STATE_SLEEP;
+	free(l);
+	free(p[0]);
+	free(p);
+*/
 }
 
 
@@ -156,7 +201,7 @@ void *child_mysql(void *arg) {
 	struct pollfd fds[1];
 	nfds_t nfds=1;
 	int rc;
-
+	pthread_mutex_unlock(&sock_mutex);
 //	MySQL_Thread *mysql_thr=create_MySQL_Thread_func();
 	Standard_MySQL_Thread *mysql_thr=new Standard_MySQL_Thread();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
@@ -166,7 +211,7 @@ void *child_mysql(void *arg) {
 
 	fds[0].fd=client;
 	fds[0].revents=0;	
-	fds[0].events=POLLIN|POLLOUT;	
+	fds[0].events=POLLIN|POLLOUT;
 
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 	sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
@@ -190,7 +235,8 @@ void *child_mysql(void *arg) {
 		myds->read_from_net();
 		myds->read_pkts();
 		sess->to_process=1;
-		sess->handler();
+		int rc=sess->handler();
+		if (rc==-1) goto __exit_child_mysql;
 	}
 
 __exit_child_mysql:
@@ -565,7 +611,7 @@ void Standard_ProxySQL_Admin::flush_debug_levels_mem_to_db(SQLite3DB *db, bool r
 #ifdef DEBUG
 int Standard_ProxySQL_Admin::flush_debug_levels_db_to_mem(SQLite3DB *db) {
   int i;
-  char *query="SELECT verbosity FROM debug_levels WHERE module=\"%s\"";
+  char *query=(char *)"SELECT verbosity FROM debug_levels WHERE module=\"%s\"";
   int l=strlen(query)+100;
   int rownum=0;
   int result;
@@ -646,6 +692,53 @@ void Standard_ProxySQL_Admin::__refresh_users() {
 	__delete_inactive_users(USERNAME_FRONTEND);
 	__add_active_users(USERNAME_BACKEND);
 	__add_active_users(USERNAME_FRONTEND);
+}
+
+void Standard_ProxySQL_Admin::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
+	assert(myprot);
+	MySQL_Data_Stream *myds=myprot->get_myds();
+	myds->DSS=STATE_QUERY_SENT;
+	int sid=1;
+	if (result) {
+//	sess->myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,result->columns); sid++;
+		for (int i=0; i<result->columns; i++) {
+			//myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"alias",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,true,0,(char *)"");
+			//myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",result->column_definition[i]->name,(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,true,0,(char *)"");
+			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",result->column_definition[i]->name,(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL);
+			sid++;
+		}
+		myds->DSS=STATE_COLUMN_DEFINITION;
+
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,0); sid++;
+		char **p=(char **)malloc(sizeof(char*)*result->columns);
+		int *l=(int *)malloc(sizeof(int*)*result->columns);
+		//p[0]="column test";
+		for (int r=0; r<result->rows_count; r++) {
+		for (int i=0; i<result->columns; i++) {
+			//int st=rand()%32+2;
+			//p[i]=(char *)malloc(st+1);
+			//for (int j=0; j<st; j++) {
+			//	p[i][j]='a'+rand()%25;
+			//}
+			//p[i][st]='\0';
+			//l[i]=strlen(p[i]);
+			l[i]=result->rows[r]->sizes[i];
+			p[i]=result->rows[r]->fields[i];
+		}
+		myprot->generate_pkt_row(true,NULL,NULL,sid,result->columns,l,p); sid++;
+		}
+		myds->DSS=STATE_ROW;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,2); sid++;
+		myds->DSS=STATE_SLEEP;
+		free(l);
+		//free(p[0]);
+		free(p);
+	
+	} else {
+		myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"#28000",error); sid++;
+		myds->DSS=STATE_SLEEP;
+	}
 }
 
 void Standard_ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {

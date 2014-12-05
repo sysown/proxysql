@@ -51,7 +51,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		va_start(ap, fmt);
 		vsnprintf(debugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
-		fprintf(stderr, "%d:%s:%d:%s(): LVL#%d : %s" , thr, __file, __line, __func, verbosity, debugbuff);
+		fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
 		return;
 	}
 /*

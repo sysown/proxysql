@@ -3,7 +3,7 @@
 
 extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
-
+extern ProxySQL_Admin *GloAdmin;
 
 MySQL_Session_userinfo::MySQL_Session_userinfo() {
 	username=NULL;
@@ -367,7 +367,8 @@ int MySQL_Session::handler() {
 								client_myds->DSS=STATE_QUERY_SENT;
 							} else {
 								// this is processed by the admin module
-								admin_func(this);	
+								admin_func(this, GloAdmin, &pkt);
+								l_free(pkt.size,pkt.ptr);
 							}
 								break;
 							case _MYSQL_COM_QUIT:
