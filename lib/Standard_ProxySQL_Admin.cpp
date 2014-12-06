@@ -159,7 +159,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	query=(char *)l_alloc(pkt->size-sizeof(mysql_hdr));
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 	query[pkt->size-sizeof(mysql_hdr)-1]=0;
-	fprintf(stderr,"%d : %s\n",pkt->size, query);
 	Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 	SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
@@ -750,7 +749,6 @@ void Standard_ProxySQL_Admin::__delete_inactive_users(enum cred_username_type us
 	char *str=(char *)"SELECT username FROM main.mysql_users WHERE %s=1 AND active=0";
 	char *query=(char *)malloc(strlen(str)+15);
 	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
-	fprintf(stderr,"%s\n", query);	
 admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -773,7 +771,6 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	char *str=(char *)"SELECT username,password,use_ssl FROM main.mysql_users WHERE %s=1 AND active=1";
 	char *query=(char *)malloc(strlen(str)+15);
 	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
-	fprintf(stderr,"%s\n", query);	
 admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
