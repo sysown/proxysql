@@ -58,13 +58,13 @@ int MySQL_Connection::assign_mshge(unsigned int hid) { // FIXME
 		a) shouldn't always return 0
 		b) MSHGE_find should get a random server
 */
-	MyHostGroups->rdlock();
+	MyHGH->rdlock();
 	if (mshge) { free_mshge(); }
-	MySQL_Hostgroup_Entry *_mshge=MyHostGroups->MSHGE_find(hid,(char *)"127.0.0.1", 3306);
+	MySQL_Hostgroup_Entry *_mshge=MyHGH->MSHGE_find(hid,(char *)"127.0.0.1", 3306);
 	assert(_mshge);
 	if (_mshge) {
 		set_mshge(_mshge);
 	}
-	MyHostGroups->rdunlock();
+	MyHGH->rdunlock();
 	return 0;
 };

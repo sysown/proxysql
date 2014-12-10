@@ -195,7 +195,7 @@ class MySQL_Server;
 //class MySQL_Servers;
 class MySQL_Hostgroup_Entry;
 class MySQL_Hostgroup;
-class MySQL_HostGroups;
+class MySQL_HostGroups_Handler;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
@@ -587,10 +587,10 @@ GOptionEntry cmd_option_entries[] =
 #endif // GLOBAL_DEFINED_OPTS_ENTRIES 
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
-MySQL_HostGroups *MyHostGroups;
+MySQL_HostGroups_Handler *MyHGH;
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
 extern ProxySQL_GlobalVariables GloVars;
-extern MySQL_HostGroups *MyHostGroups;
+extern MySQL_HostGroups_Handler *MyHGH;
 //extern GOptionEntry cmd_option_entries[];
 #endif /* PROXYSQL_EXTERN */

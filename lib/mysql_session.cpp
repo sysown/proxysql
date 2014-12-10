@@ -214,14 +214,14 @@ int MySQL_Session::handler() {
 				//mybe=find_backend(1);
 				mybe=find_or_create_backend(1,server_myds);
 /*
-				MyHostGroups->rdlock();
+				MyHGH->rdlock();
 				if (server_myds->myconn->mshge) { server_myds->myconn->free_mshge(); }
-				MySQL_Hostgroup_Entry *mshge=MyHostGroups->MSHGE_find(1,(char *)"127.0.0.1", 3306);
+				MySQL_Hostgroup_Entry *mshge=MyHGHs->MSHGE_find(1,(char *)"127.0.0.1", 3306);
 				assert(mshge);
 				if (mshge) {
 					server_myds->myconn->set_mshge(mshge);
 				}
-				MyHostGroups->rdunlock();
+				MyHGHs->rdunlock();
 */
 	      server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
 				server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);
@@ -342,14 +342,14 @@ int MySQL_Session::handler() {
 									//mybe=find_backend(1);
 									mybe=find_or_create_backend(1,server_myds);
 /*
-									MyHostGroups->rdlock();
+									MyHGH->rdlock();
 									if (server_myds->myconn->mshge) { server_myds->myconn->free_mshge(); }
-									MySQL_Hostgroup_Entry *mshge=MyHostGroups->MSHGE_find(1,(char *)"127.0.0.1", 3306);
+									MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"127.0.0.1", 3306);
 									assert(mshge);
 									if (mshge) {
 										server_myds->myconn->set_mshge(mshge);
 									}
-									MyHostGroups->rdunlock();
+									MyHGH->rdunlock();
 */
 	      					server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
         //  				server_fd=server_myds->myds_connect((char *)"127.0.0.1", 3306, &pending_connect);

@@ -6,10 +6,10 @@ Classes:
 MySQL_Server
 MySQL_Hostgroup_Entry
 MySQL_Hostgroup
-MySQL_HostGroups
+MySQL_HostGroup_Handler
 
 
-MySQL_HostGroups is a collections of MySQL_Hostgroup and MySQL_Server
+MySQL_HostGroup_Handler is a collections of MySQL_Hostgroup and MySQL_Server and function for their handling
 MySQL_Hostgroup is a collections of MySQL_Hostgroup_Entry
 MySQL_Hostgroup_Entry is a reference to MySQL_Server with further data
 
@@ -217,7 +217,7 @@ class MySQL_Hostgroup {
 	};
 };
 
-class MySQL_HostGroups {
+class MySQL_HostGroups_Handler {
 	private:
 	pthread_rwlock_t rwlock;
 	std::vector<MySQL_Hostgroup *> MyHostGroups;
@@ -245,11 +245,11 @@ class MySQL_HostGroups {
 		return srv;
 	};
 	public:
-	MySQL_HostGroups() {
+	MySQL_HostGroups_Handler() {
 		int rc=pthread_rwlock_init(&rwlock, NULL);
 		assert(rc==0);
 	};
-	~MySQL_HostGroups() {
+	~MySQL_HostGroups_Handler() {
 		reset();
 	};
 	void wrlock() {
