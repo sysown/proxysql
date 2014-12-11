@@ -115,6 +115,31 @@ class PtrSizeArray {
 
 #ifndef __GEN_FUNCTIONS
 #define __GEN_FUNCTIONS
+
+#ifdef __APPLE__
+#include <sys/types.h>
+#include <sys/_types/_timespec.h>
+#include <mach/mach.h>
+#include <mach/clock.h>
+#include <mach/mach_time.h>
+
+#ifndef mach_time_h
+#define mach_time_h 
+#define CLOCK_MONOTONIC SYSTEM_CLOCK
+
+void clock_gettime(int clk_id, struct timespec *tp) {
+	clock_serv_t cclock;
+	mach_timespec_t mts;
+	host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
+	retval = clock_get_time(cclock, &mts);
+	mach_port_deallocate(mach_task_self(), cclock);
+	tp->tv_sec = mts.tv_sec;
+	tp->tv_nsec = mts.tv_nsec;
+}
+#endif /* mach_time_t */
+#endif /* __APPLE__ */
+
+
 inline unsigned long long monotonic_time() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
