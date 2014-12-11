@@ -223,6 +223,10 @@ int MySQL_Session::handler() {
 				}
 				MyHGHs->rdunlock();
 */
+				assert(server_myds);
+				assert(server_myds->myconn);
+				assert(server_myds->myconn->mshge);
+				assert(server_myds->myconn->mshge->MSptr);
 	      server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
 				server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);
 				thread->mypolls.add(POLLIN|POLLOUT, server_fd, server_myds, curtime);
@@ -310,6 +314,7 @@ int MySQL_Session::handler() {
 //										fprintf(stderr,"Query to cache: %s\n", client_myds->query_SQL);
 										uint32_t resbuf=0;
 										unsigned char *aa=GloQC->get(client_myds->query_SQL,&resbuf);
+										//unsigned char *aa=NULL;
 										if (aa) {
 											l_free(pkt.size,pkt.ptr);
 											l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
@@ -351,6 +356,10 @@ int MySQL_Session::handler() {
 									}
 									MyHGH->rdunlock();
 */
+						assert(server_myds);
+						assert(server_myds->myconn);
+						assert(server_myds->myconn->mshge);
+						assert(server_myds->myconn->mshge->MSptr);
 	      					server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
         //  				server_fd=server_myds->myds_connect((char *)"127.0.0.1", 3306, &pending_connect);
 									server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);

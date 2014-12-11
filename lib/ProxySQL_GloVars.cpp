@@ -16,7 +16,7 @@ static void term_handler(int sig) {
 
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
-	//opt->reset();
+	opt->reset();
 	//opt->footer.clear();
 	delete opt;
 	delete confFile;

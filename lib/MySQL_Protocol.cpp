@@ -1381,10 +1381,12 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 
 
 	myc.server_capabilities=capabilities;
-	myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
+	//myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
+	myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
 	const_cast<charset_info_st *>(myc.charset)->nr=charset;
 	myc.thread_id=thread_id;
-	myc.server_version=l_strdup((const char *)version);
+	//myc.server_version=l_strdup((const char *)version);
+	myc.server_version=strdup((const char *)version);
 	myc.protocol_version=protocol;
 	
 	memcpy(myc.scramble_buff,(const char *)salt1,strlen((char *)salt1));
@@ -1471,18 +1473,17 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 	if (ret==true) {
 		MYSQL &myc=(*myds)->myconn->myconn;
-/*
 		myc.user=strdup((const char *)user);
 		if (password) myc.passwd=strdup(password);
 		if (db) myc.db=strdup((const char *)db);
-*/
+/*
 		myc.user=l_strdup((const char *)user);
 		if (password) myc.passwd=l_strdup(password);
 		if (db) myc.db=l_strdup((const char *)db);
-
+*/
 		myc.server_capabilities=capabilities;
-		//myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
-		myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
+		myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
+//		myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
 		const_cast<charset_info_st *>(myc.charset)->nr=charset;
 		//myds->myconn->myconn
 

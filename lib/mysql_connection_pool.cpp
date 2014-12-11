@@ -36,6 +36,34 @@ void MyConnArray::add(MySQL_Connection *myc) {
 	free_conns->add((void *)myc);
 }
 
+MySQL_Connection * MyConnArray::MyConn_find() {
+	unsigned int l;
+	MySQL_Connection *myc=NULL;
+	MySQL_Connection *_myc_tmp=NULL;
+	for (l=0; l<free_conns->len; l++) {
+		_myc_tmp=(MySQL_Connection *)free_conns->index(l);
+		if (_myc_tmp->is_expired(0)==false) { // FIXME: shouldn't pass 0
+			myc=(MySQL_Connection *)free_conns->remove_index_fast(l);
+			break;
+		}
+	}
+	return myc;
+}
+
+MySQL_Connection * MySQL_Connection_Pool::MySQL_Connection_lookup(MyConnArray *MCA) {
+	MySQL_Connection *myc=NULL;
+	myc=MCA->MyConn_find();
+	return myc;
+}
+
+MySQL_Connection * MySQL_Connection_Pool::MySQL_Connection_lookup(const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
+	MySQL_Connection *myc=NULL;
+	MyConnArray *MCA=MyConnArray_find(hostname, username, password, db, port);
+	if (MCA) {
+		myc=MCA->MyConn_find();	
+	}
+	return myc;
+}
 
 MyConnArray * MySQL_Connection_Pool::MyConnArray_find(const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
 	unsigned int l;
@@ -71,7 +99,7 @@ MyConnArray * MySQL_Connection_Pool::MyConnArray_lookup(const char *hostname, co
 	return MCA;
 }
 
-MySQL_Connection_Pool::MySQL_Connection_Pool(int _shared) {
+MySQL_Connection_Pool::MySQL_Connection_Pool(bool _shared) {
 	shared=_shared;
 	spinlock_init(&mutex);
 	MyConnArrays= new PtrArray();
