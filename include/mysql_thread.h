@@ -239,8 +239,9 @@ typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
 class Standard_MySQL_Thread: public MySQL_Thread
 {
 	public:
-	Standard_MySQL_Thread();
-	 ~Standard_MySQL_Thread();
+//	Standard_MySQL_Thread();
+//	 ~Standard_MySQL_Thread();
+	MySQL_Session * create_new_session_and_client_data_stream(int);
 };
 #endif /* __CLASS_STANDARD_MYSQL_THREAD_H */
 
