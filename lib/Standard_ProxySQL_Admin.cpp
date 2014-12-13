@@ -64,6 +64,25 @@ static t_symstruct lookuptable[] = {
 #define NKEYS (sizeof(lookuptable)/sizeof(t_symstruct))
 
 
+int remove_spaces(const char *s) {
+	char *inp = (char *)s, *outp = (char *)s;
+	bool prev_space = false;
+	while (*inp) {
+		if (isspace(*inp)) {
+			if (!prev_space) {
+				*outp++ = ' ';
+				prev_space = true;
+			}
+		} else {
+			*outp++ = *inp;
+			prev_space = 0;
+		}
+		++inp;
+	}
+	*outp = '\0';
+	return strlen(s);
+}
+
 static uint32_t keyfromhash(uint32_t hash) {
 	uint32_t i;
 	for (i=0; i < NKEYS; i++) {
@@ -153,16 +172,59 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	char *error=NULL;
 	int cols;
 	int affected_rows;
+	bool run_query=true;
 	SQLite3_result *resultset=NULL;
+	char *strA=NULL;
+	char *strB=NULL;
+	int strAl, strBl;
 	//char *query=(char *)"SELECT 1, 2, 3";
 	char *query=NULL;
-	query=(char *)l_alloc(pkt->size-sizeof(mysql_hdr));
-	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
-	query[pkt->size-sizeof(mysql_hdr)-1]=0;
-	Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-	SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
-	l_free(pkt->size,query);
+	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
+	query=(char *)l_alloc(query_length);
+	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
+	query[query_length-1]=0;
+
+	char *query_no_space=(char *)l_alloc(query_length);	
+	memcpy(query_no_space,query,query_length);
+
+	unsigned int query_no_space_length=remove_spaces(query_no_space);
+	//fprintf(stderr,"%s----\n",query_no_space);
+
+
+	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table'");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+
+	strA=(char *)"SHOW CREATE TABLE ";
+	strB=(char *)"SELECT name AS 'table' , sql AS 'Create Table' FROM sqlite_master WHERE type='table' AND name='%s'";
+	strAl=strlen(strA);
+        if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
+		strBl=strlen(strB);
+		int tblnamelen=query_no_space_length-strAl;
+		int l=strBl+tblnamelen-2;
+		char *buff=(char *)l_alloc(l+1);
+		snprintf(buff,l,strB,query_no_space+strAl);
+		buff[l-1]='\'';
+		buff[l]=0;
+		l_free(query_length,query);
+		query=buff;
+		//fprintf(stderr,"%s----\n",query);
+		query_length=l+1;
+		goto __run_query;
+	}
+
+__run_query:
+	if (run_query) {
+		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+		SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
+	}
+	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
+	l_free(query_length,query);
 /*
 	//MySQL_Protocol &myprot=sess->myprot_client;
 	sess->client_myds->DSS=STATE_QUERY_SENT;
