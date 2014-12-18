@@ -12,6 +12,7 @@ class MySQL_Session_userinfo {
 	~MySQL_Session_userinfo();
 	void set(char *, char *, char *);
 	void set(MySQL_Session_userinfo *);
+	bool set_schemaname(char *, int);
 };
 
 class MySQL_Session

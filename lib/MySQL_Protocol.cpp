@@ -882,7 +882,7 @@ bool MySQL_Protocol::generate_COM_INIT_DB(bool send, void **ptr, unsigned int *l
   //Copy4B(_ptr, &myhdr);
   int l=sizeof(mysql_hdr);
 	_ptr[l]=0x02; l++;
-	memcpy(_ptr+l, &schema, schema_len);
+	memcpy(_ptr+l, schema, schema_len);
 	
 	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
