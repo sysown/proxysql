@@ -294,7 +294,7 @@ void *child_mysql(void *arg) {
 		}
 		myds->revents=fds[0].revents;
 		myds->read_from_net();
-		if (sess->net_failure) goto __exit_child_mysql;
+		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
 		sess->to_process=1;
 		int rc=sess->handler();

@@ -38,7 +38,7 @@ class MySQL_Session
 //	char *schema_name;
 //	char *schema_cur;
 //	char *schema_new;
-	int net_failure;
+	//int net_failure;
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
 

@@ -79,6 +79,8 @@ class MySQL_Data_Stream
 	int active; // data stream is active. If not, shutdown+close needs to be called
 	int status; // status . FIXME: make it a ORable variable
 
+	bool net_failure;
+
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
 

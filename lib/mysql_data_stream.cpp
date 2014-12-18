@@ -112,6 +112,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	DSS=STATE_NOT_CONNECTED;
 	encrypted=false;
 	ssl=NULL;
+	net_failure=false;
 //	ssl_ctx=NULL;
 }
 
@@ -189,15 +190,18 @@ void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int
 
 
 // Soft shutdown of socket : it only deactivate the data stream
+// TODO: should check the status of the data stream, and identify if it is safe to reconnect or if the session should be destroyed
 void MySQL_Data_Stream::shut_soft() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown soft fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
 	active=FALSE;
-	if (sess) sess->net_failure=1;
+	net_failure=true;
+	//if (sess) sess->net_failure=1;
 }
 
 // Hard shutdown of socket
 void MySQL_Data_Stream::shut_hard() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown hard fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
+	net_failure=true;
 	if (fd >= 0) {
 		shutdown(fd, SHUT_RDWR);
 		close(fd);
