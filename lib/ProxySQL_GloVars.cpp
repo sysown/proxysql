@@ -35,6 +35,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
+	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
 	global.gdb=0;
 #endif
@@ -125,7 +126,9 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 void ProxySQL_GlobalVariables::process_opts_post() {
 
 	if (opt->isSet("-n")) {
-		global.nostart=true;
+		//global.nostart=true;
+		GloVars.global.nostart=true;
+		GloVars.__cmd_proxysql_nostart=1;
 	}
 
 	if (opt->isSet("-f")) {
@@ -177,7 +180,7 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
   // apply settings from cmdline, that have priority over config file
 #ifdef DEBUG
-	if (GloVars.__cmd_proxysql_gdbg>=0) { GloVars.global.gdbg=true; }
+	if (GloVars.__cmd_proxysql_gdbg>0) { GloVars.global.gdbg=true; }
 	init_debug_struct_from_cmdline();
 #endif
 

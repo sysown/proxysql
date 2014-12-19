@@ -378,8 +378,8 @@ int main(int argc, const char * argv[]) {
 	}
 	GloVars.confFile->ReadGlobals();
 #ifdef DEBUG
-	GloVars.confFile->configVariable((const char *)"global",(const char *)"debugin",GloVars.global.gdb,1,1,100,0);
-	GloVars.confFile->configVariable((const char *)"global",(const char *)"debug",GloVars.global.gdbg,true);
+//	GloVars.confFile->configVariable((const char *)"global",(const char *)"debugin",GloVars.global.gdb,1,1,100,0);
+//	GloVars.confFile->configVariable((const char *)"global",(const char *)"debug",GloVars.global.gdbg,true);
 #endif
 
 	GloVars.parse(argc,argv);
@@ -550,8 +550,6 @@ int main(int argc, const char * argv[]) {
 //	GloAdmin->init();
 }
 
-
-
 #ifdef DEBUG
 // if -d is specified in the command line, this has higher priority over what is specified in config file 
 //	init_debug_struct_from_cmdline();
@@ -562,6 +560,11 @@ int main(int argc, const char * argv[]) {
 	GloMyAuth->print_version();
 
 	GloAdmin->init_users();
+
+
+	if (GloVars.__cmd_proxysql_nostart) {
+		pthread_mutex_lock(&GloVars.global.start_mutex);
+	}
 
 {
 	GloQPro = create_Query_Processor();
@@ -699,6 +702,11 @@ int main(int argc, const char * argv[]) {
 	pthread_join(GloQC->purge_thread_id, NULL);
 	//SQC->empty();
 	//SQC->flush();
+
+	if (GloVars.__cmd_proxysql_nostart) {
+		pthread_mutex_unlock(&GloVars.global.start_mutex);
+	}
+
 	delete GloQC;
 	delete GloQPro;
 	delete GloMyAuth;

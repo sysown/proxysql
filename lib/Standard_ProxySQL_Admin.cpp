@@ -16,6 +16,9 @@
 
 #include "SpookyV2.h"
 
+
+static volatile int load_main_=0;
+
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 //#define PANIC(msg)  { perror(msg); return -1; }
@@ -150,7 +153,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual void admin_shutdown();
 	bool is_command(std::string);
 	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
-
+	void send_MySQL_OK(MySQL_Protocol *myprot);
 //	virtual void admin_session_handler(MySQL_Session *sess);
 };
 
@@ -190,6 +193,14 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	unsigned int query_no_space_length=remove_spaces(query_no_space);
 	//fprintf(stderr,"%s----\n",query_no_space);
 
+
+	if (query_no_space_length==strlen("PROXYSQL START") && !strncasecmp("PROXYSQL START",query_no_space, query_no_space_length)) {
+		__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
+		run_query=false;
+		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+		SPA->send_MySQL_OK(&sess->myprot_client);
+		goto __run_query;
+	}
 
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -389,6 +400,10 @@ static void * admin_main_loop(void *arg)
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   pthread_attr_setstacksize (&attr, mystacksize);
 
+	if(GloVars.global.nostart) {
+		pthread_mutex_lock(&GloVars.global.start_mutex);
+	}
+	__sync_fetch_and_add(&load_main_,1);
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
 		int *client;
@@ -397,6 +412,11 @@ static void * admin_main_loop(void *arg)
 		pthread_t child;
 		size_t stacks;
 		rc=poll(fds,nfds,1000);
+		//if (__sync_fetch_and_add(&GloVars.global.nostart,0)==0) {
+		//	__sync_fetch_and_add(&GloVars.global.nostart,1);
+		if (__sync_val_compare_and_swap(&GloVars.global.nostart,0,1)==0) {
+			pthread_mutex_unlock(&GloVars.global.start_mutex);
+		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
         // poll() timeout, try again
         continue;
@@ -527,7 +547,8 @@ bool Standard_ProxySQL_Admin::init() {
 
 	__attach_configdb_to_admindb();
 #ifdef DEBUG
-	flush_debug_levels_mem_to_db(configdb, true);
+	flush_debug_levels_mem_to_db(configdb, false);
+	flush_debug_levels_mem_to_db(admindb, true);
 #endif /* DEBUG */
 	__insert_or_ignore_maintable_select_disktable();
 
@@ -547,6 +568,7 @@ bool Standard_ProxySQL_Admin::init() {
 		perror("Thread creation");
 		exit(EXIT_FAILURE);
 	}
+	do { usleep(50); } while (__sync_fetch_and_sub(&load_main_,0)==0);
 	return true;
 };
 
@@ -754,6 +776,14 @@ void Standard_ProxySQL_Admin::__refresh_users() {
 	__delete_inactive_users(USERNAME_FRONTEND);
 	__add_active_users(USERNAME_BACKEND);
 	__add_active_users(USERNAME_FRONTEND);
+}
+
+void Standard_ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot) {
+	assert(myprot);
+	MySQL_Data_Stream *myds=myprot->get_myds();
+	myds->DSS=STATE_QUERY_SENT;
+	myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
+	myds->DSS=STATE_SLEEP;
 }
 
 void Standard_ProxySQL_Admin::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
