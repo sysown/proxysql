@@ -550,6 +550,14 @@ int main(int argc, const char * argv[]) {
 //	GloAdmin->init();
 }
 
+
+
+#ifdef DEBUG
+// if -d is specified in the command line, this has higher priority over what is specified in config file 
+//	init_debug_struct_from_cmdline();
+#endif /* DEBUG */
+
+
 	GloMyAuth = create_MySQL_Authentication();
 	GloMyAuth->print_version();
 

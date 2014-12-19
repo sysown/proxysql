@@ -111,6 +111,7 @@ void proxy_error_func(const char *, ...);
 
 #ifdef DEBUG
 void init_debug_struct();
+void init_debug_struct_from_cmdline();
 void proxy_debug_func(enum debug_module, int, int, const char *, int, const char *, const char *, ...);
 #endif
 

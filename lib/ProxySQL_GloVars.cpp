@@ -60,7 +60,7 @@ opt.add(
 */
 	opt->add((const char *)"",0,0,0,(const char *)"Display usage instructions.",(const char *)"-h",(const char *)"-help",(const char *)"--help",(const char *)"--usage");
 	opt->add((const char *)"",0,0,0,(const char *)"Print version",(const char *)"-V",(const char *)"--version");
-	opt->add((const char *)"",0,0,0,(const char *)"Enable debugging messages",(const char *)"-d",(const char *)"--debug");
+	opt->add((const char *)"",0,1,0,(const char *)"Enable debugging messages with specific verbosity",(const char *)"-d",(const char *)"--debug");
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
@@ -98,7 +98,8 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	}
 
 	if (opt->isSet("-d")) {
-		global.gdbg=true;
+		opt->get("-d")->getInt(GloVars.__cmd_proxysql_gdbg);	
+		//global.gdbg=true;
 	}
 
 	if (opt->isSet("-c")) {
@@ -176,8 +177,10 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
   // apply settings from cmdline, that have priority over config file
 #ifdef DEBUG
-	if (GloVars.__cmd_proxysql_gdbg>=0) { GloVars.global.gdbg=GloVars.__cmd_proxysql_gdbg; }
+	if (GloVars.__cmd_proxysql_gdbg>=0) { GloVars.global.gdbg=true; }
+	init_debug_struct_from_cmdline();
 #endif
+
 //	if (GloVars.__cmd_proxysql_foreground>=0) { foreground=GloVars.__cmd_proxysql_foreground; }
 	if (GloVars.__cmd_proxysql_nostart>=0) { glovars.nostart=GloVars.__cmd_proxysql_nostart; }
 	if (GloVars.__cmd_proxysql_datadir) {

@@ -1277,7 +1277,7 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 
 	if (len!=hdr.pkt_length+sizeof(mysql_hdr)) return false;
 
-	MYSQL &myc=(*myds)->myconn->myconn;
+	//MYSQL &myc=(*myds)->myconn->myconn;
 
 	uint64_t affected_rows;
 	uint64_t  insert_id;
