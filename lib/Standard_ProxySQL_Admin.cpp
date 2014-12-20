@@ -845,8 +845,14 @@ void Standard_ProxySQL_Admin::SQLite3_to_MySQL(SQLite3_result *result, char *err
 		//free(p[0]);
 		free(p);
 	
-	} else {
-		myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"#28000",error); sid++;
+	} else { // no result set
+		if (error) {
+			// there was an error
+			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"#28000",error);
+		} else {
+			// no error, DML succeeded
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,0,0,NULL);
+		}
 		myds->DSS=STATE_SLEEP;
 	}
 }
