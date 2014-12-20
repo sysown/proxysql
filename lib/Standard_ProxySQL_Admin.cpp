@@ -18,6 +18,7 @@
 
 
 static volatile int load_main_=0;
+static volatile bool nostart_=false;
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
@@ -153,7 +154,8 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual void admin_shutdown();
 	bool is_command(std::string);
 	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
-	void send_MySQL_OK(MySQL_Protocol *myprot);
+	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg);
+	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
 //	virtual void admin_session_handler(MySQL_Session *sess);
 };
 
@@ -195,10 +197,16 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 
 	if (query_no_space_length==strlen("PROXYSQL START") && !strncasecmp("PROXYSQL START",query_no_space, query_no_space_length)) {
-		__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
 		run_query=false;
 		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-		SPA->send_MySQL_OK(&sess->myprot_client);
+		bool rc;
+		rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
+		if (rc) {
+			nostart_=false;
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"ProxySQL already started");
+		}
 		goto __run_query;
 	}
 
@@ -388,7 +396,7 @@ static void * admin_main_loop(void *arg)
 {
 	int i;
 	//size_t c;
-	//int sd;	
+	//int sd;
 	struct sockaddr_in addr;
 	size_t mystacksize=256*1024;
 	struct pollfd *fds=((struct _main_args *)arg)->fds;
@@ -401,6 +409,7 @@ static void * admin_main_loop(void *arg)
   pthread_attr_setstacksize (&attr, mystacksize);
 
 	if(GloVars.global.nostart) {
+		nostart_=true;
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
 	__sync_fetch_and_add(&load_main_,1);
@@ -414,7 +423,8 @@ static void * admin_main_loop(void *arg)
 		rc=poll(fds,nfds,1000);
 		//if (__sync_fetch_and_add(&GloVars.global.nostart,0)==0) {
 		//	__sync_fetch_and_add(&GloVars.global.nostart,1);
-		if (__sync_val_compare_and_swap(&GloVars.global.nostart,0,1)==0) {
+		if (nostart_ && __sync_val_compare_and_swap(&GloVars.global.nostart,0,1)==0) {
+			nostart_=false;
 			pthread_mutex_unlock(&GloVars.global.start_mutex);
 		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
@@ -778,11 +788,19 @@ void Standard_ProxySQL_Admin::__refresh_users() {
 	__add_active_users(USERNAME_FRONTEND);
 }
 
-void Standard_ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot) {
+void Standard_ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT;
-	myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
+	myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,msg);
+	myds->DSS=STATE_SLEEP;
+}
+
+void Standard_ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
+	assert(myprot);
+	MySQL_Data_Stream *myds=myprot->get_myds();
+	myds->DSS=STATE_QUERY_SENT;
+	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",msg);
 	myds->DSS=STATE_SLEEP;
 }
 
