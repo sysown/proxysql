@@ -219,6 +219,31 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	if (query_no_space_length==strlen("PROXYSQL RESTART") && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
+		run_query=false;
+		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+		bool rc=true;
+//		if (nostart_) {
+//			rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
+//		}
+		if (rc) {
+			//nostart_=false;
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"ProxySQL already started");
+		}
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		glovars.reload=true;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table'");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
 
 	strA=(char *)"SHOW CREATE TABLE ";
 	strB=(char *)"SELECT name AS 'table' , sql AS 'Create Table' FROM sqlite_master WHERE type='table' AND name='%s'";
@@ -298,7 +323,7 @@ void *child_mysql(void *arg) {
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 	sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
 	
-	while (glovars.shutdown==0) {
+	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
 			fds[0].events=POLLIN|POLLOUT;	
 		} else {
@@ -425,9 +450,13 @@ static void * admin_main_loop(void *arg)
 		rc=poll(fds,nfds,1000);
 		//if (__sync_fetch_and_add(&GloVars.global.nostart,0)==0) {
 		//	__sync_fetch_and_add(&GloVars.global.nostart,1);
-		if (nostart_ && __sync_val_compare_and_swap(&GloVars.global.nostart,0,1)==0) {
+		if ((nostart_ && __sync_val_compare_and_swap(&GloVars.global.nostart,0,1)==0) || __sync_fetch_and_add(&glovars.shutdown,0)==1) {
 			nostart_=false;
 			pthread_mutex_unlock(&GloVars.global.start_mutex);
+//			if (glovars.reload) {
+//				nostart_=true;
+//				pthread_mutex_lock(&GloVars.global.start_mutex);
+//			}
 		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
         // poll() timeout, try again
@@ -581,6 +610,7 @@ bool Standard_ProxySQL_Admin::init() {
 		exit(EXIT_FAILURE);
 	}
 	do { usleep(50); } while (__sync_fetch_and_sub(&load_main_,0)==0);
+	load_main_=0;
 	return true;
 };
 

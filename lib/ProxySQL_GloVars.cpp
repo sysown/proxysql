@@ -9,7 +9,7 @@ static void term_handler(int sig) {
   proxy_error("Received TERM signal: shutdown in progress...\n");
 #ifdef DEBUG
 #endif
-  glovars.shutdown=1;
+  __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 //  sleep(5);
 //  exit(0);
 }

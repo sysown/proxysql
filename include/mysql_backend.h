@@ -233,16 +233,18 @@ class MySQL_HostGroups_Handler {
 	std::vector<MySQL_Hostgroup *> MyHostGroups;
 	std::vector<MySQL_Server *> Servers;
 	void reset() {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Resetting all MSHGE from Global Handler\n");	
-		for (std::vector<MySQL_Hostgroup *>::iterator it = MyHostGroups.begin(); it != MyHostGroups.end(); ++it) {
-			MySQL_Hostgroup *myhg=*it;
-			delete myhg;
-		}
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Resetting all MySQL Server from Global Handler\n");	
-		for (std::vector<MySQL_Server *>::iterator it = Servers.begin(); it != Servers.end(); ++it) {
-			MySQL_Server *srv=*it;
-			delete srv;
-		}
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Resetting all MSHGE from Global Handler\n");
+		if (MyHostGroups.empty()==false) MyHostGroups.clear();
+//		for (std::vector<MySQL_Hostgroup *>::iterator it = MyHostGroups.begin(); it != MyHostGroups.end(); ++it) {
+//			MySQL_Hostgroup *myhg=*it;
+//			delete myhg;
+//		}
+		if (Servers.empty()==false) Servers.clear();
+//		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Resetting all MySQL Server from Global Handler\n");	
+//		for (std::vector<MySQL_Server *>::iterator it = Servers.begin(); it != Servers.end(); ++it) {
+//			MySQL_Server *srv=*it;
+//			delete srv;
+//		}
 	};
 	void insert_hostgroup(MySQL_Hostgroup *myhg) {
 		unsigned int p=myhg->hostgroup_id;

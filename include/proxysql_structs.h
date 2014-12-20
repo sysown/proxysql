@@ -349,8 +349,9 @@ struct _global_variables_t {
 	//pthread_rwlock_t rwlock_global;
 	pthread_rwlock_t rwlock_usernames;
 
-	int shutdown;
+	volatile int shutdown;
 	bool nostart;
+	bool reload;
 
 	unsigned char protocol_version;
 	char *mysql_server_version;
