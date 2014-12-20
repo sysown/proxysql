@@ -221,20 +221,27 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 	if (query_no_space_length==strlen("PROXYSQL RESTART") && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
 		run_query=false;
-		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-		bool rc=true;
-//		if (nostart_) {
-//			rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
-//		}
-		if (rc) {
-			//nostart_=false;
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
-		} else {
-			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"ProxySQL already started");
-		}
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
-		glovars.reload=true;
+		glovars.reload=1;
 		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL STOP") && !strncasecmp("PROXYSQL STOP",query_no_space, query_no_space_length)) {
+		run_query=false;
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		glovars.reload=2;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN") && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
+		run_query=false;
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		glovars.reload=0;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
+		exit(EXIT_SUCCESS);
 	}
 
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {

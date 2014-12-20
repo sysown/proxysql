@@ -351,7 +351,7 @@ struct _global_variables_t {
 
 	volatile int shutdown;
 	bool nostart;
-	bool reload;
+	int reload;
 
 	unsigned char protocol_version;
 	char *mysql_server_version;

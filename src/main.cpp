@@ -750,7 +750,10 @@ __shutdown:
 
 	if (glovars.reload) {
 		//sleep(1);
-		glovars.reload=false;
+		if (glovars.reload==2) {
+			GloVars.global.nostart=true;
+		}
+		glovars.reload=0;
 		glovars.shutdown=0;
 		goto __start_label;
 	}
