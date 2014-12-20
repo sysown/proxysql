@@ -128,8 +128,8 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	//void fill_table__server_status(SQLite3DB *db);
 
 #ifdef DEBUG
-	void flush_debug_levels_mem_to_db(SQLite3DB *db, bool replace);
-	int flush_debug_levels_db_to_mem(SQLite3DB *db);
+	void flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace);
+	int flush_debug_levels_database_to_runtime(SQLite3DB *db);
 #endif /* DEBUG */
 
 	void __insert_or_ignore_maintable_select_disktable();
@@ -605,8 +605,8 @@ bool Standard_ProxySQL_Admin::init() {
 
 	__attach_configdb_to_admindb();
 #ifdef DEBUG
-	flush_debug_levels_mem_to_db(configdb, false);
-	flush_debug_levels_mem_to_db(admindb, true);
+	flush_debug_levels_runtime_to_database(configdb, false);
+	flush_debug_levels_runtime_to_database(admindb, true);
 #endif /* DEBUG */
 	__insert_or_ignore_maintable_select_disktable();
 
@@ -731,7 +731,7 @@ void Standard_ProxySQL_Admin::fill_table__server_status(SQLite3DB *db) {
 */
 
 #ifdef DEBUG
-void Standard_ProxySQL_Admin::flush_debug_levels_mem_to_db(SQLite3DB *db, bool replace) {
+void Standard_ProxySQL_Admin::flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace) {
 	int i;
 	char *a=NULL;
 	db->execute("DELETE FROM debug_levels WHERE verbosity=0");
@@ -752,7 +752,7 @@ void Standard_ProxySQL_Admin::flush_debug_levels_mem_to_db(SQLite3DB *db, bool r
 #endif /* DEBUG */
 
 #ifdef DEBUG
-int Standard_ProxySQL_Admin::flush_debug_levels_db_to_mem(SQLite3DB *db) {
+int Standard_ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
   int i;
   char *query=(char *)"SELECT verbosity FROM debug_levels WHERE module=\"%s\"";
   int l=strlen(query)+100;
