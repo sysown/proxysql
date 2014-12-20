@@ -562,7 +562,8 @@ int main(int argc, const char * argv[]) {
 	GloAdmin->init_users();
 
 
-	if (GloVars.__cmd_proxysql_nostart) {
+	//if (GloVars.__cmd_proxysql_nostart) {
+	if (GloVars.global.nostart) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
 

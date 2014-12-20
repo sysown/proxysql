@@ -199,10 +199,12 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	if (query_no_space_length==strlen("PROXYSQL START") && !strncasecmp("PROXYSQL START",query_no_space, query_no_space_length)) {
 		run_query=false;
 		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-		bool rc;
-		rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
+		bool rc=false;
+		if (nostart_) {
+			rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
+		}
 		if (rc) {
-			nostart_=false;
+			//nostart_=false;
 			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
 		} else {
 			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"ProxySQL already started");
