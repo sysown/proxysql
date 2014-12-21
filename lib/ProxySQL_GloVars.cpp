@@ -100,7 +100,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 
 	if (opt->isSet("-d")) {
 		opt->get("-d")->getInt(GloVars.__cmd_proxysql_gdbg);	
-		//global.gdbg=true;
+		global.gdbg=true;
 	}
 
 	if (opt->isSet("-c")) {
@@ -180,7 +180,7 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
   // apply settings from cmdline, that have priority over config file
 #ifdef DEBUG
-	if (GloVars.__cmd_proxysql_gdbg>0) { GloVars.global.gdbg=true; }
+//	if (GloVars.__cmd_proxysql_gdbg>0) { GloVars.global.gdbg=true; }
 	init_debug_struct_from_cmdline();
 #endif
 
