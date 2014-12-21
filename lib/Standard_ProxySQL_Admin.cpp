@@ -157,8 +157,10 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
 //	virtual void admin_session_handler(MySQL_Session *sess);
+#ifdef DEBUG
 	int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
 	void save_debug_from_runtime() { return flush_debug_levels_runtime_to_database(admindb, true); }
+#endif /* DEBUG */
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -231,75 +233,78 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
  */
 bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 
-	if (
-		(query_no_space_length==strlen("LOAD DEBUG TO MEMORY") && !strncasecmp("LOAD DEBUG TO MEMORY",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("LOAD DEBUG TO MEM") && !strncasecmp("LOAD DEBUG TO MEM",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("LOAD DEBUG FROM DISK") && !strncasecmp("LOAD DEBUG FROM DISK",query_no_space, query_no_space_length))
-	) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
-		l_free(*ql,*q);
-		*q=l_strdup("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
-		*ql=strlen(*q)+1;
-		return true;
-	}
-
-	if (
-		(query_no_space_length==strlen("SAVE DEBUG FROM MEMORY") && !strncasecmp("SAVE DEBUG FROM MEMORY",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("SAVE DEBUG FROM MEM") && !strncasecmp("SAVE DEBUG FROM MEM",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("SAVE DEBUG TO DISK") && !strncasecmp("SAVE DEBUG TO DISK",query_no_space, query_no_space_length))
-	) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
-		l_free(*ql,*q);
-		*q=l_strdup("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
-		*ql=strlen(*q)+1;
-		return true;
-	}
-
-	if (
-		(query_no_space_length==strlen("LOAD DEBUG FROM MEMORY") && !strncasecmp("LOAD DEBUG FROM MEMORY",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("LOAD DEBUG FROM MEM") && !strncasecmp("LOAD DEBUG FROM MEM",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("LOAD DEBUG TO RUNTIME") && !strncasecmp("LOAD DEBUG TO RUNTIME",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("LOAD DEBUG TO RUN") && !strncasecmp("LOAD DEBUG TO RUN",query_no_space, query_no_space_length))
-	) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
-
-		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-		int rc=SPA->load_debug_to_runtime();
-		if (rc) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded debug levels to RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
-		} else {
-			proxy_debug(PROXY_DEBUG_ADMIN, 1, "Error while loading debug levels to RUNTIME\n");
-			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"Error while loading debug levels to RUNTIME");
+#ifdef DEBUG
+	if ((query_no_space_length>11) && ( (!strncasecmp("SAVE DEBUG ", query_no_space, 11)) || (!strncasecmp("LOAD DEBUG ", query_no_space, 5))) ) {
+		if (
+			(query_no_space_length==strlen("LOAD DEBUG TO MEMORY") && !strncasecmp("LOAD DEBUG TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD DEBUG TO MEM") && !strncasecmp("LOAD DEBUG TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD DEBUG FROM DISK") && !strncasecmp("LOAD DEBUG FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+			*ql=strlen(*q)+1;
+			return true;
 		}
-		return false;
+	
+		if (
+			(query_no_space_length==strlen("SAVE DEBUG FROM MEMORY") && !strncasecmp("SAVE DEBUG FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE DEBUG FROM MEM") && !strncasecmp("SAVE DEBUG FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE DEBUG TO DISK") && !strncasecmp("SAVE DEBUG TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+	
+		if (
+			(query_no_space_length==strlen("LOAD DEBUG FROM MEMORY") && !strncasecmp("LOAD DEBUG FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD DEBUG FROM MEM") && !strncasecmp("LOAD DEBUG FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD DEBUG TO RUNTIME") && !strncasecmp("LOAD DEBUG TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD DEBUG TO RUN") && !strncasecmp("LOAD DEBUG TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+	
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			int rc=SPA->load_debug_to_runtime();
+			if (rc) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded debug levels to RUNTIME\n");
+				SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 1, "Error while loading debug levels to RUNTIME\n");
+				SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"Error while loading debug levels to RUNTIME");
+			}
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE DEBUG TO MEMORY") && !strncasecmp("SAVE DEBUG TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE DEBUG TO MEM") && !strncasecmp("SAVE DEBUG TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE DEBUG FROM RUNTIME") && !strncasecmp("SAVE DEBUG FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE DEBUG FROM RUN") && !strncasecmp("SAVE DEBUG FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->save_debug_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved debug levels from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
 	}
-
-	if (
-		(query_no_space_length==strlen("SAVE DEBUG TO MEMORY") && !strncasecmp("SAVE DEBUG TO MEMORY",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("SAVE DEBUG TO MEM") && !strncasecmp("SAVE DEBUG TO MEM",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("SAVE DEBUG FROM RUNTIME") && !strncasecmp("SAVE DEBUG FROM RUNTIME",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("SAVE DEBUG FROM RUN") && !strncasecmp("SAVE DEBUG FROM RUN",query_no_space, query_no_space_length))
-	) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
-
-		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-		SPA->save_debug_from_runtime();
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved debug levels from RUNTIME\n");
-		SPA->send_MySQL_OK(&sess->myprot_client, NULL);
-		return false;
-	}
-
+#endif /* DEBUG */
 	return true;
 }
 
