@@ -119,11 +119,11 @@ class MySQL_Hostgroup_Entry {
 	unsigned int references;
 	enum proxysql_server_status status;
 	unsigned long long status_change_time;
-	MySQL_Hostgroup_Entry(unsigned int hid, MySQL_Server *msptr) {
+	MySQL_Hostgroup_Entry(unsigned int hid, MySQL_Server *msptr, unsigned int _weight) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating MySQL_Hostgroup_Entry for HID %d and MySQL_Server %p at %p\n", hid, msptr, this);
 		hostgroup_id=hid;
 		MSptr=msptr;
-		weight=0;
+		weight=_weight;
 		connections_created=0;
 		connections_active=0;
 		references=0;
@@ -149,8 +149,8 @@ class MySQL_Hostgroup {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL_Hostgroup_Entry %p to Hostgroup %p with HID %d\n", mshge, this, hostgroup_id);	
 		MSHGEs.push_back(mshge);
 	};
-	void add(MySQL_Server *msptr) {
-		MySQL_Hostgroup_Entry *mshge=new MySQL_Hostgroup_Entry(hostgroup_id, msptr);
+	void add(MySQL_Server *msptr, unsigned int _weight=1) {
+		MySQL_Hostgroup_Entry *mshge=new MySQL_Hostgroup_Entry(hostgroup_id, msptr, _weight);
 		this->add(mshge);
 	};
 	bool del(MySQL_Hostgroup_Entry *mshge) {
@@ -199,13 +199,13 @@ class MySQL_Hostgroup {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Hostgroup_Entry not found\n");	
 		return NULL;
 	};
-	MySQL_Hostgroup_Entry * server_add(MySQL_Server *msptr) {
+	MySQL_Hostgroup_Entry * server_add(MySQL_Server *msptr, unsigned int _weight) {
 		MySQL_Hostgroup_Entry *mshge=NULL;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Trying to add MySQL_Server %p to MSHGE %p with HID %d\n",msptr, this, hostgroup_id);	
 		mshge=MSHGE_find(msptr);
 		if (mshge==NULL) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Server not found, adding to MSHGE %p\n", this);	
-			MySQL_Hostgroup_Entry *mshge=new MySQL_Hostgroup_Entry(hostgroup_id, msptr);
+			MySQL_Hostgroup_Entry *mshge=new MySQL_Hostgroup_Entry(hostgroup_id, msptr, _weight);
 			this->add(mshge);
 		}
 		return mshge;
@@ -307,13 +307,13 @@ class MySQL_HostGroups_Handler {
 		}
 		return srv;
 	};
-	MySQL_Hostgroup_Entry * server_add_hg(unsigned int hid, char *add=NULL, uint16_t p=3306) {
+	MySQL_Hostgroup_Entry * server_add_hg(unsigned int hid, char *add=NULL, uint16_t p=3306, unsigned int _weight=1) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL server %s:%d in Global Handler in hostgroup\n", add, p, hid);
 		if (hid>=MyHostGroups.size()) {
 			create_hostgroup(hid);
 		};
 		MySQL_Server *srv=server_add(add,p);
-		return MyHostGroups[hid]->server_add(srv);
+		return MyHostGroups[hid]->server_add(srv, _weight);
 	};
 	MySQL_Hostgroup_Entry * MSHGE_find(unsigned int hid, MySQL_Server *srv) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Searching MSHGE for MySQL_Server %p into HID %d\n", srv, hid);
