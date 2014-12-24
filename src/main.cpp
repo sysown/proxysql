@@ -503,6 +503,7 @@ __start_label:
 */
 
 	MyHGH->wrlock();
+/*
 	MyHGH->server_add_hg(0,(char *)"127.0.0.1", 3307);
 	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3307);
 	MyHGH->server_add_hg(2,(char *)"127.0.0.1", 3306);
@@ -518,12 +519,12 @@ __start_label:
 	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3304);
 	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3302);
 	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3306);
-/*
+
 	MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"127.0.0.1", 3306);
 	if (mshge) {
 		mshge->status=PROXYSQL_SERVER_STATUS_ONLINE;
 	}
-*/
+
 	for (int ir=0;ir<1000;ir++) {
 		MyHGH->set_HG_entry_status(1,(char *)"127.0.0.1", 3306, PROXYSQL_SERVER_STATUS_ONLINE);
 	}
@@ -531,9 +532,9 @@ __start_label:
 	std::cout<<"Servers in HG1 : "<<MyHGH->servers_in_hostgroup(1)<<std::endl;
 	std::cout<<"Servers in HG2 : "<<MyHGH->servers_in_hostgroup(2)<<std::endl;
 	std::cout<<"Servers in HG3 : "<<MyHGH->servers_in_hostgroup(3)<<std::endl;
-
+*/
 	MyHGH->wrunlock();
-
+/*
 	MySQL_Connection *conn=new MySQL_Connection();
 
 	MyHGH->rdlock();
@@ -544,7 +545,7 @@ __start_label:
 	MyHGH->rdunlock();
 
 	delete conn;
-
+*/
 
 
 {

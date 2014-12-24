@@ -192,11 +192,11 @@ class MySQL_Hostgroup {
 		for (std::vector<MySQL_Hostgroup_Entry *>::iterator it = MSHGEs.begin(); it != MSHGEs.end(); ++it) {
 			MySQL_Hostgroup_Entry *mshge=*it;
 			if (mshge->MSptr==msptr) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Found MySQL_Hostgroup_Entry %p\n",mshge);	
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Found MySQL_Hostgroup_Entry %p\n",mshge);
 				return mshge;
 			};
 		}
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Hostgroup_Entry not found\n");	
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Hostgroup_Entry not found\n");
 		return NULL;
 	};
 	MySQL_Hostgroup_Entry * server_add(MySQL_Server *msptr, unsigned int _weight) {
@@ -204,9 +204,12 @@ class MySQL_Hostgroup {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Trying to add MySQL_Server %p to MSHGE %p with HID %d\n",msptr, this, hostgroup_id);	
 		mshge=MSHGE_find(msptr);
 		if (mshge==NULL) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Server not found, adding to MSHGE %p\n", this);	
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Server not found, adding to MSHGE %p\n", this);
 			MySQL_Hostgroup_Entry *mshge=new MySQL_Hostgroup_Entry(hostgroup_id, msptr, _weight);
 			this->add(mshge);
+		} else {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Server found at %p, updating weight from %d to %d\n", mshge, mshge->weight _weight);
+			mshge->weight=_wieght;
 		}
 		return mshge;
 	};

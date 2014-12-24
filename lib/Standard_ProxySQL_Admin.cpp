@@ -35,7 +35,7 @@ pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 //#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT NOT NULL DEFAULT 0 REFERENCES server_status(status) , PRIMARY KEY(hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (status IN ('OFFLINE_HARD', 'OFFLINE_SOFT', 'SHUNNED', 'ONLINE')) NOT NULL DEFAULT 'OFFLINE_HARD', PRIMARY KEY(hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS "CREATE TABLE mysql_hostgroups ( hostgroup_id INT NOT NULL , description VARCHAR, PRIMARY KEY(hostgroup_id) )"
-#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES "CREATE TABLE mysql_hostgroup_entries ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , FOREIGN KEY (hostname, port) REFERENCES servers (hostname, port) , FOREIGN KEY (hostgroup_id) REFERENCES mysql_hostgroups (hostgroup_id) , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES "CREATE TABLE mysql_hostgroup_entries ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , FOREIGN KEY (hostname, port) REFERENCES mysql_servers (hostname, port) , FOREIGN KEY (hostgroup_id) REFERENCES mysql_hostgroups (hostgroup_id) , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
 
 #ifdef DEBUG
@@ -162,6 +162,10 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
 	void save_debug_from_runtime() { return flush_debug_levels_runtime_to_database(admindb, true); }
 #endif /* DEBUG */
+	void flush_mysql_servers__from_memory_to_disk();
+	void flush_mysql_servers__from_disk_to_memory();
+	void load_mysql_servers_to_runtime();
+	void save_mysql_servers_from_runtime();
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -249,7 +253,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			*ql=strlen(*q)+1;
 			return true;
 		}
-	
+
 		if (
 			(query_no_space_length==strlen("SAVE DEBUG FROM MEMORY") && !strncasecmp("SAVE DEBUG FROM MEMORY",query_no_space, query_no_space_length))
 			||
@@ -263,7 +267,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			*ql=strlen(*q)+1;
 			return true;
 		}
-	
+
 		if (
 			(query_no_space_length==strlen("LOAD DEBUG FROM MEMORY") && !strncasecmp("LOAD DEBUG FROM MEMORY",query_no_space, query_no_space_length))
 			||
@@ -274,7 +278,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length==strlen("LOAD DEBUG TO RUN") && !strncasecmp("LOAD DEBUG TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
-	
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			int rc=SPA->load_debug_to_runtime();
 			if (rc) {
@@ -322,7 +325,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			*ql=strlen(*q)+1;
 			return true;
 		}
-	
+
 		if (
 			(query_no_space_length==strlen("SAVE MYSQL USERS FROM MEMORY") && !strncasecmp("SAVE MYSQL USERS FROM MEMORY",query_no_space, query_no_space_length))
 			||
@@ -336,7 +339,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			*ql=strlen(*q)+1;
 			return true;
 		}
-	
+
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL USERS FROM MEMORY") && !strncasecmp("LOAD MYSQL USERS FROM MEMORY",query_no_space, query_no_space_length))
 			||
@@ -347,7 +350,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length==strlen("LOAD MYSQL USERS TO RUN") && !strncasecmp("LOAD MYSQL USERS TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
-	
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->init_users();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users to RUNTIME\n");
@@ -372,6 +374,74 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
+	}
+
+	if ((query_no_space_length>19) && ( (!strncasecmp("SAVE MYSQL SERVERS ", query_no_space, 19)) || (!strncasecmp("LOAD MYSQL SERVERS ", query_no_space, 19))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO MEMORY") && !strncasecmp("LOAD MYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO MEM") && !strncasecmp("LOAD MYSQL SERVERS TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM DISK") && !strncasecmp("LOAD MYSQL SERVERS FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->flush_mysql_servers__from_disk_to_memory();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to MEMORY\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM MEMORY") && !strncasecmp("SAVE MYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM MEM") && !strncasecmp("SAVE MYSQL SERVERS FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO DISK") && !strncasecmp("SAVE MYSQL SERVERS TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->flush_mysql_servers__from_memory_to_disk();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers to DISK\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM MEMORY") && !strncasecmp("LOAD MYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM MEM") && !strncasecmp("LOAD MYSQL SERVERS FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO RUNTIME") && !strncasecmp("LOAD MYSQL SERVERS TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO RUN") && !strncasecmp("LOAD MYSQL SERVERS TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->load_mysql_servers_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+/*
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO MEMORY") && !strncasecmp("SAVE MYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO MEM") && !strncasecmp("SAVE MYSQL SERVERS TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM RUNTIME") && !strncasecmp("SAVE MYSQL SERVERS FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM RUN") && !strncasecmp("SAVE MYSQL SERVERS FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->save_mysql_users_runtime_to_database();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+*/
 	}
 
 	return true;
@@ -977,6 +1047,25 @@ void Standard_ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 #endif /* DEBUG */
 }
 
+
+void Standard_ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
+	// FIXME : low-priority , this should be transactional
+  admindb->execute("PRAGMA foreign_keys = OFF");
+  admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
+  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroups SELECT * FROM disk.mysql_hostgroups");
+  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
+  admindb->execute("PRAGMA foreign_keys = ON");
+}
+
+void Standard_ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
+	// FIXME : low-priority , this should be transactional
+  admindb->execute("PRAGMA foreign_keys = OFF");
+  admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
+  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroups SELECT * FROM main.mysql_hostgroups");
+  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroup_entries SELECT * FROM main.mysql_hostgroup_entries");
+  admindb->execute("PRAGMA foreign_keys = ON");
+}
+
 void Standard_ProxySQL_Admin::__attach_configdb_to_admindb() {
 	const char *a="ATTACH DATABASE '%s' AS disk";
 	int l=strlen(a)+strlen(configdb->get_url())+5;
@@ -1113,6 +1202,30 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 
 void Standard_ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 }
+
+
+void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT hostgroup_id,hostname,port,weight FROM main.mysql_hostgroup_entries";
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	MyHGH->wrlock();
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+      SQLite3_row *r=*it;
+			MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
+		}
+	}
+	MyHGH->wrunlock();
+//	if (error) free(error);
+	if (resultset) delete resultset;
+	free(query);
+}
+
 
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func() {
 	return new Standard_ProxySQL_Admin();
