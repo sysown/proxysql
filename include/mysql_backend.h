@@ -208,8 +208,8 @@ class MySQL_Hostgroup {
 			MySQL_Hostgroup_Entry *mshge=new MySQL_Hostgroup_Entry(hostgroup_id, msptr, _weight);
 			this->add(mshge);
 		} else {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Server found at %p, updating weight from %d to %d\n", mshge, mshge->weight _weight);
-			mshge->weight=_wieght;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Server found at %p, updating weight from %d to %d\n", mshge, mshge->weight, _weight);
+			mshge->weight=_weight;
 		}
 		return mshge;
 	};
