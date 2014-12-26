@@ -145,6 +145,11 @@ class MySQL_Hostgroup_Entry {
 
 class MySQL_Hostgroup {
 	private:
+	void add(MySQL_Hostgroup_Entry *mshge);
+	void add(MySQL_Server *msptr, unsigned int _weight=1);
+	bool del(MySQL_Hostgroup_Entry *mshge);
+	bool del(MySQL_Server *msptr);
+/*
 	void add(MySQL_Hostgroup_Entry *mshge) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL_Hostgroup_Entry %p to Hostgroup %p with HID %d\n", mshge, this, hostgroup_id);	
 		MSHGEs.push_back(mshge);
@@ -175,18 +180,27 @@ class MySQL_Hostgroup {
 		}
 		return false;
 	};
+*/
 	public:
 	unsigned int hostgroup_id;
-	std::vector<MySQL_Hostgroup_Entry *> MSHGEs;
+	//std::vector<MySQL_Hostgroup_Entry *> MSHGEs;
+	PtrArray *MSHGEs;
 	MySQL_Hostgroup(unsigned int hid) {
 		hostgroup_id=hid;
+		MSHGEs = new PtrArray();
 	};
 	~MySQL_Hostgroup() {
-		for (std::vector<MySQL_Hostgroup_Entry *>::iterator it = MSHGEs.begin() ; it != MSHGEs.end(); ++it) {
-			MySQL_Hostgroup_Entry *mshge=*it;
+//		for (std::vector<MySQL_Hostgroup_Entry *>::iterator it = MSHGEs.begin() ; it != MSHGEs.end(); ++it) {
+//			MySQL_Hostgroup_Entry *mshge=*it;
+//			delete mshge;
+//		};
+		while (MSHGEs->len) {
+			MySQL_Hostgroup_Entry *mshge=(MySQL_Hostgroup_Entry *)MSHGEs->remove_index_fast(0);
 			delete mshge;
-		};
+		}
 	};
+	MySQL_Hostgroup_Entry * MSHGE_find(MySQL_Server *msptr);
+/*
 	MySQL_Hostgroup_Entry * MSHGE_find(MySQL_Server *msptr) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Searching MySQL_Hostgroup_Entry for MySQL_Server %p from Hostgroup %p with HID %d\n", msptr, this, hostgroup_id);	
 		for (std::vector<MySQL_Hostgroup_Entry *>::iterator it = MSHGEs.begin(); it != MSHGEs.end(); ++it) {
@@ -199,6 +213,7 @@ class MySQL_Hostgroup {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Hostgroup_Entry not found\n");
 		return NULL;
 	};
+*/
 	MySQL_Hostgroup_Entry * server_add(MySQL_Server *msptr, unsigned int _weight) {
 		MySQL_Hostgroup_Entry *mshge=NULL;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Trying to add MySQL_Server %p to MSHGE %p with HID %d\n",msptr, this, hostgroup_id);	
@@ -213,9 +228,10 @@ class MySQL_Hostgroup {
 		}
 		return mshge;
 	};
-	size_t servers_in_hostgroup() {
-		return MSHGEs.size();
-	};
+	size_t servers_in_hostgroup();
+//	size_t servers_in_hostgroup() {
+//		return MSHGEs.size();
+//	};
 	void set_HG_entry_status(MySQL_Hostgroup_Entry *mshge, enum proxysql_server_status _status) {
 		mshge->set_status(_status);
 	};

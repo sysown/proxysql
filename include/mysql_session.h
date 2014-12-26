@@ -56,8 +56,8 @@ class MySQL_Session
 	int handler();
 
 	MySQL_Backend * find_backend(int);
-	MySQL_Backend * create_backend(int, MySQL_Data_Stream *);
-	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *);
+	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	void reset_all_backends();
 	void writeout();
 
