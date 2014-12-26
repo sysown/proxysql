@@ -244,6 +244,7 @@ class MySQL_Hostgroup {
 		}
 		return mshge;
 	};
+	MySQL_Hostgroup_Entry * get_random_hostgroup_entry();
 };
 
 class MySQL_HostGroups_Handler {
@@ -385,6 +386,7 @@ class MySQL_HostGroups_Handler {
 		return MyHostGroups[hid]->set_HG_entry_status(msptr,_status);
 	};
 */
+	MySQL_Hostgroup_Entry * get_random_hostgroup_entry(unsigned int hid);
 };
 
 

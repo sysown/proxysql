@@ -92,6 +92,15 @@ void MySQL_HostGroups_Handler::insert_hostgroup(MySQL_Hostgroup *myhg) {
 }
 
 
+MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::get_random_hostgroup_entry(unsigned int hid) {
+	MySQL_Hostgroup_Entry *mshge=NULL;
+	rdlock();
+	MySQL_Hostgroup *mshg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
+	mshge=mshg->get_random_hostgroup_entry();
+	rdunlock();
+	return mshge;
+}
+
 
 void * MySQL_Backend::operator new(size_t size) {
 	return l_alloc(size);
@@ -190,3 +199,23 @@ size_t MySQL_Hostgroup::servers_in_hostgroup() {
 	return MSHGEs->len;
 }
 
+
+MySQL_Hostgroup_Entry * MySQL_Hostgroup::get_random_hostgroup_entry() {
+	unsigned int i;
+	unsigned int sum=0;
+	MySQL_Hostgroup_Entry *mshge;
+	for (i=0; i<MSHGEs->len; i++) {
+		mshge=(MySQL_Hostgroup_Entry *)MSHGEs->index(i);
+		sum+=mshge->weight;
+	}
+	unsigned int j=rand()%sum;
+	sum=0;
+	for (i=0; i<MSHGEs->len; i++) {
+		mshge=(MySQL_Hostgroup_Entry *)MSHGEs->index(i);
+		sum+=mshge->weight;
+		if (j<=sum) {
+			return mshge;
+		}
+	}
+	return NULL;
+}
