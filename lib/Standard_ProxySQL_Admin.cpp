@@ -151,6 +151,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual void print_version();
 	virtual bool init();
 	virtual void init_users();
+	virtual void init_mysql_servers();
 	void save_mysql_users_runtime_to_database();
 	virtual void admin_shutdown();
 	bool is_command(std::string);
@@ -1016,6 +1017,7 @@ void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
   admindb->execute("PRAGMA foreign_keys = OFF");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_hostgroups SELECT * FROM disk.mysql_hostgroups");
+  admindb->execute("INSERT OR IGNORE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
 //  admindb->execute("INSERT OR IGNORE INTO main.query_rules SELECT * FROM disk.query_rules");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 //  admindb->execute("INSERT OR IGNORE INTO main.default_hostgroups SELECT * FROM disk.default_hostgroups");
@@ -1028,6 +1030,7 @@ void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 void Standard_ProxySQL_Admin::__delete_disktable() {
   admindb->execute("DELETE FROM disk.mysql_servers");
   admindb->execute("DELETE FROM disk.mysql_hostgroups");
+  admindb->execute("DELETE FROM disk.mysql_hostgroup_entries");
 //  admindb->execute("DELETE FROM disk.query_rules");
   admindb->execute("DELETE FROM disk.mysql_users");
 //  admindb->execute("DELETE FROM disk.default_hostgroups");
@@ -1039,6 +1042,7 @@ void Standard_ProxySQL_Admin::__delete_disktable() {
 void Standard_ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroups SELECT * FROM main.mysql_hostgroups");
+  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroup_entries SELECT * FROM main.mysql_hostgroup_entries");
 //  admindb->execute("INSERT OR REPLACE INTO disk.query_rules SELECT * FROM main.query_rules");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 //  admindb->execute("INSERT OR REPLACE INTO disk.default_hostgroups SELECT * FROM main.default_hostgroups");
@@ -1078,6 +1082,10 @@ void Standard_ProxySQL_Admin::__attach_configdb_to_admindb() {
 
 void Standard_ProxySQL_Admin::init_users() {
 	__refresh_users();
+}
+
+void Standard_ProxySQL_Admin::init_mysql_servers() {
+	load_mysql_servers_to_runtime();
 }
 
 void Standard_ProxySQL_Admin::__refresh_users() {

@@ -579,6 +579,10 @@ __start_label:
 		goto __shutdown;
 	}
 
+	// load all mysql servers to GloHGH
+	GloAdmin->init_mysql_servers();
+
+
 {
 	GloQPro = create_Query_Processor();
   GloQPro->print_version();

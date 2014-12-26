@@ -12,6 +12,7 @@ class ProxySQL_Admin {
 	virtual void print_version() {};
 	virtual bool init() {return false;};
 	virtual void init_users() {};
+	virtual void init_mysql_servers() {};
 	virtual void admin_shutdown() {};
 };
 
