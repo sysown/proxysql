@@ -1223,7 +1223,6 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	MyHGH->wrunlock();
 //	if (error) free(error);
 	if (resultset) delete resultset;
-	free(query);
 }
 
 
