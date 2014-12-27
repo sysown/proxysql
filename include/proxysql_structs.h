@@ -60,6 +60,7 @@ enum session_status {
 };
 
 enum mysql_data_stream_status {
+	STATE_NOT_INITIALIZED,
 	STATE_NOT_CONNECTED,
 	STATE_SERVER_HANDSHAKE,
 	STATE_CLIENT_HANDSHAKE,
