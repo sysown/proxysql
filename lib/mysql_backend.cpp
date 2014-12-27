@@ -36,26 +36,33 @@ MySQL_Server * MySQL_HostGroups_Handler::server_find(char *add, uint16_t p) {
 };
 
 size_t MySQL_HostGroups_Handler::servers_in_hostgroup(int hid) {
-	MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
-	return myhg->servers_in_hostgroup();
+	if (MyHostGroups->len > hid) {
+		MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
+		return myhg->servers_in_hostgroup();
+	}
+	return 0;
 };
 
 
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::set_HG_entry_status(unsigned int hid, MySQL_Server *msptr, enum proxysql_server_status _status) {
-	MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
-	return myhg->set_HG_entry_status(msptr,_status);
+	if (MyHostGroups->len > hid) {
+		MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
+		return myhg->set_HG_entry_status(msptr,_status);
+	}
+	return 0;
 };
 
 
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::set_HG_entry_status(unsigned int hid, char *add, uint16_t p, enum proxysql_server_status _status) {
 	MySQL_Server *msptr=server_find(add,p);
 	if (msptr==NULL) return NULL; // server not found
-	MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
-	MySQL_Hostgroup_Entry *myhge=myhg->set_HG_entry_status(msptr,_status);
-	return myhge;
-};
-
-
+	if (MyHostGroups->len > hid) {
+		MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
+		MySQL_Hostgroup_Entry *myhge=myhg->set_HG_entry_status(msptr,_status);
+		return myhge;
+	}
+	return NULL;
+}
 
 //MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::server_add_hg(unsigned int hid, char *add=NULL, uint16_t p=3306, unsigned int _weight=1) {
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::server_add_hg(unsigned int hid, char *add, uint16_t p, unsigned int _weight) {
@@ -66,19 +73,23 @@ MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::server_add_hg(unsigned int hid
 	MySQL_Server *srv=server_add(add,p);
 	MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
 	return myhg->server_add(srv, _weight);
-};
+}
+
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::MSHGE_find(unsigned int hid, MySQL_Server *srv) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Searching MSHGE for MySQL_Server %p into HID %d\n", srv, hid);
-	MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
-	return myhg->MSHGE_find(srv);
+	if (MyHostGroups->len > hid) {
+		MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
+		return myhg->MSHGE_find(srv);
+	}
+	return NULL;
 }
+
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::MSHGE_find(unsigned int hid, char *add, uint16_t p) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Searching MSHGE for MySQL server %s:%d into HID %d\n", add, p, hid);
 	MySQL_Server *srv=server_find(add,p);
 	if (srv==NULL) return NULL; // server not found
 	return MSHGE_find(hid,srv);
 }
-
 
 void MySQL_HostGroups_Handler::insert_hostgroup(MySQL_Hostgroup *myhg) {
 	unsigned int p=myhg->hostgroup_id;
@@ -95,8 +106,10 @@ void MySQL_HostGroups_Handler::insert_hostgroup(MySQL_Hostgroup *myhg) {
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::get_random_hostgroup_entry(unsigned int hid) {
 	MySQL_Hostgroup_Entry *mshge=NULL;
 	rdlock();
-	MySQL_Hostgroup *mshg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
-	mshge=mshg->get_random_hostgroup_entry();
+	if (MyHostGroups->len > hid) {
+		MySQL_Hostgroup *mshg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
+		mshge=mshg->get_random_hostgroup_entry();
+	}
 	rdunlock();
 	return mshge;
 }
