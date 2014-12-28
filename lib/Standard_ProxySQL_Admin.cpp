@@ -139,6 +139,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 
 	void __add_active_users(enum cred_username_type usertype);
 	void __delete_inactive_users(enum cred_username_type usertype);
+	void add_default_user(char *, char *);
 	void __refresh_users();
 	
 
@@ -1091,6 +1092,7 @@ void Standard_ProxySQL_Admin::init_mysql_servers() {
 void Standard_ProxySQL_Admin::__refresh_users() {
 	__delete_inactive_users(USERNAME_BACKEND);
 	__delete_inactive_users(USERNAME_FRONTEND);
+	add_default_user((char *)"admin",(char *)"admin");
 	__add_active_users(USERNAME_BACKEND);
 	__add_active_users(USERNAME_FRONTEND);
 }
@@ -1207,6 +1209,35 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	if (resultset) delete resultset;
 	free(query);
 }
+
+void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT COUNT(*) FROM main.mysql_users WHERE active=1 AND frontend=1";
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	int matching_rows=0;
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+      SQLite3_row *r=*it;
+			matching_rows+=atoi(r->fields[0]);
+		}
+	}
+	if (resultset) delete resultset;
+	if (matching_rows==0) {
+		proxy_error("Adding default user. Username=%s, Password=%s\n", user,password);
+		admindb->execute("PRAGMA foreign_keys = OFF");
+		char *str1=(char *)"INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,backend,frontend) VALUES('%s','%s',1,0,0,0,1)";
+		char *query=(char *)malloc(strlen(str1)+strlen(user)+strlen(password));
+		sprintf(query,str1,user,password);
+		admindb->execute(query);
+		admindb->execute("PRAGMA foreign_keys = ON");
+	}
+}
+
 
 void Standard_ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 }
