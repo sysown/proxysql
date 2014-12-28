@@ -10,6 +10,7 @@ typedef struct _account_details_t {
 	char *username;
 	char *password;
 	bool use_ssl;
+	int default_hostgroup;
 } account_details_t;
 
 #define MYSQL_AUTHENTICATION_VERSION "0.1.0706"
@@ -46,7 +47,8 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 	};
 
 	//virtual bool add(char * domain, char * username, char * password) {
-	virtual bool add(char * username, char * password, enum cred_username_type usertype, bool use_ssl) {
+//	virtual bool add(char * username, char * password, enum cred_username_type usertype, bool use_ssl) {
+	virtual bool add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup) {
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
 		myhash->Init(1,2);
@@ -75,6 +77,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		ad->username=strdup(username);
 		ad->password=strdup(password);
 		ad->use_ssl=use_ssl;
+		ad->default_hostgroup=default_hostgroup;
     cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array.add(ad);
     spin_wrunlock(&cg.lock);
@@ -116,6 +119,32 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 
 
 
+	virtual char * lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup) {
+		char *ret=NULL;
+		uint64_t hash1, hash2;
+		SpookyHash *myhash=new SpookyHash();
+		myhash->Init(1,2);
+		myhash->Update(username,strlen(username));
+		myhash->Final(&hash1,&hash2);
+		delete myhash;
+
+		creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+
+		spin_rdlock(&cg.lock);
+		btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+		lookup = cg.bt_map.find(hash1);
+		if (lookup != cg.bt_map.end()) {
+			account_details_t *ad=lookup->second;
+			ret=l_strdup(ad->password);
+			if (use_ssl) *use_ssl=ad->use_ssl;
+			if (default_hostgroup) *default_hostgroup=ad->default_hostgroup;
+		}
+		spin_rdunlock(&cg.lock);
+		return ret;
+
+	}
+
+/*
 	//virtual char * lookup(char * domain, char * username) {
 	virtual char * lookup(char * username, enum cred_username_type usertype, bool *use_ssl) {
 		char *ret=NULL;
@@ -142,7 +171,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		spin_rdunlock(&cg.lock);
 		return ret;
 	}
-
+*/
 
 	bool _reset(enum cred_username_type usertype) {
 

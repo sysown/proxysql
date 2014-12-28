@@ -36,7 +36,7 @@ pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (status IN ('OFFLINE_HARD', 'OFFLINE_SOFT', 'SHUNNED', 'ONLINE')) NOT NULL DEFAULT 'OFFLINE_HARD', PRIMARY KEY(hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS "CREATE TABLE mysql_hostgroups ( hostgroup_id INT NOT NULL , description VARCHAR, PRIMARY KEY(hostgroup_id) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES "CREATE TABLE mysql_hostgroup_entries ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , FOREIGN KEY (hostname, port) REFERENCES mysql_servers (hostname, port) , FOREIGN KEY (hostgroup_id) REFERENCES mysql_hostgroups (hostgroup_id) , PRIMARY KEY (hostgroup_id, hostname, port) )"
-#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
+#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend) , FOREIGN KEY (default_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY, verbosity INT NOT NULL DEFAULT 0)"
@@ -1191,7 +1191,7 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *str=(char *)"SELECT username,password,use_ssl FROM main.mysql_users WHERE %s=1 AND active=1";
+	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup FROM main.mysql_users WHERE %s=1 AND active=1";
 	char *query=(char *)malloc(strlen(str)+15);
 	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1200,7 +1200,7 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
-			GloMyAuth->add(r->fields[0], r->fields[1], usertype, (strcmp(r->fields[2],"1")==0 ? true : false) );
+			GloMyAuth->add(r->fields[0], r->fields[1], usertype, (strcmp(r->fields[2],"1")==0 ? true : false) , atoi(r->fields[3]));
 		}
 	}
 //	if (error) free(error);
