@@ -11,6 +11,7 @@ typedef struct _account_details_t {
 	char *password;
 	bool use_ssl;
 	int default_hostgroup;
+	bool transaction_persistent;
 } account_details_t;
 
 #define MYSQL_AUTHENTICATION_VERSION "0.1.0706"
@@ -48,7 +49,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 
 	//virtual bool add(char * domain, char * username, char * password) {
 //	virtual bool add(char * username, char * password, enum cred_username_type usertype, bool use_ssl) {
-	virtual bool add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup) {
+	virtual bool add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, bool transaction_persistent) {
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
 		myhash->Init(1,2);
@@ -78,6 +79,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 		ad->password=strdup(password);
 		ad->use_ssl=use_ssl;
 		ad->default_hostgroup=default_hostgroup;
+		ad->transaction_persistent=transaction_persistent;
     cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array.add(ad);
     spin_wrunlock(&cg.lock);
@@ -119,7 +121,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 
 
 
-	virtual char * lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup) {
+	virtual char * lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, bool *transaction_persistent) {
 		char *ret=NULL;
 		uint64_t hash1, hash2;
 		SpookyHash *myhash=new SpookyHash();
@@ -138,6 +140,7 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 			ret=l_strdup(ad->password);
 			if (use_ssl) *use_ssl=ad->use_ssl;
 			if (default_hostgroup) *default_hostgroup=ad->default_hostgroup;
+			if (transaction_persistent) *transaction_persistent=ad->transaction_persistent;
 		}
 		spin_rdunlock(&cg.lock);
 		return ret;

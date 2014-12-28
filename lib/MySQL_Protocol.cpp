@@ -449,6 +449,7 @@ int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length
    unsigned char pass[128];
 	bool _ret_use_ssl=false; 	
 	int default_hostgroup=-1;
+	bool transaction_persistent;
 
       capabilities     = CPY4(pkt);
       pkt     += sizeof(uint32_t);
@@ -468,7 +469,7 @@ int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup);
+	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
 	if (password==NULL) {
 		ret=PKT_ERROR;
 	} else {
@@ -1445,9 +1446,11 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
 	int default_hostgroup=-1;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup);
+	bool transaction_persistent;
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
 	//assert(default_hostgroup>=0);
 	(*myds)->sess->default_hostgroup=default_hostgroup;
+	(*myds)->sess->transaction_persistent=transaction_persistent;
 	if (password==NULL) {
 		ret=false;
 	} else {

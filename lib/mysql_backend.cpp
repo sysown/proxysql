@@ -36,7 +36,7 @@ MySQL_Server * MySQL_HostGroups_Handler::server_find(char *add, uint16_t p) {
 };
 
 size_t MySQL_HostGroups_Handler::servers_in_hostgroup(int hid) {
-	if (MyHostGroups->len > hid) {
+	if (MyHostGroups->len > (unsigned int)hid) {
 		MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
 		return myhg->servers_in_hostgroup();
 	}

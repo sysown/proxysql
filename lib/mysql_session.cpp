@@ -94,6 +94,10 @@ MySQL_Session::MySQL_Session() {
 	mybe=NULL;
 	mybes= new (true) PtrArray(4,true);
 
+	current_hostgroup=-1;
+	default_hostgroup=-1;
+	transaction_persistent=false;
+	active_transactions=0;
 	myprot_client.init(&client_myds, &userinfo_client, this);
 	myprot_server.init(&server_myds, &userinfo_server, this);
 }
@@ -229,10 +233,10 @@ int MySQL_Session::handler() {
 			}
 			if (pause<=0) {
 				unsigned long long curtime=monotonic_time();
-				int rc=server_myds->assign_mshge(1);
+				int rc=server_myds->assign_mshge(current_hostgroup);
 
 				//mybe=find_backend(1);
-				mybe=find_or_create_backend(1,server_myds);
+				mybe=find_or_create_backend(current_hostgroup,server_myds);
 				assert(server_myds);
 				assert(server_myds->myconn);
 				assert(server_myds->myconn->mshge);
@@ -347,8 +351,8 @@ int MySQL_Session::handler() {
 									//l_free(sizeof(QP_out_t), qpo);
 									//break;
 								}
-								int destination_hostgroup=1;
-								mybe=find_or_create_backend(destination_hostgroup);
+								//int destination_hostgroup=1;
+								mybe=find_or_create_backend(current_hostgroup);
 								if (server_myds!=mybe->server_myds) {
 									server_myds=mybe->server_myds;
 								} 
@@ -495,21 +499,11 @@ int MySQL_Session::handler() {
 	}
 */
 
-	//assert(server_myds);
-	if (client_myds->DSS==STATE_QUERY_SENT)
+	if (client_myds->DSS==STATE_QUERY_SENT) {
 		if (server_myds->DSS==STATE_NOT_INITIALIZED) {
-/*
-								if (server_myds==NULL) {
-									//printf("Create new MYDS\n");
-									server_myds = new MySQL_Data_Stream();
-									server_myds->myconn = new MySQL_Connection(); // 20141011
-*/
           				int pending_connect=1;
 									unsigned long long curtime=monotonic_time();
-									int rc=server_myds->assign_mshge(1);
-
-									//mybe=find_backend(1);
-//									mybe=find_or_create_backend(1,server_myds);
+									int rc=server_myds->assign_mshge(current_hostgroup);
 						assert(server_myds);
 						assert(server_myds->myconn);
 						assert(server_myds->myconn->mshge);
@@ -550,6 +544,7 @@ int MySQL_Session::handler() {
 									}
 									}
 								}
+			}
 //
 		
 

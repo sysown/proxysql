@@ -29,7 +29,10 @@ class MySQL_Session
 	int client_fd;
 	int server_fd;
 	enum session_status status;
+	int current_hostgroup;
 	int default_hostgroup;
+	int active_transactions;
+	bool transaction_persistent;
 	int to_process;
 	unsigned long long pause;
 	MySQL_Session_userinfo userinfo_client;
