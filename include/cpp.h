@@ -3,7 +3,7 @@
 #include "mysql_session.h"
 #include "mysql_backend.h"
 #include "mysql_data_stream.h"
-#include "shared_query_cache.h"
+//#include "shared_query_cache.h"
 #include "query_cache.hpp"
 //#include "local_query_cache.h"
 #include "mysql_connection.h"
