@@ -67,12 +67,21 @@ MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::set_HG_entry_status(unsigned i
 //MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::server_add_hg(unsigned int hid, char *add=NULL, uint16_t p=3306, unsigned int _weight=1) {
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::server_add_hg(unsigned int hid, char *add, uint16_t p, unsigned int _weight) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL server %s:%d in Global Handler in hostgroup\n", add, p, hid);
+	MySQL_Server *srv=server_add(add,p);
+	MySQL_Hostgroup *myhg=MyHostGroups_idx(hid);
+	return myhg->server_add(srv, _weight);
+}
+
+MySQL_Hostgroup * MySQL_HostGroups_Handler::MyHostGroups_idx(unsigned int hid) {
 	if (hid>=MyHostGroups->len) {
 		create_hostgroup(hid);
-	};
-	MySQL_Server *srv=server_add(add,p);
+	}
 	MySQL_Hostgroup *myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
-	return myhg->server_add(srv, _weight);
+	if (myhg==NULL) {
+		create_hostgroup(hid);
+		myhg=(MySQL_Hostgroup *)MyHostGroups->index(hid);
+	}
+	return myhg;	
 }
 
 MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::MSHGE_find(unsigned int hid, MySQL_Server *srv) {

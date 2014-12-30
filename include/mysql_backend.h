@@ -275,6 +275,7 @@ class MySQL_HostGroups_Handler {
 //		}
 	};
 */
+	MySQL_Hostgroup * MyHostGroups_idx(unsigned int hid);
 	void insert_hostgroup(MySQL_Hostgroup *myhg);
 /*
 	void insert_hostgroup(MySQL_Hostgroup *myhg) {

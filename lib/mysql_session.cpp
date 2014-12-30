@@ -313,6 +313,7 @@ int MySQL_Session::handler() {
 			case WAITING_CLIENT_DATA:
 				switch (client_myds->DSS) {
 					case STATE_SLEEP:
+						current_hostgroup=default_hostgroup;
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n");
 						//unsigned char c;
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));

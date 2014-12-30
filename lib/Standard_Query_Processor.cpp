@@ -130,6 +130,7 @@ virtual QP_rule_t * new_query_rule(int rule_id, bool active, char *username, cha
 	newQR->cache_ttl=cache_ttl;
 	newQR->apply=apply;
 	newQR->regex_engine=NULL;
+	newQR->hits=0;
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
 	return newQR;
 };
@@ -220,18 +221,88 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 	}
 	QP_rule_t *qr;
 	re2_t *re2p;
+	int flagIN=0;
 	for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
 		qr=*it;
+		if (qr->flagIN != flagIN) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 6, "query rule %d has no matching flagIN\n", qr->rule_id);
+			continue;
+		}
+		if (qr->username) {
+			if (strcmp(qr->username,sess->userinfo_client.username)!=0) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching username\n", qr->rule_id);
+				continue;
+			}
+		}
+		if (qr->schemaname) {
+			if (strcmp(qr->schemaname,sess->userinfo_client.schemaname)!=0) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching schemaname\n", qr->rule_id);
+				continue;
+			}
+		}
+
 		re2p=(re2_t *)qr->regex_engine;
-		if (qr->match_pattern && RE2::PartialMatch(query,*re2p->re)==true) {
-			//ret=(QP_out_t *)malloc(sizeof(QP_out_t));
+		if (qr->match_pattern) {
+			bool rc;
+			if (ret && ret->new_query) {
+				// if we already rewrote the query, process the new query
+				//std::string *s=ret->new_query;
+				rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re);
+			} else {
+				// we never rewrote the query
+				rc=RE2::PartialMatch(query,*re2p->re);
+			}
+			if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
+				continue;
+			}
+		}
+		// if we arrived here, we have a match
+		if (ret==NULL) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "this is the first time we find a match\n");
+			// create struct
 			ret=(QP_out_t *)l_alloc(sizeof(QP_out_t));
-			ret->cache_ttl=qr->cache_ttl;
+			// initalized all values
+			ret->ptr=NULL;
+			ret->size=0;
+			ret->destination_hostgroup=-1;
+			ret->cache_ttl=-1;
+			ret->new_query=NULL;
+		}
+		//__sync_fetch_and	_add(&qr->hits,1);
+		qr->hits++; // this is done without atomic function because it updates only the local variables
+			//ret=(QP_out_t *)malloc(sizeof(QP_out_t));
+
+		if (qr->flagOUT >= 0) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
+			flagIN=qr->flagOUT;
+			//sess->query_info.flagOUT=flagIN;
+    }
+    if (qr->cache_ttl >= 0) {
+			// Note: negative TTL means this rule doesn't change 
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
+      ret->cache_ttl=qr->cache_ttl;
+    }
+    if (qr->destination_hostgroup >= 0) {
+			// Note: negative TTL means this rule doesn't change 
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
+      ret->destination_hostgroup=qr->destination_hostgroup;
+    }
+
+		if (qr->replace_pattern) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d on match_pattern \"%s\" has a replace_pattern \"%s\" to apply\n", qr->rule_id, qr->match_pattern, qr->replace_pattern);
+			if (ret->new_query==NULL) ret->new_query=new std::string(query);
+			RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+		}
+
+		if (qr->apply==true) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d is the last one to apply: exit!\n", qr->rule_id);
 			goto __exit_process_mysql_query;
 		}
 	}
 	
 __exit_process_mysql_query:
+	// FIXME : there is too much data being copied around
 	l_free(len+1,query);
 	return ret;
 };

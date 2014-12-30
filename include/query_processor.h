@@ -3,7 +3,6 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-
 struct _Query_Processor_rule_t {
 	int rule_id;
 	bool active;
@@ -18,6 +17,7 @@ struct _Query_Processor_rule_t {
 	int cache_ttl;
 	bool apply;
 	void *regex_engine;
+	uint64_t hits;
 };
 
 
@@ -26,6 +26,7 @@ struct _Query_Processor_output_t {
 	unsigned int size;
 	int destination_hostgroup;
 	int cache_ttl;
+	std::string *new_query;
 };
 
 typedef struct _Query_Processor_rule_t QP_rule_t;
