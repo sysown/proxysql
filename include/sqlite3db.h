@@ -38,8 +38,12 @@ class SQLite3_row {
 		int i;
 		for (i=0;i<cnt;i++) {
 			sizes[i]=sqlite3_column_bytes(stmt,i);
-			const char *c=(char *)sqlite3_column_text(stmt,i);
-			fields[i]=( c ? strdup(c) : NULL);
+			if (size[i]) {
+				const char *c=(char *)sqlite3_column_text(stmt,i);
+				fields[i]=strdup(c);
+			} else {
+				fields[i]=NULL;
+			}
 			//fields[i]=(sizes[i] ? strdup((char *)sqlite3_column_text(stmt,i)) : NULL);
 		}
 	};
