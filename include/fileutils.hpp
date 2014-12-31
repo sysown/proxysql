@@ -12,5 +12,13 @@ class FileUtils {
 		if (access(pathname, W_OK)==0) return true;
 		return false;
 	};
+    static bool Proxy_file_exists(const char *pathname) {
+        if (access(pathname, F_OK)==0) return true;
+        return false;
+    };
+    static bool Proxy_file_regular(const char *pathname) {
+        if (access(pathname, F_OK)==0 && access(pathname, R_OK)) return true;
+        return false;
+    };
 };
 #endif /* __CLASS_FILEUTILS_H */
