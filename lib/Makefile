@@ -42,12 +42,12 @@ CC=gcc
 CPP=g++
 #CC=clang
 
-DEBUG=-ggdb -DDEBUG
+DEBUG=-ggdb  -DDEBUG
 O0=-O0
 O2=-O2
 O1=-O1
 O3=-O3 -mtune=native
-OPTZ=$(O2)
+OPTZ=$(O0)
 CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
 CPPFLAGS=-std=c++0x $(CFLAGS) $(LDIRS) $(LIBS)
 

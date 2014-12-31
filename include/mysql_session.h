@@ -12,6 +12,7 @@ class MySQL_Session_userinfo {
 	~MySQL_Session_userinfo();
 	void set(char *, char *, char *);
 	void set(MySQL_Session_userinfo *);
+	bool set_schemaname(char *, int);
 };
 
 class MySQL_Session
@@ -37,7 +38,7 @@ class MySQL_Session
 //	char *schema_name;
 //	char *schema_cur;
 //	char *schema_new;
-	int net_failure;
+	//int net_failure;
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
 
@@ -55,8 +56,8 @@ class MySQL_Session
 	int handler();
 
 	MySQL_Backend * find_backend(int);
-	MySQL_Backend * create_backend(int, MySQL_Data_Stream *);
-	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *);
+	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	void reset_all_backends();
 	void writeout();
 

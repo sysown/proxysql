@@ -18,6 +18,7 @@ enum debug_module {
 	PROXY_DEBUG_MYSQL_COM,
 	PROXY_DEBUG_MYSQL_SERVER,
 	PROXY_DEBUG_MYSQL_CONNECTION,
+	PROXY_DEBUG_MYSQL_CONNPOOL,
 	PROXY_DEBUG_MYSQL_RW_SPLIT,
 	PROXY_DEBUG_MYSQL_AUTH,
 	PROXY_DEBUG_MYSQL_PROTOCOL,
@@ -54,11 +55,12 @@ enum session_status {
 	CONNECTING_SERVER,
 	WAITING_CLIENT_DATA,
 	WAITING_SERVER_DATA,
-
+	CHANGING_SCHEMA,
 	NONE
 };
 
 enum mysql_data_stream_status {
+	STATE_NOT_INITIALIZED,
 	STATE_NOT_CONNECTED,
 	STATE_SERVER_HANDSHAKE,
 	STATE_CLIENT_HANDSHAKE,
@@ -348,8 +350,9 @@ struct _global_variables_t {
 	//pthread_rwlock_t rwlock_global;
 	pthread_rwlock_t rwlock_usernames;
 
-	int shutdown;
+	volatile int shutdown;
 	bool nostart;
+	int reload;
 
 	unsigned char protocol_version;
 	char *mysql_server_version;

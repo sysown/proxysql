@@ -9,7 +9,7 @@ static void term_handler(int sig) {
   proxy_error("Received TERM signal: shutdown in progress...\n");
 #ifdef DEBUG
 #endif
-  glovars.shutdown=1;
+  __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 //  sleep(5);
 //  exit(0);
 }
@@ -35,6 +35,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
+	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
 	global.gdb=0;
 #endif
@@ -60,7 +61,7 @@ opt.add(
 */
 	opt->add((const char *)"",0,0,0,(const char *)"Display usage instructions.",(const char *)"-h",(const char *)"-help",(const char *)"--help",(const char *)"--usage");
 	opt->add((const char *)"",0,0,0,(const char *)"Print version",(const char *)"-V",(const char *)"--version");
-	opt->add((const char *)"",0,0,0,(const char *)"Enable debugging messages",(const char *)"-d",(const char *)"--debug");
+	opt->add((const char *)"",0,1,0,(const char *)"Enable debugging messages with specific verbosity",(const char *)"-d",(const char *)"--debug");
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
@@ -98,6 +99,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	}
 
 	if (opt->isSet("-d")) {
+		opt->get("-d")->getInt(GloVars.__cmd_proxysql_gdbg);	
 		global.gdbg=true;
 	}
 
@@ -124,7 +126,9 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 void ProxySQL_GlobalVariables::process_opts_post() {
 
 	if (opt->isSet("-n")) {
-		global.nostart=true;
+		//global.nostart=true;
+		GloVars.global.nostart=true;
+		GloVars.__cmd_proxysql_nostart=1;
 	}
 
 	if (opt->isSet("-f")) {
@@ -176,8 +180,10 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
   // apply settings from cmdline, that have priority over config file
 #ifdef DEBUG
-	if (GloVars.__cmd_proxysql_gdbg>=0) { GloVars.global.gdbg=GloVars.__cmd_proxysql_gdbg; }
+//	if (GloVars.__cmd_proxysql_gdbg>0) { GloVars.global.gdbg=true; }
+	init_debug_struct_from_cmdline();
 #endif
+
 //	if (GloVars.__cmd_proxysql_foreground>=0) { foreground=GloVars.__cmd_proxysql_foreground; }
 	if (GloVars.__cmd_proxysql_nostart>=0) { glovars.nostart=GloVars.__cmd_proxysql_nostart; }
 	if (GloVars.__cmd_proxysql_datadir) {

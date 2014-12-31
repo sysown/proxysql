@@ -261,68 +261,6 @@ int main(int argc, const char * argv[]) {
 
 
 
-	MyHGH=new MySQL_HostGroups_Handler();
-/*
-	MySQL_Server serverA;
-	MySQL_Server serverB((char *)"localhost", 3305);
-//	MySQL_Server *serverC=MyHGH->server_add((char *)"localhost", 3305);
-	
-	MySQL_Hostgroup *myhg;
-	myhg=new MySQL_Hostgroup(0);
-	myhg->add(&serverA);
-	myhg->add(&serverB);
-//	GloVars.MyHGH->insert(GloVars.MyHGH.begin()+0,myhg);
-	MyHGH->insert(myhg);
-
-	myhg=new MySQL_Hostgroup(1);
-	myhg->add(&serverA);
-	myhg->add(&serverB);
-//	GloVars.MyHGH.insert(GloVars.MyHGH.begin()+1,myhg);
-	MyHGH->insert(myhg);
-*/
-
-	MyHGH->wrlock();
-	MyHGH->server_add_hg(0,(char *)"127.0.0.1", 3307);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3307);
-	MyHGH->server_add_hg(2,(char *)"127.0.0.1", 3306);
-	MyHGH->server_add_hg(2,(char *)"127.0.0.1", 3307);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3310);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3309);
-	MyHGH->server_add_hg(3,(char *)"127.0.0.1", 3305);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3308);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3311);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3312);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3301);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3303);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3304);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3302);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3306);
-/*
-	MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"127.0.0.1", 3306);
-	if (mshge) {
-		mshge->status=PROXYSQL_SERVER_STATUS_ONLINE;
-	}
-*/
-	for (int ir=0;ir<1000;ir++) {
-		MyHGH->set_HG_entry_status(1,(char *)"127.0.0.1", 3306, PROXYSQL_SERVER_STATUS_ONLINE);
-	}
-	std::cout<<"Servers in HG0 : "<<MyHGH->servers_in_hostgroup(0)<<std::endl;
-	std::cout<<"Servers in HG1 : "<<MyHGH->servers_in_hostgroup(1)<<std::endl;
-	std::cout<<"Servers in HG2 : "<<MyHGH->servers_in_hostgroup(2)<<std::endl;
-	std::cout<<"Servers in HG3 : "<<MyHGH->servers_in_hostgroup(3)<<std::endl;
-
-	MyHGH->wrunlock();
-
-	MySQL_Connection *conn=new MySQL_Connection();
-
-	MyHGH->rdlock();
-	MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"localhost", 3306);
-	if (mshge) {
-		conn->set_mshge(mshge);
-	};
-	MyHGH->rdunlock();
-
-	delete conn;
 
 //	exit(0);
 //	std::cout<<"Servers in HG1 : "<<MyHGH->MyHGH[1]->servers_in_hostgroup()<<std::endl;
@@ -378,8 +316,8 @@ int main(int argc, const char * argv[]) {
 	}
 	GloVars.confFile->ReadGlobals();
 #ifdef DEBUG
-	GloVars.confFile->configVariable((const char *)"global",(const char *)"debugin",GloVars.global.gdb,1,1,100,0);
-	GloVars.confFile->configVariable((const char *)"global",(const char *)"debug",GloVars.global.gdbg,true);
+//	GloVars.confFile->configVariable((const char *)"global",(const char *)"debugin",GloVars.global.gdb,1,1,100,0);
+//	GloVars.confFile->configVariable((const char *)"global",(const char *)"debug",GloVars.global.gdbg,true);
 #endif
 
 	GloVars.parse(argc,argv);
@@ -540,6 +478,74 @@ int main(int argc, const char * argv[]) {
 //	}
 }
 
+__start_label:
+
+	GloQC=NULL;
+	GloQPro=NULL;
+	MyHGH=new MySQL_HostGroups_Handler();
+/*
+	MySQL_Server serverA;
+	MySQL_Server serverB((char *)"localhost", 3305);
+//	MySQL_Server *serverC=MyHGH->server_add((char *)"localhost", 3305);
+	
+	MySQL_Hostgroup *myhg;
+	myhg=new MySQL_Hostgroup(0);
+	myhg->add(&serverA);
+	myhg->add(&serverB);
+//	GloVars.MyHGH->insert(GloVars.MyHGH.begin()+0,myhg);
+	MyHGH->insert(myhg);
+
+	myhg=new MySQL_Hostgroup(1);
+	myhg->add(&serverA);
+	myhg->add(&serverB);
+//	GloVars.MyHGH.insert(GloVars.MyHGH.begin()+1,myhg);
+	MyHGH->insert(myhg);
+*/
+
+	MyHGH->wrlock();
+/*
+	MyHGH->server_add_hg(0,(char *)"127.0.0.1", 3307);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3307);
+	MyHGH->server_add_hg(2,(char *)"127.0.0.1", 3306);
+	MyHGH->server_add_hg(2,(char *)"127.0.0.1", 3307);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3310);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3309);
+	MyHGH->server_add_hg(3,(char *)"127.0.0.1", 3305);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3308);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3311);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3312);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3301);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3303);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3304);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3302);
+	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3306);
+
+	MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"127.0.0.1", 3306);
+	if (mshge) {
+		mshge->status=PROXYSQL_SERVER_STATUS_ONLINE;
+	}
+
+	for (int ir=0;ir<1000;ir++) {
+		MyHGH->set_HG_entry_status(1,(char *)"127.0.0.1", 3306, PROXYSQL_SERVER_STATUS_ONLINE);
+	}
+	std::cout<<"Servers in HG0 : "<<MyHGH->servers_in_hostgroup(0)<<std::endl;
+	std::cout<<"Servers in HG1 : "<<MyHGH->servers_in_hostgroup(1)<<std::endl;
+	std::cout<<"Servers in HG2 : "<<MyHGH->servers_in_hostgroup(2)<<std::endl;
+	std::cout<<"Servers in HG3 : "<<MyHGH->servers_in_hostgroup(3)<<std::endl;
+*/
+	MyHGH->wrunlock();
+/*
+	MySQL_Connection *conn=new MySQL_Connection();
+
+	MyHGH->rdlock();
+	MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"localhost", 3306);
+	if (mshge) {
+		conn->set_mshge(mshge);
+	};
+	MyHGH->rdunlock();
+
+	delete conn;
+*/
 
 
 {
@@ -550,10 +556,32 @@ int main(int argc, const char * argv[]) {
 //	GloAdmin->init();
 }
 
+#ifdef DEBUG
+// if -d is specified in the command line, this has higher priority over what is specified in config file 
+//	init_debug_struct_from_cmdline();
+#endif /* DEBUG */
+
+
 	GloMyAuth = create_MySQL_Authentication();
 	GloMyAuth->print_version();
 
 	GloAdmin->init_users();
+
+
+	//if (GloVars.__cmd_proxysql_nostart) {
+	if (GloVars.global.nostart) {
+		pthread_mutex_lock(&GloVars.global.start_mutex);
+	}
+
+	mysql_threads=NULL;
+
+	if (glovars.shutdown) {
+		goto __shutdown;
+	}
+
+	// load all mysql servers to GloHGH
+	GloAdmin->init_mysql_servers();
+
 
 {
 	GloQPro = create_Query_Processor();
@@ -674,28 +702,66 @@ int main(int argc, const char * argv[]) {
 
 	//sleep(10);
 
-	while (glovars.shutdown==0) sleep(5);   // FIXME: TERRIBLE UGLY
-	sleep(2);                               // FIXME: TERRIBLE UGLY
+	while (glovars.shutdown==0) {
+		sleep(1);   // FIXME: TERRIBLE UGLY
+	}
+//	sleep(2);                               // FIXME: TERRIBLE UGLY
 //	diagnostic_all();
 //	sleep(1000);
-	
-	for (i=0; i<NUM_THREADS; i++) {
-		mysql_threads[i].worker->shutdown=1;
-	}
+		
+__shutdown:
 
-	for (i=0; i<NUM_THREADS; i++) {
-		pthread_join(mysql_threads[i].thread_id,NULL);
+	if (mysql_threads) {
+
+		for (i=0; i<NUM_THREADS; i++) {
+			mysql_threads[i].worker->shutdown=1;
+		}
+
+		for (i=0; i<NUM_THREADS; i++) {
+			pthread_join(mysql_threads[i].thread_id,NULL);
+		}
+		free(mysql_threads);
+		mysql_threads=NULL;
 	}
-	free(mysql_threads);
-	GloQC->shutdown=1;
-	pthread_join(GloQC->purge_thread_id, NULL);
+	if (GloQC) {
+		GloQC->shutdown=1;
+		pthread_join(GloQC->purge_thread_id, NULL);
+	}
 	//SQC->empty();
 	//SQC->flush();
-	delete GloQC;
-	delete GloQPro;
+
+
+
+
+	//if (GloVars.__cmd_proxysql_nostart) {
+	if (GloVars.global.nostart) {
+		pthread_mutex_unlock(&GloVars.global.start_mutex);
+	}
+
+	if (GloQC) {
+		delete GloQC;
+		GloQC=NULL;
+	}
+	if (GloQPro) {
+		delete GloQPro;
+		GloQPro=NULL;
+	}
+	if (GloMyAuth) {
 	delete GloMyAuth;
+		GloMyAuth=NULL;
+	}
 	delete GloAdmin;
 	delete MyHGH;
+
+	if (glovars.reload) {
+		//sleep(1);
+		if (glovars.reload==2) {
+			GloVars.global.nostart=true;
+		}
+		glovars.reload=0;
+		glovars.shutdown=0;
+		goto __start_label;
+	}
 
 	if (RUNNING_ON_VALGRIND==0) {
 		dlclose(__qc);
@@ -705,6 +771,7 @@ int main(int argc, const char * argv[]) {
 		dlclose(__proxysql_admin);
 	}
 	l_mem_destroy(__thr_sfp);
+
 
 	return 0;
 }

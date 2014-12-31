@@ -59,7 +59,8 @@ int MySQL_Connection::assign_mshge(unsigned int hid) { // FIXME
 */
 	MyHGH->rdlock();
 	if (mshge) { free_mshge(); }
-	MySQL_Hostgroup_Entry *_mshge=MyHGH->MSHGE_find(hid,(char *)"127.0.0.1", 3306);
+	//MySQL_Hostgroup_Entry *_mshge=MyHGH->MSHGE_find(hid,(char *)"127.0.0.1", 3306);
+	MySQL_Hostgroup_Entry *_mshge=MyHGH->get_random_hostgroup_entry(hid);
 	assert(_mshge);
 	if (_mshge) {
 		set_mshge(_mshge);
