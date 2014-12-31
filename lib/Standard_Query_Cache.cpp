@@ -107,7 +107,7 @@ class KV_BtreeArray {
 	};
 
   ~KV_BtreeArray() {
-		fprintf(stderr,"Size of  KVBtreeArray:%d , freed_memory:%lu, cntGet:%lu, cntGetOK:%lu, cntSet:%lu, cntPurge:%lu, dataIN:%lu, dataOUT:%lu\n", cnt() , total_freed_memory, cntGet, cntGetOK, cntSet, cntPurge, dataIN, dataOUT);
+		proxy_debug(PROXY_DEBUG_QUERY_CACHE, 3, "Size of  KVBtreeArray:%d , freed_memory:%lu, cntGet:%lu, cntGetOK:%lu, cntSet:%lu, cntPurge:%lu, dataIN:%lu, dataOUT:%lu\n", cnt() , total_freed_memory, cntGet, cntGetOK, cntSet, cntPurge, dataIN, dataOUT);
 		empty();
 		QC_entry_t *qce=NULL;
 		while (ptrArray.len) {

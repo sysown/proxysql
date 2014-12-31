@@ -1,6 +1,6 @@
 #include "proxysql.h"
 
-
+#include <cxxabi.h>
 
 
 #ifdef DEBUG
@@ -45,13 +45,48 @@ void proxy_debug_func(enum debug_module module, int verbosity, const char *fmt, 
 void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {
 	assert(module<PROXY_DEBUG_UNKNOWN);
 	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity) return;
+	char debugbuff[DEBUG_MSG_MAXSIZE];
+	char longdebugbuff[DEBUG_MSG_MAXSIZE*8];
+	longdebugbuff[0]=0;
 	if (GloVars.global.foreground) {
-		char debugbuff[DEBUG_MSG_MAXSIZE];
 		va_list ap;
 		va_start(ap, fmt);
 		vsnprintf(debugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
-		fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
+		//fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
+		sprintf(longdebugbuff, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
+	}
+	if (GloVars.global.gdbg_lvl[module].verbosity>=10) {
+		void *arr[20];
+		char **strings;
+		int s;
+		s = backtrace(arr, 20);
+		//backtrace_symbols_fd(arr, s, STDERR_FILENO);
+		strings=backtrace_symbols(arr,s);
+		if (strings == NULL) {
+			perror("backtrace_symbols");
+			exit(EXIT_FAILURE);
+		}
+		for (int i=0; i<s; i++) {
+			//printf("%s\n", strings[i]);
+			debugbuff[0]=0;
+			sscanf(strings[i], "%*[^(](%100[^+]", debugbuff);
+			int status;
+			char *realname=NULL;
+			realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
+			if (realname) {
+				sprintf(debugbuff," ---- %s : %s\n", strings[i], realname);
+				strcat(longdebugbuff,debugbuff);
+			}
+		}
+		//printf("\n");
+		strcat(longdebugbuff,"\n");
+		free(strings);
+//	} else {
+//		fprintf(stderr, "%s", longdebugbuff);
+	}
+	if (strlen(longdebugbuff)) fprintf(stderr, "%s", longdebugbuff);
+	if (GloVars.global.foreground) {
 		return;
 	}
 /*
@@ -109,6 +144,7 @@ void init_debug_struct() {
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_COM].name=(char *)"debug_mysql_com";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_SERVER].name=(char *)"debug_mysql_server";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_CONNECTION].name=(char *)"debug_mysql_connection";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_CONNPOOL].name=(char *)"debug_mysql_connpool";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_RW_SPLIT].name=(char *)"debug_mysql_rw_split";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_AUTH].name=(char *)"debug_mysql_auth";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_PROTOCOL].name=(char *)"debug_mysql_protocol";
@@ -122,6 +158,15 @@ void init_debug_struct() {
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		// if this happen, the above table is not populated correctly
 		assert(GloVars.global.gdbg_lvl[i].name!=NULL);
+	}
+}
+
+
+void init_debug_struct_from_cmdline() {
+	if (GloVars.__cmd_proxysql_gdbg<0) return;
+	int i;
+	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
+		GloVars.global.gdbg_lvl[i].verbosity=GloVars.__cmd_proxysql_gdbg;
 	}
 }
 #endif /* DEBUG */
