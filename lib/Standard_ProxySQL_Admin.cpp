@@ -174,7 +174,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void flush_mysql_query_rules__from_disk_to_memory();	
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
-	void load_mysql_query_rules_to_runtime();
+	char * load_mysql_query_rules_to_runtime();
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -496,9 +496,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-			SPA->load_mysql_query_rules_to_runtime();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			char *err=SPA->load_mysql_query_rules_to_runtime();
+			if (err==NULL) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
+				SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			} else {
+				SPA->send_MySQL_ERR(&sess->myprot_client, err);
+			}
 			return false;
 		}
 
@@ -1364,10 +1368,11 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 }
 
 
-void Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
+char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
+	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, apply FROM main.mysql_query_rules WHERE active=1";
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1381,12 +1386,13 @@ void Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 			nqpr=GloQPro->new_query_rule(atoi(r->fields[0]), true, r->fields[1], r->fields[2], atoi(r->fields[3]), r->fields[4], (atoi(r->fields[5])==1 ? true : false), (r->fields[6]==NULL ? -1 : atol(r->fields[6])), r->fields[7], (r->fields[8]==NULL ? -1 : atoi(r->fields[8])), (r->fields[9]==NULL ? -1 : atol(r->fields[9])), (atoi(r->fields[10])==1 ? true : false));
 			GloQPro->insert(nqpr);
 		}
-		GloQPro->sort();
+		GloQPro->sort(false);
 	}
 	GloQPro->wrunlock();
 	GloQPro->commit();
 //	if (error) free(error);
 	if (resultset) delete resultset;
+	return NULL;
 }
 
 
