@@ -38,7 +38,7 @@ class SQLite3_row {
 		int i;
 		for (i=0;i<cnt;i++) {
 			sizes[i]=sqlite3_column_bytes(stmt,i);
-			if (size[i]) {
+			if (sizes[i]) {
 				const char *c=(char *)sqlite3_column_text(stmt,i);
 				fields[i]=strdup(c);
 			} else {

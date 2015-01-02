@@ -22,6 +22,7 @@ static volatile bool nostart_=false;
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
+extern Query_Processor *GloQPro;
 //#define PANIC(msg)  { perror(msg); return -1; }
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -37,6 +38,8 @@ pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS "CREATE TABLE mysql_hostgroups ( hostgroup_id INT NOT NULL , description VARCHAR, PRIMARY KEY(hostgroup_id) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES "CREATE TABLE mysql_hostgroup_entries ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , FOREIGN KEY (hostname, port) REFERENCES mysql_servers (hostname, port) , FOREIGN KEY (hostgroup_id) REFERENCES mysql_hostgroups (hostgroup_id) , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend) , FOREIGN KEY (default_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
+#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0, FOREIGN KEY (destination_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
+
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY, verbosity INT NOT NULL DEFAULT 0)"
@@ -141,7 +144,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void add_default_user(char *, char *);
 	void __refresh_users();
-	
+
 
 	public:
 	SQLite3DB *admindb;	// in memory
@@ -153,6 +156,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual bool init();
 	virtual void init_users();
 	virtual void init_mysql_servers();
+	virtual void init_mysql_query_rules();
 	void save_mysql_users_runtime_to_database();
 	virtual void admin_shutdown();
 	bool is_command(std::string);
@@ -166,8 +170,11 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 #endif /* DEBUG */
 	void flush_mysql_servers__from_memory_to_disk();
 	void flush_mysql_servers__from_disk_to_memory();
+	void flush_mysql_query_rules__from_memory_to_disk();	
+	void flush_mysql_query_rules__from_disk_to_memory();	
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
+	void load_mysql_query_rules_to_runtime();
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -435,6 +442,75 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM RUNTIME") && !strncasecmp("SAVE MYSQL SERVERS FROM RUNTIME",query_no_space, query_no_space_length))
 			||
 			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM RUN") && !strncasecmp("SAVE MYSQL SERVERS FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->save_mysql_users_runtime_to_database();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+*/
+	}
+
+	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL QUERY RULES ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL QUERY RULES ", query_no_space, 23))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO MEMORY") && !strncasecmp("LOAD MYSQL QUERY RULES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO MEM") && !strncasecmp("LOAD MYSQL QUERY RULES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM DISK") && !strncasecmp("LOAD MYSQL QUERY RULES FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->flush_mysql_query_rules__from_disk_to_memory();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to MEMORY\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM MEMORY") && !strncasecmp("SAVE MYSQL QUERY RULES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM MEM") && !strncasecmp("SAVE MYSQL QUERY RULES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES TO DISK") && !strncasecmp("SAVE MYSQL QUERY RULES TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->flush_mysql_query_rules__from_memory_to_disk();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules to DISK\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM MEMORY") && !strncasecmp("LOAD MYSQL QUERY RULES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM MEM") && !strncasecmp("LOAD MYSQL QUERY RULES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO RUNTIME") && !strncasecmp("LOAD MYSQL QUERY RULES TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO RUN") && !strncasecmp("LOAD MYSQL QUERY RULES TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->load_mysql_query_rules_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+/*
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES TO MEMORY") && !strncasecmp("SAVE MYSQL QUERY RULES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES TO MEM") && !strncasecmp("SAVE MYSQL QUERY RULES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE MYSQL QUERY RULES FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM RUN") && !strncasecmp("SAVE MYSQL QUERY RULES FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
@@ -819,6 +895,7 @@ bool Standard_ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
+	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -828,6 +905,7 @@ bool Standard_ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
+	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -1021,6 +1099,7 @@ void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
   admindb->execute("INSERT OR IGNORE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
 //  admindb->execute("INSERT OR IGNORE INTO main.query_rules SELECT * FROM disk.query_rules");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 //  admindb->execute("INSERT OR IGNORE INTO main.default_hostgroups SELECT * FROM disk.default_hostgroups");
 #ifdef DEBUG
   admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
@@ -1034,6 +1113,7 @@ void Standard_ProxySQL_Admin::__delete_disktable() {
   admindb->execute("DELETE FROM disk.mysql_hostgroup_entries");
 //  admindb->execute("DELETE FROM disk.query_rules");
   admindb->execute("DELETE FROM disk.mysql_users");
+	admindb->execute("DELETE FROM disk.mysql_query_rules");
 //  admindb->execute("DELETE FROM disk.default_hostgroups");
 #ifdef DEBUG
   admindb->execute("DELETE FROM disk.debug_levels");
@@ -1046,6 +1126,7 @@ void Standard_ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroup_entries SELECT * FROM main.mysql_hostgroup_entries");
 //  admindb->execute("INSERT OR REPLACE INTO disk.query_rules SELECT * FROM main.query_rules");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 //  admindb->execute("INSERT OR REPLACE INTO disk.default_hostgroups SELECT * FROM main.default_hostgroups");
 #ifdef DEBUG
   admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
@@ -1071,6 +1152,20 @@ void Standard_ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
   admindb->execute("PRAGMA foreign_keys = ON");
 }
 
+void Standard_ProxySQL_Admin::flush_mysql_query_rules__from_disk_to_memory() {
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
+	admindb->execute("PRAGMA foreign_keys = ON");
+}
+
+void Standard_ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
+	admindb->execute("PRAGMA foreign_keys = ON");
+}
+
+
+
 void Standard_ProxySQL_Admin::__attach_configdb_to_admindb() {
 	const char *a="ATTACH DATABASE '%s' AS disk";
 	int l=strlen(a)+strlen(configdb->get_url())+5;
@@ -1087,6 +1182,10 @@ void Standard_ProxySQL_Admin::init_users() {
 
 void Standard_ProxySQL_Admin::init_mysql_servers() {
 	load_mysql_servers_to_runtime();
+}
+
+void Standard_ProxySQL_Admin::init_mysql_query_rules() {
+	load_mysql_query_rules_to_runtime();
 }
 
 void Standard_ProxySQL_Admin::__refresh_users() {
@@ -1202,7 +1301,7 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
-			GloMyAuth->add(r->fields[0], r->fields[1], usertype, (strcmp(r->fields[2],"1")==0 ? true : false) , atoi(r->fields[3]), (strcmp(r->fields[4],"1")==0 ? true : false));
+			GloMyAuth->add(r->fields[0], (r->fields[1]==NULL ? (char *)"" : r->fields[1]), usertype, (strcmp(r->fields[2],"1")==0 ? true : false) , atoi(r->fields[3]), (strcmp(r->fields[4],"1")==0 ? true : false));
 		}
 	}
 //	if (error) free(error);
@@ -1260,6 +1359,34 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		}
 	}
 	MyHGH->wrunlock();
+//	if (error) free(error);
+	if (resultset) delete resultset;
+}
+
+
+void Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, apply FROM main.mysql_query_rules WHERE is_active=1";
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	GloQPro->wrlock();
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		QP_rule_t * nqpr;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+      SQLite3_row *r=*it;
+			//GloQPro->new_query_rule(1, true, NULL, NULL, 0, (char *)"^SELECT ", false, 0, NULL, 0, 10, true);
+			nqpr=GloQPro->new_query_rule(atoi(r->fields[0]), true, r->fields[1], r->fields[2], atoi(r->fields[3]), r->fields[4], (atoi(r->fields[5])==1 ? true : false), (r->fields[6]==NULL ? -1 : atol(r->fields[6])), r->fields[7], (r->fields[8]==NULL ? -1 : atoi(r->fields[8])), (r->fields[9]==NULL ? -1 : atol(r->fields[9])), (atoi(r->fields[10])==1 ? true : false));
+			GloQPro->insert(nqpr);
+			//GloQPro->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
+		}
+		GloQPro->sort();
+	}
+	GloQPro->wrunlock();
+	GloQPro->commit();
 //	if (error) free(error);
 	if (resultset) delete resultset;
 }

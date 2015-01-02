@@ -604,7 +604,7 @@ __start_label:
 	GloQPro->commit();
 //	exit(EXIT_SUCCESS);
 }
-
+	GloAdmin->init_mysql_query_rules();
 
 /*
 	GModule * __mysql_auth = g_module_open("../lib/Standard_MySQL_Authentication.so", G_MODULE_BIND_LAZY);
