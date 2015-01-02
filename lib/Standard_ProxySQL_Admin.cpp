@@ -1331,6 +1331,8 @@ void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
 	}
 	if (resultset) delete resultset;
 	if (matching_rows==0) {
+		GloMyAuth->add(user,password, USERNAME_FRONTEND, false , 0, true);
+/*
 		proxy_error("Adding default user. Username=%s, Password=%s\n", user,password);
 		admindb->execute("PRAGMA foreign_keys = OFF");
 		char *str1=(char *)"INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,transaction_persistent,backend,frontend) VALUES('%s','%s',1,0,0,0,0,1)";
@@ -1338,6 +1340,7 @@ void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
 		sprintf(query,str1,user,password);
 		admindb->execute(query);
 		admindb->execute("PRAGMA foreign_keys = ON");
+*/
 	}
 }
 
