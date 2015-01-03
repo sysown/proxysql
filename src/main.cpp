@@ -51,9 +51,6 @@ __thread l_sfp *__thr_sfp=NULL;
 
 const char *malloc_conf = "xmalloc:true,lg_tcache_max:17";
 
-//struct epoll_event ev, events[MAX_EVENTS];
-//int listen_sock, conn_sock, nfds, epollfd;
-
 int listen_fd;
 int socket_fd;
 
@@ -141,7 +138,6 @@ void diagnostic_all() {
 		unsigned int j;
 		MySQL_Thread *thr=mysql_threads[i].worker;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
-			//MySQL_Session *sess=(MySQL_Session *)g_ptr_array_index(thr->mysql_sessions,j);
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->index(j);
 			fprintf(stderr," Session=%p\n", sess);
 			fprintf(stderr,"    Client Data Stream=%p, fd=%d\n", sess->client_myds, ( sess->client_myds ? sess->client_myds->fd : 0 ));
@@ -151,21 +147,6 @@ void diagnostic_all() {
 		}
 	}
 }
-
-/*
-void * memcached_main_thread(void *arg) {
-	char **argv=(char **)malloc(sizeof(char *)*7);
-	argv[0]=(char *)"proxysql";
-	argv[1]=(char *)"-m";
-	argv[2]=(char *)"128";
-	argv[3]=(char *)"-t";
-	argv[4]=(char *)"2";
-	argv[5]=(char *)"-c";
-	argv[6]=(char *)"100";
-//	(*__memcached_main)(7,argv);
-	return NULL;
-}
-*/
 
 void * mysql_worker_thread_func(void *arg) {
 
@@ -181,38 +162,7 @@ void * mysql_worker_thread_func(void *arg) {
 		worker->print_version();
 	}
 	do { usleep(50); } while (load_);
-{
-	unsigned char *a;
-	unsigned char *b;
-	int i;
-	uint32_t j;
-/*
-	for (i=0; i<1000000; i++) {
-		a=(unsigned char *)gen_random_string(4);
-		b=(unsigned char *)gen_random_string(7);
-		SQC->set(a,5,b,8,10);
-		free(a);
-	}
-*/
-	for (i=0; i<400; i++) {
-		a=(unsigned char *)gen_random_string(4);
-		if (i%100==0) {
-		//if (0) {
-			b=(unsigned char *)gen_random_string(7);
-			GloQC->set(a,5,b,8,3);
-			free(b);
-		} else {
-			b=GloQC->get(a,&j);
-			if(b) free(b);
-		}
-		free(a);
-	}
 
-
-	//delete worker; // FIXME: remove me, here for testing only
-	//return NULL;
-//	exit(0);
-}
 	worker->run();
 	//delete worker;
 	destroy_MySQL_Thread(worker);
@@ -262,51 +212,7 @@ int main(int argc, const char * argv[]) {
 
 
 
-//	exit(0);
-//	std::cout<<"Servers in HG1 : "<<MyHGH->MyHGH[1]->servers_in_hostgroup()<<std::endl;
-//	std::cout<<"Servers in HG2 : "<<MyHGH->MyHGH[2]->servers_in_hostgroup()<<std::endl;
-
-
-//	MySQL_Hostgroup myhg);
-
-	//GloVars.MyHGH.reserve(10);
-//	GloVars.MyHGH.insert(GloVars.MyHGH.begin()+1,&myhg1);
-
-/*
-	MySQL_Protocol p;
-	MySQL_Data_Stream myds;
-	myds.init(MYDS_FRONTEND,NULL,10);
-#ifdef DEBUG
-	p.dump_pkt=true;
-#endif
-	p.generate_pkt_OK(NULL,false,NULL,NULL,0,10,10,0,0,(char *)"this is a message all ok");
-	p.generate_pkt_ERR(NULL,false,NULL,NULL,20,1234,(char *)"HY100",(char *)"Dude, table doesn't exist");
-	p.generate_pkt_EOF(NULL,false,NULL,NULL,2,45,657);
-	p.generate_COM_QUIT(NULL,false,NULL,NULL);
-	p.generate_COM_INIT_DB(NULL,false,NULL,NULL,(char *)"testdb");
-	p.generate_COM_PING(NULL,false,NULL,NULL);
-	p.generate_COM_RESET_CONNECTION(NULL,false,NULL,NULL);
-	p.generate_pkt_initial_handshake(&myds,false,NULL,NULL);
-	//exit(EXIT_FAILURE);
-*/
 }
-/*
-
-	ProxySQL_ConfigFile P_CNF;
-	if (P_CNF.OpenFile("proxysql.cnf2") == true) {
-		// open config file
-	} else {
-		std::cerr << "Cannot open config file, aborted" << endl;
-		//exit(EXIT_FAILURE);
-	}
-	P_CNF.ReadGlobals();
-
-	//int aaa;
-
-	P_CNF.configVariable((const char *)"global",(const char *)"debug",GloVars.global.gdb,1,1,100,0);
-	//cout << aaa << endl;
-	//exit(0);
-*/
 
 	if (GloVars.confFile->OpenFile("proxysql.cnf2") == true) {
 		// open config file
@@ -315,10 +221,6 @@ int main(int argc, const char * argv[]) {
 		//exit(EXIT_FAILURE);
 	}
 	GloVars.confFile->ReadGlobals();
-#ifdef DEBUG
-//	GloVars.confFile->configVariable((const char *)"global",(const char *)"debugin",GloVars.global.gdb,1,1,100,0);
-//	GloVars.confFile->configVariable((const char *)"global",(const char *)"debug",GloVars.global.gdbg,true);
-#endif
 
 	GloVars.parse(argc,argv);
 
@@ -327,20 +229,6 @@ int main(int argc, const char * argv[]) {
 
 
 	bool rc;
-
-/*
-	//void* __qc = dlopen("./Shared_Query_Cache.so", RTLD_NOW);
-	//GModule * __qc = g_module_open("../test/triangle.so", G_MODULE_BIND_LAZY);
-	GModule * __qc = g_module_open("../lib/Standard_Query_Cache.so", G_MODULE_BIND_LAZY);
-	//GModule * __qc = g_module_open("../lib/Shared_Query_Cache.so", G_MODULE_BIND_LAZY);
-    if (!__qc) {
-	//	perror("");
-        cerr << "Cannot load library: " << g_module_error() << '\n';
-        return 1;
-    }
-
-    //dlerror();
-*/
 
 	dlerror();
 	char* dlsym_error = NULL;
@@ -473,9 +361,6 @@ int main(int argc, const char * argv[]) {
 			exit(EXIT_FAILURE);
 		}
 	}
-//	if (__mysql_auth==NULL || dlsym_error) {
-//		create_MySQL_Authentication=&create_MySQL_Authentication_func;
-//	}
 }
 
 __start_label:
@@ -483,83 +368,12 @@ __start_label:
 	GloQC=NULL;
 	GloQPro=NULL;
 	MyHGH=new MySQL_HostGroups_Handler();
-/*
-	MySQL_Server serverA;
-	MySQL_Server serverB((char *)"localhost", 3305);
-//	MySQL_Server *serverC=MyHGH->server_add((char *)"localhost", 3305);
-	
-	MySQL_Hostgroup *myhg;
-	myhg=new MySQL_Hostgroup(0);
-	myhg->add(&serverA);
-	myhg->add(&serverB);
-//	GloVars.MyHGH->insert(GloVars.MyHGH.begin()+0,myhg);
-	MyHGH->insert(myhg);
-
-	myhg=new MySQL_Hostgroup(1);
-	myhg->add(&serverA);
-	myhg->add(&serverB);
-//	GloVars.MyHGH.insert(GloVars.MyHGH.begin()+1,myhg);
-	MyHGH->insert(myhg);
-*/
-
-	MyHGH->wrlock();
-/*
-	MyHGH->server_add_hg(0,(char *)"127.0.0.1", 3307);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3307);
-	MyHGH->server_add_hg(2,(char *)"127.0.0.1", 3306);
-	MyHGH->server_add_hg(2,(char *)"127.0.0.1", 3307);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3310);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3309);
-	MyHGH->server_add_hg(3,(char *)"127.0.0.1", 3305);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3308);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3311);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3312);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3301);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3303);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3304);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3302);
-	MyHGH->server_add_hg(1,(char *)"127.0.0.1", 3306);
-
-	MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"127.0.0.1", 3306);
-	if (mshge) {
-		mshge->status=PROXYSQL_SERVER_STATUS_ONLINE;
-	}
-
-	for (int ir=0;ir<1000;ir++) {
-		MyHGH->set_HG_entry_status(1,(char *)"127.0.0.1", 3306, PROXYSQL_SERVER_STATUS_ONLINE);
-	}
-	std::cout<<"Servers in HG0 : "<<MyHGH->servers_in_hostgroup(0)<<std::endl;
-	std::cout<<"Servers in HG1 : "<<MyHGH->servers_in_hostgroup(1)<<std::endl;
-	std::cout<<"Servers in HG2 : "<<MyHGH->servers_in_hostgroup(2)<<std::endl;
-	std::cout<<"Servers in HG3 : "<<MyHGH->servers_in_hostgroup(3)<<std::endl;
-*/
-	MyHGH->wrunlock();
-/*
-	MySQL_Connection *conn=new MySQL_Connection();
-
-	MyHGH->rdlock();
-	MySQL_Hostgroup_Entry *mshge=MyHGH->MSHGE_find(1,(char *)"localhost", 3306);
-	if (mshge) {
-		conn->set_mshge(mshge);
-	};
-	MyHGH->rdunlock();
-
-	delete conn;
-*/
-
 
 {
 	GloAdmin = create_ProxySQL_Admin();
 	GloAdmin->print_version();
 	GloAdmin->init();
-//	GloAdmin->admin_shutdown();
-//	GloAdmin->init();
 }
-
-#ifdef DEBUG
-// if -d is specified in the command line, this has higher priority over what is specified in config file 
-//	init_debug_struct_from_cmdline();
-#endif /* DEBUG */
 
 
 	GloMyAuth = create_MySQL_Authentication();
@@ -568,7 +382,6 @@ __start_label:
 	GloAdmin->init_users();
 
 
-	//if (GloVars.__cmd_proxysql_nostart) {
 	if (GloVars.global.nostart) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
@@ -586,23 +399,6 @@ __start_label:
 {
 	GloQPro = create_Query_Processor();
   GloQPro->print_version();
-	QP_rule_t * nqpr;
-/*
-	nqpr = QP->new_query_rule(3,true,(char *)"root",(char *)"test", 0, NULL, false, 0, NULL, 0, 0, true);
-	QP->insert(nqpr);
-	nqpr = QP->new_query_rule(4,true,(char *)"root",(char *)"test", 0, NULL, false, 0, NULL, 0, 0, true);
-	QP->insert(nqpr);
-	nqpr = QP->new_query_rule(1,true,(char *)"root",(char *)"test", 0, NULL, false, 0, NULL, 0, 0, true);
-	QP->insert(nqpr);
-	nqpr = QP->new_query_rule(2,true,(char *)"root",(char *)"test", 0, NULL, false, 0, NULL, 0, 0, true);
-	QP->insert(nqpr);
-*/
-	nqpr = GloQPro->new_query_rule(1, true, NULL, NULL, 0, (char *)"^SELECT ", false, 0, NULL, 0, 10, true);
-	GloQPro->insert(nqpr);
-	GloQPro->sort();
-//	QP->reset_all();
-	GloQPro->commit();
-//	exit(EXIT_SUCCESS);
 }
 	GloAdmin->init_mysql_query_rules();
 
@@ -628,21 +424,6 @@ __start_label:
 
 
 //  main_opts(&argc, (gchar ***)&argv);
-
-#ifdef DEBUG
-/*
-	GloVars.global.gdbg=true;
-	GloVars.__cmd_proxysql_foreground=1;
-
-	{
-		int i;
-		for (i=0;i<16;i++) {
-			//gdbg_lvl[i].verbosity=7;
-			GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_PROTOCOL].verbosity=7;
-		}
-	}
-*/
-#endif /* DEBUG */
 
 
 	// start admin thread
@@ -705,9 +486,6 @@ __start_label:
 	while (glovars.shutdown==0) {
 		sleep(1);   // FIXME: TERRIBLE UGLY
 	}
-//	sleep(2);                               // FIXME: TERRIBLE UGLY
-//	diagnostic_all();
-//	sleep(1000);
 		
 __shutdown:
 
