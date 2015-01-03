@@ -418,6 +418,22 @@ int MySQL_Session::handler() {
 								myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
 								client_myds->DSS=STATE_SLEEP;
 								break;
+							case _MYSQL_COM_SET_OPTION:
+								{
+									char v;
+									v=*((char *)pkt.ptr+3);
+									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_SET_OPTION packet , value %d\n", v);
+									// FIXME: ProxySQL doesn't support yet CLIENT_MULTI_STATEMENTS 
+									client_myds->DSS=STATE_QUERY_SENT;
+									if (v==1) {
+										myprot_client.generate_pkt_EOF(true,NULL,NULL,1,0,0);
+									} else {
+										myprot_client.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"");
+									}
+									client_myds->DSS=STATE_SLEEP;
+									l_free(pkt.size,pkt.ptr);
+								}	
+								break;
 							case _MYSQL_COM_STATISTICS:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_STATISTICS packet\n");
 								l_free(pkt.size,pkt.ptr);
