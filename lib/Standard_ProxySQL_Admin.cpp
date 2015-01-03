@@ -1379,10 +1379,11 @@ char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, apply FROM main.mysql_query_rules WHERE active=1";
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	GloQPro->wrlock();
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+		GloQPro->wrlock();
+		GloQPro->reset_all(false);
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
@@ -1390,9 +1391,9 @@ char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 			GloQPro->insert(nqpr);
 		}
 		GloQPro->sort(false);
+		GloQPro->wrunlock();
+		GloQPro->commit();
 	}
-	GloQPro->wrunlock();
-	GloQPro->commit();
 //	if (error) free(error);
 	if (resultset) delete resultset;
 	return NULL;
