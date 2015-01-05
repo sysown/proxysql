@@ -1409,7 +1409,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
 	unsigned char *user=NULL;
-	unsigned char *db=NULL;
+	char *db=NULL;
 	unsigned char pass[128];
 	char *password=NULL;
 	bool use_ssl=false;
@@ -1441,7 +1441,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pass[pass_len] = 0;
 
 	pkt += pass_len;
-	db = (capabilities & CLIENT_CONNECT_WITH_DB ? pkt : 0);
+	db = (capabilities & CLIENT_CONNECT_WITH_DB ? (char *)pkt : NULL);
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
@@ -1500,6 +1500,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 		userinfo->username=l_strdup((const char *)user);
 		userinfo->password=l_strdup((const char *)password);
+		if (db) userinfo->set_schemaname(db,strlen(db));
 	}
 	//if (password) free(password);
 	if (password) l_free_string(password);
