@@ -170,6 +170,7 @@ typedef struct __fdb_hash_entry fdb_hash_entry;
 typedef unsigned spinlock;
 typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
+typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 //typedef struct _mysql_server_t mysql_server_t;
 
 #endif /* PROXYSQL_TYPEDEFS */
@@ -182,6 +183,7 @@ class MySQL_Session_userinfo;
 class MySQL_Session;
 class MySQL_Backend;
 class MySQL_Thread;
+class MySQL_Threads_Handler;
 class SQLite3DB;
 class SimpleKV;
 class AdvancedKV;
@@ -323,6 +325,11 @@ struct _global_variable_entry_t {
 // structure that defines mysql protocol header
 struct _mysql_hdr {
 	u_int pkt_length:24, pkt_id:8;
+};
+
+struct _proxysql_mysql_thread_t {
+	MySQL_Thread *worker;
+	pthread_t thread_id;
 };
 
 

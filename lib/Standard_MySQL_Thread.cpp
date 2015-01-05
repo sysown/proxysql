@@ -227,9 +227,9 @@ void MySQL_Thread::init_poll() {
 }
 */
 
-virtual void print_version() {
-	fprintf(stderr,"Standard MySQL Thread rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
-};
+//virtual void print_version() {
+//	fprintf(stderr,"Standard MySQL Thread rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
+//};
 
 inline virtual struct pollfd * get_pollfd(unsigned int i) {
 	return &mypolls.fds[i];
@@ -456,6 +456,55 @@ virtual void run() {
 	}
 };
 };
+
+
+class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
+{
+	private:
+	size_t stacksize;
+	pthread_attr_t attr;
+	public:
+	Standard_MySQL_Threads_Handler() {
+		num_threads=0;
+		mysql_threads=NULL;
+		stacksize=0;
+		pthread_attr_init(&attr);
+	}
+	virtual ~Standard_MySQL_Threads_Handler() {
+		free(mysql_threads);
+	}
+	virtual void print_version() {
+		fprintf(stderr,"Standard MySQL Threads Handler rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
+	}
+	virtual void init(unsigned int num, size_t stack) {
+		stacksize=stack;
+		num_threads=num;
+		int rc=pthread_attr_setstacksize(&attr, stacksize);
+		assert(rc==0);
+		mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
+	}
+	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *)) {
+		pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
+		return NULL;
+	}
+	virtual void shutdown_threads() {
+		unsigned int i;
+		for (i=0; i<num_threads; i++) {
+			mysql_threads[i].worker->shutdown=1;
+		}
+		for (i=0; i<num_threads; i++) {
+			pthread_join(mysql_threads[i].thread_id,NULL);
+		}
+	}
+};
+
+extern "C" MySQL_Threads_Handler * create_MySQL_Threads_Handler_func() {
+    return new Standard_MySQL_Threads_Handler();
+}
+
+extern "C" void destroy_MySQL_Threads_Handler_func(MySQL_Threads_Handler * ms) {
+    delete ms;
+}
 
 extern "C" MySQL_Thread * create_MySQL_Thread_func() {
     return new Standard_MySQL_Thread();

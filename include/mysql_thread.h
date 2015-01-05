@@ -217,8 +217,6 @@ class MySQL_Thread
 	virtual void poll_listener_add(int fd) {};
 	virtual void run() {};
 
-	virtual const char *version() {return NULL;};
-	virtual void print_version() {};
 
 
 	virtual void register_session(MySQL_Session *) {};
@@ -244,5 +242,23 @@ class Standard_MySQL_Thread: public MySQL_Thread
 	MySQL_Session * create_new_session_and_client_data_stream(int);
 };
 #endif /* __CLASS_STANDARD_MYSQL_THREAD_H */
+
+
+class MySQL_Threads_Handler
+{
+	public:
+	unsigned int num_threads;
+	proxysql_mysql_thread_t *mysql_threads;
+	MySQL_Threads_Handler() {};
+	virtual ~MySQL_Threads_Handler() {};
+	virtual const char *version() {return NULL;};
+	virtual void print_version() {};
+	virtual void init(unsigned int num, size_t stack) {};
+	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *)) {return NULL;};
+	virtual void shutdown_threads() {};
+};
+
+typedef MySQL_Threads_Handler * create_MySQL_Threads_Handler_t();
+typedef void destroy_MySQL_Threads_Handler_t(MySQL_Threads_Handler *);
 
 #endif /* __CLASS_MYSQL_THREAD_H */

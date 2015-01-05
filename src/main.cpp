@@ -16,6 +16,7 @@
 extern "C" Query_Cache* create_QC_func();
 extern "C" MySQL_Thread * create_MySQL_Thread_func();
 extern "C" void destroy_MySQL_Thread_func();
+extern "C" MySQL_Threads_Handler * create_MySQL_Threads_Handler_func();
 extern "C" MySQL_Authentication * create_MySQL_Authentication_func();
 extern "C" Query_Processor * create_Query_Processor_func();
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func();
@@ -23,6 +24,7 @@ extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func();
 
 void * __qc;
 void * __mysql_thread;
+void * __mysql_threads_handler;
 void * __query_processor;
 void * __mysql_auth; 
 void * __proxysql_admin; 
@@ -30,6 +32,8 @@ void * __proxysql_admin;
 
 create_MySQL_Thread_t * create_MySQL_Thread = NULL;
 destroy_MySQL_Thread_t * destroy_MySQL_Thread = NULL;
+create_MySQL_Threads_Handler_t * create_MySQL_Threads_Handler = NULL;
+destroy_MySQL_Threads_Handler_t * destroy_MySQL_Threads_Handler = NULL;
 create_MySQL_Authentication_t * create_MySQL_Authentication = NULL;
 create_Query_Processor_t * create_Query_Processor = NULL;
 create_ProxySQL_Admin_t * create_ProxySQL_Admin = NULL;
@@ -59,7 +63,8 @@ Query_Cache *GloQC;
 MySQL_Authentication *GloMyAuth;
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
-
+MySQL_Threads_Handler *GloMTH;
+/*
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 
 
@@ -67,8 +72,8 @@ struct _proxysql_mysql_thread_t {
 	MySQL_Thread *worker;
 	pthread_t thread_id;
 };
-
-static proxysql_mysql_thread_t *mysql_threads;
+*/
+//static proxysql_mysql_thread_t *mysql_threads;
 
 #define NUM_THREADS	8
 
@@ -122,6 +127,7 @@ char * gen_random_string(const int len) {
 
 
 
+/*
 void diagnostic_myds(MySQL_Data_Stream *myds) {
 	if (!myds) return;
 	fprintf(stderr,"      fd=%d, pkts_sent=%llu, pkts_recv=%llu, bytes_sent=%llu, bytes_recv=%llu\n", myds->fd, myds->pkts_sent, myds->pkts_recv, myds->bytes_info.bytes_sent, myds->bytes_info.bytes_recv);
@@ -147,7 +153,7 @@ void diagnostic_all() {
 		}
 	}
 }
-
+*/
 void * mysql_worker_thread_func(void *arg) {
 
 	__thr_sfp=l_mem_init();
@@ -158,9 +164,10 @@ void * mysql_worker_thread_func(void *arg) {
 	worker->init();
 	worker->poll_listener_add(listen_fd);
 	worker->poll_listener_add(socket_fd);
-	if (__sync_fetch_and_sub(&load_,1)==(NUM_THREADS+1)) {
-		worker->print_version();
-	}
+	__sync_fetch_and_sub(&load_,1);
+//	if (__sync_fetch_and_sub(&load_,1)==(NUM_THREADS+1)) {
+//		worker->print_version();
+//	}
 	do { usleep(50); } while (load_);
 
 	worker->run();
@@ -283,10 +290,24 @@ int main(int argc, const char * argv[]) {
 		exit(EXIT_FAILURE);
 	} else {
 		dlerror();
+		create_MySQL_Threads_Handler = (create_MySQL_Threads_Handler_t *) dlsym(__mysql_thread, "create_MySQL_Threads_Handler_func");
+		dlsym_error = dlerror();
+		if (dlsym_error!=NULL) {
+			cerr << "Cannot load symbol create_MySQL_Threads_Handler_func: " << dlsym_error << '\n';
+			exit(EXIT_FAILURE);
+		}
+		dlerror();
 		create_MySQL_Thread = (create_MySQL_Thread_t *) dlsym(__mysql_thread, "create_MySQL_Thread_func");
 		dlsym_error = dlerror();
 		if (dlsym_error!=NULL) {
 			cerr << "Cannot load symbol create_MySQL_Thread_func: " << dlsym_error << '\n';
+			exit(EXIT_FAILURE);
+		}
+		dlerror();
+		destroy_MySQL_Threads_Handler = (destroy_MySQL_Threads_Handler_t *) dlsym(__mysql_thread, "destroy_MySQL_Threads_Handler_func");
+		dlsym_error = dlerror();
+		if (dlsym_error!=NULL) {
+			cerr << "Cannot load symbol destroy_MySQL_Threads_Handler_func: " << dlsym_error << '\n';
 			exit(EXIT_FAILURE);
 		}
 		dlerror();
@@ -367,6 +388,7 @@ __start_label:
 
 	GloQC=NULL;
 	GloQPro=NULL;
+	GloMTH=NULL;
 	MyHGH=new MySQL_HostGroups_Handler();
 
 {
@@ -386,7 +408,7 @@ __start_label:
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
 
-	mysql_threads=NULL;
+	//mysql_threads=NULL;
 
 	if (glovars.shutdown) {
 		goto __shutdown;
@@ -442,14 +464,18 @@ __start_label:
 	socket_fd=listen_on_unix((char *)"/tmp/proxysql.sock", 50);
 	ioctl_FIONBIO(listen_fd, 1);
 	ioctl_FIONBIO(socket_fd, 1);
-	int i;
+	unsigned int i;
 
 
-	mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*NUM_THREADS);
-	assert(mysql_threads);
+	GloMTH=create_MySQL_Threads_Handler();
+	GloMTH->print_version();
+	GloMTH->init(6, 512*1024);
+	//mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*NUM_THREADS);
+	//assert(mysql_threads);
+	
+	load_ = GloMTH->num_threads + 1;
 
-	load_ = NUM_THREADS + 1;
-
+/*
 	pthread_attr_t attr;
 
 
@@ -459,9 +485,11 @@ __start_label:
   assert(rc==0);
 
 }
-
-	for (i=0; i<NUM_THREADS; i++) {
-		pthread_create(&mysql_threads[i].thread_id, &attr, mysql_worker_thread_func , &mysql_threads[i]);
+*/
+	for (i=0; i<GloMTH->num_threads; i++) {
+		//pthread_create(&mysql_threads[i].thread_id, &attr, mysql_worker_thread_func , &mysql_threads[i]);
+		GloMTH->create_thread(i,mysql_worker_thread_func);
+		//pthread_create(&mysql_threads[i].thread_id, &attr, mysql_worker_thread_func , &mysql_threads[i]);
 	}
 
 	
@@ -489,6 +517,10 @@ __start_label:
 		
 __shutdown:
 
+	if (GloMTH) {
+		GloMTH->shutdown_threads();
+	}
+/*
 	if (mysql_threads) {
 
 		for (i=0; i<NUM_THREADS; i++) {
@@ -501,6 +533,7 @@ __shutdown:
 		free(mysql_threads);
 		mysql_threads=NULL;
 	}
+*/
 	if (GloQC) {
 		GloQC->shutdown=1;
 		pthread_join(GloQC->purge_thread_id, NULL);
@@ -528,6 +561,11 @@ __shutdown:
 	delete GloMyAuth;
 		GloMyAuth=NULL;
 	}
+	if (GloMTH) {
+		delete GloMTH;
+		GloMTH=NULL;
+	}
+
 	delete GloAdmin;
 	delete MyHGH;
 
