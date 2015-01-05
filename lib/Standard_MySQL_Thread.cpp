@@ -250,6 +250,7 @@ virtual void register_session(MySQL_Session *_sess) {
 	if (mysql_sessions==NULL) return;
 	mysql_sessions->add(_sess);
 	_sess->thread=this;
+	_sess->MyConnPool=MyConnPool;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
 };
 

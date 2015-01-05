@@ -17,9 +17,11 @@ MySQL_Connection::MySQL_Connection() {
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 
 MySQL_Connection::~MySQL_Connection() {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 	if (myconn.host) free(myconn.host);
 	if (myconn.user) free(myconn.user);
 	if (myconn.passwd) free(myconn.passwd);
@@ -41,6 +43,21 @@ MySQL_Connection::~MySQL_Connection() {
 	__sync_add_and_fetch(&mshge->references,-1);
 	};
 };
+
+
+MyConnArray * MySQL_Connection::set_MCA(MySQL_Connection_Pool *_MyConnPool, const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection_Pool=%p, Host=%s, user=%s, pass=%s, db=%s, port=%d\n", _MyConnPool, hostname, username, password, db, port);
+	MCA=_MyConnPool->MyConnArray_lookup(hostname, username, password, db, port);
+	assert(MCA);
+	return MCA;
+}
+
+bool MySQL_Connection::return_to_connection_pool() {
+	assert(MCA);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Returning MySQL_Connection %p at MCA=%p\n", this, MCA);
+	MCA->add(this);
+	return true;
+}
 
 void MySQL_Connection::set_mshge(MySQL_Hostgroup_Entry *_mshge) {
 	mshge=_mshge;

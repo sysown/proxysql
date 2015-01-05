@@ -142,12 +142,13 @@ MySQL_Backend * MySQL_Session::find_backend(int hostgroup_id) {
 
 MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=new MySQL_Backend();
+	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	_mybe->hostgroup_id=hostgroup_id;
 	if (_myds) {
 		_mybe->server_myds=_myds;
 	} else {
 		_mybe->server_myds = new MySQL_Data_Stream();
-		_mybe->server_myds->myconn = new MySQL_Connection();
+		//_mybe->server_myds->myconn = new MySQL_Connection();
 		_mybe->server_myds->DSS=STATE_NOT_INITIALIZED;
 		_mybe->server_myds->init(MYDS_BACKEND_NOT_CONNECTED, this, 0);
 	}
@@ -157,6 +158,7 @@ MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Strea
 
 MySQL_Backend * MySQL_Session::find_or_create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=find_backend(hostgroup_id);
+	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	return ( _mybe ? _mybe : create_backend(hostgroup_id, _myds) );
 };
 
@@ -517,31 +519,78 @@ int MySQL_Session::handler() {
 */
 
 	if (client_myds->DSS==STATE_QUERY_SENT) {
+	// the client has completely sent the query, now we should handle it server side
+	//
 		if (server_myds->DSS==STATE_NOT_INITIALIZED) {
-          				int pending_connect=1;
-									unsigned long long curtime=monotonic_time();
-									int rc=server_myds->assign_mshge(current_hostgroup);
-						assert(server_myds);
-						assert(server_myds->myconn);
-						assert(server_myds->myconn->mshge);
-						assert(server_myds->myconn->mshge->MSptr);
-	      					server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT , server_myds==STATE_NOT_INITIALIZED\n", this);
+			// DSS is STATE_NOT_INITIALIZED. It means we are not connected to any server
+			// try to connect
+			int pending_connect=1;
+			unsigned long long curtime=monotonic_time();
+
+			// if DSS==STATE_NOT_INITIALIZED , we expect few pointers to be NULL . If it is not null, we have a bug
+			assert(mybe->mshge==NULL);
+			assert(server_myds->myconn==NULL);
+			assert(mybe->myconn==NULL);
+
+			// Get a MSHGE
+			mybe->mshge=MyHGH->get_random_hostgroup_entry(mybe->hostgroup_id);
+
+			// FIXME: this shouldn't be an assert(). A NULL value should be considered as missing MSHGE.
+			// Possible solution is that if MSHGE is not acquired within a timeout, disconnect
+			assert(mybe->mshge);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, mybe=%p, mshge=%p\n", this, mybe, mybe->mshge);
+//			if (mybe->mshge==NULL) {
+//				goto __exit_DSS__STATE_NOT_INITIALIZED;
+//			}
+
+			// Get a MySQL Connection
+			MySQL_Server *m=mybe->mshge->MSptr;
+			mybe->myconn=MyConnPool->MySQL_Connection_lookup(m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, mybe=%p, mshge=%p, host=%s, port=%d\n", this, mybe, mybe->mshge, m->address, m->port);
+			
+			if (mybe->myconn==NULL) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection not found\n", this);
+			// we didn't get a connection, we need to create one
+//							int rc=server_myds->assign_mshge(current_hostgroup);
+//						assert(server_myds);
+//						assert(server_myds->myconn);
+//						assert(server_myds->myconn->mshge);
+//						assert(server_myds->myconn->mshge->MSptr);
+//	      					server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
+	      					server_fd=server_myds->myds_connect(m->address, m->port, &pending_connect);
         //  				server_fd=server_myds->myds_connect((char *)"127.0.0.1", 3306, &pending_connect);
+        	//server_myds->myconn->MCA=MyConnPool->MyConnArray_lookup(m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
+        	server_myds->myconn->set_MCA(MyConnPool, m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
 									server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);
+					mybe->myconn=server_myds->myconn;
+					mybe->myconn->reusable=true;
+					status=CONNECTING_SERVER;
+					server_myds->DSS=STATE_NOT_CONNECTED;
+			} else {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection found = %p\n", this, mybe->myconn);
+				server_myds->myconn=mybe->myconn;
+				server_myds->assign_fd_from_mysql_conn();
+				server_fd=server_myds->fd;
+				server_myds->myds_type=MYDS_BACKEND;
+				server_myds->DSS=STATE_READY;
+			}
 									//thread->mypolls.add(POLLIN|POLLOUT, server_fd, server_myds, pending_connect==1 ? 0 : curtime);
 									thread->mypolls.add(POLLIN|POLLOUT, server_fd, server_myds, curtime);
-									status=CONNECTING_SERVER;
-									server_myds->DSS=STATE_NOT_CONNECTED;
 									//server_myds->PSarrayOUTpending->add(pkt.ptr, pkt.size);
+						if (server_myds->DSS!=STATE_READY) {
               unsigned int k;
               PtrSize_t pkt2;
               for (k=0; k<server_myds->PSarrayOUT->len;) {
                 server_myds->PSarrayOUT->remove_index(0,&pkt2);
                 server_myds->PSarrayOUTpending->add(pkt2.ptr, pkt2.size);
               }
-
-								} else {
+						}
+			// END OF if (server_myds->DSS==STATE_NOT_INITIALIZED)
+								//} else {  TRY #1
+								}    // TRY #1
 									if (server_myds->myds_type==MYDS_BACKEND && server_myds->DSS==STATE_READY) {
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT , server_myds==STATE_READY , server_myds->myds_type==MYDS_BACKEND\n", this);
 									if (strcmp(userinfo_client.schemaname,userinfo_server.schemaname)==0) {
 										//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 										server_myds->DSS=STATE_QUERY_SENT;
@@ -560,9 +609,11 @@ int MySQL_Session::handler() {
 										status=CHANGING_SCHEMA;
 									}
 									}
-								}
-			}
-//
+							//	}   TRY #1
+
+	}
+
+__exit_DSS__STATE_NOT_INITIALIZED:
 		
 
 //	}

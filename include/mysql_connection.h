@@ -21,6 +21,8 @@ class MySQL_Connection {
 	int assign_mshge(unsigned int);
 	void set_mshge(MySQL_Hostgroup_Entry *);
 	void free_mshge();
+	MyConnArray *set_MCA(MySQL_Connection_Pool *_MyConnPool, const char *hostname, const char *username, const char *password, const char *db, unsigned int port);
+	bool return_to_connection_pool();
 	friend class MyConnArray;
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

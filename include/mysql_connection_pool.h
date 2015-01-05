@@ -32,6 +32,7 @@ class MyConnArray {
 	MyConnArray(const char *__hostname, const char *__username, const char *__password, const char *__db, unsigned int __port);
 	~MyConnArray();
 	friend class MySQL_Connection_Pool;
+	friend class MySQL_Connection;
 };
 
 class MySQL_Connection_Pool {

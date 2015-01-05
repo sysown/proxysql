@@ -155,9 +155,12 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	delete resultset;
 	}
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
-	if (fd) {
-		shutdown(fd,SHUT_RDWR);
-		close(fd);
+	if (fd>0) {
+		if (myconn==NULL || myconn->reusable==false) {
+			shut_hard();
+//		shutdown(fd,SHUT_RDWR);
+//		close(fd);
+		}
 	}
 	if (encrypted) {
 		if (ssl) SSL_free(ssl);
@@ -184,6 +187,7 @@ void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int
 	sess=_sess;
 	init();
 	fd=_fd;
+	proxy_debug(PROXY_DEBUG_NET,1, "Initialized Data Stream. Session=%p, DataStream=%p, type=%d, fd=%d, myconn=%p\n" , sess, this, myds_type, fd, myconn);
 	//if (myconn==NULL) myconn = new MySQL_Connection();
 	if (myconn) myconn->myconn.net.fd=fd;
 }
@@ -505,10 +509,13 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 			return -1;
 		}
 		//*pending_connect=1;  // default
-		myconn->myconn.net.fd=s; // FIXME: why here? // 20141011
+		//myconn->myconn.net.fd=s; // FIXME: why here? // 20141011
 	} else {
 		*pending_connect=0;
 	}
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, old_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->myconn.net.fd, s);
+	myconn->myconn.net.fd=s;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, new_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->myconn.net.fd, s);
 	return s;
 
 }
@@ -517,4 +524,10 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 int MySQL_Data_Stream::assign_mshge(unsigned int hid) {
 	assert (myconn);
 	return myconn->assign_mshge(hid);
-};
+}
+
+int MySQL_Data_Stream::assign_fd_from_mysql_conn() {
+	assert(myconn);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->myconn.net.fd);
+	fd=myconn->myconn.net.fd;
+}

@@ -103,6 +103,7 @@ class MySQL_Data_Stream
 	int myds_connect(char *, int, int *); // the data stream MUST be initialized
 
 	void check_data_flow();
+	int assign_fd_from_mysql_conn();
 
 	unsigned char * resultset2buffer(bool);
 	void buffer2resultset(unsigned char *, unsigned int);

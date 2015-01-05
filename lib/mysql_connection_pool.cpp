@@ -57,11 +57,14 @@ MySQL_Connection * MySQL_Connection_Pool::MySQL_Connection_lookup(MyConnArray *M
 }
 
 MySQL_Connection * MySQL_Connection_Pool::MySQL_Connection_lookup(const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Host=%s, user=%s, pass=%s, db=%s, port=%d\n", hostname, username, password, db, port);
 	MySQL_Connection *myc=NULL;
 	MyConnArray *MCA=MyConnArray_find(hostname, username, password, db, port);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Found MCA=%p\n", MCA);
 	if (MCA) {
-		myc=MCA->MyConn_find();	
+		myc=MCA->MyConn_find();
 	}
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Returning MySQL_Connection=%p\n", myc);
 	return myc;
 }
 
@@ -79,23 +82,28 @@ MyConnArray * MySQL_Connection_Pool::MyConnArray_find(const char *hostname, cons
 }
 
 MyConnArray * MySQL_Connection_Pool::MyConnArray_create(const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Host=%s, user=%s, pass=%s, db=%s, port=%d\n", hostname, username, password, db, port);
 	MyConnArray *MCA= new MyConnArray(hostname, username, password, db, port);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Created MCA=%p\n", MCA);
 	MyConnArrays->add(MCA);
 	return MCA;
 }
 
 MyConnArray * MySQL_Connection_Pool::MyConnArray_lookup(const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
 	MyConnArray *MCA=NULL;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Host=%s, user=%s, pass=%s, db=%s, port=%d\n", hostname, username, password, db, port);
 	if (shared) {
 		spin_lock(&mutex);
 	}
 	MCA=MyConnArray_find(hostname, username, password, db, port);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Found MCA=%p\n", MCA);
 	if (MCA==NULL) {
 		MCA=MyConnArray_create(hostname, username, password, db, port);
 	}
 	if (shared) {
 		spin_unlock(&mutex);
 	}
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Returning MCA=%p\n", MCA);
 	return MCA;
 }
 

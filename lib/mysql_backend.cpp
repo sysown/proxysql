@@ -148,6 +148,7 @@ MySQL_Backend::MySQL_Backend() {
 	myconn=NULL;
 	server_bytes_at_cmd.bytes_recv=0;
 	server_bytes_at_cmd.bytes_sent=0;
+	mshge=NULL;
 }
 
 MySQL_Backend::~MySQL_Backend() {
@@ -159,14 +160,19 @@ void MySQL_Backend::reset() {
 		server_myds=NULL;
 	}
 	if (myconn) {
-		if (myconn->reusable==false) {
+		if (myconn->reusable==true) {
 			//server_myds->myconn=NULL;
-			delete myconn;
+			//delete myconn;
+			myconn->return_to_connection_pool();
+			myconn=NULL;
 		} else {
 //			MyConnArray *MCA=MyConnPool->MyConnArray_lookup(myconn->mshge->MSptr->address, myconn->myconn.user, myconn->mshge->MSptr->password, myconn->mshge->MSptr->db, myconn->mshge->MSptr->port);
+			delete myconn;
 		}
 	};
-	myconn=NULL;
+	if (mshge) {
+		// FIXME: what to do with it?
+	}
 }
 
 
@@ -241,11 +247,13 @@ MySQL_Hostgroup_Entry * MySQL_Hostgroup::get_random_hostgroup_entry() {
 		sum+=mshge->weight;
 	}
 	unsigned int j=rand()%sum;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "HID=%d, MSHGEs=%d, total_weight=%d, rand=%d\n" , hostgroup_id, MSHGEs->len, sum, j);
 	sum=0;
 	for (i=0; i<MSHGEs->len; i++) {
 		mshge=(MySQL_Hostgroup_Entry *)MSHGEs->index(i);
 		sum+=mshge->weight;
 		if (j<=sum) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Returning mshge=%p, host=%s, port=%d\n" , mshge, mshge->MSptr->address, mshge->MSptr->port);
 			return mshge;
 		}
 	}
