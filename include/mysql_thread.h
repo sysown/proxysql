@@ -253,7 +253,7 @@ class MySQL_Threads_Handler
 	virtual ~MySQL_Threads_Handler() {};
 	virtual const char *version() {return NULL;};
 	virtual void print_version() {};
-	virtual void init(unsigned int num, size_t stack) {};
+	virtual void init(unsigned int num=0, size_t stack=0) {};
 	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *)) {return NULL;};
 	virtual void shutdown_threads() {};
 	virtual void wrlock() {};

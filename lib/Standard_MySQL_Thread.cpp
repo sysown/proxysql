@@ -19,6 +19,9 @@ extern "C" {
 #define MYSQL_THREAD_VERSION "0.1.1114"
 
 
+#define DEFAULT_NUM_THREADS	4
+#define DEFAULT_STACK_SIZE	1024*1024
+
 /*
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
@@ -174,6 +177,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+	(char *)"stacksize",
 	(char *)"threads",
 	NULL
 };
@@ -227,6 +231,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	}
 	int get_variable_int(char *name) {
 		if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
+		if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 		proxy_error("Not existing variable: %s\n", name); assert(0);
 		return 0;
 	}
@@ -246,7 +251,11 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 			return strdup(intbuf);
 		}
 		if (!strcmp(name,"threads")) {
-			sprintf(intbuf,"%d",num_threads);
+			sprintf(intbuf,"%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
+			return strdup(intbuf);
+		}
+		if (!strcmp(name,"stacksize")) {
+			sprintf(intbuf,"%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 			return strdup(intbuf);
 		}
 		return NULL;
@@ -322,8 +331,16 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		fprintf(stderr,"Standard MySQL Threads Handler rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 	}
 	virtual void init(unsigned int num, size_t stack) {
-		stacksize=stack;
-		num_threads=num;
+		if (stack) {
+			stacksize=stack;
+		} else {
+			stacksize=DEFAULT_STACK_SIZE;
+		}
+		if (num) {
+			num_threads=num;
+		} else {
+			num_threads=DEFAULT_NUM_THREADS; //default
+		}
 		int rc=pthread_attr_setstacksize(&attr, stacksize);
 		assert(rc==0);
 		mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);

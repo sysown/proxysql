@@ -137,6 +137,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 #endif /* DEBUG */
 
 	void __insert_or_ignore_maintable_select_disktable();
+	void __insert_or_replace_maintable_select_disktable();
 	void __delete_disktable();
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_configdb_to_admindb();
@@ -941,10 +942,10 @@ bool Standard_ProxySQL_Admin::init() {
 	flush_mysql_variables___runtime_to_database(configdb, false, false, false);
 	flush_mysql_variables___runtime_to_database(admindb, false, true, false);
 	// delete from mysql-threads from admindb . At this stage it is still unknwon
-	admindb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads'");
-	configdb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads' AND variable_value=0");
+	//admindb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads'");
+	//configdb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads' AND variable_value=0");
 
-	__insert_or_ignore_maintable_select_disktable();
+	__insert_or_replace_maintable_select_disktable();
 
 	
 	//fill_table__server_status(admindb);
@@ -1175,11 +1176,23 @@ void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
   admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_hostgroups SELECT * FROM disk.mysql_hostgroups");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
-//  admindb->execute("INSERT OR IGNORE INTO main.query_rules SELECT * FROM disk.query_rules");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
-//  admindb->execute("INSERT OR IGNORE INTO main.default_hostgroups SELECT * FROM disk.default_hostgroups");
+#ifdef DEBUG
+  admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+#endif /* DEBUG */
+  admindb->execute("PRAGMA foreign_keys = ON");
+}
+
+void Standard_ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
+  admindb->execute("PRAGMA foreign_keys = OFF");
+  admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
+  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroups SELECT * FROM disk.mysql_hostgroups");
+  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
+  admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
+	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
 #ifdef DEBUG
   admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 #endif /* DEBUG */
