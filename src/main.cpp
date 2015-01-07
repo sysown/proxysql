@@ -470,7 +470,8 @@ __start_label:
 	unsigned int i;
 
 
-	GloMTH->init(6, 512*1024);
+	//GloMTH->init(6, 512*1024);
+	GloMTH->init();
 	//mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*NUM_THREADS);
 	//assert(mysql_threads);
 	

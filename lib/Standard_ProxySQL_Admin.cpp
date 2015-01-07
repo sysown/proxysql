@@ -148,6 +148,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void __refresh_users();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
+	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 	public:
 	SQLite3DB *admindb;	// in memory
@@ -178,6 +179,10 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
+
+	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
+	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
+
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -382,6 +387,71 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->save_mysql_users_runtime_to_database();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+	}
+	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO MEMORY") && !strncasecmp("LOAD MYSQL VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO MEM") && !strncasecmp("LOAD MYSQL VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM DISK") && !strncasecmp("LOAD MYSQL VARIABLES FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM MEMORY") && !strncasecmp("SAVE MYSQL VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM MEM") && !strncasecmp("SAVE MYSQL VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL VARIABLES TO DISK") && !strncasecmp("SAVE MYSQL VARIABLES TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM memory.global_variables WHERE variable_name LIKE 'mysql-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM MEMORY") && !strncasecmp("LOAD MYSQL VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM MEM") && !strncasecmp("LOAD MYSQL VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO RUNTIME") && !strncasecmp("LOAD MYSQL VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO RUN") && !strncasecmp("LOAD MYSQL VARIABLES TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->load_mysql_variables_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL VARIABLES TO MEMORY") && !strncasecmp("SAVE MYSQL VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL VARIABLES TO MEM") && !strncasecmp("SAVE MYSQL VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM RUNTIME") && !strncasecmp("SAVE MYSQL VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM RUN") && !strncasecmp("SAVE MYSQL VARIABLES FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->save_mysql_variables_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql variables from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
 			return false;
 		}
@@ -1068,6 +1138,45 @@ void Standard_ProxySQL_Admin::fill_table__server_status(SQLite3DB *db) {
 */
 
 
+void Standard_ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d\n", replace);
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT substr(variable_name,7) vn, variable_value FROM global_variables WHERE variable_name LIKE 'mysql-%'";
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			bool rc=GloMTH->set_variable(r->fields[0],r->fields[1]);
+			if (rc==false) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+				if (replace) {
+					char *val=GloMTH->get_variable(r->fields[0]);
+					char q[1000];
+					if (val) {
+						proxy_error("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"%s\",\"%s\")",r->fields[0],val);
+						db->execute(q);
+						free(val);
+					} else {
+						proxy_error("Impossible to set not existing variable %s with value \"%s\". Deleting\n", r->fields[0],r->fields[1]);
+						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"%s\"",r->fields[0]);
+						db->execute(q);
+					}
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+			}
+		}
+	}
+	if (resultset) delete resultset;
+}
+
 void Standard_ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
@@ -1076,10 +1185,11 @@ void Standard_ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite
 	  int affected_rows=0;
 	  SQLite3_result *resultset=NULL;
 	  char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mysql-%'";
-	  admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	  db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
 		int matching_rows=0;
 		if (error) {
 			proxy_error("Error on %s : %s\n", q, error);
+			return;
 		} else {
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;

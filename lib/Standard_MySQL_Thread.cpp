@@ -203,13 +203,15 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		stacksize=0;
 		spinlock_rwlock_init(&rwlock);
 		pthread_attr_init(&attr);
-		variables.default_schema=(char *)"information_schema";
-		variables.server_version=(char *)"5.1.30";
+		variables.default_schema=strdup((char *)"information_schema");
+		variables.server_version=strdup((char *)"5.1.30");
 		variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 		variables.poll_timeout=2000;
 		__global_MySQL_Thread_Variables_version=1;
 	}
 	virtual ~Standard_MySQL_Threads_Handler() {
+		if (variables.default_schema) free(variables.default_schema);
+		if (variables.server_version) free(variables.server_version);
 		free(mysql_threads);
 	}
 	virtual void wrlock() {
@@ -302,9 +304,27 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 				return false;
 			}
 		}
+		if (!strcmp(name,"server_capabilities")) {
+			int intv=atoi(value);
+			if (intv > 0) {
+				variables.server_capabilities=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcmp(name,"stacksize")) {
+			int intv=atoi(value);
+			if (intv >= 256*1024 && intv <= 4*1024*1024) {
+				stacksize=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
 		if (!strcmp(name,"threads")) {
 			int intv=atoi(value);
-			if (num_threads==0 && intv > 0 && intv < 128) {
+			if ((num_threads==0 || num_threads==intv) && intv > 0 && intv < 128) {
 				num_threads=intv;
 				return true;
 			} else {
@@ -334,12 +354,12 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		if (stack) {
 			stacksize=stack;
 		} else {
-			stacksize=DEFAULT_STACK_SIZE;
+			if (stacksize==0) stacksize=DEFAULT_STACK_SIZE;
 		}
 		if (num) {
 			num_threads=num;
 		} else {
-			num_threads=DEFAULT_NUM_THREADS; //default
+			if (num_threads==0) num_threads=DEFAULT_NUM_THREADS; //default
 		}
 		int rc=pthread_attr_setstacksize(&attr, stacksize);
 		assert(rc==0);
