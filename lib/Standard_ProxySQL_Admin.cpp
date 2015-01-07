@@ -708,6 +708,7 @@ void *child_mysql(void *arg) {
 	int client = *(int *)arg;
 	__thr_sfp=l_mem_init();
 
+	GloMTH->wrlock();
 	mysql_thread___server_version=GloMTH->get_variable((char *)"server_version");
 	mysql_thread___default_schema=GloMTH->get_variable((char *)"default_schema");
 	{
@@ -715,6 +716,7 @@ void *child_mysql(void *arg) {
 		mysql_thread___server_capabilities=atoi(s);
 		free(s);
 	}
+	GloMTH->wrunlock();
 
 	struct pollfd fds[1];
 	nfds_t nfds=1;
@@ -1150,6 +1152,7 @@ void Standard_ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite
 		proxy_error("Error on %s : %s\n", q, error);
 		return;
 	} else {
+		GloMTH->wrlock();
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			bool rc=GloMTH->set_variable(r->fields[0],r->fields[1]);
@@ -1173,6 +1176,8 @@ void Standard_ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
 			}
 		}
+		GloMTH->commit();
+		GloMTH->wrunlock();
 	}
 	if (resultset) delete resultset;
 }
@@ -1213,15 +1218,16 @@ void Standard_ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite
     a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
   }
   int l=strlen(a)+200;
+	GloMTH->wrlock();
 	char **varnames=GloMTH->get_variables_list();	
-	// FIXME: add lock
   char *query=(char *)malloc(l);
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMTH->get_variable(varnames[i]);
 		sprintf(query, a, varnames[i], val);
 		db->execute(query);
 		free(val);
-	}	
+	}
+	GloMTH->wrunlock();
 	free(query);
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);

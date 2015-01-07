@@ -220,6 +220,12 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	virtual void wrunlock() {                                                                                                           
 		spin_wrunlock(&rwlock);                                                                                                                              
 	}
+
+	virtual void commit() {
+	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
+	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
+	};
+
 	char *get_variable_string(char *name) {
 		if (!strcmp(name,"server_version")) return strdup(variables.server_version);
 		if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
