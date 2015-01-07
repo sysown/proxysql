@@ -599,10 +599,10 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 
 
 static unsigned char protocol_version=10;
-static uint16_t server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
+//static uint16_t server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 static uint8_t server_language=33;
 static uint16_t server_status=1;
-static char *mysql_server_version = (char *)"5.1.30";
+//static char *mysql_server_version = (char *)"5.1.30";
 
 /*
 //void MySQL_Protocol::generate_server_handshake(MySQL_Data_Stream *myds) {
@@ -1177,14 +1177,14 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
   myhdr.pkt_length=sizeof(protocol_version)
-    + (strlen(mysql_server_version)+1)
+    + (strlen(mysql_thread___server_version)+1)
     + sizeof(uint32_t)  // thread_id
     + 8  // scramble1
     + 1  // 0x00
     //+ sizeof(glovars.server_capabilities)
     //+ sizeof(glovars.server_language)
     //+ sizeof(glovars.server_status)
-    + sizeof(server_capabilities)
+    + sizeof(mysql_thread___server_capabilities)
     + sizeof(server_language)
     + sizeof(server_status)
     + 3 // unknown stuff
@@ -1214,7 +1214,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   rand_st.seed2=rand()%rand_st.max_value;
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
-  memcpy(_ptr+l, mysql_server_version, strlen(mysql_server_version)); l+=strlen(mysql_server_version)+1;
+  memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
 //#ifdef MARIADB_BASE_VERSION
 //  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
@@ -1231,7 +1231,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 
   memcpy(_ptr+l, (*myds)->myconn->myconn.scramble_buff+0, 8); l+=8;
   _ptr[l]=0x00; l+=1; //0x00
-  memcpy(_ptr+l,&server_capabilities, sizeof(server_capabilities)); l+=sizeof(server_capabilities);
+  memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
   memcpy(_ptr+l,&server_language, sizeof(server_language)); l+=sizeof(server_language);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
   memcpy(_ptr+l,"\x0f\x80\x15",3); l+=3;

@@ -8,7 +8,7 @@ extern ProxySQL_Admin *GloAdmin;
 MySQL_Session_userinfo::MySQL_Session_userinfo() {
 	username=NULL;
 	password=NULL;
-	schemaname=l_strdup((char *)"information_schema");
+	schemaname=l_strdup(mysql_thread___default_schema);
 }
 
 MySQL_Session_userinfo::~MySQL_Session_userinfo() {

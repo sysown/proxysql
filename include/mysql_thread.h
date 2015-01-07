@@ -256,9 +256,24 @@ class MySQL_Threads_Handler
 	virtual void init(unsigned int num, size_t stack) {};
 	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *)) {return NULL;};
 	virtual void shutdown_threads() {};
+	virtual void wrlock() {};
+  virtual void wrunlock() {};
 };
 
 typedef MySQL_Threads_Handler * create_MySQL_Threads_Handler_t();
 typedef void destroy_MySQL_Threads_Handler_t(MySQL_Threads_Handler *);
+
+
+
+#ifndef MYSQL_THREAD_IMPLEMENTATION
+#define __EXTERN extern
+#else
+#define __EXTERN
+#endif /* MYSQL_THREAD_IMPLEMENTATION */
+
+__EXTERN __thread char *mysql_thread___default_schema;
+__EXTERN __thread char *mysql_thread___server_version;
+__EXTERN __thread uint16_t mysql_thread___server_capabilities;
+__EXTERN __thread int mysql_thread___poll_timeout;
 
 #endif /* __CLASS_MYSQL_THREAD_H */

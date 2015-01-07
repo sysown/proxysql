@@ -1,5 +1,5 @@
 #define __CLASS_STANDARD_MYSQL_THREAD_H
-
+#define MYSQL_THREAD_IMPLEMENTATION
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -162,6 +162,92 @@ int mypoll_del(proxy_poll_t *_myp, int i) {
 
 __thread MySQL_Connection_Pool *MyConnPool;
 
+
+__thread unsigned int __thread_MySQL_Thread_Variables_version;
+
+volatile static unsigned int __global_MySQL_Thread_Variables_version;
+
+
+
+class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
+{
+	private:
+	size_t stacksize;
+	pthread_attr_t attr;
+	rwlock_t rwlock;
+	struct {
+		char *default_schema;
+		char *server_version;
+		uint16_t server_capabilities;
+		int poll_timeout;
+	} variables;
+	public:
+	Standard_MySQL_Threads_Handler() {
+		num_threads=0;
+		mysql_threads=NULL;
+		stacksize=0;
+		spinlock_rwlock_init(&rwlock);
+		pthread_attr_init(&attr);
+		variables.default_schema=(char *)"information_schema";
+		variables.server_version=(char *)"5.1.30";
+		variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
+		variables.poll_timeout=2000;
+		__global_MySQL_Thread_Variables_version=1;
+	}
+	virtual ~Standard_MySQL_Threads_Handler() {
+		free(mysql_threads);
+	}
+	virtual void wrlock() {
+		spin_wrlock(&rwlock);                                                                                                                                
+	}
+	virtual void wrunlock() {                                                                                                           
+		spin_wrunlock(&rwlock);                                                                                                                              
+	}
+	char *get_variable_string(char *name) {
+		if (!strcmp(name,"server_version")) return strdup(variables.server_version);
+		if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
+		proxy_error("Not existing variable: %s\n", name); assert(0);
+		return NULL;
+	}
+	uint16_t get_variable_uint16(char *name) {
+		if (!strcmp(name,"server_capabilities")) return variables.server_capabilities;
+		proxy_error("Not existing variable: %s\n", name); assert(0);
+		return 0;
+	}
+	int get_variable_int(char *name) {
+		if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
+		proxy_error("Not existing variable: %s\n", name); assert(0);
+		return 0;
+	}
+	virtual void print_version() {
+		fprintf(stderr,"Standard MySQL Threads Handler rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
+	}
+	virtual void init(unsigned int num, size_t stack) {
+		stacksize=stack;
+		num_threads=num;
+		int rc=pthread_attr_setstacksize(&attr, stacksize);
+		assert(rc==0);
+		mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
+	}
+	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *)) {
+		pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
+		return NULL;
+	}
+	virtual void shutdown_threads() {
+		unsigned int i;
+		for (i=0; i<num_threads; i++) {
+			mysql_threads[i].worker->shutdown=1;
+		}
+		for (i=0; i<num_threads; i++) {
+			pthread_join(mysql_threads[i].thread_id,NULL);
+		}
+	}
+};
+
+
+extern Standard_MySQL_Threads_Handler *GloMTH;
+
+
 class Standard_MySQL_Thread: public MySQL_Thread {
 
 private:
@@ -173,6 +259,8 @@ Standard_MySQL_Thread() {
 	mypolls.size=0;
 	mypolls.fds=NULL;
 	mypolls.myds=NULL;
+	__thread_MySQL_Thread_Variables_version=0;
+	mysql_thread___server_version=NULL;
 //	GloQPro->init_thread();
 //	MyConnPool=new MySQL_Connection_Pool();
 	//events=NULL;
@@ -181,6 +269,17 @@ Standard_MySQL_Thread() {
 //	mysql_sessions=NULL;
 };
 
+void refresh_variables() {
+	GloMTH->wrlock();
+	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
+	if (mysql_thread___server_version) free(mysql_thread___server_version);
+	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
+	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
+	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
+	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
+	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+	GloMTH->wrunlock();
+}
 
 virtual ~Standard_MySQL_Thread() {
 //	if (mypolls.fds)
@@ -304,7 +403,7 @@ virtual void run() {
 		}	
 	
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Calling poll");
-		rc=poll(mypolls.fds,mypolls.len,2000);
+		rc=poll(mypolls.fds,mypolls.len,mysql_thread___poll_timeout);
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
 			if (rc == -1 && errno == EINTR)
 				// poll() timeout, try again
@@ -317,6 +416,12 @@ virtual void run() {
 
 
 		unsigned long long curtime=monotonic_time();
+
+		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
+			refresh_variables();
+		}
+
+
 		for (n = 0; n < mypolls.len; n++) {
 			proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
 
@@ -457,46 +562,6 @@ virtual void run() {
 };
 };
 
-
-class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
-{
-	private:
-	size_t stacksize;
-	pthread_attr_t attr;
-	public:
-	Standard_MySQL_Threads_Handler() {
-		num_threads=0;
-		mysql_threads=NULL;
-		stacksize=0;
-		pthread_attr_init(&attr);
-	}
-	virtual ~Standard_MySQL_Threads_Handler() {
-		free(mysql_threads);
-	}
-	virtual void print_version() {
-		fprintf(stderr,"Standard MySQL Threads Handler rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
-	}
-	virtual void init(unsigned int num, size_t stack) {
-		stacksize=stack;
-		num_threads=num;
-		int rc=pthread_attr_setstacksize(&attr, stacksize);
-		assert(rc==0);
-		mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
-	}
-	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *)) {
-		pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
-		return NULL;
-	}
-	virtual void shutdown_threads() {
-		unsigned int i;
-		for (i=0; i<num_threads; i++) {
-			mysql_threads[i].worker->shutdown=1;
-		}
-		for (i=0; i<num_threads; i++) {
-			pthread_join(mysql_threads[i].thread_id,NULL);
-		}
-	}
-};
 
 extern "C" MySQL_Threads_Handler * create_MySQL_Threads_Handler_func() {
     return new Standard_MySQL_Threads_Handler();
