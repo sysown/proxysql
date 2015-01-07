@@ -391,6 +391,9 @@ __start_label:
 	GloMTH=NULL;
 	MyHGH=new MySQL_HostGroups_Handler();
 
+	GloMTH=create_MySQL_Threads_Handler();
+	GloMTH->print_version();
+
 {
 	GloAdmin = create_ProxySQL_Admin();
 	GloAdmin->print_version();
@@ -467,8 +470,6 @@ __start_label:
 	unsigned int i;
 
 
-	GloMTH=create_MySQL_Threads_Handler();
-	GloMTH->print_version();
 	GloMTH->init(6, 512*1024);
 	//mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*NUM_THREADS);
 	//assert(mysql_threads);

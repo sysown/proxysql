@@ -403,6 +403,10 @@ virtual ~Standard_MySQL_Thread() {
 
 	GloQPro->end_thread();
 	delete MyConnPool;
+
+	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
+	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
+
 };
 
 virtual bool init() {
