@@ -169,6 +169,17 @@ volatile static unsigned int __global_MySQL_Thread_Variables_version;
 
 
 
+static char * mysql_thread_variables_names[]= {
+	(char *)"default_schema",
+	(char *)"poll_timeout",
+	(char *)"server_capabilities",
+	(char *)"server_version",
+	(char *)"threads",
+	NULL
+};
+
+
+
 class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 {
 	private:
@@ -219,6 +230,94 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		proxy_error("Not existing variable: %s\n", name); assert(0);
 		return 0;
 	}
+
+	virtual char *get_variable(char *name) {	// this is the public function, accessible from admin
+#define INTBUFSIZE	4096
+		char intbuf[INTBUFSIZE];
+		if (!strcmp(name,"server_version")) return strdup(variables.server_version);
+		if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
+		if (!strcmp(name,"server_capabilities")) {
+			// FIXME : make it human readable
+			sprintf(intbuf,"%d",variables.server_capabilities);
+			return strdup(intbuf);
+		}
+		if (!strcmp(name,"poll_timeout")) {
+			sprintf(intbuf,"%d",variables.poll_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcmp(name,"threads")) {
+			sprintf(intbuf,"%d",num_threads);
+			return strdup(intbuf);
+		}
+		return NULL;
+	}	
+
+
+
+
+	virtual bool set_variable(char *name, char *value) {	// this is the public function, accessible from admin
+		// IN:
+		// name: variable name
+		// value: variable value
+		//
+		// OUT:
+		// false: unable to change the variable value, either because doesn't exist, or because out of range, or read only
+		// true: variable value changed
+		// 
+		size_t vallen=strlen(value);
+
+		if (!strcmp(name,"default_schema")) {
+			if (vallen) {
+				free(variables.default_schema);
+				variables.default_schema=strdup(value);
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcmp(name,"server_version")) {
+			if (vallen) {
+				free(variables.server_version);
+				variables.server_version=strdup(value);
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcmp(name,"poll_timeout")) {
+			int intv=atoi(value);
+			if (intv > 10 && intv < 20000) {
+				variables.poll_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcmp(name,"threads")) {
+			int intv=atoi(value);
+			if (num_threads==0 && intv > 0 && intv < 128) {
+				num_threads=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+
+		return false;
+	}
+
+
+	virtual char **get_variable_lists() {
+		size_t l=sizeof(mysql_thread_variables_names);
+		unsigned int i;
+		char **ret=(char **)malloc(sizeof(char *)*l);
+		for (i=0;i<l;i++) {
+			ret[i]=(i==l-1 ? strdup(mysql_thread_variables_names[i]) : NULL);
+		}
+		return NULL;
+	}
+
+
 	virtual void print_version() {
 		fprintf(stderr,"Standard MySQL Threads Handler rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 	}

@@ -258,6 +258,9 @@ class MySQL_Threads_Handler
 	virtual void shutdown_threads() {};
 	virtual void wrlock() {};
   virtual void wrunlock() {};
+	virtual char *get_variable(char *name) {return NULL;};
+	virtual bool set_variable(char *name, char *value) {return false;};
+	virtual char **get_variables_list() {return NULL;}
 };
 
 typedef MySQL_Threads_Handler * create_MySQL_Threads_Handler_t();
