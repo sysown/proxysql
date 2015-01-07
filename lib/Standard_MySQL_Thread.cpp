@@ -307,14 +307,14 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	}
 
 
-	virtual char **get_variable_lists() {
-		size_t l=sizeof(mysql_thread_variables_names);
+	virtual char **get_variables_list() {
+		size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 		unsigned int i;
 		char **ret=(char **)malloc(sizeof(char *)*l);
 		for (i=0;i<l;i++) {
-			ret[i]=(i==l-1 ? strdup(mysql_thread_variables_names[i]) : NULL);
+			ret[i]=(i==l-1 ? NULL : strdup(mysql_thread_variables_names[i]));
 		}
-		return NULL;
+		return ret;
 	}
 
 

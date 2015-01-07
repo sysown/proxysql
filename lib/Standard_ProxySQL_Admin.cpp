@@ -146,6 +146,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void add_default_user(char *, char *);
 	void __refresh_users();
 
+	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
 
 	public:
 	SQLite3DB *admindb;	// in memory
@@ -911,7 +912,7 @@ bool Standard_ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_admin,"mysql_global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -922,7 +923,7 @@ bool Standard_ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_config,"mysql_global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -936,6 +937,13 @@ bool Standard_ProxySQL_Admin::init() {
 	flush_debug_levels_runtime_to_database(configdb, false);
 	flush_debug_levels_runtime_to_database(admindb, true);
 #endif /* DEBUG */
+
+	flush_mysql_variables___runtime_to_database(configdb, false, false, false);
+	flush_mysql_variables___runtime_to_database(admindb, false, true, false);
+	// delete from mysql-threads from admindb . At this stage it is still unknwon
+	admindb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads'");
+	configdb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads' AND variable_value=0");
+
 	__insert_or_ignore_maintable_select_disktable();
 
 	
@@ -1057,6 +1065,59 @@ void Standard_ProxySQL_Admin::fill_table__server_status(SQLite3DB *db) {
 	db->execute("PRAGMA foreign_keys = ON");
 }
 */
+
+
+void Standard_ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (onlyifempty) {
+		char *error=NULL;
+	  int cols=0;
+	  int affected_rows=0;
+	  SQLite3_result *resultset=NULL;
+	  char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mysql-%'";
+	  admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int matching_rows=0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				matching_rows+=atoi(r->fields[0]);
+			}
+	  }
+	  if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has MySQL variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MySQL variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mysql-%'");
+	}
+	char *a;
+  if (replace) {
+    a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
+  } else {
+    a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
+  }
+  int l=strlen(a)+200;
+	char **varnames=GloMTH->get_variables_list();	
+	// FIXME: add lock
+  char *query=(char *)malloc(l);
+	for (int i=0; varnames[i]; i++) {
+		char *val=GloMTH->get_variable(varnames[i]);
+		sprintf(query, a, varnames[i], val);
+		db->execute(query);
+		free(val);
+	}	
+	free(query);
+	for (int i=0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+}
+
 
 #ifdef DEBUG
 void Standard_ProxySQL_Admin::flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace) {
