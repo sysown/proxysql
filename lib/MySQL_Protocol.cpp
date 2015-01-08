@@ -1501,6 +1501,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		userinfo->username=l_strdup((const char *)user);
 		userinfo->password=l_strdup((const char *)password);
 		if (db) userinfo->set_schemaname(db,strlen(db));
+	} else {
+		// we always duplicate username and password, or crashes happen
+		userinfo->username=l_strdup((const char *)user);
+		if (pass_len) userinfo->password=l_strdup((const char *)"");
 	}
 	//if (password) free(password);
 	if (password) l_free_string(password);

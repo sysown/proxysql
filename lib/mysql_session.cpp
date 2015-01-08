@@ -197,6 +197,7 @@ MySQL_Data_Stream * MySQL_Session::inactive_handler(MySQL_Data_Stream *_myds) {
 */
 
 int MySQL_Session::handler() {
+	bool wrong_pass=false;
 	if (to_process==0) return 0; // this should be redundant if the called does the same check
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
 	//unsigned char *pkt;
@@ -292,7 +293,15 @@ int MySQL_Session::handler() {
 							}
 						} else {
 							l_free(pkt.size,pkt.ptr);
+							wrong_pass=true;
 							// FIXME: this should become close connection
+							client_myds->DSS=STATE_QUERY_SENT;
+							char *_s=(char *)malloc(strlen(userinfo_client.username)+100);
+							sprintf(_s,"Access denied for user '%s' (using password: %s)", userinfo_client.username, (userinfo_client.password ? "YES" : "NO"));
+							myprot_client.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
+							free(_s);
+							client_myds->DSS=STATE_SLEEP;
+							//return -1;
 						}
 						break;
 					case STATE_SSL_INIT:
@@ -783,5 +792,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	to_process=0;
 	}
 */
+	if (wrong_pass==true) return -1;
 	return 0;
 }
