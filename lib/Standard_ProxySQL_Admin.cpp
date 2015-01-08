@@ -1595,7 +1595,7 @@ char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
 			nqpr=GloQPro->new_query_rule(atoi(r->fields[0]), true, r->fields[1], r->fields[2], atoi(r->fields[3]), r->fields[4], (atoi(r->fields[5])==1 ? true : false), (r->fields[6]==NULL ? -1 : atol(r->fields[6])), r->fields[7], (r->fields[8]==NULL ? -1 : atoi(r->fields[8])), (r->fields[9]==NULL ? -1 : atol(r->fields[9])), (atoi(r->fields[10])==1 ? true : false));
-			GloQPro->insert(nqpr);
+			GloQPro->insert(nqpr, false);
 		}
 		GloQPro->sort(false);
 		GloQPro->wrunlock();
