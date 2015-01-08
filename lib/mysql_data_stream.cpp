@@ -157,6 +157,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 	if (fd>0) {
 		if (myconn==NULL || myconn->reusable==false) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "MySQL_Connection %p %s: shutdown socket\n", myconn, (myconn ? "not reusable" : "is empty"));
 			shut_hard();
 //		shutdown(fd,SHUT_RDWR);
 //		close(fd);

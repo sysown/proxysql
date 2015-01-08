@@ -293,6 +293,7 @@ int MySQL_Session::handler() {
 							}
 						} else {
 							l_free(pkt.size,pkt.ptr);
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
 							wrong_pass=true;
 							// FIXME: this should become close connection
 							client_myds->DSS=STATE_QUERY_SENT;
@@ -314,6 +315,8 @@ int MySQL_Session::handler() {
 						} else {
 							l_free(pkt.size,pkt.ptr);
 							// FIXME: this should become close connection
+							perror("Hitting a not implemented feature: https://github.com/sysown/proxysql-0.2/issues/124");
+							assert(0);
 						}	
 						break;
 					default:
@@ -651,7 +654,9 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 							////status=WAITING_CLIENT_DATA;
 							server_myds->DSS=STATE_CLIENT_HANDSHAKE;
 						} else {
-							l_free(pkt.size,pkt.ptr);	
+							// FIXME: what to do here?
+							l_free(pkt.size,pkt.ptr);
+							assert(0);
 						}
 						break;
 					case STATE_CLIENT_HANDSHAKE:
@@ -669,7 +674,17 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 								server_myds->DSS=STATE_QUERY_SENT;
 							}
 						} else {
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for backend: disconnecting\n");
 							l_free(pkt.size,pkt.ptr);	
+							wrong_pass=true;
+							client_myds->DSS=STATE_QUERY_SENT;
+							char *_s=(char *)malloc(strlen(userinfo_client.username)+100);
+							sprintf(_s,"Access denied for user '%s' (using password: %s)", userinfo_client.username, (userinfo_client.password ? "YES" : "NO"));
+							myprot_client.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000", _s);
+							free(_s);
+							client_myds->DSS=STATE_SLEEP;
+							status=WAITING_CLIENT_DATA;
+							server_myds->myconn->reusable=false;
 						}
 						break;
 					default:

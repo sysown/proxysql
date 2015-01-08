@@ -254,6 +254,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
  * This function can modify the original query
  */
 bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 5, "Received command %s\n", query_no_space);
 
 #ifdef DEBUG
 	if ((query_no_space_length>11) && ( (!strncasecmp("SAVE DEBUG ", query_no_space, 11)) || (!strncasecmp("LOAD DEBUG ", query_no_space, 11))) ) {

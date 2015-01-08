@@ -39,7 +39,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, const char *fmt, 
 };
 */
 
-#define DEBUG_MSG_MAXSIZE	256
+#define DEBUG_MSG_MAXSIZE	1024
 
 #ifdef DEBUG
 void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {

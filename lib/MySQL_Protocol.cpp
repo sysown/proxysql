@@ -1277,6 +1277,7 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
   memcpy(&hdr,pkt,sizeof(mysql_hdr));
   pkt     += sizeof(mysql_hdr);
 
+	if (*pkt) return false;
 	if (len!=hdr.pkt_length+sizeof(mysql_hdr)) return false;
 
 	//MYSQL &myc=(*myds)->myconn->myconn;
