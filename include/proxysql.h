@@ -73,6 +73,8 @@
 
 #include "sqlite3.h"
 
+#include "c_tokenizer.h"
+
 //#include "cpp.h"
 
 

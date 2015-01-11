@@ -56,7 +56,7 @@ default: libproxysql.a DYN_LIB libproxysql.so
 .PHONY: default
 
 #_OBJ = mysql_protocol.o debug.o global_variables.o mysql_data_stream.o network.o proxysql_global.o
-_OBJ = sqlite3.o
+_OBJ = sqlite3.o c_tokenizer.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 #_OBJ_CPP = Standard_Query_Cache.oo SpookyV2.oo Standard_MySQL_Thread.oo gen_utils.oo mysql_connection_pool.oo simple_kv.oo advanced_kv.oo sqlite3db.oo mysql_connection.oo global_variables.oo proxysql_mem.oo mysql_protocol.oo mysql_data_stream.oo mysql_session.oo mysql_backend.oo
 #_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo proxysql_global.oo configfile.oo Standard_Query_Cache.oo SpookyV2.oo Standard_MySQL_Thread.oo Standard_MySQL_Authentication.oo gen_utils.oo mysql_connection_pool.oo simple_kv.oo advanced_kv.oo sqlite3db.oo mysql_connection.oo global_variables.oo proxysql_mem.oo MySQL_Protocol.oo mysql_data_stream.oo mysql_session.oo mysql_backend.oo

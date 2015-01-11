@@ -13,6 +13,9 @@
 #define MIN_POLL_DELETE_RATIO  8
 
 
+#define ADMIN_HOSTGROUP	-2
+#define MONITOR_HOSTGROUP	-3
+
 
 static unsigned int near_pow_2 (unsigned int n) {
   unsigned int i = 1;

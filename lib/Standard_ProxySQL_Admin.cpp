@@ -63,6 +63,17 @@ typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 
 
+static char * admin_variables_names[]= {
+  (char *)"admin_credentials",
+  (char *)"monitor_credentials",
+  (char *)"refresh_interval",
+#ifdef DEBUG
+  (char *)"debug",
+#endif /* DEBUG */
+  NULL
+};
+
+
 static t_symstruct lookuptable[] = {
     { SpookyHash::Hash32("SHOW",4,0), CMD1 },
     { SpookyHash::Hash32("SET",3,0), CMD2 },
@@ -127,6 +138,19 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
 
+	rwlock_t rwlock;
+	void wrlock();
+	void wrunlock();
+
+	struct {
+		char *admin_credentials;
+		char *monitor_credentials;
+		int refresh_interval;
+#ifdef DEBUG
+		bool debug;
+#endif /* DEBUG */
+	} variables;
+
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	//void fill_table__server_status(SQLite3DB *db);
@@ -145,10 +169,26 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void __add_active_users(enum cred_username_type usertype);
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void add_default_user(char *, char *);
+	void add_admin_users();
 	void __refresh_users();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
+
+
+	char **get_variables_list();
+	char *get_variable(char *name);
+	bool set_variable(char *name, char *value);
+	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
+
+#ifdef DEBUG
+	void add_credentials(char *type, char *credentials, int hostgroup_id);
+	void delete_credentials(char *type, char *credentials);
+#else
+	void add_credentials(char *type, char *credentials, int hostgroup_id);
+	void delete_credentials(char *credentials);
+#endif /* DEBUG */
 
 	public:
 	SQLite3DB *admindb;	// in memory
@@ -179,6 +219,9 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
+
+	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
+	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
@@ -418,7 +461,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
 			l_free(*ql,*q);
-			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM memory.global_variables WHERE variable_name LIKE 'mysql-%'");
+			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
 			*ql=strlen(*q)+1;
 			return true;
 		}
@@ -598,6 +641,72 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 */
+	}
+
+	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO MEMORY") && !strncasecmp("LOAD ADMIN VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO MEM") && !strncasecmp("LOAD ADMIN VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM DISK") && !strncasecmp("LOAD ADMIN VARIABLES FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'admin-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM MEMORY") && !strncasecmp("SAVE ADMIN VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM MEM") && !strncasecmp("SAVE ADMIN VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO DISK") && !strncasecmp("SAVE ADMIN VARIABLES TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'admin-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM MEMORY") && !strncasecmp("LOAD ADMIN VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM MEM") && !strncasecmp("LOAD ADMIN VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO RUNTIME") && !strncasecmp("LOAD ADMIN VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO RUN") && !strncasecmp("LOAD ADMIN VARIABLES TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->load_admin_variables_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO MEMORY") && !strncasecmp("SAVE ADMIN VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO MEM") && !strncasecmp("SAVE ADMIN VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM RUNTIME") && !strncasecmp("SAVE ADMIN VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM RUN") && !strncasecmp("SAVE ADMIN VARIABLES FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+			SPA->save_admin_variables_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved admin variables from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			return false;
+		}
+
 	}
 
 	return true;
@@ -922,13 +1031,27 @@ Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
 	int i;
 
 	SPA=this;
-
+	spinlock_rwlock_init(&rwlock);
 	i=sqlite3_config(SQLITE_CONFIG_URI, 1);
 	if (i!=SQLITE_OK) {
   	fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
 		assert(i==SQLITE_OK);
 		exit(EXIT_FAILURE);
 	}
+	variables.admin_credentials=strdup("admin:admin");
+	variables.monitor_credentials=strdup("monitor:monitor");
+	variables.refresh_interval=2000;
+#ifdef DEBUG
+	variables.debug=false;
+#endif /* DEBUG */
+};
+
+void Standard_ProxySQL_Admin::wrlock() {
+	spin_wrlock(&rwlock);
+};
+
+void Standard_ProxySQL_Admin::wrunlock() {
+	spin_wrunlock(&rwlock);
 };
 
 void Standard_ProxySQL_Admin::print_version() {
@@ -1018,8 +1141,12 @@ bool Standard_ProxySQL_Admin::init() {
 	//admindb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads'");
 	//configdb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads' AND variable_value=0");
 
+	flush_admin_variables___runtime_to_database(configdb, false, false, false);
+	flush_admin_variables___runtime_to_database(admindb, false, true, false);
+
 	__insert_or_replace_maintable_select_disktable();
 
+	flush_admin_variables___database_to_runtime(admindb,true);
 	
 	//fill_table__server_status(admindb);
 	//fill_table__server_status(configdb);
@@ -1141,6 +1268,48 @@ void Standard_ProxySQL_Admin::fill_table__server_status(SQLite3DB *db) {
 */
 
 
+void Standard_ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT substr(variable_name,7) vn, variable_value FROM global_variables WHERE variable_name LIKE 'admin-%'";
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	} else {
+		wrlock();
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			bool rc=set_variable(r->fields[0],r->fields[1]);
+			if (rc==false) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+				if (replace) {
+					char *val=get_variable(r->fields[0]);
+					char q[1000];
+					if (val) {
+						proxy_error("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"%s\",\"%s\")",r->fields[0],val);
+						db->execute(q);
+						free(val);
+					} else {
+						proxy_error("Impossible to set not existing variable %s with value \"%s\". Deleting\n", r->fields[0],r->fields[1]);
+						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"%s\"",r->fields[0]);
+						db->execute(q);
+					}
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+			}
+		}
+		//commit(); NOT IMPLEMENTED
+		wrunlock();
+	}
+	if (resultset) delete resultset;
+}
+
 void Standard_ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d\n", replace);
 	char *error=NULL;
@@ -1234,6 +1403,200 @@ void Standard_ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite
 		free(varnames[i]);
 	}
 	free(varnames);
+}
+
+char **Standard_ProxySQL_Admin::get_variables_list() {
+	size_t l=sizeof(admin_variables_names)/sizeof(char *);
+	unsigned int i;
+	char **ret=(char **)malloc(sizeof(char *)*l);
+	for (i=0;i<l;i++) {
+		ret[i]=(i==l-1 ? NULL : strdup(admin_variables_names[i]));
+	}
+	return ret;
+}
+
+char * Standard_ProxySQL_Admin::get_variable(char *name) {
+#define INTBUFSIZE  4096
+	char intbuf[INTBUFSIZE];
+	if (!strcmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
+	if (!strcmp(name,"monitor_credentials")) return strdup(variables.monitor_credentials);
+	if (!strcmp(name,"refresh_interval")) {
+		sprintf(intbuf,"%d",variables.refresh_interval);
+		return strdup(intbuf);
+	}
+#ifdef DEBUG
+	if (!strcmp(name,"debug")) {
+		return strdup((variables.debug ? "true" : "false"));
+	}
+#endif /* DEBUG */
+	return NULL;
+}
+
+
+#ifdef DEBUG
+void Standard_ProxySQL_Admin::add_credentials(char *type, char *credentials, int hostgroup_id) {
+#else
+void Standard_ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
+#endif /* DEBUG */
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Removing adding %s credentials: %s\n", type, credentials);
+	tokenizer_t tok = tokenizer( credentials, ";", TOKENIZER_NO_EMPTIES );
+	const char* token;
+	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
+		char *user=NULL;
+		char *pass=NULL;
+		c_split_2(token, ":", &user, &pass);
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
+		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
+			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,0);
+		}
+		free(user);
+		free(pass);
+	}
+	free_tokenizer( &tok );
+}
+
+#ifdef DEBUG
+void Standard_ProxySQL_Admin::delete_credentials(char *type, char *credentials) {
+#else
+void Standard_ProxySQL_Admin::delete_credentials(char *credentials) {
+#endif /* DEBUG */
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Removing old %s credentials: %s\n", type, credentials);
+	tokenizer_t tok = tokenizer( credentials, ";", TOKENIZER_NO_EMPTIES );
+	const char* token;
+	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
+		char *user=NULL;
+		char *pass=NULL;
+		c_split_2(token, ":", &user, &pass);
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Removing %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
+		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
+			GloMyAuth->del(user,USERNAME_FRONTEND);
+		}
+		free(user);
+		free(pass);
+	}
+	free_tokenizer( &tok );
+}
+
+bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
+	size_t vallen=strlen(value);
+
+	if (!strcmp(name,"admin_credentials")) {
+		if (vallen) {
+			bool update_creds=false;
+			if ((variables.admin_credentials==NULL) || strcmp(variables.admin_credentials,value) ) update_creds=true;
+			if (update_creds && variables.admin_credentials) {
+#ifdef DEBUG
+				delete_credentials((char *)"admin",variables.admin_credentials);
+#else
+				delete_credentials(variables.admin_credentials);
+#endif /* DEBUG */
+			}
+			free(variables.admin_credentials);
+			variables.admin_credentials=strdup(value);
+			if (update_creds && variables.admin_credentials) {
+#ifdef DEBUG
+				add_credentials((char *)"admin",variables.admin_credentials, -2);
+#else
+				add_credentials(variables.admin_credentials, -2);
+#endif /* DEBUG */
+			}
+			return true;
+		} else {
+			return false;
+		}
+	}
+/*
+	if (!strcmp(name,"monitor_credentials")) {
+		if (vallen) {
+			free(variables.monitor_credentials);
+			variables.monitor_credentials=strdup(value);
+			return true;
+		} else {
+			return false;
+		}
+	}
+*/
+	if (!strcmp(name,"refresh_interval")) {
+		int intv=atoi(value);
+		if (intv > 100 && intv < 100000) {
+			variables.refresh_interval=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+#ifdef DEBUG
+	if (!strcmp(name,"debug")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.debug=1;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.debug=0;
+			return true;
+		}
+		return false;
+	}
+#endif /* DEBUG */
+	return false;
+}
+
+
+void Standard_ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (onlyifempty) {
+		char *error=NULL;
+	  int cols=0;
+	  int affected_rows=0;
+	  SQLite3_result *resultset=NULL;
+	  char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'admin-%'";
+	  db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int matching_rows=0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				matching_rows+=atoi(r->fields[0]);
+			}
+	  }
+	  if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has ADMIN variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting ADMIN variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'admin-%'");
+	}
+	char *a;
+  if (replace) {
+    a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"admin-%s\",\"%s\")";
+  } else {
+    a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"admin-%s\",\"%s\")";
+  }
+  int l=strlen(a)+200;
+
+//	GloMTH->wrlock();
+	//char **varnames=GloMTH->get_variables_list();	
+	char **varnames=get_variables_list();	
+  char *query=(char *)malloc(l);
+	for (int i=0; varnames[i]; i++) {
+		//char *val=GloMTH->get_variable(varnames[i]);
+		char *val=get_variable(varnames[i]);
+		sprintf(query, a, varnames[i], val);
+		db->execute(query);
+		free(val);
+	}
+//	GloMTH->wrunlock();
+	free(query);
+	for (int i=0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+
 }
 
 
@@ -1399,10 +1762,21 @@ void Standard_ProxySQL_Admin::init_mysql_query_rules() {
 	load_mysql_query_rules_to_runtime();
 }
 
+void Standard_ProxySQL_Admin::add_admin_users() {
+#ifdef DEBUG
+	add_credentials((char *)"admin",variables.admin_credentials, ADMIN_HOSTGROUP);
+	add_credentials((char *)"monitor",variables.monitor_credentials, MONITOR_HOSTGROUP);
+#else
+	add_credentials(variables.admin_credentials, ADMIN_HOSTGROUP);
+	add_credentials(variables.monitor_credentials, MONITOR_HOSTGROUP);
+#endif /* DEBUG */
+}
+
 void Standard_ProxySQL_Admin::__refresh_users() {
 	__delete_inactive_users(USERNAME_BACKEND);
 	__delete_inactive_users(USERNAME_FRONTEND);
-	add_default_user((char *)"admin",(char *)"admin");
+	//add_default_user((char *)"admin",(char *)"admin");
+	add_admin_users();
 	__add_active_users(USERNAME_BACKEND);
 	__add_active_users(USERNAME_FRONTEND);
 }
@@ -1537,8 +1911,8 @@ void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
 		}
 	}
 	if (resultset) delete resultset;
-	if (matching_rows==0) {
-		GloMyAuth->add(user,password, USERNAME_FRONTEND, false , 0, true);
+	if (matching_rows<1000) { // FIXME, SMALL HACK
+		GloMyAuth->add(user,password, USERNAME_FRONTEND, false , -1, true);
 		proxy_error("Adding default user. Username=%s, Password=%s\n", user,password);
 /*
 		admindb->execute("PRAGMA foreign_keys = OFF");

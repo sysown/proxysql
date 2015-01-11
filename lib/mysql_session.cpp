@@ -273,7 +273,11 @@ int MySQL_Session::handler() {
 			case CONNECTING_CLIENT:
 				switch (client_myds->DSS) {
 					case STATE_SERVER_HANDSHAKE:
-						if (myprot_client.process_pkt_handshake_response((unsigned char *)pkt.ptr,pkt.size)==true) {
+						if ( 
+							(myprot_client.process_pkt_handshake_response((unsigned char *)pkt.ptr,pkt.size)==true) 
+							&&
+							( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) )
+						)	{
 							l_free(pkt.size,pkt.ptr);
 							if (client_myds->encrypted==false) {
 								myprot_client.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);

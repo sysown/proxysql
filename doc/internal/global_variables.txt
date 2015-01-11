@@ -1,0 +1,66 @@
+Each module of ProxySQL can have global variables and should be configurable
+through the admin interface.
+As such, the interface for the management of these global variables should be
+either very simple, or managed by a simple API.
+
+Trying to make a standard API, the proposed functions are:
+  virtual char **get_variables_list() {return NULL;}
+  virtual char *get_variable(char *name) {return NULL;};
+  virtual bool set_variable(char *name, char *value) {return false;};
+  virtual void commit() {};
+  virtual void wrlock() {};
+  virtual void wrunlock() {};
+
+In order:
+- get_variables_list() returns an array of pointer to variables name, where the
+  last element is NULL;
+- get_variable() returns the value of a specific variable. If the variable was
+  not previously set, the module should return the default value. If the
+  variable doesn't exist, NULL should be returned;
+- set_variable() set the variable "name" to the value "value" . On success, true
+  is returned. If "name" does not exist or if "value" is not valid, false is
+  return;
+- commit() trigger the module to read the new setting. Its implementation is
+  specific to the module;
+- wrlock() and wrunlock() are a way to acquire and release mutex or write lock,
+  as it is not guaranteed that the any of the previous command is thread-safe.
+
+
+Current specific implementation.
+
+Standard_ProxySQL_Admin is the current Admin Module.
+It allows users to modify such global variables through a table called
+global_variables that has 2 columns:
+- variable_name (VARCHAR NOT NULL PRIMARY KEY)
+- variable_value (VARCHAR NOT NULL)
+
+To distinguish variables from different modules, variable_name has the follow
+format: <module>-<name>
+For example:
+admin-admin_credentials
+admin-interfaces
+mysql-poll_timeout
+mysql-server_version
+
+Current modules that support global variables:
+- MySQL_Threads_Handler ("mysql" prefix) : currently implemented in
+  Standard_MySQL_Threads_Handler, that then handles Standard_MySQL_Thread;
+- ProxySQL_Admin ("admin" prefix) : currently implemented in
+  Standard_ProxySQL_Admin . Although ProxySQL_Admin don't interact with other
+  modules when processing its own variables, the same interface is used for
+  semplicity and to provide threads safety.
+
+
+Implementation details in Standard_ProxySQL_Admin.
+Standard_ProxySQL_Admin uses the follow functions to handle global variables: 
+- flush_<module>_variables___database_to_runtime
+- flush_<module>_variables___runtime_to_database
+
+flush_<module>_variables___database_to_runtime :
+a) selects all the variables that have name like "<module>-%" and strips the
+   prefix
+b) for each of them try to set it with set_variable()
+c) if #b fails, it calls get_variable() with the same name
+d) if #c succeed, update the value in the table; if #c fails, delete the row
+   from the table
+
