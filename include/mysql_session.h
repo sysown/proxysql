@@ -26,6 +26,7 @@ class MySQL_Session
 	QP_out_t *qpo;
 	int healthy;
 	bool admin;
+	bool monitor;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
 	int client_fd;
 	int server_fd;

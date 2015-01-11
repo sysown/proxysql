@@ -779,7 +779,11 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 __run_query:
 	if (run_query) {
 		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-		SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (sess->monitor==false) {
+			SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		} else {
+			SPA->monitordb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		}
 		SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
@@ -1495,9 +1499,34 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			variables.admin_credentials=strdup(value);
 			if (update_creds && variables.admin_credentials) {
 #ifdef DEBUG
-				add_credentials((char *)"admin",variables.admin_credentials, -2);
+				add_credentials((char *)"admin",variables.admin_credentials, ADMIN_HOSTGROUP);
 #else
-				add_credentials(variables.admin_credentials, -2);
+				add_credentials(variables.admin_credentials, ADMIN_HOSTGROUP);
+#endif /* DEBUG */
+			}
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcmp(name,"monitor_credentials")) {
+		if (vallen) {
+			bool update_creds=false;
+			if ((variables.monitor_credentials==NULL) || strcmp(variables.monitor_credentials,value) ) update_creds=true;
+			if (update_creds && variables.monitor_credentials) {
+#ifdef DEBUG
+				delete_credentials((char *)"monitor",variables.monitor_credentials);
+#else
+				delete_credentials(variables.monitor_credentials);
+#endif /* DEBUG */
+			}
+			free(variables.monitor_credentials);
+			variables.monitor_credentials=strdup(value);
+			if (update_creds && variables.monitor_credentials) {
+#ifdef DEBUG
+				add_credentials((char *)"admin",variables.monitor_credentials, MONITOR_HOSTGROUP);
+#else
+				add_credentials(variables.monitor_credentials, MONITOR_HOSTGROUP);
 #endif /* DEBUG */
 			}
 			return true;
