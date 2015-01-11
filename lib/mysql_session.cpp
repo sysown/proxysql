@@ -76,7 +76,7 @@ MySQL_Session::MySQL_Session() {
 	qpo=NULL;
 	healthy=1;
 	admin=false;
-	monitor=false;
+	stats=false;
 	admin_func=NULL;
 	client_fd=0;
 	server_fd=0;
@@ -280,8 +280,8 @@ int MySQL_Session::handler() {
 							( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) )
 						)	{
 							if (default_hostgroup<0 && admin==true) {
-								if (default_hostgroup==MONITOR_HOSTGROUP) {
-									monitor=true;
+								if (default_hostgroup==STATS_HOSTGROUP) {
+									stats=true;
 								}
 							}
 							l_free(pkt.size,pkt.ptr);

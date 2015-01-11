@@ -14,7 +14,7 @@
 
 
 #define ADMIN_HOSTGROUP	-2
-#define MONITOR_HOSTGROUP	-3
+#define STATS_HOSTGROUP	-3
 
 
 static unsigned int near_pow_2 (unsigned int n) {

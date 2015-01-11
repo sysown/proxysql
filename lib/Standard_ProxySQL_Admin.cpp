@@ -65,10 +65,10 @@ typedef struct { char * table_name; char * table_def; } table_def_t;
 
 static char * admin_variables_names[]= {
   (char *)"admin_credentials",
-  (char *)"monitor_credentials",
+  (char *)"stats_credentials",
   (char *)"mysql_ifaces",
   (char *)"telnet_admin_ifaces",
-  (char *)"telnet_monitor_ifaces",
+  (char *)"telnet_stats_ifaces",
   (char *)"mysql_ifaces",
   (char *)"refresh_interval",
 #ifdef DEBUG
@@ -132,7 +132,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 //SQLite3DB *db3;
 
 	std::vector<table_def_t *> *tables_defs_admin;
-	std::vector<table_def_t *> *tables_defs_monitor;
+	std::vector<table_def_t *> *tables_defs_stats;
 	std::vector<table_def_t *> *tables_defs_config;
 
 
@@ -148,11 +148,11 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 
 	struct {
 		char *admin_credentials;
-		char *monitor_credentials;
+		char *stats_credentials;
 		int refresh_interval;
 		char *mysql_ifaces;
 		char *telnet_admin_ifaces;
-		char *telnet_monitor_ifaces;
+		char *telnet_stats_ifaces;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -199,7 +199,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 
 	public:
 	SQLite3DB *admindb;	// in memory
-	SQLite3DB *monitordb;	// in memory
+	SQLite3DB *statsdb;	// in memory
 	SQLite3DB *configdb; // on disk
 	Standard_ProxySQL_Admin();
 	virtual ~Standard_ProxySQL_Admin();
@@ -261,7 +261,7 @@ static _admin_main_loop_listeners_t admin_main_loop_listeners;
 typedef struct _ifaces_desc_t {
 		char **mysql_ifaces;
 		char **telnet_admin_ifaces;
-		char **telnet_monitor_ifaces;
+		char **telnet_stats_ifaces;
 } ifaces_desc_t;
 
 
@@ -328,23 +328,23 @@ class admin_main_loop_listeners {
 //	ifaces_desc_t descriptor_new_copy;
 	ifaces_desc *ifaces_mysql;
 	ifaces_desc *ifaces_telnet_admin;
-	ifaces_desc *ifaces_telnet_monitor;
+	ifaces_desc *ifaces_telnet_stats;
 	ifaces_desc_t descriptor_new;
 	admin_main_loop_listeners() {
 		spinlock_rwlock_init(&rwlock);
 		ifaces_mysql=new ifaces_desc();
 		ifaces_telnet_admin=new ifaces_desc();
-		ifaces_telnet_monitor=new ifaces_desc();
+		ifaces_telnet_stats=new ifaces_desc();
 		version=0;
 //		descriptor_old.mysql_ifaces=NULL;
 //		descriptor_old.telnet_admin_ifaces=NULL;
-//		descriptor_old.telnet_monitor_ifaces=NULL;
+//		descriptor_old.telnet_stats_ifaces=NULL;
 //		descriptor_new_copy.mysql_ifaces=NULL;
 //		descriptor_new_copy.telnet_admin_ifaces=NULL;
-//		descriptor_new_copy.telnet_monitor_ifaces=NULL;
+//		descriptor_new_copy.telnet_stats_ifaces=NULL;
 		descriptor_new.mysql_ifaces=NULL;
 		descriptor_new.telnet_admin_ifaces=NULL;
-		descriptor_new.telnet_monitor_ifaces=NULL;
+		descriptor_new.telnet_stats_ifaces=NULL;
 	}
 
 
@@ -388,10 +388,10 @@ class admin_main_loop_listeners {
 		if (also_lock) { wrlock(); }
 		dst->mysql_ifaces=reset_ifaces(dst->mysql_ifaces);
 		dst->telnet_admin_ifaces=reset_ifaces(dst->telnet_admin_ifaces);
-		dst->telnet_monitor_ifaces=reset_ifaces(dst->telnet_monitor_ifaces);
+		dst->telnet_stats_ifaces=reset_ifaces(dst->telnet_stats_ifaces);
 		for (int i=0; i<MAX_IFACES; i++) { if (src->mysql_ifaces[i]) { dst->mysql_ifaces[i]=strdup(src->mysql_ifaces[i]); } }
-		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_admin_ifaces[i]) { dst->telnet_admin_ifaces[i]=strdup(src->telnet_monitor_ifaces[i]); } }
-		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_monitor_ifaces[i]) { dst->telnet_monitor_ifaces[i]=strdup(src->telnet_monitor_ifaces[i]); } }
+		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_admin_ifaces[i]) { dst->telnet_admin_ifaces[i]=strdup(src->telnet_stats_ifaces[i]); } }
+		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_stats_ifaces[i]) { dst->telnet_stats_ifaces[i]=strdup(src->telnet_stats_ifaces[i]); } }
 		if (also_lock) { wrunlock(); }
 	}
 */
@@ -894,7 +894,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	//fprintf(stderr,"%s----\n",query_no_space);
 
 
-	if (sess->monitor==false) {
+	if (sess->stats==false) {
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
 			run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
@@ -931,13 +931,13 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
-	if (sess->monitor==true) {
+	if (sess->stats==true) {
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
 			||
 			(strncasecmp("ATTACH",query_no_space,6)==0)
 		) {
-			proxy_error("[WARNING]: Commands executed from Monitor interface in Admin Module: \"%s\"\n", query_no_space);
+			proxy_error("[WARNING]: Commands executed from stats interface in Admin Module: \"%s\"\n", query_no_space);
 			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"Command not allowed");
 			run_query=false;
 		}
@@ -946,12 +946,12 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 __run_query:
 	if (run_query) {
 		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-		if (sess->monitor==false) {
+		if (sess->stats==false) {
 			SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		} else {
-			SPA->monitordb->execute("PRAGMA query_only = ON");
-			SPA->monitordb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			SPA->monitordb->execute("PRAGMA query_only = OFF");
+			SPA->statsdb->execute("PRAGMA query_only = ON");
+			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			SPA->statsdb->execute("PRAGMA query_only = OFF");
 		}
 		SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
 	}
@@ -1204,8 +1204,8 @@ __end_while_pool:
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=1; socket_names[nfds]=strdup(sn); nfds++; }
 			}
-			for (j=0; j<S_amll.ifaces_telnet_monitor->ifaces->len; j++) {
-				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_monitor->ifaces->index(j);
+			for (j=0; j<S_amll.ifaces_telnet_stats->ifaces->len; j++) {
+				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_stats->ifaces->index(j);
 				c_split_2(sn, ":" , &add, &port);
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=2; socket_names[nfds]=strdup(sn); nfds++; }
@@ -1227,7 +1227,7 @@ __end_while_pool:
 private:
 volatile int main_shutdown;
 SQLite3DB *admindb;	// in memory
-SQLite3DB *monitordb;	// in memory
+SQLite3DB *statsdb;	// in memory
 SQLite3DB *configdb; // on disk
 //SQLite3DB *db3;
 
@@ -1251,10 +1251,10 @@ Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
 		exit(EXIT_FAILURE);
 	}
 	variables.admin_credentials=strdup("admin:admin");
-	variables.monitor_credentials=strdup("monitor:monitor");
+	variables.stats_credentials=strdup("stats:stats");
 	variables.mysql_ifaces=strdup("127.0.0.1:6032");
 	variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
-	variables.telnet_monitor_ifaces=strdup("127.0.0.1:6031");
+	variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
 #ifdef DEBUG
 	variables.debug=false;
@@ -1310,14 +1310,14 @@ bool Standard_ProxySQL_Admin::init() {
 
 	admindb=new SQLite3DB();
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-	monitordb=new SQLite3DB();
-	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	statsdb=new SQLite3DB();
+	statsdb->open((char *)"file:mem_statsdb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	configdb=new SQLite3DB();
 	configdb->open((char *)"proxysql.db", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
 
 	tables_defs_admin=new std::vector<table_def_t *>;
-	tables_defs_monitor=new std::vector<table_def_t *>;
+	tables_defs_stats=new std::vector<table_def_t *>;
 	tables_defs_config=new std::vector<table_def_t *>;
 
 //	insert_into_tables_defs(tables_defs_admin,"mysql_server_status", ADMIN_SQLITE_TABLE_MYSQL_SERVER_STATUS);
@@ -1368,10 +1368,10 @@ bool Standard_ProxySQL_Admin::init() {
 
 //	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
 //	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
-//	S_amll.update_ifaces(variables.telnet_monitor_ifaces, &S_amll.descriptor_new.telnet_monitor_ifaces);
+//	S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.descriptor_new.telnet_stats_ifaces);
 	S_amll.update_ifaces(variables.mysql_ifaces, S_amll.ifaces_mysql);
 	S_amll.update_ifaces(variables.telnet_admin_ifaces, S_amll.ifaces_telnet_admin);
-	S_amll.update_ifaces(variables.telnet_monitor_ifaces, S_amll.ifaces_telnet_monitor);
+	S_amll.update_ifaces(variables.telnet_stats_ifaces, S_amll.ifaces_telnet_stats);
 
 	
 	//fill_table__server_status(admindb);
@@ -1400,7 +1400,7 @@ void Standard_ProxySQL_Admin::admin_shutdown() {
 //	do { usleep(50); } while (main_shutdown==0);
 	pthread_join(admin_thr, NULL);
 	delete admindb;
-	delete monitordb;
+	delete statsdb;
 	delete configdb;
 	sqlite3_shutdown();
 	if (main_poll_fds) {
@@ -1645,10 +1645,10 @@ char * Standard_ProxySQL_Admin::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
 	if (!strcmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
-	if (!strcmp(name,"monitor_credentials")) return strdup(variables.monitor_credentials);
+	if (!strcmp(name,"stats_credentials")) return strdup(variables.stats_credentials);
 	if (!strcmp(name,"mysql_ifaces")) return strdup(variables.mysql_ifaces);
 	if (!strcmp(name,"telnet_admin_ifaces")) return strdup(variables.telnet_admin_ifaces);
-	if (!strcmp(name,"telnet_monitor_ifaces")) return strdup(variables.telnet_monitor_ifaces);
+	if (!strcmp(name,"telnet_stats_ifaces")) return strdup(variables.telnet_stats_ifaces);
 	if (!strcmp(name,"refresh_interval")) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
@@ -1734,24 +1734,24 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"monitor_credentials")) {
+	if (!strcmp(name,"stats_credentials")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.monitor_credentials==NULL) || strcmp(variables.monitor_credentials,value) ) update_creds=true;
-			if (update_creds && variables.monitor_credentials) {
+			if ((variables.stats_credentials==NULL) || strcmp(variables.stats_credentials,value) ) update_creds=true;
+			if (update_creds && variables.stats_credentials) {
 #ifdef DEBUG
-				delete_credentials((char *)"monitor",variables.monitor_credentials);
+				delete_credentials((char *)"stats",variables.stats_credentials);
 #else
-				delete_credentials(variables.monitor_credentials);
+				delete_credentials(variables.stats_credentials);
 #endif /* DEBUG */
 			}
-			free(variables.monitor_credentials);
-			variables.monitor_credentials=strdup(value);
-			if (update_creds && variables.monitor_credentials) {
+			free(variables.stats_credentials);
+			variables.stats_credentials=strdup(value);
+			if (update_creds && variables.stats_credentials) {
 #ifdef DEBUG
-				add_credentials((char *)"admin",variables.monitor_credentials, MONITOR_HOSTGROUP);
+				add_credentials((char *)"admin",variables.stats_credentials, STATS_HOSTGROUP);
 #else
-				add_credentials(variables.monitor_credentials, MONITOR_HOSTGROUP);
+				add_credentials(variables.stats_credentials, STATS_HOSTGROUP);
 #endif /* DEBUG */
 			}
 			return true;
@@ -1789,15 +1789,15 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"telnet_monitor_ifaces")) {
+	if (!strcmp(name,"telnet_stats_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.telnet_monitor_ifaces==NULL) || strcmp(variables.telnet_monitor_ifaces,value) ) update_creds=true;
-			free(variables.telnet_monitor_ifaces);
-			variables.telnet_monitor_ifaces=strdup(value);
-			if (update_creds && variables.telnet_monitor_ifaces) {
-				//S_amll.update_ifaces(variables.telnet_monitor_ifaces, &S_amll.descriptor_new.telnet_monitor_ifaces);
-				S_amll.update_ifaces(variables.telnet_monitor_ifaces, S_amll.ifaces_telnet_monitor);
+			if ((variables.telnet_stats_ifaces==NULL) || strcmp(variables.telnet_stats_ifaces,value) ) update_creds=true;
+			free(variables.telnet_stats_ifaces);
+			variables.telnet_stats_ifaces=strdup(value);
+			if (update_creds && variables.telnet_stats_ifaces) {
+				//S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.descriptor_new.telnet_stats_ifaces);
+				S_amll.update_ifaces(variables.telnet_stats_ifaces, S_amll.ifaces_telnet_stats);
 			}
 			return true;
 		} else {
@@ -1805,10 +1805,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 		}
 	}
 /*
-	if (!strcmp(name,"monitor_credentials")) {
+	if (!strcmp(name,"stats_credentials")) {
 		if (vallen) {
-			free(variables.monitor_credentials);
-			variables.monitor_credentials=strdup(value);
+			free(variables.stats_credentials);
+			variables.stats_credentials=strdup(value);
 			return true;
 		} else {
 			return false;
@@ -2064,10 +2064,10 @@ void Standard_ProxySQL_Admin::init_mysql_query_rules() {
 void Standard_ProxySQL_Admin::add_admin_users() {
 #ifdef DEBUG
 	add_credentials((char *)"admin",variables.admin_credentials, ADMIN_HOSTGROUP);
-	add_credentials((char *)"monitor",variables.monitor_credentials, MONITOR_HOSTGROUP);
+	add_credentials((char *)"stats",variables.stats_credentials, STATS_HOSTGROUP);
 #else
 	add_credentials(variables.admin_credentials, ADMIN_HOSTGROUP);
-	add_credentials(variables.monitor_credentials, MONITOR_HOSTGROUP);
+	add_credentials(variables.stats_credentials, STATS_HOSTGROUP);
 #endif /* DEBUG */
 }
 

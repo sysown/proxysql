@@ -377,13 +377,13 @@ struct _global_variables_t {
 	int stack_size;
 	char *proxy_admin_socket;
 	char *proxy_mysql_bind;
-	char *proxy_admin_bind;
-	char *proxy_monitor_bind;
-	int proxy_mysql_port;
-	int proxy_admin_port;
-	int proxy_monitor_port;
-	int proxy_admin_refresh_status_interval;
-	int proxy_monitor_refresh_status_interval;
+	char *proxy_admin_bind;	// FIXME: to remove
+	char *proxy_stats_bind; // FIXME: to remove
+	int proxy_mysql_port;	// FIXME: to remove
+	int proxy_admin_port;	// FIXME: to remove
+	int proxy_stats_port;	// FIXME: to remove
+	int proxy_admin_refresh_status_interval; // FIXME: to remove
+	int proxy_stats_refresh_status_interval; // FIXME: to remove
 	//int proxy_flush_status_interval;
 	int backlog;
 	//int print_statistics_interval;
@@ -421,8 +421,8 @@ struct _global_variables_t {
 
 	char *proxy_admin_user;
 	char *proxy_admin_password;
-	char *proxy_monitor_user;
-	char *proxy_monitor_password;
+	//char *proxy_monitor_user;
+	//char *proxy_monitor_password;
 
 	char *mysql_default_schema;
 	char *mysql_socket;
