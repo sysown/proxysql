@@ -775,13 +775,27 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	if (sess->monitor==true) {
+		if (
+			(strncasecmp("PRAGMA",query_no_space,6)==0)
+			||
+			(strncasecmp("ATTACH",query_no_space,6)==0)
+		) {
+			proxy_error("[WARNING]: Commands executed from Monitor interface in Admin Module: \"%s\"\n", query_no_space);
+			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"Command not allowed");
+			run_query=false;
+		}
+	}
+
 __run_query:
 	if (run_query) {
 		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 		if (sess->monitor==false) {
 			SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		} else {
+			SPA->monitordb->execute("PRAGMA query_only = ON");
 			SPA->monitordb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			SPA->monitordb->execute("PRAGMA query_only = OFF");
 		}
 		SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
 	}
