@@ -12,7 +12,8 @@ int listen_on_port(char *ip, uint16_t port, int backlog) {
 	// create a socket
 	if ( (sd = socket(PF_INET, SOCK_STREAM, 0)) < 0 ) {
 		proxy_error("Error on creating socket\n");
-		exit(EXIT_FAILURE);
+		close(sd);
+		return -1;
 	}
 
 	// set SO_REUSEADDR
@@ -29,13 +30,15 @@ int listen_on_port(char *ip, uint16_t port, int backlog) {
 	// call bind() to bind the socket on the specified address
 	if ( bind(sd, (struct sockaddr*)&addr, sizeof(addr)) != 0 ) {
 		proxy_error("Error on Bind , address %s:%d\n", ip, port);
-		exit(EXIT_FAILURE);
+		close(sd);
+		return -1;
 	}
 
 	// define the backlog
 	if ( listen(sd, backlog) != 0 ) {
 		proxy_error("Error on Listen , address %s:%d\n", ip, port);
-		exit(EXIT_FAILURE);
+		close(sd);
+		return -1;
 	}
 
 	// return the socket
@@ -55,13 +58,15 @@ int listen_on_unix(char *path, int backlog) {
 	r=unlink(path);
 	if ( (r==-1) && (errno!=ENOENT) ) {
 		proxy_error("Error unlink Unix Socket %s", path);
-		exit(EXIT_FAILURE);
+		close(sd);
+		return -1;
 	}
 
 	// create a socket
 	if ( ( sd = socket(AF_UNIX, SOCK_STREAM, 0)) <0 ) {
 		proxy_error("Error on creating socket\n");
-		exit(EXIT_FAILURE);
+		close(sd);
+		return -1;
 	}
 
 	memset(&serveraddr, 0, sizeof(serveraddr));
@@ -71,13 +76,15 @@ int listen_on_unix(char *path, int backlog) {
 	// call bind() to bind the socket on the specified file
 	if ( bind(sd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr_un)) != 0 ) {
 		proxy_error("Error on Bind , Unix Socket %s\n", path);
-		exit(EXIT_FAILURE);
+		close(sd);
+		return -1;
 	}
 
 	// define the backlog
 	if ( listen(sd, backlog) != 0 ) {
 		proxy_error("Error on Listen , Unix Socket %s\n", path);
-		exit(EXIT_FAILURE);
+		close(sd);
+		return -1;
 	}
 
 	// change the permission on socket

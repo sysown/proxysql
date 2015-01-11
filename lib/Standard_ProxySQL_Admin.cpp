@@ -287,6 +287,9 @@ class ifaces_desc {
 	~ifaces_desc() {
 		while(ifaces->len) {
 			char *d=(char *)ifaces->remove_index_fast(0);
+			char *add=NULL; char *port=NULL;
+      c_split_2(d, ":" , &add, &port);
+      if (atoi(port)==0) { unlink(add); }
 			free(d);
 		}
 		delete ifaces;
@@ -1271,7 +1274,7 @@ void Standard_ProxySQL_Admin::print_version() {
 };
 
 bool Standard_ProxySQL_Admin::init() {
-	int i;
+	//int i;
 	size_t mystacksize=256*1024;
 
 	child_func[0]=child_mysql;
