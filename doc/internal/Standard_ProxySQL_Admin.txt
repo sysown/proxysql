@@ -1,0 +1,7 @@
+Standard_ProxySQL_Admin.cpp contains the code that current implements the Admin Module.
+
+Currently it is in alpha stage (a lot of implementation details will change)
+and is implemented as the follow:
+
+main() calls create_ProxySQL_Admin() : this create a new object
+Standard_ProxySQL_Admin, that then calls init() .
