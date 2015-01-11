@@ -738,19 +738,18 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	//fprintf(stderr,"%s----\n",query_no_space);
 
 
-
-	if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
-		run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
-		goto __run_query;
+	if (sess->monitor==false) {
+		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
+			run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
+			goto __run_query;
+		}
+		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) { 
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
+			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);	
+			goto __run_query;
+		}
 	}
-
-	if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) { 
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
-		run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);	
-		goto __run_query;
-	}
-
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')");
