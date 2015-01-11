@@ -66,6 +66,10 @@ typedef struct { char * table_name; char * table_def; } table_def_t;
 static char * admin_variables_names[]= {
   (char *)"admin_credentials",
   (char *)"monitor_credentials",
+  (char *)"mysql_ifaces",
+  (char *)"telnet_admin_ifaces",
+  (char *)"telnet_monitor_ifaces",
+  (char *)"mysql_ifaces",
   (char *)"refresh_interval",
 #ifdef DEBUG
   (char *)"debug",
@@ -146,6 +150,9 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 		char *admin_credentials;
 		char *monitor_credentials;
 		int refresh_interval;
+		char *mysql_ifaces;
+		char *telnet_admin_ifaces;
+		char *telnet_monitor_ifaces;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -239,9 +246,155 @@ typedef struct _main_args {
 	volatile int *shutdown;
 } main_args;
 
+/*
+struct _admin_main_loop_listeners_t {
+	int nfds;
+	struct pollfd *fds;
+	int *callback_func;
+	char **descriptor;
+};
+typedef struct _admin_main_loop_listeners_t admin_main_loop_listeners_t;
+
+static _admin_main_loop_listeners_t admin_main_loop_listeners;
+*/
+
+typedef struct _ifaces_desc_t {
+		char **mysql_ifaces;
+		char **telnet_admin_ifaces;
+		char **telnet_monitor_ifaces;
+} ifaces_desc_t;
 
 
 
+#define MAX_IFACES	8
+#define MAX_ADMIN_LISTENERS 16
+
+class ifaces_desc {
+	public:
+	PtrArray *ifaces;
+	ifaces_desc() {
+		ifaces=new PtrArray();
+	}
+	bool add(const char *iface) {
+		for (unsigned int i=0; i<ifaces->len; i++) {
+			if (strcmp((const char *)ifaces->index(i),iface)==0) {
+				return false;
+			}
+		}
+		ifaces->add(strdup(iface));
+		return true;
+	}
+	~ifaces_desc() {
+		while(ifaces->len) {
+			char *d=(char *)ifaces->remove_index_fast(0);
+			free(d);
+		}
+		delete ifaces;
+	}
+};
+
+class admin_main_loop_listeners {
+	private:
+	int version;
+	rwlock_t rwlock;
+
+	char ** reset_ifaces(char **ifaces) {
+		int i;
+		if (ifaces) {
+			for (i=0; i<MAX_IFACES; i++) {
+				if (ifaces[i]) free(ifaces[i]);
+			}
+		} else {
+			ifaces=(char **)malloc(sizeof(char *)*MAX_IFACES);
+		}
+		for (i=0; i<MAX_IFACES; i++) {
+			ifaces[i]=NULL;
+		}
+		return ifaces;
+	}
+	
+
+	public:
+	int nfds;
+	struct pollfd *fds;
+	int *callback_func;
+	int get_version() { return version; }
+	void wrlock() { spin_wrlock(&rwlock); }
+	void wrunlock() { spin_wrunlock(&rwlock); }
+//	ifaces_desc_t descriptor_old;
+//	ifaces_desc_t descriptor_new_copy;
+	ifaces_desc *ifaces_mysql;
+	ifaces_desc *ifaces_telnet_admin;
+	ifaces_desc *ifaces_telnet_monitor;
+	ifaces_desc_t descriptor_new;
+	admin_main_loop_listeners() {
+		spinlock_rwlock_init(&rwlock);
+		ifaces_mysql=new ifaces_desc();
+		ifaces_telnet_admin=new ifaces_desc();
+		ifaces_telnet_monitor=new ifaces_desc();
+		version=0;
+//		descriptor_old.mysql_ifaces=NULL;
+//		descriptor_old.telnet_admin_ifaces=NULL;
+//		descriptor_old.telnet_monitor_ifaces=NULL;
+//		descriptor_new_copy.mysql_ifaces=NULL;
+//		descriptor_new_copy.telnet_admin_ifaces=NULL;
+//		descriptor_new_copy.telnet_monitor_ifaces=NULL;
+		descriptor_new.mysql_ifaces=NULL;
+		descriptor_new.telnet_admin_ifaces=NULL;
+		descriptor_new.telnet_monitor_ifaces=NULL;
+	}
+
+
+	void update_ifaces(char *list, ifaces_desc *ifd) {
+		wrlock();
+		delete ifd;
+		ifd=new ifaces_desc();
+		int i=0;
+		tokenizer_t tok = tokenizer( list, ";", TOKENIZER_NO_EMPTIES );
+		const char* token;
+		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
+			ifd->add(token);
+			i++;
+		}
+		free_tokenizer( &tok );
+		version++;
+		wrunlock();
+	}
+
+
+	bool update_ifaces(char *list, char ***_ifaces) {
+		wrlock();
+		int i;
+		char **ifaces=*_ifaces;
+		tokenizer_t tok = tokenizer( list, ";", TOKENIZER_NO_EMPTIES );
+		const char* token;
+		ifaces=reset_ifaces(ifaces);
+		i=0;
+		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
+			ifaces[i]=(char *)malloc(strlen(token)+1);
+			strcpy(ifaces[i],token);
+			i++;
+		}
+		free_tokenizer( &tok );
+		version++;
+		wrunlock();
+		return true;
+	}
+/*
+	void copy_new_descriptors(ifaces_desc_t *src, ifaces_desc_t *dst, bool also_lock) {
+		if (also_lock) { wrlock(); }
+		dst->mysql_ifaces=reset_ifaces(dst->mysql_ifaces);
+		dst->telnet_admin_ifaces=reset_ifaces(dst->telnet_admin_ifaces);
+		dst->telnet_monitor_ifaces=reset_ifaces(dst->telnet_monitor_ifaces);
+		for (int i=0; i<MAX_IFACES; i++) { if (src->mysql_ifaces[i]) { dst->mysql_ifaces[i]=strdup(src->mysql_ifaces[i]); } }
+		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_admin_ifaces[i]) { dst->telnet_admin_ifaces[i]=strdup(src->telnet_monitor_ifaces[i]); } }
+		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_monitor_ifaces[i]) { dst->telnet_monitor_ifaces[i]=strdup(src->telnet_monitor_ifaces[i]); } }
+		if (also_lock) { wrunlock(); }
+	}
+*/
+};
+
+static admin_main_loop_listeners S_amll;
 /*
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
@@ -964,6 +1117,7 @@ void* child_telnet_also(void* arg)
 static void * admin_main_loop(void *arg)
 {
 	int i;
+	int version=0;
 	//size_t c;
 	//int sd;
 	struct sockaddr_in addr;
@@ -972,6 +1126,8 @@ static void * admin_main_loop(void *arg)
 	int nfds=((struct _main_args *)arg)->nfds;
 	int *callback_func=((struct _main_args *)arg)->callback_func;
 	volatile int *shutdown=((struct _main_args *)arg)->shutdown;
+	char *socket_names[MAX_ADMIN_LISTENERS];
+	for (i=0;i<MAX_ADMIN_LISTENERS;i++) { socket_names[i]=NULL; }
 	pthread_attr_t attr; 
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -1002,7 +1158,8 @@ static void * admin_main_loop(void *arg)
 		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
         // poll() timeout, try again
-        continue;
+			goto __end_while_pool;
+//        continue;
 		}
 		for (i=0;i<nfds;i++) {
 			if (fds[i].revents==POLLIN) {
@@ -1018,6 +1175,41 @@ static void * admin_main_loop(void *arg)
 			}
 			fds[i].revents=0;
 		}
+__end_while_pool:
+		if (S_amll.get_version()!=version) {
+			S_amll.wrlock();
+			version=S_amll.get_version();
+			//S_amll.copy_new_descriptors(&S_amll.descriptor_new, &S_amll.descriptor_new_copy, false);
+			for (i=0; i<nfds; i++) {
+				char *add=NULL; char *port=NULL;
+				close(fds[i].fd);
+				c_split_2(socket_names[i], ":" , &add, &port);
+				if (atoi(port)==0) { unlink(socket_names[i]); }
+			}
+			nfds=0;
+			unsigned int j;
+			i=0; j=0;
+			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
+				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
+				c_split_2(sn, ":" , &add, &port);
+				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
+				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
+			}
+			for (j=0; j<S_amll.ifaces_telnet_admin->ifaces->len; j++) {
+				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_admin->ifaces->index(j);
+				c_split_2(sn, ":" , &add, &port);
+				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
+				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=1; socket_names[nfds]=strdup(sn); nfds++; }
+			}
+			for (j=0; j<S_amll.ifaces_telnet_monitor->ifaces->len; j++) {
+				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_monitor->ifaces->index(j);
+				c_split_2(sn, ":" , &add, &port);
+				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
+				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=2; socket_names[nfds]=strdup(sn); nfds++; }
+			}
+			S_amll.wrunlock();	
+		}
+		
 	}
 	//if (__sync_add_and_fetch(shutdown,0)==0) __sync_add_and_fetch(shutdown,1);
 	free(arg);
@@ -1057,6 +1249,9 @@ Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
 	}
 	variables.admin_credentials=strdup("admin:admin");
 	variables.monitor_credentials=strdup("monitor:monitor");
+	variables.mysql_ifaces=strdup("127.0.0.1:6032");
+	variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
+	variables.telnet_monitor_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
 #ifdef DEBUG
 	variables.debug=false;
@@ -1087,9 +1282,11 @@ bool Standard_ProxySQL_Admin::init() {
 	main_poll_fds=NULL;
 	main_callback_func=NULL;
 
-	main_poll_nfds=10;
-	main_callback_func=(int *)malloc(sizeof(int)*main_poll_nfds);
-	main_poll_fds=(struct pollfd *)malloc(sizeof(struct pollfd)*main_poll_nfds);
+	main_callback_func=(int *)malloc(sizeof(int)*MAX_ADMIN_LISTENERS);
+	main_poll_fds=(struct pollfd *)malloc(sizeof(struct pollfd)*MAX_ADMIN_LISTENERS);
+	main_poll_nfds=0;
+/*
+	main_poll_nfds=0;
 	for (i=0;i<main_poll_nfds-1;i++) {
 		main_poll_fds[i].fd=listen_on_port((char *)"127.0.0.1",9900+i, 50);
 		main_poll_fds[i].events=POLLIN;
@@ -1101,7 +1298,7 @@ bool Standard_ProxySQL_Admin::init() {
 	main_poll_fds[i].events=POLLIN;
 	main_poll_fds[i].revents=0;
 	main_callback_func[i]=0;
-	
+*/
 
 	pthread_attr_t attr; 
   pthread_attr_init(&attr);
@@ -1164,6 +1361,15 @@ bool Standard_ProxySQL_Admin::init() {
 	__insert_or_replace_maintable_select_disktable();
 
 	flush_admin_variables___database_to_runtime(admindb,true);
+
+
+//	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
+//	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
+//	S_amll.update_ifaces(variables.telnet_monitor_ifaces, &S_amll.descriptor_new.telnet_monitor_ifaces);
+	S_amll.update_ifaces(variables.mysql_ifaces, S_amll.ifaces_mysql);
+	S_amll.update_ifaces(variables.telnet_admin_ifaces, S_amll.ifaces_telnet_admin);
+	S_amll.update_ifaces(variables.telnet_monitor_ifaces, S_amll.ifaces_telnet_monitor);
+
 	
 	//fill_table__server_status(admindb);
 	//fill_table__server_status(configdb);
@@ -1308,12 +1514,12 @@ void Standard_ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite
 					char q[1000];
 					if (val) {
 						proxy_error("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"%s\",\"%s\")",r->fields[0],val);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"admin-%s\",\"%s\")",r->fields[0],val);
 						db->execute(q);
 						free(val);
 					} else {
 						proxy_error("Impossible to set not existing variable %s with value \"%s\". Deleting\n", r->fields[0],r->fields[1]);
-						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"%s\"",r->fields[0]);
+						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"admin-%s\"",r->fields[0]);
 						db->execute(q);
 					}
 				}
@@ -1350,12 +1556,12 @@ void Standard_ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite
 					char q[1000];
 					if (val) {
 						proxy_error("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"%s\",\"%s\")",r->fields[0],val);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
 						db->execute(q);
 						free(val);
 					} else {
 						proxy_error("Impossible to set not existing variable %s with value \"%s\". Deleting\n", r->fields[0],r->fields[1]);
-						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"%s\"",r->fields[0]);
+						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
 						db->execute(q);
 					}
 				}
@@ -1437,6 +1643,9 @@ char * Standard_ProxySQL_Admin::get_variable(char *name) {
 	char intbuf[INTBUFSIZE];
 	if (!strcmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
 	if (!strcmp(name,"monitor_credentials")) return strdup(variables.monitor_credentials);
+	if (!strcmp(name,"mysql_ifaces")) return strdup(variables.mysql_ifaces);
+	if (!strcmp(name,"telnet_admin_ifaces")) return strdup(variables.telnet_admin_ifaces);
+	if (!strcmp(name,"telnet_monitor_ifaces")) return strdup(variables.telnet_monitor_ifaces);
 	if (!strcmp(name,"refresh_interval")) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
@@ -1541,6 +1750,51 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 #else
 				add_credentials(variables.monitor_credentials, MONITOR_HOSTGROUP);
 #endif /* DEBUG */
+			}
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcmp(name,"mysql_ifaces")) {
+		if (vallen) {
+			bool update_creds=false;
+			if ((variables.mysql_ifaces==NULL) || strcmp(variables.mysql_ifaces,value) ) update_creds=true;
+			free(variables.mysql_ifaces);
+			variables.mysql_ifaces=strdup(value);
+			if (update_creds && variables.mysql_ifaces) {
+				//S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
+				S_amll.update_ifaces(variables.mysql_ifaces, S_amll.ifaces_mysql);
+			}
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcmp(name,"telnet_admin_ifaces")) {
+		if (vallen) {
+			bool update_creds=false;
+			if ((variables.telnet_admin_ifaces==NULL) || strcmp(variables.telnet_admin_ifaces,value) ) update_creds=true;
+			free(variables.telnet_admin_ifaces);
+			variables.telnet_admin_ifaces=strdup(value);
+			if (update_creds && variables.telnet_admin_ifaces) {
+				//S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
+				S_amll.update_ifaces(variables.telnet_admin_ifaces, S_amll.ifaces_telnet_admin);
+			}
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcmp(name,"telnet_monitor_ifaces")) {
+		if (vallen) {
+			bool update_creds=false;
+			if ((variables.telnet_monitor_ifaces==NULL) || strcmp(variables.telnet_monitor_ifaces,value) ) update_creds=true;
+			free(variables.telnet_monitor_ifaces);
+			variables.telnet_monitor_ifaces=strdup(value);
+			if (update_creds && variables.telnet_monitor_ifaces) {
+				//S_amll.update_ifaces(variables.telnet_monitor_ifaces, &S_amll.descriptor_new.telnet_monitor_ifaces);
+				S_amll.update_ifaces(variables.telnet_monitor_ifaces, S_amll.ifaces_telnet_monitor);
 			}
 			return true;
 		} else {
