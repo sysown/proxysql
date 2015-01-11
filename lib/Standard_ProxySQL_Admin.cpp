@@ -193,7 +193,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void add_credentials(char *type, char *credentials, int hostgroup_id);
 	void delete_credentials(char *type, char *credentials);
 #else
-	void add_credentials(char *type, char *credentials, int hostgroup_id);
+	void add_credentials(char *credentials, int hostgroup_id);
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 

@@ -5,7 +5,8 @@
 #include <string.h>
 
 #include "c_tokenizer.h"
-
+/*
+// commented for issue #137
 #ifndef strdup
 #define strdup sdup
 static char* sdup( const char* s )
@@ -15,10 +16,11 @@ static char* sdup( const char* s )
 	return p ? memcpy( p, s, n ) : NULL;
 }
 #endif
-
+*/
 tokenizer_t tokenizer( const char* s, const char* delimiters, int empties )
 {
-	char* strdup( const char* );
+//	Commented for issue #137
+//	char* strdup( const char* );
 
 	tokenizer_t result;
 
