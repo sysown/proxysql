@@ -916,6 +916,20 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);	
 			goto __run_query;
 		}
+		if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
+			strA=query_no_space+17;
+			strAl=strlen(strA);
+			strB=(char *)"SELECT name AS tables FROM %s.sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')";
+			strBl=strlen(strB);
+			int l=strBl+strAl-2;
+			char *b=(char *)l_alloc(l+1);
+			snprintf(b,l+1,strB,strA);
+			b[l]=0;
+			l_free(query_length,query);
+			query=b;
+			query_length=l+1;
+			goto __run_query;
+		}
 	}
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -932,12 +946,10 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		int tblnamelen=query_no_space_length-strAl;
 		int l=strBl+tblnamelen-2;
 		char *buff=(char *)l_alloc(l+1);
-		snprintf(buff,l,strB,query_no_space+strAl);
-		buff[l-1]='\'';
+		snprintf(buff,l+1,strB,query_no_space+strAl);
 		buff[l]=0;
 		l_free(query_length,query);
 		query=buff;
-		//fprintf(stderr,"%s----\n",query);
 		query_length=l+1;
 		goto __run_query;
 	}
