@@ -282,5 +282,6 @@ __EXTERN __thread char *mysql_thread___default_schema;
 __EXTERN __thread char *mysql_thread___server_version;
 __EXTERN __thread uint16_t mysql_thread___server_capabilities;
 __EXTERN __thread int mysql_thread___poll_timeout;
+__EXTERN __thread int mysql_thread___servers_stats;
 
 #endif /* __CLASS_MYSQL_THREAD_H */

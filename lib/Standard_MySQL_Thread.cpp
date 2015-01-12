@@ -177,6 +177,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+	(char *)"servers_stats",
 	(char *)"stacksize",
 	(char *)"threads",
 	NULL
@@ -193,6 +194,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	struct {
 		char *default_schema;
 		char *server_version;
+		bool servers_stats;
 		uint16_t server_capabilities;
 		int poll_timeout;
 	} variables;
@@ -207,6 +209,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		variables.server_version=strdup((char *)"5.1.30");
 		variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 		variables.poll_timeout=2000;
+		variables.servers_stats=true;
 		__global_MySQL_Thread_Variables_version=1;
 	}
 	virtual ~Standard_MySQL_Threads_Handler() {
@@ -238,6 +241,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		return 0;
 	}
 	int get_variable_int(char *name) {
+		if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
 		if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
 		if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 		proxy_error("Not existing variable: %s\n", name); assert(0);
@@ -265,6 +269,9 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		if (!strcmp(name,"stacksize")) {
 			sprintf(intbuf,"%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 			return strdup(intbuf);
+		}
+		if (!strcmp(name,"servers_stats")) {
+			return strdup((variables.servers_stats ? "true" : "false"));
 		}
 		return NULL;
 	}	
@@ -337,7 +344,17 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 				return false;
 			}
 		}
-
+		if (!strcmp(name,"servers_stats")) {
+			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+				variables.servers_stats=true;
+				return true;
+			}
+			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+				variables.servers_stats=false;
+				return true;
+			}
+			return false;
+		}
 		return false;
 	}
 
@@ -420,6 +437,7 @@ void refresh_variables() {
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	GloMTH->wrunlock();
 }
 
