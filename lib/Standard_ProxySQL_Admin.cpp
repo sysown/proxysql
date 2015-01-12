@@ -184,7 +184,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 
 	void __add_active_users(enum cred_username_type usertype);
 	void __delete_inactive_users(enum cred_username_type usertype);
-	void add_default_user(char *, char *);
+//	void add_default_user(char *, char *);
 	void add_admin_users();
 	void __refresh_users();
 
@@ -2306,6 +2306,8 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	free(query);
 }
 
+/*
+// deprecated, see issue #129
 void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
 	char *error=NULL;
 	int cols=0;
@@ -2326,16 +2328,15 @@ void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
 	if (matching_rows<1000) { // FIXME, SMALL HACK
 		GloMyAuth->add(user,password, USERNAME_FRONTEND, false , -1, true);
 		proxy_error("Adding default user. Username=%s, Password=%s\n", user,password);
-/*
 		admindb->execute("PRAGMA foreign_keys = OFF");
 		char *str1=(char *)"INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,transaction_persistent,backend,frontend) VALUES('%s','%s',1,0,0,0,0,1)";
 		char *query=(char *)malloc(strlen(str1)+strlen(user)+strlen(password));
 		sprintf(query,str1,user,password);
 		admindb->execute(query);
 		admindb->execute("PRAGMA foreign_keys = ON");
-*/
 	}
 }
+*/
 
 
 void Standard_ProxySQL_Admin::save_mysql_users_runtime_to_database() {
