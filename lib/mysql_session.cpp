@@ -754,15 +754,17 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
 							if (qpo) {
+								if (qpo->cache_ttl>0) { // Fixed bug #145
+									client_myds->PSarrayOUT->copy_add(server_myds->resultset,0,server_myds->resultset->len);
+									unsigned char *aa=server_myds->resultset2buffer(false);
+									while (server_myds->resultset->len) server_myds->resultset->remove_index(server_myds->resultset->len-1,NULL);	
+									GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,server_myds->resultset_length,30);
+									l_free(server_myds->resultset_length,aa);
+									server_myds->resultset_length=0;
+									l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
+								}
 								GloQPro->delete_QP_out(qpo);
 								qpo=NULL;
-								client_myds->PSarrayOUT->copy_add(server_myds->resultset,0,server_myds->resultset->len);
-								unsigned char *aa=server_myds->resultset2buffer(false);
-								while (server_myds->resultset->len) server_myds->resultset->remove_index(server_myds->resultset->len-1,NULL);	
-								GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,server_myds->resultset_length,30);
-								l_free(server_myds->resultset_length,aa);
-								server_myds->resultset_length=0;
-								l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
 							}
 						}
 						break;

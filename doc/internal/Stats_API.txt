@@ -1,0 +1,19 @@
+
+
+
+This API should be simple.
+Each module should collect statistics and stores them internally, preferibly
+in a table format because this is how Admin will expect the results.
+
+Each module should implement 2 functions:
+- stats_get_tables_list() returns an array of pointer to variables name, where
+  the last element is NULL;
+- stat_get_table() returns the content of such table in the form of a
+  SQLite3_result resultset
+
+
+Important note:
+The reads should be considered in read committed isolation level. It is not
+possible to read multiple tables at the same time, therefore it is possible
+that the relation between these tables are not consistent. Due the temporary
+nature of statistics information, this glitch is absolutely expected.

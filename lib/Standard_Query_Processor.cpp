@@ -11,6 +11,102 @@
 #define QUERY_PROCESSOR_VERSION "0.1.728"
 
 
+#define strdup_null(__c) ( __c ? strdup(__c) : __c )
+#define char_malloc (char *)malloc
+#define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
+
+#define itostr(__s, __i)  { __s=char_malloc(16); sprintf(__s, "%d", __i); }
+
+class QP_rule_text_hitsonly {
+	public:
+	char **pta;
+	QP_rule_text_hitsonly(QP_rule_t *QPr) {
+		pta=NULL;
+		pta=(char **)malloc(sizeof(char *)*2);
+		itostr(pta[0], QPr->rule_id);
+		itostr(pta[1], QPr->hits);
+	}
+	~QP_rule_text_hitsonly() {
+		for(int i=0; i<2; i++) {
+			free_null(pta[i]);
+		}
+		free(pta);
+	}
+};
+
+class QP_rule_text {
+	public:
+	char **pta;
+/*
+	char * rule_id;
+	char * active;
+	char * username;
+	char * schemaname;
+	char * flagIN;
+	char * match_pattern;
+	char * negate_match_pattern;
+	char * flagOUT;
+	char * replace_pattern;
+	char * destination_hostgroup;
+	char * cache_ttl;
+	char * apply;
+	char * hits;
+*/
+	QP_rule_text(QP_rule_t *QPr) {
+		pta=NULL;
+		pta=(char **)malloc(sizeof(char *)*13);
+		itostr(pta[0], QPr->rule_id);
+		itostr(pta[1], QPr->active);
+		pta[2]=strdup_null(QPr->username);
+		pta[3]=strdup_null(QPr->schemaname);
+		itostr(pta[4], QPr->flagIN);
+		pta[5]=strdup_null(QPr->match_pattern);
+		itostr(pta[6], QPr->negate_match_pattern);
+		itostr(pta[7], QPr->flagOUT);
+		pta[8]=strdup_null(QPr->replace_pattern);
+		itostr(pta[9], QPr->destination_hostgroup);
+		itostr(pta[10], QPr->cache_ttl);
+		itostr(pta[11], QPr->apply);
+		itostr(pta[12], QPr->hits);
+/*
+		itostr(rule_id, QPr->rule_id);
+		itostr(active, QPr->active);
+		username=strdup_null(QPr->username);
+		schemaname=strdup_null(QPr->schemaname);
+		itostr(flagIN, QPr->flagIN);
+		match_pattern=strdup_null(QPr->match_pattern);
+		itostr(negate_match_pattern, QPr->negate_match_pattern);
+		itostr(flagOUT, QPr->flagOUT);
+		replace_pattern=strdup_null(QPr->replace_pattern);
+		itostr(destination_hostgroup, QPr->destination_hostgroup);
+		itostr(cache_ttl, QPr->cache_ttl);
+		itostr(apply, QPr->apply);
+		itostr(hits, QPr->hits);
+*/
+	}
+	~QP_rule_text() {
+		for(int i=0; i<13; i++) {
+			free_null(pta[i]);
+		}
+		free(pta);
+/*
+		free_null(rule_id);
+		free_null(active);
+		free_null(username);
+		free_null(schemaname);
+		free_null(flagIN);
+		free_null(match_pattern);
+		free_null(negate_match_pattern);
+		free_null(flagOUT);
+		free_null(replace_pattern);
+  	free_null(destination_hostgroup);
+		free_null(cache_ttl);
+		free_null(apply);
+		free_null(hits);
+*/
+	}
+};
+
 
 struct __RE2_objects_t {
 	re2::RE2::Options *opt;
@@ -191,6 +287,56 @@ virtual void commit() {
 };
 
 
+virtual SQLite3_result * get_stats_query_rules() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping query rules statistics, using Global version %d\n", version);
+	SQLite3_result *result=new SQLite3_result(2);
+	spin_rdlock(&rwlock);
+	QP_rule_t *qr1;
+	result->add_column_definition(SQLITE_TEXT,"rule_id");
+	result->add_column_definition(SQLITE_TEXT,"hits");
+	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
+		qr1=*it;
+		if (qr1->active) {
+			QP_rule_text_hitsonly *qt=new QP_rule_text_hitsonly(qr1);
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping Query Rule id: %d\n", qr1->rule_id);
+			result->add_row(qt->pta);
+			delete qt;
+		}
+	}
+	spin_rdunlock(&rwlock);
+	return result;
+}
+
+virtual SQLite3_result * get_current_query_rules() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
+	SQLite3_result *result=new SQLite3_result(13);
+	spin_rdlock(&rwlock);
+	QP_rule_t *qr1;
+	result->add_column_definition(SQLITE_TEXT,"rule_id");
+	result->add_column_definition(SQLITE_TEXT,"active");
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"flagIN");
+	result->add_column_definition(SQLITE_TEXT,"match_pattern");
+	result->add_column_definition(SQLITE_TEXT,"negate_match_pattern");
+	result->add_column_definition(SQLITE_TEXT,"flagOUT");
+	result->add_column_definition(SQLITE_TEXT,"replace_pattern");
+	result->add_column_definition(SQLITE_TEXT,"destination_hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"cache_ttl");
+	result->add_column_definition(SQLITE_TEXT,"apply");
+	result->add_column_definition(SQLITE_TEXT,"hits");
+	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
+		qr1=*it;
+		QP_rule_text *qt=new QP_rule_text(qr1);
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping Query Rule id: %d\n", qr1->rule_id);
+		result->add_row(qt->pta);
+		delete qt;
+	}
+	spin_rdunlock(&rwlock);
+	return result;
+}
+
+
 virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
 	QP_out_t *ret=NULL;
 	unsigned int len=size-sizeof(mysql_hdr)-1;
@@ -210,6 +356,7 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 			if (qr1->active) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
 				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->apply);
+				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: \n", qr2->rule_id, qr2->match_pattern);
 					qr2->regex_engine=(void *)compile_query_rule(qr2);
@@ -272,6 +419,27 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 		//__sync_fetch_and	_add(&qr->hits,1);
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 			//ret=(QP_out_t *)malloc(sizeof(QP_out_t));
+
+{
+		// FIXME: this block of code is only for testing
+		if ((qr->hits%20)==0) {
+			spin_rdlock(&rwlock);
+			if (__sync_add_and_fetch(&version,0) == _thr_SQP_version) { // extra safety check to avoid race conditions
+				__sync_fetch_and_add(&qr->parent->hits,20);
+			}
+/*
+			QP_rule_t *qrg;
+			for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
+				qrg=*it;
+				if (qrg->rule_id==qr->rule_id) {
+					__sync_fetch_and_add(&qrg->hits,20);
+					break;
+				}
+			}
+*/
+			spin_rdunlock(&rwlock);
+		}
+}
 
 		if (qr->flagOUT >= 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);

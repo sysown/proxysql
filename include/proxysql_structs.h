@@ -197,6 +197,7 @@ class MySQL_Connection_Pool;
 class PtrArray;
 class ProxySQL_ConfigFile;
 class MySQL_Server;
+class SQLite3_result;
 //class MySQL_Servers;
 class MySQL_Hostgroup_Entry;
 class MySQL_Hostgroup;

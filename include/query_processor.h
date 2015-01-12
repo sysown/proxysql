@@ -17,7 +17,8 @@ struct _Query_Processor_rule_t {
 	int cache_ttl;
 	bool apply;
 	void *regex_engine;
-	uint64_t hits;
+	int hits;
+	struct _Query_Processor_rule_t *parent; // pointer to parent, to speed up parent update
 };
 
 
@@ -59,7 +60,11 @@ class Query_Processor {
 	virtual void init_thread() {};
 	virtual void end_thread() {};
 	virtual void commit() {};	// this applies all the changes in memory
+	virtual SQLite3_result * get_current_query_rules() {return NULL;};
+
+	virtual SQLite3_result * get_stats_query_rules() {return NULL;};	
 };
+
 
 typedef Query_Processor * create_Query_Processor_t();
 

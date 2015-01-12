@@ -20,6 +20,9 @@
 static volatile int load_main_=0;
 static volatile bool nostart_=false;
 
+static int __admin_refresh_interval=0;
+
+
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
@@ -41,6 +44,11 @@ pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend) , FOREIGN KEY (default_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0, FOREIGN KEY (destination_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
+
+
+#define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY, hits INT NOT NULL)"
+
+
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY, verbosity INT NOT NULL DEFAULT 0)"
@@ -171,7 +179,8 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void __insert_or_replace_maintable_select_disktable();
 	void __delete_disktable();
 	void __insert_or_replace_disktable_select_maintable();
-	void __attach_configdb_to_admindb();
+//	void __attach_configdb_to_admindb();
+	void __attach_db_to_admindb(SQLite3DB *db, char *alias);
 
 	void __add_active_users(enum cred_username_type usertype);
 	void __delete_inactive_users(enum cred_username_type usertype);
@@ -226,12 +235,16 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
+	void save_mysql_query_rules_from_runtime();
 
 	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
+
+
+	void stats___mysql_query_rules();
 
 };
 
@@ -779,7 +792,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-/*
 		if (
 			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES TO MEMORY") && !strncasecmp("SAVE MYSQL QUERY RULES TO MEMORY",query_no_space, query_no_space_length))
 			||
@@ -791,12 +803,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-			SPA->save_mysql_users_runtime_to_database();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
+			SPA->save_mysql_query_rules_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
 			return false;
 		}
-*/
 	}
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
@@ -1018,6 +1029,9 @@ void *child_mysql(void *arg) {
 
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 	sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
+
+	unsigned long oldtime=monotonic_time();
+	unsigned long curtime=monotonic_time();
 	
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -1026,7 +1040,17 @@ void *child_mysql(void *arg) {
 			fds[0].events=POLLIN;	
 		}
 		fds[0].revents=0;	
-		rc=poll(fds,nfds,2000);
+		//rc=poll(fds,nfds,2000);
+		rc=poll(fds,nfds,__sync_fetch_and_add(&__admin_refresh_interval,0));
+		{
+			//FIXME: cleanup this block
+			curtime=monotonic_time();
+			if (curtime>oldtime+__admin_refresh_interval) {
+				oldtime=curtime;
+				Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)GloAdmin;
+				SPA->stats___mysql_query_rules();
+			}
+		}
 		if (rc == -1) {
 			if (errno == EINTR) {
 				continue;
@@ -1343,10 +1367,16 @@ bool Standard_ProxySQL_Admin::init() {
 #endif /* DEBUG */
 
 
+	insert_into_tables_defs(tables_defs_stats,"mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
+
+
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);
+	check_and_build_standard_tables(statsdb, tables_defs_stats);
 
-	__attach_configdb_to_admindb();
+	//__attach_configdb_to_admindb();
+	__attach_db_to_admindb(configdb, (char *)"disk");
+	__attach_db_to_admindb(statsdb, (char *)"stats");
 #ifdef DEBUG
 	flush_debug_levels_runtime_to_database(configdb, false);
 	flush_debug_levels_runtime_to_database(admindb, true);
@@ -1819,6 +1849,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 		int intv=atoi(value);
 		if (intv > 100 && intv < 100000) {
 			variables.refresh_interval=intv;
+			__admin_refresh_interval=intv;
 			return true;
 		} else {
 			return false;
@@ -1840,6 +1871,55 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 	return false;
 }
 
+
+
+
+
+void Standard_ProxySQL_Admin::stats___mysql_query_rules() {
+	SQLite3_result * resultset=GloQPro->get_stats_query_rules();
+	if (resultset==NULL) return;
+//	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
+	statsdb->execute("DELETE FROM stats_mysql_query_rules");
+	char *a=(char *)"INSERT INTO stats_mysql_query_rules VALUES (\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<2; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1]);
+		//fprintf(stderr,"%s\n",query);
+		statsdb->execute(query);
+		free(query);
+	}
+	delete resultset;
+}
+
+void Standard_ProxySQL_Admin::save_mysql_query_rules_from_runtime() {
+	SQLite3_result * resultset=GloQPro->get_current_query_rules();
+	if (resultset==NULL) return;
+//	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
+	admindb->execute("DELETE FROM mysql_query_rules");
+	char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<12; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11]);
+		fprintf(stderr,"%s\n",query);
+		admindb->execute(query);
+		free(query);
+	}
+		
+	//admindb->execute("UPDATE mysql_query_rules SET username=NULL WHERE username=\"\"");
+	//admindb->execute("UPDATE mysql_query_rules SET schemaname=NULL WHERE schemaname=\"\"");
+	
+	delete resultset;
+}
 
 void Standard_ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
@@ -2039,11 +2119,19 @@ void Standard_ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 
 
 
-void Standard_ProxySQL_Admin::__attach_configdb_to_admindb() {
-	const char *a="ATTACH DATABASE '%s' AS disk";
+void Standard_ProxySQL_Admin::__attach_db_to_admindb(SQLite3DB *db, char *alias) {
+/*
+ * const char *a="ATTACH DATABASE '%s' AS disk";
 	int l=strlen(a)+strlen(configdb->get_url())+5;
 	char *cmd=(char *)malloc(l);
 	sprintf(cmd,a,configdb->get_url());
+	admindb->execute(cmd);
+	free(cmd);
+*/
+	const char *a="ATTACH DATABASE '%s' AS %s";
+	int l=strlen(a)+strlen(db->get_url())+strlen(alias)+5;
+	char *cmd=(char *)malloc(l);
+	sprintf(cmd,a,db->get_url(), alias);
 	admindb->execute(cmd);
 	free(cmd);
 }
