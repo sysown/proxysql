@@ -1281,7 +1281,7 @@ Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
 	variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
 #ifdef DEBUG
-	variables.debug=false;
+	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
 };
 
@@ -1858,11 +1858,13 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 #ifdef DEBUG
 	if (!strcmp(name,"debug")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.debug=1;
+			variables.debug=true;
+			GloVars.global.gdbg=true;
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.debug=0;
+			variables.debug=false;
+			GloVars.global.gdbg=false;
 			return true;
 		}
 		return false;
