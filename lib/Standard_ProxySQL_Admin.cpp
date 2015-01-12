@@ -972,6 +972,17 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		if (sess->stats==false) {
+			query=l_strdup("SELECT \"admin\" AS 'DATABASE()'");
+		} else {
+			query=l_strdup("SELECT \"stats\" AS 'DATABASE()'");
+		}
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
 	if (sess->stats==true) {
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
