@@ -63,6 +63,7 @@ class Query_Processor {
 	virtual SQLite3_result * get_current_query_rules() {return NULL;};
 
 	virtual SQLite3_result * get_stats_query_rules() {return NULL;};	
+	virtual void update_query_processor_stats() {};
 };
 
 

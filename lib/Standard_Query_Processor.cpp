@@ -420,6 +420,7 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 			//ret=(QP_out_t *)malloc(sizeof(QP_out_t));
 
+/*
 {
 		// FIXME: this block of code is only for testing
 		if ((qr->hits%20)==0) {
@@ -427,6 +428,7 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 			if (__sync_add_and_fetch(&version,0) == _thr_SQP_version) { // extra safety check to avoid race conditions
 				__sync_fetch_and_add(&qr->parent->hits,20);
 			}
+*/
 /*
 			QP_rule_t *qrg;
 			for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
@@ -437,10 +439,11 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 				}
 			}
 */
+/*
 			spin_rdunlock(&rwlock);
 		}
 }
-
+*/
 		if (qr->flagOUT >= 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
 			flagIN=qr->flagOUT;
@@ -479,6 +482,30 @@ __exit_process_mysql_query:
 virtual void delete_QP_out(QP_out_t *o) {
 	l_free(sizeof(QP_out_t),o);
 };
+
+virtual void update_query_processor_stats() {
+	// Note:
+	// this function is called by each thread to update global query statistics
+	//
+	// As an extra safety, it checks that the version didn't change
+	// Yet, if version changed doesn't perfomr any rules update
+	//
+	// It acquires a read lock to ensure that the rules table doesn't change
+	// Yet, because it has to update vales, it uses atomic operations
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Updating query rules statistics\n");
+	spin_rdlock(&rwlock);
+	if (__sync_add_and_fetch(&version,0) == _thr_SQP_version) {
+		QP_rule_t *qr;
+		for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
+			qr=*it;
+			if (qr->active && qr->hits) {
+				__sync_fetch_and_add(&qr->parent->hits,qr->hits);
+				qr->hits=0;
+			}
+		}
+	}
+	spin_rdunlock(&rwlock);
+}
 
 };
 

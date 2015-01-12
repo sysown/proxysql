@@ -534,6 +534,9 @@ virtual void run() {
 	int loops=0;	// FIXME: debug
 
 
+	unsigned long oldtime=monotonic_time();
+	unsigned long curtime=monotonic_time();
+
 	while (shutdown==0) {
 
 		for (n = 0; n < mypolls.len; n++) {
@@ -547,10 +550,19 @@ virtual void run() {
 		if (loops>100) {
 			loops-=10;
 		}	
+
+
 	
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Calling poll");
 		rc=poll(mypolls.fds,mypolls.len,mysql_thread___poll_timeout);
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
+
+		curtime=monotonic_time();
+		if (curtime>oldtime+mysql_thread___poll_timeout) {
+			oldtime=curtime;
+			GloQPro->update_query_processor_stats();
+		}
+
 			if (rc == -1 && errno == EINTR)
 				// poll() timeout, try again
 				continue;
