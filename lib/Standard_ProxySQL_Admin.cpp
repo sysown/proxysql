@@ -939,15 +939,26 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 	strA=(char *)"SHOW CREATE TABLE ";
-	strB=(char *)"SELECT name AS 'table' , sql AS 'Create Table' FROM sqlite_master WHERE type='table' AND name='%s'";
+	strB=(char *)"SELECT name AS 'table' , sql AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";
 	strAl=strlen(strA);
-        if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
+  if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
 		strBl=strlen(strB);
-		int tblnamelen=query_no_space_length-strAl;
-		int l=strBl+tblnamelen-2;
+		char *dbh=NULL;
+		char *tbh=NULL;
+		//int tblnamelen=query_no_space_length-strAl;
+		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
+
+		if (strlen(tbh)==0) {
+			free(tbh);
+			tbh=dbh;
+			dbh=strdup("main");
+		}
+		int l=strBl+strlen(tbh)+strlen(dbh)-4;
 		char *buff=(char *)l_alloc(l+1);
-		snprintf(buff,l+1,strB,query_no_space+strAl);
+		snprintf(buff,l+1,strB,dbh,tbh);
 		buff[l]=0;
+		free(tbh);
+		free(dbh);
 		l_free(query_length,query);
 		query=buff;
 		query_length=l+1;
