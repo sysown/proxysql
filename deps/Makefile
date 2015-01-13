@@ -1,6 +1,6 @@
 
 
-default: libconfig libdaemon jemalloc mariadb_client re2
+default: libconfig libdaemon jemalloc mariadb_client re2 libinjection
 .PHONY: default
 
 
@@ -12,6 +12,12 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
+
+
+libinjection/libinjection.a:
+	cd libinjection && make
+
+libinjection: libinjection/libinjection.a
 
 
 jemalloc/jemalloc/lib/libjemalloc.a:
@@ -68,6 +74,7 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb_client-2.0.0-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
+	cd libinjection && make clean
 #	cd glib && rm -rf glib-2.40.0
 #	cd libevent && rm -rf libevent-2.0.21-stable
 #	cd sqlite3 && rm -rf sqlite-amalgamation-3080403
