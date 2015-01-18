@@ -398,14 +398,14 @@ int MySQL_Data_Stream::array2buffer() {
 	bool cont=true;
 	if (queue_available(queueOUT)==0) return ret;
 	while (cont) {
-	if (queueOUT.partial==0) { // read a new packet
-        if (PSarrayOUT->len-idx) {
-        proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
-    	    if (queueOUT.pkt.ptr) {
-        	    l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
-            	queueOUT.pkt.ptr=NULL;
-   	 	    }
-			//PSarrayOUT->remove_index(0,&queueOUT.pkt);
+		if (queueOUT.partial==0) { // read a new packet
+			if (PSarrayOUT->len-idx) {
+				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
+				if (queueOUT.pkt.ptr) {
+					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
+					queueOUT.pkt.ptr=NULL;
+				}
+				//PSarrayOUT->remove_index(0,&queueOUT.pkt);
 			memcpy(&queueOUT.pkt,PSarrayOUT->index(idx),sizeof(PtrSize_t));
 #ifdef DEBUG
 			{ __dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size); }
@@ -413,31 +413,31 @@ int MySQL_Data_Stream::array2buffer() {
 //			PtrSize_t *pts=PSarrayOUT->index(idx);
 //			queueOUT.pkt.ptr=pts->ptr;
 //			queueOUT.pkt.size=pts->size;
-			idx++;
-        } else {
-            cont=false;
-						continue;
-        }
-    }
-    int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
-    memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
-    queue_w(queueOUT,b);
-    proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
-    queueOUT.partial+=b;
-    ret=b;
-    if (queueOUT.partial==queueOUT.pkt.size) {
-        if (queueOUT.pkt.ptr) {
-            l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
-            queueOUT.pkt.ptr=NULL;
-        }
-        proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Packet completely written into send buffer\n", this);
-        queueOUT.partial=0;
-		pkts_sent+=1;
-    }
+				idx++;
+			} else {
+				cont=false;
+				continue;
+			}
 		}
-		//for (int i=0; i<idx; i++) { PSarrayOUT->remove_index(0,NULL); }
-		if (idx) PSarrayOUT->remove_index_range(0,idx);
-    return ret;
+		int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
+		memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
+		queue_w(queueOUT,b);
+		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
+		queueOUT.partial+=b;
+		ret=b;
+		if (queueOUT.partial==queueOUT.pkt.size) {
+			if (queueOUT.pkt.ptr) {
+				l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
+				queueOUT.pkt.ptr=NULL;
+			}
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Packet completely written into send buffer\n", this);
+			queueOUT.partial=0;
+			pkts_sent+=1;
+		}
+	}
+	//for (int i=0; i<idx; i++) { PSarrayOUT->remove_index(0,NULL); }
+	if (idx) PSarrayOUT->remove_index_range(0,idx);
+	return ret;
 }
 
 unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
