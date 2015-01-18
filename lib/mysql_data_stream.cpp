@@ -305,7 +305,7 @@ void MySQL_Data_Stream::set_pollout() {
 	//_pollfd=&sess->thread->mypolls.fds[poll_fds_idx];
 	//_pollfd=sess->thread->get_pollfd(poll_fds_idx);
 	//if (buflen || PSarrayOUT->len) {
-	if (available_data_out()) {
+	if (available_data_out() || queueOUT.partial) {
 		_pollfd->events = POLLIN | POLLOUT;
 	} else {
 		_pollfd->events = POLLIN;
