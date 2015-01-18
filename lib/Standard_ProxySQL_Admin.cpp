@@ -1435,6 +1435,7 @@ bool Standard_ProxySQL_Admin::init() {
 	__insert_or_replace_maintable_select_disktable();
 
 	flush_admin_variables___database_to_runtime(admindb,true);
+	flush_mysql_variables___database_to_runtime(admindb,true);
 
 
 //	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
