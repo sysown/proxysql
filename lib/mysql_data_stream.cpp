@@ -341,12 +341,12 @@ int MySQL_Data_Stream::read_pkts() {
 
 
 int MySQL_Data_Stream::buffer2array() {
-    int ret=0;
+	int ret=0;
 	int fast_mode=0;
-    if (queue_data(queueIN)==0) return ret;
-    if ((queueIN.pkt.size==0) && queue_data(queueIN)<sizeof(mysql_hdr)) {
-        queue_zero(queueIN);
-    }
+	if (queue_data(queueIN)==0) return ret;
+	if ((queueIN.pkt.size==0) && queue_data(queueIN)<sizeof(mysql_hdr)) {
+		queue_zero(queueIN);
+	}
 
 	if (fast_mode) {
 		queueIN.pkt.size=queue_data(queueIN);
@@ -358,36 +358,36 @@ int MySQL_Data_Stream::buffer2array() {
 		queueIN.pkt.size=0;
 		return ret;
 	}
-    if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
-        proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
-        memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
-				//Copy4B(&queueIN.hdr,queue_r_ptr(queueIN));
-        queue_r(queueIN,sizeof(mysql_hdr));
-        //proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Allocating %d bytes for a new packet\n", myds->input.hdr.pkt_length+sizeof(mysql_hdr));
-        queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr);
-        queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
+	if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
+		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
+		memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
+		//Copy4B(&queueIN.hdr,queue_r_ptr(queueIN));
+		queue_r(queueIN,sizeof(mysql_hdr));
+		//proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Allocating %d bytes for a new packet\n", myds->input.hdr.pkt_length+sizeof(mysql_hdr));
+		queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr);
+		queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
 
-        //MEM_COPY_FWD((unsigned char *)queueIN.pkt.ptr, (unsigned char *)&queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
-        memcpy(queueIN.pkt.ptr, &queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
-				//Copy4B(queueIN.pkt.ptr,&queueIN.hdr);
-        queueIN.partial=sizeof(mysql_hdr);
-        ret+=sizeof(mysql_hdr);
-    }
-    if ((queueIN.pkt.size>0) && queue_data(queueIN)) {
-        int b= ( queue_data(queueIN) > (queueIN.pkt.size - queueIN.partial) ? (queueIN.pkt.size - queueIN.partial) : queue_data(queueIN) );
-        proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied %d bytes into packet\n", b);
-        memcpy((unsigned char *)queueIN.pkt.ptr + queueIN.partial, queue_r_ptr(queueIN),b);
-        queue_r(queueIN,b);
-        queueIN.partial+=b;
-        ret+=b;
-    }
-    if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
+		//MEM_COPY_FWD((unsigned char *)queueIN.pkt.ptr, (unsigned char *)&queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
+		memcpy(queueIN.pkt.ptr, &queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
+		//Copy4B(queueIN.pkt.ptr,&queueIN.hdr);
+		queueIN.partial=sizeof(mysql_hdr);
+		ret+=sizeof(mysql_hdr);
+	}
+	if ((queueIN.pkt.size>0) && queue_data(queueIN)) {
+		int b= ( queue_data(queueIN) > (queueIN.pkt.size - queueIN.partial) ? (queueIN.pkt.size - queueIN.partial) : queue_data(queueIN) );
+		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied %d bytes into packet\n", b);
+		memcpy((unsigned char *)queueIN.pkt.ptr + queueIN.partial, queue_r_ptr(queueIN),b);
+		queue_r(queueIN,b);
+		queueIN.partial+=b;
+		ret+=b;
+	}
+	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
 		PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
-        pkts_recv++;
-        queueIN.pkt.size=0;
+		pkts_recv++;
+		queueIN.pkt.size=0;
 		queueIN.pkt.ptr=NULL;
-    }  
-    return ret;
+	}  
+	return ret;
 }
 
 
