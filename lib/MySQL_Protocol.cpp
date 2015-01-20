@@ -11,6 +11,7 @@ extern MySQL_Authentication *GloMyAuth;
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
 
 	if (GloVars.global.gdbg==0) return;
+	if (GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_PROTOCOL].verbosity < 8 ) return;
 	unsigned int i;
 	printf("DUMP %d bytes FROM %s\n", len, func);
 	for(i = 0; i < len; i++) {
