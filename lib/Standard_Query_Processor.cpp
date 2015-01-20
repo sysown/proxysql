@@ -5,7 +5,8 @@
 #include "re2/regexp.h"
 #include "proxysql.h"
 #include "cpp.h"
-
+#include "../deps/libinjection/libinjection.h"
+#include "../deps/libinjection/libinjection_sqli.h"
 
 
 #define QUERY_PROCESSOR_VERSION "0.1.728"
@@ -106,6 +107,13 @@ class QP_rule_text {
 */
 	}
 };
+
+
+struct __SQP_query_parser_t {
+	sfilter sf;
+};
+
+typedef struct __SQP_query_parser_t SQP_par_t;
 
 
 struct __RE2_objects_t {
@@ -505,7 +513,26 @@ virtual void update_query_processor_stats() {
 		}
 	}
 	spin_rdunlock(&rwlock);
+};
+
+virtual void * query_parser_init(char *query, int query_length, int flags) {
+	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
+	libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
+	return (void *)qp;
+};
+
+virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {
+	SQP_par_t *qp=(SQP_par_t *)args;
+	
+	return MYSQL_COM_QUERY___UNKNOWN;
 }
+
+virtual char * query_parser_first_comment(void *args) { return NULL; }
+
+virtual void query_parser_free(void *args) {
+	SQP_par_t *qp=(SQP_par_t *)args;
+	free(qp);	
+};
 
 };
 

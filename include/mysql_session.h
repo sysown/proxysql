@@ -36,6 +36,7 @@ class MySQL_Session
 	int active_transactions;
 	bool transaction_persistent;
 	int to_process;
+	void *query_parser_args;
 	unsigned long long pause;
 	MySQL_Session_userinfo userinfo_client;
 	MySQL_Session_userinfo userinfo_server;

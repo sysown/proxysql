@@ -3,7 +3,7 @@ AR=ar r
 CC=cc
 LD=ld
 LDSHARED=ld -shared
-CFLAGS=-Wall -Werror -ansi -g -O3
+CFLAGS=-Wall -Werror -ansi -g -O3 -fPIC
 
 # MAC
 #AR=libtool -static

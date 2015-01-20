@@ -3,6 +3,53 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+
+enum MYSQL_COM_QUERY_command {
+	MYSQL_COM_QUERY_ALTER_TABLE,
+	MYSQL_COM_QUERY_ANALYZE,
+	MYSQL_COM_QUERY_BEGIN,
+	MYSQL_COM_QUERY_CHANGE_MASTER,
+	MYSQL_COM_QUERY_CREATE_DATABASE,
+	MYSQL_COM_QUERY_CREATE_INDEX,
+	MYSQL_COM_QUERY_CREATE_TABLE,
+	MYSQL_COM_QUERY_CREATE_TEMPORARY,
+	MYSQL_COM_QUERY_CREATE_TRIGGER,
+	MYSQL_COM_QUERY_CREATE_USER,
+	MYSQL_COM_QUERY_DELETE,
+	MYSQL_COM_QUERY_DESCRIBE,
+	MYSQL_COM_QUERY_DROP_DATABASE,
+	MYSQL_COM_QUERY_DROP_INDEX,
+	MYSQL_COM_QUERY_DROP_TABLE,
+	MYSQL_COM_QUERY_DROP_TRIGGER,
+	MYSQL_COM_QUERY_DROP_USER,
+	MYSQL_COM_QUERY_GRANT,
+	MYSQL_COM_QUERY_EXPLAIN,
+	MYSQL_COM_QUERY_FLUSH,
+	MYSQL_COM_QUERY_INSERT,
+	MYSQL_COM_QUERY_KILL,
+	MYSQL_COM_QUERY_LOAD,
+	MYSQL_COM_QUERY_LOCK_TABLE,
+	MYSQL_COM_QUERY_OPTIMIZE,
+	MYSQL_COM_QUERY_PREPARE,
+	MYSQL_COM_QUERY_PURGE,
+	MYSQL_COM_QUERY_RENAME_TABLE,
+	MYSQL_COM_QUERY_RESET_MASTER,
+	MYSQL_COM_QUERY_RESET_SLAVE,
+	MYSQL_COM_QUERY_REPLACE,
+	MYSQL_COM_QUERY_REVOKE,
+	MYSQL_COM_QUERY_ROLLBACK,
+	MYSQL_COM_QUERY_SAVEPOINT,
+	MYSQL_COM_QUERY_SELECT,
+	MYSQL_COM_QUERY_SELECT_FOR_UPDATE,
+	MYSQL_COM_QUERY_SET,
+	MYSQL_COM_QUERY_START_TRANSACTION,
+	MYSQL_COM_QUERY_UNLOCK_TABLES,
+	MYSQL_COM_QUERY_UPDATE,
+	MYSQL_COM_QUERY_USE,
+	MYSQL_COM_QUERY_SHOW,
+	MYSQL_COM_QUERY___UNKNOWN
+};
+
 struct _Query_Processor_rule_t {
 	int rule_id;
 	bool active;
@@ -61,9 +108,15 @@ class Query_Processor {
 	virtual void end_thread() {};
 	virtual void commit() {};	// this applies all the changes in memory
 	virtual SQLite3_result * get_current_query_rules() {return NULL;};
-
 	virtual SQLite3_result * get_stats_query_rules() {return NULL;};	
+
 	virtual void update_query_processor_stats() {};
+
+	virtual void * query_parser_init(char *query, int query_length, int flags) {return NULL;};
+	virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {return MYSQL_COM_QUERY___UNKNOWN;}
+	virtual char * query_parser_first_comment(void *args) { return NULL; }
+	virtual void query_parser_free(void *args) {};
+
 };
 
 

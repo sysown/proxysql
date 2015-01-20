@@ -1,0 +1,21 @@
+ProxySQL implements query parsing in the Query_Processor class.
+
+4 virtual functions are introduced in Query_Processor class:
+  virtual void * query_parser_init(char *query, int query_length, int flags) {return NULL;};
+  virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {return MYSQL_COM_QUERY___UNKNOWN;}
+	virtual char * query_parser_first_comment(void *args) { return NULL; }
+  virtual void query_parser_free(void *args) {};
+
+query_parser_init()
+query_parser_init() get as arguments a pointer to the query, its length, and flags that are specific to Query_Processor implementation or simply ignored.
+Because multiple implementations of the query parsing should be possible, query_parser_init() returns a generic pointer that should point to a data structure created by query_parser_init() itself. The pointer needs to be passed at the end to query_parser_free() to be freed.
+
+query_parser_free()
+Free the structure originally created by query_parser_init()
+
+query_parser_command_type()
+Accept as argument the structure created by query_parser_init() and returns the type of query processed.
+
+query_parser_first_comment()
+Not implemented yet.
+In case the filterning need to be performed based on comments in the query, query_parser_first_comment() can return such comment.

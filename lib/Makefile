@@ -23,6 +23,10 @@ LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig-1.4.9
 LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
 
 
+INJECTION_PATH=$(DEPS_PATH)/libinjection
+INJECTION_IDIR=$(INJECTION_PATH)
+
+
 RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
 
@@ -31,7 +35,7 @@ IDIR=../include
 #IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBEVENT_IDIR) $(GLIB_IDIRS) $(LIBCONFIG_IDIR)
 IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR)
 
-LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj
+LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
 
 LIBS=-rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt
 
@@ -64,7 +68,7 @@ Standard_ProxySQL_Admin.so: Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.ko 
 	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.ko libproxysql.a -lcrypto $(LIBS)
 
 Standard_Query_Processor.so: Standard_Query_Processor.ko libproxysql.a
-	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_Query_Processor.ko libproxysql.a -lcrypto $(LIBS)
+	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_Query_Processor.ko libproxysql.a -lcrypto $(LIBS) -linjection
 
 Standard_MySQL_Authentication.so: Standard_MySQL_Authentication.ko libproxysql.a
 	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_MySQL_Authentication.ko libproxysql.a -lcrypto $(LIBS)
