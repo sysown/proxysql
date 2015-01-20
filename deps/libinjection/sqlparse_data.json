@@ -8472,6 +8472,7 @@
         "COLUMNS_UPDATED": "f", 
         "COL_LENGTH": "f", 
         "COL_NAME": "f", 
+        "COMMIT": "T", 
         "COMPRESS": "f", 
         "CONCAT": "f", 
         "CONCAT_WS": "f", 

@@ -120,6 +120,7 @@ KEYWORDS = {
 'AVG'                         : 'f',
 'BEFORE'                      : 'k',
 'BEGIN'                       : 'T',
+'COMMIT'                      : 'T',
 'BENCHMARK'                   : 'f',
 'BETWEEN'                     : 'o',
 'BIGINT'                      : 't',

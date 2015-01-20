@@ -8506,6 +8506,7 @@ static const keyword_t sql_keywords[] = {
     {"COLUMNS_UPDATED", 'f'},
     {"COL_LENGTH", 'f'},
     {"COL_NAME", 'f'},
+    {"COMMIT", 'T'},
     {"COMPRESS", 'f'},
     {"CONCAT", 'f'},
     {"CONCAT_WS", 'f'},
@@ -9345,5 +9346,5 @@ static const keyword_t sql_keywords[] = {
     {"||", '&'},
     {"~*", 'o'},
 };
-static const size_t sql_keywords_sz = 9049;
+static const size_t sql_keywords_sz = 9050;
 #endif

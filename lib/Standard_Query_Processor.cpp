@@ -523,7 +523,88 @@ virtual void * query_parser_init(char *query, int query_length, int flags) {
 
 virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
-	
+	while (libinjection_sqli_tokenize(&qp->sf)) {
+		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
+			char c1=toupper(qp->sf.current->val[0]);
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", c1, qp->sf.current->val, c1);
+			switch (c1) {
+				case 'A':
+					if (!strcasecmp("ALTER",qp->sf.current->val)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
+						while (libinjection_sqli_tokenize(&qp->sf)) {
+							if (qp->sf.current->type=='c') continue;
+							if (qp->sf.current->type=='n') {
+								if (!strcasecmp("OFFLINE",qp->sf.current->val)) continue;
+								if (!strcasecmp("ONLINE",qp->sf.current->val)) continue;
+							}
+							if (qp->sf.current->type=='k') {
+								if (!strcasecmp("IGNORE",qp->sf.current->val)) continue;
+								if (!strcasecmp("TABLE",qp->sf.current->val))
+									return MYSQL_COM_QUERY_ALTER_TABLE;
+							}
+							return MYSQL_COM_QUERY___UNKNOWN;
+						}
+					}
+					if (!strcasecmp("ANALYZE",qp->sf.current->val)) { // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE
+						while (libinjection_sqli_tokenize(&qp->sf)) {
+							if (qp->sf.current->type=='c') continue;
+							if (qp->sf.current->type=='n') {
+								if (!strcasecmp("LOCAL",qp->sf.current->val)) continue;
+							}
+							if (qp->sf.current->type=='k') {
+								if (!strcasecmp("NO_WRITE_TO_BINLOG",qp->sf.current->val)) continue;
+								if (!strcasecmp("TABLE",qp->sf.current->val))
+									return MYSQL_COM_QUERY_ANALYZE_TABLE;
+							}
+							return MYSQL_COM_QUERY___UNKNOWN;
+						}
+					}
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+				case 'B':
+					if (!strcasecmp("BEGIN",qp->sf.current->val)) { // BEGIN
+						return MYSQL_COM_QUERY_DELETE;
+					}
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+				case 'C':
+					if (!strcasecmp("COMMIT",qp->sf.current->val)) { // COMMIT
+						return MYSQL_COM_QUERY_DELETE;
+					}
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+				case 'D':
+					if (!strcasecmp("DELETE",qp->sf.current->val)) { // DELETE
+						return MYSQL_COM_QUERY_DELETE;
+					}
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+				case 'I':
+					if (!strcasecmp("INSERT",qp->sf.current->val)) { // INSERT
+						return MYSQL_COM_QUERY_INSERT;
+					}
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+				case 'S':
+					if (!strcasecmp("SELECT",qp->sf.current->val)) { // SELECT
+						return MYSQL_COM_QUERY_SELECT;
+					}
+					if (!strcasecmp("SET",qp->sf.current->val)) { // SET
+						return MYSQL_COM_QUERY_SET;
+					}
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+				case 'U':
+					if (!strcasecmp("UPDATE",qp->sf.current->val)) { // UPDATE
+						return MYSQL_COM_QUERY_UPDATE;
+					}
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+				default:
+					return MYSQL_COM_QUERY___UNKNOWN;
+					break;
+			}
+		}
+	}
 	return MYSQL_COM_QUERY___UNKNOWN;
 }
 
