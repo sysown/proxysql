@@ -12,23 +12,23 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 	if (GloVars.global.gdbg==0) return;
 	if (GloVars.global.gdbg_lvl[PROXY_DEBUG_PKT_ARRAY].verbosity < 8 ) return;
 	unsigned int i;
-	printf("DUMP %d bytes FROM %s\n", len, func);
+	fprintf(stderr,"DUMP %d bytes FROM %s\n", len, func);
 	for(i = 0; i < len; i++) {
-		if(isprint(_ptr[i])) printf("%c", _ptr[i]); else printf(".");
+		if(isprint(_ptr[i])) fprintf(stderr,"%c", _ptr[i]); else fprintf(stderr,".");
 		if (i>0 && (i%16==15 || i==len-1)) {
 			unsigned int j;
 			if (i%16!=15) {
 				j=15-i%16;
-				while (j--) printf(" ");
+				while (j--) fprintf(stderr," ");
 			}
-			printf(" --- ");
+			fprintf(stderr," --- ");
 			for (j=(i==len-1 ? ((int)(i/16))*16 : i-15 ) ; j<=i; j++) {
-				printf("%02x ", _ptr[j]);
+				fprintf(stderr,"%02x ", _ptr[j]);
 			}
-			printf("\n");
+			fprintf(stderr,"\n");
 		}
    }
-	printf("\n\n");
+	fprintf(stderr,"\n\n");
 	
 
 }
