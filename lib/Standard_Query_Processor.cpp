@@ -115,6 +115,9 @@ struct __SQP_query_parser_t {
 
 typedef struct __SQP_query_parser_t SQP_par_t;
 
+static char *commands_counters_desc[MYSQL_COM_QUERY___UNKNOWN+1];
+
+
 
 struct __RE2_objects_t {
 	re2::RE2::Options *opt;
@@ -170,12 +173,15 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
+__thread unsigned int _thr_commands_counters[MYSQL_COM_QUERY___UNKNOWN+1];
+
 
 class Standard_Query_Processor: public Query_Processor {
 
 private:
 rwlock_t rwlock;
 std::vector<QP_rule_t *> rules;
+unsigned int commands_counters[MYSQL_COM_QUERY___UNKNOWN+1];
 
 volatile unsigned int version;
 protected:
@@ -185,6 +191,51 @@ Standard_Query_Processor() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
 	spinlock_rwlock_init(&rwlock);
 	version=0;
+	for (int i=0; i<=MYSQL_COM_QUERY___UNKNOWN; i++) commands_counters[i]=0;
+
+	commands_counters_desc[MYSQL_COM_QUERY_ALTER_TABLE]=(char *)"ALTER_TABLE";
+  commands_counters_desc[MYSQL_COM_QUERY_ANALYZE_TABLE]=(char *)"ANALYZE_TABLE";
+  commands_counters_desc[MYSQL_COM_QUERY_BEGIN]=(char *)"BEGIN";
+  commands_counters_desc[MYSQL_COM_QUERY_CHANGE_MASTER]=(char *)"CHANGE_MASTER";
+  commands_counters_desc[MYSQL_COM_QUERY_CREATE_DATABASE]=(char *)"CREATE_DATABASE";
+  commands_counters_desc[MYSQL_COM_QUERY_CREATE_INDEX]=(char *)"CREATE_INDEX";
+  commands_counters_desc[MYSQL_COM_QUERY_CREATE_TABLE]=(char *)"CREATE_TABLE";
+  commands_counters_desc[MYSQL_COM_QUERY_CREATE_TEMPORARY]=(char *)"CREATE_TEMPORARY";
+  commands_counters_desc[MYSQL_COM_QUERY_CREATE_TRIGGER]=(char *)"CREATE_TRIGGER";
+  commands_counters_desc[MYSQL_COM_QUERY_CREATE_USER]=(char *)"CREATE_USER";
+  commands_counters_desc[MYSQL_COM_QUERY_DELETE]=(char *)"DELETE";
+  commands_counters_desc[MYSQL_COM_QUERY_DESCRIBE]=(char *)"DESCRIBE";
+  commands_counters_desc[MYSQL_COM_QUERY_DROP_DATABASE]=(char *)"DROP_DATABASE";
+  commands_counters_desc[MYSQL_COM_QUERY_DROP_INDEX]=(char *)"DROP_INDEX";
+  commands_counters_desc[MYSQL_COM_QUERY_DROP_TABLE]=(char *)"DROP_TABLE";
+  commands_counters_desc[MYSQL_COM_QUERY_DROP_TRIGGER]=(char *)"DROP_TRIGGER";
+  commands_counters_desc[MYSQL_COM_QUERY_DROP_USER]=(char *)"DROP_USER";
+  commands_counters_desc[MYSQL_COM_QUERY_GRANT]=(char *)"GRANT";
+  commands_counters_desc[MYSQL_COM_QUERY_EXPLAIN]=(char *)"EXPLAIN";
+  commands_counters_desc[MYSQL_COM_QUERY_FLUSH]=(char *)"FLUSH";
+  commands_counters_desc[MYSQL_COM_QUERY_INSERT]=(char *)"INSERT";
+  commands_counters_desc[MYSQL_COM_QUERY_KILL]=(char *)"KILL";
+  commands_counters_desc[MYSQL_COM_QUERY_LOAD]=(char *)"LOAD";
+  commands_counters_desc[MYSQL_COM_QUERY_LOCK_TABLE]=(char *)"LOCK_TABLE";
+  commands_counters_desc[MYSQL_COM_QUERY_OPTIMIZE]=(char *)"OPTIMIZE";
+  commands_counters_desc[MYSQL_COM_QUERY_PREPARE]=(char *)"PREPARE";
+  commands_counters_desc[MYSQL_COM_QUERY_PURGE]=(char *)"PURGE";
+  commands_counters_desc[MYSQL_COM_QUERY_RENAME_TABLE]=(char *)"RENAME_TABLE";
+  commands_counters_desc[MYSQL_COM_QUERY_RESET_MASTER]=(char *)"RESET_MASTER";
+  commands_counters_desc[MYSQL_COM_QUERY_RESET_SLAVE]=(char *)"RESET_SLAVE";
+  commands_counters_desc[MYSQL_COM_QUERY_REPLACE]=(char *)"REPLACE";
+  commands_counters_desc[MYSQL_COM_QUERY_REVOKE]=(char *)"REVOKE";
+  commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK]=(char *)"ROLLBACK";
+  commands_counters_desc[MYSQL_COM_QUERY_SAVEPOINT]=(char *)"SAVEPOINT";
+  commands_counters_desc[MYSQL_COM_QUERY_SELECT]=(char *)"SELECT";
+  commands_counters_desc[MYSQL_COM_QUERY_SELECT_FOR_UPDATE]=(char *)"SELECT_FOR_UPDATE";
+  commands_counters_desc[MYSQL_COM_QUERY_SET]=(char *)"SET";
+  commands_counters_desc[MYSQL_COM_QUERY_SHOW_TABLE_STATUS]=(char *)"SHOW_TABLE_STATUS";
+  commands_counters_desc[MYSQL_COM_QUERY_START_TRANSACTION]=(char *)"START_TRANSACTION";
+  commands_counters_desc[MYSQL_COM_QUERY_UNLOCK_TABLES]=(char *)"UNLOCK_TABLES";
+  commands_counters_desc[MYSQL_COM_QUERY_UPDATE]=(char *)"UPDATE";
+  commands_counters_desc[MYSQL_COM_QUERY_USE]=(char *)"USE";
+  commands_counters_desc[MYSQL_COM_QUERY___UNKNOWN]=(char *)"UNKNOWN";
 };
 
 virtual ~Standard_Query_Processor() {
@@ -196,6 +247,7 @@ virtual void init_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Per-Thread Query Processor Table with version=0\n");
 	_thr_SQP_version=0;
 	_thr_SQP_rules=new std::vector<QP_rule_t *>;
+	for (int i=0; i<=MYSQL_COM_QUERY___UNKNOWN; i++) _thr_commands_counters[i]=0;
 };
 
 
@@ -295,6 +347,21 @@ virtual void commit() {
 };
 
 
+virtual SQLite3_result * get_stats_commands_counters() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping commands counters%d\n");
+	SQLite3_result *result=new SQLite3_result(2);
+	result->add_column_definition(SQLITE_TEXT,"Command");
+	result->add_column_definition(SQLITE_TEXT,"Counter");
+	for (int i=0;i<=MYSQL_COM_QUERY___UNKNOWN;i++) {
+		char **pta=(char **)malloc(sizeof(char *)*2);
+		pta[0]=commands_counters_desc[i];
+		itostr(pta[1], commands_counters[i]);
+		result->add_row(pta);
+		free(pta[1]);
+		free(pta);
+	}
+	return result;
+}
 virtual SQLite3_result * get_stats_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping query rules statistics, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(2);
@@ -513,6 +580,10 @@ virtual void update_query_processor_stats() {
 		}
 	}
 	spin_rdunlock(&rwlock);
+	for (int i=0; i<=MYSQL_COM_QUERY___UNKNOWN; i++) {
+		__sync_fetch_and_add(&commands_counters[i],_thr_commands_counters[i]);
+		_thr_commands_counters[i]=0;
+	}
 };
 
 virtual void * query_parser_init(char *query, int query_length, int flags) {
@@ -522,6 +593,13 @@ virtual void * query_parser_init(char *query, int query_length, int flags) {
 };
 
 virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {
+	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(args);
+	_thr_commands_counters[ret]++;
+	return ret;
+}
+
+
+enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
 	while (libinjection_sqli_tokenize(&qp->sf)) {
 		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
@@ -590,6 +668,29 @@ virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {
 					}
 					if (!strcasecmp("SET",qp->sf.current->val)) { // SET
 						return MYSQL_COM_QUERY_SET;
+					}
+					if (!strcasecmp("SHOW",qp->sf.current->val)) { // SHOW
+						while (libinjection_sqli_tokenize(&qp->sf)) {
+							if (qp->sf.current->type=='c') continue;
+/*
+							if (qp->sf.current->type=='n') {
+								if (!strcasecmp("OFFLINE",qp->sf.current->val)) continue;
+								if (!strcasecmp("ONLINE",qp->sf.current->val)) continue;
+							}
+*/
+							if (qp->sf.current->type=='k') {
+								if (!strcasecmp("TABLE",qp->sf.current->val)) {
+									while (libinjection_sqli_tokenize(&qp->sf)) {
+										if (qp->sf.current->type=='c') continue;
+										if (qp->sf.current->type=='n') {
+											if (!strcasecmp("STATUS",qp->sf.current->val))
+												return MYSQL_COM_QUERY_SHOW_TABLE_STATUS;
+										}
+									}
+								}
+							}
+							return MYSQL_COM_QUERY___UNKNOWN;
+						}
 					}
 					return MYSQL_COM_QUERY___UNKNOWN;
 					break;

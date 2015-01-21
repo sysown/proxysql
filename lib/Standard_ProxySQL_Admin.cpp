@@ -47,6 +47,7 @@ pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY, hits INT NOT NULL)"
+#define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters ( Command VARCHAR NOT NULL PRIMARY KEY, Counter INT NOT NULL)"
 
 
 
@@ -245,7 +246,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 
 
 	void stats___mysql_query_rules();
-
+	void stats___mysql_commands_counters();
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -1090,6 +1091,7 @@ void *child_mysql(void *arg) {
 				oldtime=curtime;
 				Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)GloAdmin;
 				SPA->stats___mysql_query_rules();
+				SPA->stats___mysql_commands_counters();
 			}
 		}
 		if (rc == -1) {
@@ -1409,6 +1411,7 @@ bool Standard_ProxySQL_Admin::init() {
 
 
 	insert_into_tables_defs(tables_defs_stats,"mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
+	insert_into_tables_defs(tables_defs_stats,"mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
 
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
@@ -1918,11 +1921,33 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 
 
 
-
+void Standard_ProxySQL_Admin::stats___mysql_commands_counters() {
+	SQLite3_result * resultset=GloQPro->get_stats_commands_counters();
+	if (resultset==NULL) return;
+//	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_commands_counters");
+	char *a=(char *)"INSERT INTO stats_mysql_commands_counters VALUES (\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<2; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1]);
+		//fprintf(stderr,"%s\n",query);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
 void Standard_ProxySQL_Admin::stats___mysql_query_rules() {
 	SQLite3_result * resultset=GloQPro->get_stats_query_rules();
 	if (resultset==NULL) return;
 //	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
+	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_query_rules");
 	char *a=(char *)"INSERT INTO stats_mysql_query_rules VALUES (\"%s\",\"%s\")";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -1937,6 +1962,7 @@ void Standard_ProxySQL_Admin::stats___mysql_query_rules() {
 		statsdb->execute(query);
 		free(query);
 	}
+	statsdb->execute("COMMIT");
 	delete resultset;
 }
 

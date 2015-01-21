@@ -42,6 +42,7 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_SELECT,
 	MYSQL_COM_QUERY_SELECT_FOR_UPDATE,
 	MYSQL_COM_QUERY_SET,
+	MYSQL_COM_QUERY_SHOW_TABLE_STATUS,
 	MYSQL_COM_QUERY_START_TRANSACTION,
 	MYSQL_COM_QUERY_UNLOCK_TABLES,
 	MYSQL_COM_QUERY_UPDATE,
@@ -116,7 +117,7 @@ class Query_Processor {
 	virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {return MYSQL_COM_QUERY___UNKNOWN;}
 	virtual char * query_parser_first_comment(void *args) { return NULL; }
 	virtual void query_parser_free(void *args) {};
-
+	virtual SQLite3_result * get_stats_commands_counters() {return NULL;};
 };
 
 

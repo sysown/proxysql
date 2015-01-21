@@ -344,10 +344,12 @@ int MySQL_Session::handler() {
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
 							if (admin==false) {
+/**/
 								query_parser_args=GloQPro->query_parser_init((char *)pkt.ptr+5, pkt.size-5, 0);
 								enum MYSQL_COM_QUERY_command mcqc=GloQPro->query_parser_command_type(query_parser_args);
-								fprintf(stderr,"Command=%d, query=%s\n", mcqc, (char *)pkt.ptr+5);
+//								if (mcqc==42) fprintf(stderr,"Command=%d, query=%s\n", mcqc, (char *)pkt.ptr+5);
 								GloQPro->query_parser_free(query_parser_args);
+/**/
 								myprot_client.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
 								qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,false);
 								if (qpo) {

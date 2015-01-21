@@ -9093,7 +9093,7 @@ static const keyword_t sql_keywords[] = {
     {"SHA", 'f'},
     {"SHA1", 'f'},
     {"SHA2", 'f'},
-    {"SHOW", 'n'},
+    {"SHOW", 'k'},
     {"SHUTDOWN", 'T'},
     {"SIGN", 'f'},
     {"SIGNAL", 'k'},
