@@ -207,13 +207,13 @@ class MySQL_Thread
 	
 	public:
 
-	
+	unsigned long long curtime;
 
 	ProxySQL_Poll mypolls;
 	pthread_t thread_id;
 	int shutdown;
 	PtrArray *mysql_sessions;
-
+	
 	MySQL_Thread() {};
 	virtual ~MySQL_Thread() {};
 	virtual bool init() {return false;};

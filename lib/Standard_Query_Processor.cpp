@@ -16,7 +16,7 @@
 #define char_malloc (char *)malloc
 #define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
 
-#define itostr(__s, __i)  { __s=char_malloc(16); sprintf(__s, "%d", __i); }
+#define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
 
 class QP_rule_text_hitsonly {
 	public:
@@ -24,8 +24,8 @@ class QP_rule_text_hitsonly {
 	QP_rule_text_hitsonly(QP_rule_t *QPr) {
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*2);
-		itostr(pta[0], QPr->rule_id);
-		itostr(pta[1], QPr->hits);
+		itostr(pta[0], (long long)QPr->rule_id);
+		itostr(pta[1], (long long)QPr->hits);
 	}
 	~QP_rule_text_hitsonly() {
 		for(int i=0; i<2; i++) {
@@ -56,19 +56,19 @@ class QP_rule_text {
 	QP_rule_text(QP_rule_t *QPr) {
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*13);
-		itostr(pta[0], QPr->rule_id);
-		itostr(pta[1], QPr->active);
+		itostr(pta[0], (long long)QPr->rule_id);
+		itostr(pta[1], (long long)QPr->active);
 		pta[2]=strdup_null(QPr->username);
 		pta[3]=strdup_null(QPr->schemaname);
-		itostr(pta[4], QPr->flagIN);
+		itostr(pta[4], (long long)QPr->flagIN);
 		pta[5]=strdup_null(QPr->match_pattern);
-		itostr(pta[6], QPr->negate_match_pattern);
-		itostr(pta[7], QPr->flagOUT);
+		itostr(pta[6], (long long)QPr->negate_match_pattern);
+		itostr(pta[7], (long long)QPr->flagOUT);
 		pta[8]=strdup_null(QPr->replace_pattern);
-		itostr(pta[9], QPr->destination_hostgroup);
-		itostr(pta[10], QPr->cache_ttl);
-		itostr(pta[11], QPr->apply);
-		itostr(pta[12], QPr->hits);
+		itostr(pta[9], (long long)QPr->destination_hostgroup);
+		itostr(pta[10], (long long)QPr->cache_ttl);
+		itostr(pta[11], (long long)QPr->apply);
+		itostr(pta[12], (long long)QPr->hits);
 /*
 		itostr(rule_id, QPr->rule_id);
 		itostr(active, QPr->active);
@@ -115,7 +115,7 @@ struct __SQP_query_parser_t {
 
 typedef struct __SQP_query_parser_t SQP_par_t;
 
-static char *commands_counters_desc[MYSQL_COM_QUERY___UNKNOWN+1];
+static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];
 
 
 
@@ -170,10 +170,59 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 }
 
 
+class Command_Counter {
+	private:
+	int cmd_idx;
+	int _add_idx(unsigned long long t) {
+		if (t<=100) return 0;
+		if (t<=500) return 1;
+		if (t<=1000) return 2;
+		if (t<=5000) return 3;
+		if (t<=10000) return 4;
+		if (t<=50000) return 5;
+		if (t<=100000) return 6;
+		if (t<=500000) return 7;
+		if (t<=1000000) return 8;
+		if (t<=5000000) return 9;
+		if (t<=10000000) return 10;
+		return 11;
+	}
+	public:
+	unsigned long long total_time;
+	unsigned long long counters[13];
+	Command_Counter(int a) {
+		total_time=0;
+		cmd_idx=a;
+		total_time=0;
+		for (int i=0; i<13; i++) {
+			counters[i]=0;
+		}
+	}
+	unsigned long long add_time(unsigned long long t) {
+		total_time+=t;
+		counters[0]++;
+		int i=_add_idx(t);
+		counters[i+1]++;
+		return total_time;
+	}
+	char **get_row() {
+		char **pta=(char **)malloc(sizeof(char *)*15);
+		pta[0]=commands_counters_desc[cmd_idx];
+		itostr(pta[1],total_time);
+		for (int i=0;i<13;i++) itostr(pta[i+2], counters[i]);
+		return pta;
+	}
+	void free_row(char **pta) {
+		for (int i=1;i<15;i++) free(pta[i]);
+		free(pta);
+	}
+};
+
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
-__thread unsigned int _thr_commands_counters[MYSQL_COM_QUERY___UNKNOWN+1];
+//__thread unsigned int _thr_commands_counters[MYSQL_COM_QUERY___NONE];
+__thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 
 
 class Standard_Query_Processor: public Query_Processor {
@@ -181,7 +230,8 @@ class Standard_Query_Processor: public Query_Processor {
 private:
 rwlock_t rwlock;
 std::vector<QP_rule_t *> rules;
-unsigned int commands_counters[MYSQL_COM_QUERY___UNKNOWN+1];
+//unsigned int commands_counters[MYSQL_COM_QUERY___NONE];
+Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 
 volatile unsigned int version;
 protected:
@@ -191,12 +241,13 @@ Standard_Query_Processor() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
 	spinlock_rwlock_init(&rwlock);
 	version=0;
-	for (int i=0; i<=MYSQL_COM_QUERY___UNKNOWN; i++) commands_counters[i]=0;
+	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) commands_counters[i]=new Command_Counter(i);
 
 	commands_counters_desc[MYSQL_COM_QUERY_ALTER_TABLE]=(char *)"ALTER_TABLE";
   commands_counters_desc[MYSQL_COM_QUERY_ANALYZE_TABLE]=(char *)"ANALYZE_TABLE";
   commands_counters_desc[MYSQL_COM_QUERY_BEGIN]=(char *)"BEGIN";
   commands_counters_desc[MYSQL_COM_QUERY_CHANGE_MASTER]=(char *)"CHANGE_MASTER";
+  commands_counters_desc[MYSQL_COM_QUERY_COMMIT]=(char *)"COMMIT";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_DATABASE]=(char *)"CREATE_DATABASE";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_INDEX]=(char *)"CREATE_INDEX";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_TABLE]=(char *)"CREATE_TABLE";
@@ -235,10 +286,11 @@ Standard_Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_UNLOCK_TABLES]=(char *)"UNLOCK_TABLES";
   commands_counters_desc[MYSQL_COM_QUERY_UPDATE]=(char *)"UPDATE";
   commands_counters_desc[MYSQL_COM_QUERY_USE]=(char *)"USE";
-  commands_counters_desc[MYSQL_COM_QUERY___UNKNOWN]=(char *)"UNKNOWN";
+  commands_counters_desc[MYSQL_COM_QUERY_UNKNOWN]=(char *)"UNKNOWN";
 };
 
 virtual ~Standard_Query_Processor() {
+	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete commands_counters[i];
 	__reset_rules(&rules);
 };
 
@@ -247,7 +299,7 @@ virtual void init_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Per-Thread Query Processor Table with version=0\n");
 	_thr_SQP_version=0;
 	_thr_SQP_rules=new std::vector<QP_rule_t *>;
-	for (int i=0; i<=MYSQL_COM_QUERY___UNKNOWN; i++) _thr_commands_counters[i]=0;
+	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) _thr_commands_counters[i] = new Command_Counter(i);
 };
 
 
@@ -255,6 +307,7 @@ virtual void end_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Destroying Per-Thread Query Processor Table with version=%d\n", _thr_SQP_version);
 	__reset_rules(_thr_SQP_rules);
 	delete _thr_SQP_rules;
+	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete _thr_commands_counters[i];
 };
 
 virtual void print_version() {
@@ -349,16 +402,34 @@ virtual void commit() {
 
 virtual SQLite3_result * get_stats_commands_counters() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping commands counters%d\n");
-	SQLite3_result *result=new SQLite3_result(2);
+	SQLite3_result *result=new SQLite3_result(15);
 	result->add_column_definition(SQLITE_TEXT,"Command");
-	result->add_column_definition(SQLITE_TEXT,"Counter");
-	for (int i=0;i<=MYSQL_COM_QUERY___UNKNOWN;i++) {
+	result->add_column_definition(SQLITE_TEXT,"Total_Cnt");
+	result->add_column_definition(SQLITE_TEXT,"Total_Time_us");
+	result->add_column_definition(SQLITE_TEXT,"cnt_100us");
+	result->add_column_definition(SQLITE_TEXT,"cnt_500us");
+	result->add_column_definition(SQLITE_TEXT,"cnt_1ms");
+	result->add_column_definition(SQLITE_TEXT,"cnt_5ms");
+	result->add_column_definition(SQLITE_TEXT,"cnt_10ms");
+	result->add_column_definition(SQLITE_TEXT,"cnt_50ms");
+	result->add_column_definition(SQLITE_TEXT,"cnt_100ms");
+	result->add_column_definition(SQLITE_TEXT,"cnt_500ms");
+	result->add_column_definition(SQLITE_TEXT,"cnt_1s");
+	result->add_column_definition(SQLITE_TEXT,"cnt_5s");
+	result->add_column_definition(SQLITE_TEXT,"cnt_10s");
+	result->add_column_definition(SQLITE_TEXT,"cnt_INFs");
+	for (int i=0;i<MYSQL_COM_QUERY___NONE;i++) {
+		char **pta=commands_counters[i]->get_row();
+		result->add_row(pta);
+		commands_counters[i]->free_row(pta);
+/*
 		char **pta=(char **)malloc(sizeof(char *)*2);
 		pta[0]=commands_counters_desc[i];
-		itostr(pta[1], commands_counters[i]);
+		itostr(pta[1], (long long)commands_counters[i]);
 		result->add_row(pta);
 		free(pta[1]);
 		free(pta);
+*/
 	}
 	return result;
 }
@@ -580,9 +651,13 @@ virtual void update_query_processor_stats() {
 		}
 	}
 	spin_rdunlock(&rwlock);
-	for (int i=0; i<=MYSQL_COM_QUERY___UNKNOWN; i++) {
-		__sync_fetch_and_add(&commands_counters[i],_thr_commands_counters[i]);
-		_thr_commands_counters[i]=0;
+	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) {
+		for (int j=0; j<13; j++) {
+			__sync_fetch_and_add(&commands_counters[i]->counters[j],_thr_commands_counters[i]->counters[j]);
+			_thr_commands_counters[i]->counters[j]=0;
+		}
+		__sync_fetch_and_add(&commands_counters[i]->total_time,_thr_commands_counters[i]->total_time);
+		_thr_commands_counters[i]->total_time=0;
 	}
 };
 
@@ -594,7 +669,13 @@ virtual void * query_parser_init(char *query, int query_length, int flags) {
 
 virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {
 	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(args);
-	_thr_commands_counters[ret]++;
+	//_thr_commands_counters[ret]++;
+	return ret;
+}
+
+virtual unsigned long long query_parser_update_counters(enum MYSQL_COM_QUERY_command c, unsigned long long t) {
+	if (c>=MYSQL_COM_QUERY___NONE) return 0;
+	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 	return ret;
 }
 
@@ -619,7 +700,7 @@ enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args) {
 								if (!strcasecmp("TABLE",qp->sf.current->val))
 									return MYSQL_COM_QUERY_ALTER_TABLE;
 							}
-							return MYSQL_COM_QUERY___UNKNOWN;
+							return MYSQL_COM_QUERY_UNKNOWN;
 						}
 					}
 					if (!strcasecmp("ANALYZE",qp->sf.current->val)) { // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE
@@ -633,34 +714,34 @@ enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args) {
 								if (!strcasecmp("TABLE",qp->sf.current->val))
 									return MYSQL_COM_QUERY_ANALYZE_TABLE;
 							}
-							return MYSQL_COM_QUERY___UNKNOWN;
+							return MYSQL_COM_QUERY_UNKNOWN;
 						}
 					}
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 				case 'B':
 					if (!strcasecmp("BEGIN",qp->sf.current->val)) { // BEGIN
-						return MYSQL_COM_QUERY_DELETE;
+						return MYSQL_COM_QUERY_BEGIN;
 					}
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 				case 'C':
 					if (!strcasecmp("COMMIT",qp->sf.current->val)) { // COMMIT
-						return MYSQL_COM_QUERY_DELETE;
+						return MYSQL_COM_QUERY_COMMIT;
 					}
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 				case 'D':
 					if (!strcasecmp("DELETE",qp->sf.current->val)) { // DELETE
 						return MYSQL_COM_QUERY_DELETE;
 					}
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 				case 'I':
 					if (!strcasecmp("INSERT",qp->sf.current->val)) { // INSERT
 						return MYSQL_COM_QUERY_INSERT;
 					}
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 				case 'S':
 					if (!strcasecmp("SELECT",qp->sf.current->val)) { // SELECT
@@ -689,24 +770,24 @@ enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args) {
 									}
 								}
 							}
-							return MYSQL_COM_QUERY___UNKNOWN;
+							return MYSQL_COM_QUERY_UNKNOWN;
 						}
 					}
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 				case 'U':
 					if (!strcasecmp("UPDATE",qp->sf.current->val)) { // UPDATE
 						return MYSQL_COM_QUERY_UPDATE;
 					}
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 				default:
-					return MYSQL_COM_QUERY___UNKNOWN;
+					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 			}
 		}
 	}
-	return MYSQL_COM_QUERY___UNKNOWN;
+	return MYSQL_COM_QUERY_UNKNOWN;
 }
 
 virtual char * query_parser_first_comment(void *args) { return NULL; }

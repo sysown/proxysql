@@ -259,6 +259,7 @@ int MySQL_Data_Stream::read_from_net() {
 	} else {
         queue_w(queueIN,r);
         bytes_info.bytes_recv+=r;
+				if (mypolls) mypolls->last_recv[poll_fds_idx]=sess->thread->curtime;
         if (mybe) {
              //__sync_fetch_and_add(&myds->mybe->mshge->server_bytes.bytes_recv,r);
         }
@@ -283,6 +284,7 @@ int MySQL_Data_Stream::write_to_net() {
 		}
 	} else {
 		queue_r(queueOUT, bytes_io);
+		if (mypolls) mypolls->last_sent[poll_fds_idx]=sess->thread->curtime;
 		bytes_info.bytes_sent+=bytes_io;
 		if (mybe) {
  		//	__sync_fetch_and_add(&myds->mybe->mshge->server_bytes.bytes_sent,r);
@@ -395,7 +397,7 @@ int MySQL_Data_Stream::buffer2array() {
 
 int MySQL_Data_Stream::array2buffer() {
 	int ret=0;
-	unsigned int idx=0;
+	//unsigned int idx=0;
 	bool cont=true;
 	while (cont) {
 		if (queue_available(queueOUT)==0) return ret;

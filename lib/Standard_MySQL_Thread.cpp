@@ -552,8 +552,8 @@ virtual void run() {
 	int loops=0;	// FIXME: debug
 
 
-	unsigned long oldtime=monotonic_time();
-	unsigned long curtime=monotonic_time();
+	unsigned long long oldtime=monotonic_time();
+//	unsigned long curtime=monotonic_time();
 
 	while (shutdown==0) {
 
@@ -591,7 +591,7 @@ virtual void run() {
 			}
 
 
-		unsigned long long curtime=monotonic_time();
+		//unsigned long long curtime=monotonic_time();
 
 		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
 			refresh_variables();

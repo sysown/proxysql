@@ -9,6 +9,7 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_ANALYZE_TABLE,
 	MYSQL_COM_QUERY_BEGIN,
 	MYSQL_COM_QUERY_CHANGE_MASTER,
+	MYSQL_COM_QUERY_COMMIT,
 	MYSQL_COM_QUERY_CREATE_DATABASE,
 	MYSQL_COM_QUERY_CREATE_INDEX,
 	MYSQL_COM_QUERY_CREATE_TABLE,
@@ -48,7 +49,8 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_UPDATE,
 	MYSQL_COM_QUERY_USE,
 	MYSQL_COM_QUERY_SHOW,
-	MYSQL_COM_QUERY___UNKNOWN
+	MYSQL_COM_QUERY_UNKNOWN,
+	MYSQL_COM_QUERY___NONE // Special marker.
 };
 
 struct _Query_Processor_rule_t {
@@ -114,9 +116,12 @@ class Query_Processor {
 	virtual void update_query_processor_stats() {};
 
 	virtual void * query_parser_init(char *query, int query_length, int flags) {return NULL;};
-	virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {return MYSQL_COM_QUERY___UNKNOWN;}
+	virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {return MYSQL_COM_QUERY_UNKNOWN;}
 	virtual char * query_parser_first_comment(void *args) { return NULL; }
 	virtual void query_parser_free(void *args) {};
+
+	virtual unsigned long long query_parser_update_counters(enum MYSQL_COM_QUERY_command c, unsigned long long t) { return 0; }
+
 	virtual SQLite3_result * get_stats_commands_counters() {return NULL;};
 };
 

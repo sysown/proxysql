@@ -15,6 +15,21 @@ class MySQL_Session_userinfo {
 	bool set_schemaname(char *, int);
 };
 
+class Query_Info {
+	public:
+	unsigned long long start_time;
+	unsigned long long end_time;
+	void *QueryParserArgs;
+	enum MYSQL_COM_QUERY_command MyComQueryCmd;
+	unsigned char *QueryPointer;
+	int QueryLength;
+	void init(unsigned char *_p, int len, bool mysql_header=false);
+	void query_parser_init(); 
+	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
+	void query_parser_free(); 
+	unsigned long long query_parser_update_counters();
+};
+
 class MySQL_Session
 {
 	public:
@@ -36,7 +51,8 @@ class MySQL_Session
 	int active_transactions;
 	bool transaction_persistent;
 	int to_process;
-	void *query_parser_args;
+	Query_Info CurrentQuery;
+	//void *query_parser_args;
 	unsigned long long pause;
 	MySQL_Session_userinfo userinfo_client;
 	MySQL_Session_userinfo userinfo_server;
