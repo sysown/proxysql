@@ -1,6 +1,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#ifndef UNIX_PATH_MAX
+#define UNIX_PATH_MAX    108
+#endif 
 //static void cleanup(const void *data, size_t len, void *arg) {
 //	free(arg);
 //}
@@ -487,26 +490,50 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 
 	if (myconn==NULL) myconn= new MySQL_Connection(); // FIXME: why here? // 20141011
 
+	struct sockaddr_un u;
 	struct sockaddr_in a;
 	int s=0;
+	int len=0;
+	int rc=0;
 
-	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-		perror("socket");
-		close(s);
-		return -1;
+
+	if (connect_port) {
+		// TCP socket
+		if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+			perror("socket");
+			close(s);
+			return -1;
+		}
+		ioctl_FIONBIO(s, 1);
+		memset(&a, 0, sizeof(a));
+		a.sin_port = htons(connect_port);
+		a.sin_family = AF_INET;
+
+		if (!inet_aton(address, (struct in_addr *) &a.sin_addr.s_addr)) {
+			perror("bad IP address format");
+			close(s);
+			return -1;
+		}
+	} else {
+		// UNIX socket domain
+		if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+			perror("socket");
+			close(s);
+			return -1;
+		}
+		ioctl_FIONBIO(s, 1);
+		memset(u.sun_path,0,UNIX_PATH_MAX);
+		u.sun_family = AF_UNIX;
+		strncpy(u.sun_path, address, UNIX_PATH_MAX-1);
+		len=strlen(u.sun_path)+sizeof(u.sun_family);
 	}
-	ioctl_FIONBIO(s, 1);
-	memset(&a, 0, sizeof(a));
-	a.sin_port = htons(connect_port);
-	a.sin_family = AF_INET;
 
-	if (!inet_aton(address, (struct in_addr *) &a.sin_addr.s_addr)) {
-		perror("bad IP address format");
-		close(s);
-		return -1;
+	if (connect_port) {
+		rc=connect(s, (struct sockaddr *) &a, sizeof(a));
+	} else {
+		rc=connect(s, (struct sockaddr *) &u, len);
 	}
-
-	if (connect(s, (struct sockaddr *) &a, sizeof(a)) == -1) {
+	if (rc==-1) {
 		if (errno!=EINPROGRESS) {
 			perror("connect()");
 			shutdown(s, SHUT_RDWR);

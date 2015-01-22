@@ -247,6 +247,7 @@ MySQL_Hostgroup_Entry * MySQL_Hostgroup::get_random_hostgroup_entry() {
 		sum+=mshge->weight;
 	}
 	unsigned int j=rand()%sum;
+	j++;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "HID=%d, MSHGEs=%d, total_weight=%d, rand=%d\n" , hostgroup_id, MSHGEs->len, sum, j);
 	sum=0;
 	for (i=0; i<MSHGEs->len; i++) {
