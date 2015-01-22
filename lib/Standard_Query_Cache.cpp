@@ -16,7 +16,15 @@
 	do {\
 		__a+=__c; \
 		if (__a>=__d) { \
-			__sync_fetch_and_add(&__b,__a); __a=0; \
+			__sync_fetch_and_add(&__b, __a - __a % __d); __a = __a % __d; \
+		} \
+	} while(0) 
+
+#define THR_DECREASE_CNT(__a, __b, __c, __d) \
+	do {\
+		__a+=__c; \
+		if (__a>=__d) { \
+			__sync_fetch_and_sub(&__b, __a - __a % __d); __a = __a % __d; \
 		} \
 	} while(0) 
 
@@ -29,10 +37,22 @@ __thread uint64_t __thr_cntGetOK=0;
 __thread uint64_t __thr_dataIN=0;
 __thread uint64_t __thr_dataOUT=0;
 __thread uint64_t __thr_num_entries=0;
+__thread uint64_t __thr_num_deleted=0;
 __thread uint64_t __thr_size_values=0;
 //__thread uint64_t __thr_freeable_memory=0;
 
 #define DEFAULT_SQC_size  4*1024*1024
+
+
+static uint64_t Glo_cntSet=0;
+static uint64_t Glo_cntGet=0;
+static uint64_t Glo_cntGetOK=0;
+static uint64_t Glo_num_entries=0;
+static uint64_t Glo_dataIN=0;
+static uint64_t Glo_dataOUT=0;
+static uint64_t Glo_cntPurge=0;
+static uint64_t Glo_size_values=0;
+static uint64_t Glo_total_freed_memory;
 
 /*
 */
@@ -74,40 +94,40 @@ class KV_BtreeArray {
   bool __insert(uint64_t, void *);
 
 
-	uint64_t num_entries;
-	uint64_t size_values;
+//	uint64_t num_entries;
+//	uint64_t size_values;
 
 	uint64_t freeable_memory;
 
-	uint64_t dataIN;
-	uint64_t dataOUT;
-	uint64_t cntGet;
-	uint64_t cntGetOK;
-	uint64_t cntSet;
+//	uint64_t dataIN;
+//	uint64_t dataOUT;
+//	uint64_t cntGet;
+//	uint64_t cntGetOK;
+//	uint64_t cntSet;
 
-	uint64_t cntPurge;
-	uint64_t total_freed_memory;
+//	uint64_t cntPurge;
+//	uint64_t total_freed_memory;
 
   public:
 	uint64_t tottopurge;
   KV_BtreeArray() {
-		num_entries=0;
-		size_values=0;
+//		num_entries=0;
+		//size_values=0;
 		freeable_memory=0;
-		dataIN=0;
-		dataOUT=0;
-		cntGet=0;
-		cntGetOK=0;
-		cntSet=0;
-		cntPurge=0;
-		total_freed_memory=0;
+//		dataIN=0;
+//		dataOUT=0;
+//		cntGet=0;
+//		cntGetOK=0;
+//		cntSet=0;
+//		cntPurge=0;
+//		total_freed_memory=0;
 		tottopurge=0;
 		spinlock_rwlock_init(&lock);
 		//dataSize=0;
 	};
 
   ~KV_BtreeArray() {
-		proxy_debug(PROXY_DEBUG_QUERY_CACHE, 3, "Size of  KVBtreeArray:%d , freed_memory:%lu, cntGet:%lu, cntGetOK:%lu, cntSet:%lu, cntPurge:%lu, dataIN:%lu, dataOUT:%lu\n", cnt() , total_freed_memory, cntGet, cntGetOK, cntSet, cntPurge, dataIN, dataOUT);
+		proxy_debug(PROXY_DEBUG_QUERY_CACHE, 3, "Size of  KVBtreeArray:%d , ptrArray:%llu\n", cnt() , ptrArray.len);
 		empty();
 		QC_entry_t *qce=NULL;
 		while (ptrArray.len) {
@@ -119,7 +139,7 @@ class KV_BtreeArray {
 
 
 	uint64_t get_data_size() {
-		uint64_t r = __sync_fetch_and_add(&num_entries,0) * (sizeof(QC_entry_t)+sizeof(QC_entry_t *)*2+sizeof(uint64_t)*2) +  __sync_fetch_and_add(&size_values,0) ;
+		uint64_t r = __sync_fetch_and_add(&Glo_num_entries,0) * (sizeof(QC_entry_t)+sizeof(QC_entry_t *)*2+sizeof(uint64_t)*2) +  __sync_fetch_and_add(&Glo_size_values,0) ;
 		return r;
 	};
 
@@ -162,11 +182,17 @@ class KV_BtreeArray {
 				}
 			}
 	  	spin_wrunlock(&lock);
-			__sync_fetch_and_sub(&num_entries,removed_entries);
-			__sync_fetch_and_add(&total_freed_memory,freed_memory);
-			__sync_fetch_and_sub(&size_values,freed_memory);
-			__sync_fetch_and_add(&cntPurge,removed_entries);
-			if (removed_entries) fprintf(stderr,"Removed: %lu, total: %lu, arraylen: %d\n", removed_entries, __sync_fetch_and_sub(&num_entries,0), ptrArray.len);
+			//__sync_fetch_and_sub(&Glo_num_entries,removed_entries);
+			//__thr_num_deleted+=removed_entries;
+			//THR_DECREASE_CNT(__thr_num_deleted,Glo_num_entries,removed_entries,100);
+			THR_DECREASE_CNT(__thr_num_deleted,Glo_num_entries,removed_entries,1);
+			if (removed_entries) {
+				__sync_fetch_and_add(&Glo_total_freed_memory,freed_memory);
+				__sync_fetch_and_sub(&Glo_size_values,freed_memory);
+				__sync_fetch_and_add(&Glo_cntPurge,removed_entries);
+//				if (removed_entries) fprintf(stderr,"Removed: %lu, total: %lu, arraylen: %d\n", removed_entries, __sync_fetch_and_sub(&Glo_num_entries,0), ptrArray.len);
+//				if (removed_entries) firintf(stderr,"Size of  KVBtreeArray:%d , freed_memory:%lu, Glo_cntGet:%lu, Glo_cntGetOK:%lu, Glo_cntSet:%lu, cntPurge:%lu, dataIN:%lu, dataOUT:%lu\n", cnt() , Glo_total_freed_memory, Glo_cntGet, Glo_cntGetOK, Glo_cntSet, Glo_cntPurge, Glo_dataIN, Glo_dataOUT);
+			}
 		}
 	};
 
@@ -177,18 +203,19 @@ class KV_BtreeArray {
 	bool replace(uint64_t key, QC_entry_t *entry) {
 	  spin_wrlock(&lock);
 		//cntSet++;
-		THR_UPDATE_CNT(__thr_cntSet,cntSet,1,100);
+		THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,100);
 		//__sync_fetch_and_add(&cntSet,1);
 	//__sync_fetch_and_add(&size_keys,kl);
 		//size_values+=entry->length;
 		//dataIN+=entry->length;
-		THR_UPDATE_CNT(__thr_size_values,size_values,entry->length,100);
+		THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,100);
 		//__sync_fetch_and_add(&size_values,entry->length);
-		THR_UPDATE_CNT(__thr_dataIN,dataIN,entry->length,100);
+		THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,100);
 		//__sync_fetch_and_add(&dataIN,entry->length);
 //	__sync_fetch_and_add(&size_metas,sizeof(fdb_hash_entry)+sizeof(fdb_hash_entry *));
 		//__sync_fetch_and_add(&size_metas,sizeof(QC_entry_t)+sizeof(QC_entry_t *)*4);
-		THR_UPDATE_CNT(__thr_num_entries,num_entries,1,100);
+		//THR_UPDATE_CNT(__thr_num_entries,Glo_num_entries,1,100);
+		THR_UPDATE_CNT(__thr_num_entries,Glo_num_entries,1,1);
 		//__sync_fetch_and_add(&num_entries,1);
 		//size_metas+=sizeof(QC_entry_t)+sizeof(QC_entry_t *)*4;
 
@@ -210,7 +237,7 @@ class KV_BtreeArray {
 		QC_entry_t *entry=NULL;
 		spin_rdlock(&lock);
 		//__cntGet++;
-		THR_UPDATE_CNT(__thr_cntGet,cntGet,1,100);
+		THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,100);
 //		if (++__thr_cntGet==1000) {
 //			__sync_fetch_and_add(&cntGet,__thr_cntGet); __thr_cntGet=0;
 //		}
@@ -220,11 +247,11 @@ class KV_BtreeArray {
 	  if (lookup != bt_map.end()) {
 			entry=lookup->second;
 			__sync_fetch_and_add(&entry->ref_count,1);
-			THR_UPDATE_CNT(__thr_cntGetOK,cntGetOK,1,100);
+			THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,100);
 //			if (++__thr_cntGetOK==1000) {
 //				__sync_fetch_and_add(&cntGetOK,__thr_cntGetOK); __thr_cntGetOK=0;
 //			}
-			THR_UPDATE_CNT(__thr_dataOUT,dataOUT,entry->length,10000);
+			THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,10000);
 			//__sync_fetch_and_add(&dataOUT,entry->length);
 	 	}	
 		spin_rdunlock(&lock);
