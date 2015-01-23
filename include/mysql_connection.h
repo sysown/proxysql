@@ -10,6 +10,7 @@ class MySQL_Connection {
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
 	public:
+	void *parent;
 //	void * operator new(size_t);
 //	void operator delete(void *);
 	MySQL_Data_Stream *myds;

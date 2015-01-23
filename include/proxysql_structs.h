@@ -202,6 +202,7 @@ class SQLite3_result;
 class MySQL_Hostgroup_Entry;
 class MySQL_Hostgroup;
 class MySQL_HostGroups_Handler;
+class MySQL_HostGroups_Manager;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
@@ -600,9 +601,11 @@ GOptionEntry cmd_option_entries[] =
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
 MySQL_HostGroups_Handler *MyHGH;
+MySQL_HostGroups_Manager *MyHGM;
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_HostGroups_Handler *MyHGH;
+extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
 #endif /* PROXYSQL_EXTERN */

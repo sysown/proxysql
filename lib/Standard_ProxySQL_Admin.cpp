@@ -1307,16 +1307,19 @@ int *main_callback_func;
 public:
 */
 Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
-	int i;
+//	int i;
 
 	SPA=this;
 	spinlock_rwlock_init(&rwlock);
+/*
+ * moved to main()
 	i=sqlite3_config(SQLITE_CONFIG_URI, 1);
 	if (i!=SQLITE_OK) {
   	fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
 		assert(i==SQLITE_OK);
 		exit(EXIT_FAILURE);
 	}
+*/
 	variables.admin_credentials=strdup("admin:admin");
 	variables.stats_credentials=strdup("stats:stats");
 	variables.mysql_ifaces=strdup("127.0.0.1:6032");
@@ -2401,10 +2404,12 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
+			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), MYSQL_SERVER_STATUS_ONLINE);
 			MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
 		}
 	}
 	MyHGH->wrunlock();
+	MyHGM->commit();
 //	if (error) free(error);
 	if (resultset) delete resultset;
 }

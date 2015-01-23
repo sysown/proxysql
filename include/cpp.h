@@ -19,5 +19,6 @@
 #include "configfile.hpp"
 #include "query_processor.h"
 #include "proxysql_admin.h"
+#include "MySQL_HostGroups_Manager.h"
 //#include "proxysql_glovars.hpp"
 //#endif /* __cplusplus */

@@ -192,6 +192,16 @@ int main(int argc, const char * argv[]) {
 {
 	__thr_sfp=l_mem_init();
 
+	{
+		/* moved here, so if needed by multiple modules it applies to all of them */
+		int i=sqlite3_config(SQLITE_CONFIG_URI, 1);
+		if (i!=SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
+			assert(i==SQLITE_OK);
+			exit(EXIT_FAILURE);
+		}
+	}
+
 	SSL_library_init();
 	SSL_METHOD *ssl_method;
 	OpenSSL_add_all_algorithms();
@@ -390,6 +400,7 @@ __start_label:
 	GloQPro=NULL;
 	GloMTH=NULL;
 	MyHGH=new MySQL_HostGroups_Handler();
+	MyHGM=new MySQL_HostGroups_Manager();
 
 	GloMTH=create_MySQL_Threads_Handler();
 	GloMTH->print_version();
@@ -570,6 +581,7 @@ __shutdown:
 
 	delete GloAdmin;
 	delete MyHGH;
+	delete MyHGM;
 
 	if (glovars.reload) {
 		//sleep(1);
