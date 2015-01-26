@@ -107,4 +107,4 @@ class MySQL_Session
 
 };
 
-#endif /* __CLASS_MYSQL_SESSION_H w
+#endif /* __CLASS_MYSQL_SESSION_ H */
