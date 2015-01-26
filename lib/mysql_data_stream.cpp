@@ -553,6 +553,15 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 }
 
 
+void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
+	unsigned int k;
+	PtrSize_t pkt2;
+	for (k=0; k<PSarrayOUT->len;) {
+		PSarrayOUT->remove_index(0,&pkt2);
+		PSarrayOUTpending->add(pkt2.ptr, pkt2.size);
+	}
+}
+
 int MySQL_Data_Stream::assign_mshge(unsigned int hid) {
 	assert (myconn);
 	return myconn->assign_mshge(hid);
