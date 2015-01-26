@@ -148,7 +148,7 @@ MySQL_Backend::MySQL_Backend() {
 	myconn=NULL;
 	server_bytes_at_cmd.bytes_recv=0;
 	server_bytes_at_cmd.bytes_sent=0;
-	mshge=NULL;
+	//mshge=NULL;
 }
 
 MySQL_Backend::~MySQL_Backend() {
@@ -163,16 +163,17 @@ void MySQL_Backend::reset() {
 		if (myconn->reusable==true) {
 			//server_myds->myconn=NULL;
 			//delete myconn;
-			myconn->return_to_connection_pool();
+			MyHGM->push_MyConn_to_pool(myconn);
+//			myconn->return_to_connection_pool();
 			myconn=NULL;
 		} else {
 //			MyConnArray *MCA=MyConnPool->MyConnArray_lookup(myconn->mshge->MSptr->address, myconn->myconn.user, myconn->mshge->MSptr->password, myconn->mshge->MSptr->db, myconn->mshge->MSptr->port);
 			delete myconn;
 		}
 	};
-	if (mshge) {
+	//if (mshge) {
 		// FIXME: what to do with it?
-	}
+	//}
 }
 
 

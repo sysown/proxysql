@@ -14,6 +14,7 @@ class MySQL_Protocol {
 #ifdef DEBUG
 	bool dump_pkt;
 #endif
+	uint16_t prot_status;
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	void init(MySQL_Data_Stream **, MySQL_Session_userinfo *, MySQL_Session *);
 	int pkt_handshake_client(unsigned char *, unsigned int);
@@ -63,6 +64,7 @@ class MySQL_Protocol {
 //	bool process_pkt_initial_handshake(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len);
 //	bool process_pkt_COM_QUERY(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len);
 	bool process_pkt_OK(unsigned char *pkt, unsigned int len);
+	bool process_pkt_EOF(unsigned char *pkt, unsigned int len);
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
 	bool process_pkt_initial_handshake(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);

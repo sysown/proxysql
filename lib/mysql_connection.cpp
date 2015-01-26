@@ -18,6 +18,7 @@ MySQL_Connection::MySQL_Connection() {
 	inserted_into_pool=0;
 	reusable=false;
 	parent=NULL;
+	fd=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 

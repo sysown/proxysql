@@ -249,8 +249,13 @@ bool MySQL_HostGroups_Manager::commit() {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			long long ptr=atoll(r->fields[0]);
+			long long ptr=atoll(r->fields[5]);
 			fprintf(stderr,"%lld\n", ptr);
+			if (ptr==0) {
+				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]));
+				add(mysrvc,atoi(r->fields[0]));
+			}
+	
 		}
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
@@ -284,6 +289,7 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 		myhgc=MyHGC_create(_hid);
 	}
 	assert(myhgc);
+	MyHostGroups->add(myhgc);
 	return myhgc;
 }
 
@@ -295,17 +301,21 @@ MySrvC * MyHGC::MySrvC_lookup_with_coordinates(MySQL_Connection *c) {
 }
 */
 
-//MyHGC * MySQL_HostGroups_Manager::MyConn_add_to_poll(MySQL_Connection *c, int _hid) {
-void MySQL_HostGroups_Manager::push_MyConn_to_poll(MySQL_Connection *c) {
+//MyHGC * MySQL_HostGroups_Manager::MyConn_add_to_pool(MySQL_Connection *c, int _hid) {
+void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 	assert(c->parent);
 	MySrvC *mysrvc=NULL;
 //	if (c->parent) {
-	mysrvc=(MySrvC *)(c->parent);
+	//mysrvc=(MySrvC *)(c->parent);
 //	} else {
 //		MyHGC=MyHGC_lookup(_hid);
 //		MySrvC=MyHGC->MySrvC_lookup_with_coordinates(c);
 //	}
+	wrlock();
+	mysrvc=(MySrvC *)c->parent;
+  mysrvc->ConnectionsUsed->remove(c);
 	mysrvc->ConnectionsFree->add(c);
+	wrunlock();
 }
 
 
@@ -339,24 +349,38 @@ MySQL_Connection * MySrvConnList::get_random_MyConn() {
 	} else {
 		conn = new MySQL_Connection();
 		conn->parent=mysrvc;
+		return  conn;
 	}
 	return NULL; // never reach here
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_poll(unsigned int _hid) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid) {
 	MySQL_Connection * conn=NULL;
+	wrlock();
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	MySrvC *mysrvc=myhgc->get_random_MySrvC();
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
-		conn=mysrvc->ConnectionsUsed->get_random_MyConn();
-		mysrvc->ConnectionsFree->add(conn);
+		//conn=mysrvc->ConnectionsUsed->get_random_MyConn();
+		//mysrvc->ConnectionsFree->add(conn);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn();
+		mysrvc->ConnectionsUsed->add(conn);
 	}
 //	conn->parent=mysrvc;
+	wrunlock();
 	return conn;
 }
 
-void MySQL_HostGroups_Manager::destroy_MyConn_from_poll(MySQL_Connection *c) {
+void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
+	wrlock();
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	mysrvc->ConnectionsUsed->remove(c);
 	delete c;
+	wrunlock();
+}
+
+
+
+void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
+	MyHGC *myhgc=MyHGC_lookup(_hid);
+	myhgc->mysrvs->add(mysrvc);
 }

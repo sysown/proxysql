@@ -81,6 +81,8 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);
 
+	void add(MySrvC *, unsigned int);
+
 	public:
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
@@ -93,12 +95,12 @@ class MySQL_HostGroups_Manager {
 
 	MyHGC * MyHGC_lookup(unsigned int);
 	
-	void MyConn_add_to_poll(MySQL_Connection *);
+	void MyConn_add_to_pool(MySQL_Connection *);
 
-	MySQL_Connection * get_MyConn_from_poll(unsigned int);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int);
 
-	void push_MyConn_to_poll(MySQL_Connection *);
-	void destroy_MyConn_from_poll(MySQL_Connection *);	
+	void push_MyConn_to_pool(MySQL_Connection *);
+	void destroy_MyConn_from_pool(MySQL_Connection *);	
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

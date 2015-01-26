@@ -5,6 +5,8 @@ extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
 
+static unsigned int __debugging_mp=0;
+
 MySQL_Session_userinfo::MySQL_Session_userinfo() {
 	username=NULL;
 	password=NULL;
@@ -266,7 +268,7 @@ int MySQL_Session::handler() {
 			}
 			if (pause<=0) {
 				unsigned long long curtime=monotonic_time();
-				int rc=server_myds->assign_mshge(current_hostgroup);
+				//int rc=server_myds->assign_mshge(current_hostgroup);
 
 				//mybe=find_backend(1);
 				mybe=find_or_create_backend(current_hostgroup,server_myds);
@@ -445,10 +447,10 @@ int MySQL_Session::handler() {
 			unsigned long long curtime=monotonic_time();
 
 			// if DSS==STATE_NOT_INITIALIZED , we expect few pointers to be NULL . If it is not null, we have a bug
-			assert(mybe->mshge==NULL);
+			//assert(mybe->mshge==NULL);
 			assert(server_myds->myconn==NULL);
 			assert(mybe->myconn==NULL);
-
+/*
 			// Get a MSHGE
 			mybe->mshge=MyHGH->get_random_hostgroup_entry(mybe->hostgroup_id);
 
@@ -459,7 +461,7 @@ int MySQL_Session::handler() {
 //			if (mybe->mshge==NULL) {
 //				goto __exit_DSS__STATE_NOT_INITIALIZED;
 //			}
-
+*/
 			handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
 			thread->mypolls.add(POLLIN|POLLOUT, server_fd, server_myds, curtime);
@@ -634,6 +636,23 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 		server_myds->DSS=STATE_READY;
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
+
+		//myprot_server.get_status((unsigned char *)pkt->ptr, pkt->size);
+
+		/* multi-plexing attempt */
+		if (c==0xfe) {
+			myprot_server.process_pkt_EOF((unsigned char *)pkt->ptr,pkt->size);
+			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, myprot_server.prot_status);
+			if ((myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0) {
+				MyHGM->push_MyConn_to_pool(mybe->myconn);
+				mybe->myconn=NULL;
+				server_myds->unplug_backend();
+				unsigned int aa=__sync_fetch_and_add(&__debugging_mp,1);
+				if (aa%1000==0) fprintf(stderr,"mp=%u\n", aa);
+			}
+		}
+		/* multi-plexing attempt */	
+
 		if (qpo) {
 			if (qpo->cache_ttl>0) { // Fixed bug #145
 				client_myds->PSarrayOUT->copy_add(server_myds->resultset,0,server_myds->resultset->len);
@@ -844,6 +863,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 	}
+	if ( qpo->destination_hostgroup >= 0 ) current_hostgroup=qpo->destination_hostgroup;
 	//GloQPro->delete_QP_out(qpo);
 	//qpo=NULL;
 	//fprintf(stderr,"Query needs to be cached\n");
@@ -861,12 +881,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
-			MySQL_Server *m=mybe->mshge->MSptr;
-			mybe->myconn=MyConnPool->MySQL_Connection_lookup(m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, mybe=%p, mshge=%p, host=%s, port=%d\n", this, mybe, mybe->mshge, m->address, m->port);
-			
-			if (mybe->myconn==NULL) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection not found\n", this);
+			//MySQL_Server *m=mybe->mshge->MSptr;
+			//mybe->myconn=MyConnPool->MySQL_Connection_lookup(m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
+			//proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, mybe=%p, mshge=%p, host=%s, port=%d\n", this, mybe, mybe->mshge, m->address, m->port);
+
+	mybe->myconn=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+
+			//if (mybe->myconn==NULL) {
+	if (mybe->myconn->fd==-1) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection has no FD\n", this);
+		server_myds->myconn=mybe->myconn;
 			// we didn't get a connection, we need to create one
 //							int rc=server_myds->assign_mshge(current_hostgroup);
 //						assert(server_myds);
@@ -874,23 +898,25 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 //						assert(server_myds->myconn->mshge);
 //						assert(server_myds->myconn->mshge->MSptr);
 //	      					server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
-	      					server_fd=server_myds->myds_connect(m->address, m->port, &pending_connect);
+	      					//server_fd=server_myds->myds_connect(m->address, m->port, &pending_connect);
+		server_fd=server_myds->myds_connect(mybe->myconn->parent->address, mybe->myconn->parent->port, &pending_connect);
         //  				server_fd=server_myds->myds_connect((char *)"127.0.0.1", 3306, &pending_connect);
         	//server_myds->myconn->MCA=MyConnPool->MyConnArray_lookup(m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
-        	server_myds->myconn->set_MCA(MyConnPool, m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
-									server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);
-					mybe->myconn=server_myds->myconn;
-					mybe->myconn->reusable=true;
-					status=CONNECTING_SERVER;
-					server_myds->DSS=STATE_NOT_CONNECTED;
-			} else {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection found = %p\n", this, mybe->myconn);
-				server_myds->myconn=mybe->myconn;
-				server_myds->assign_fd_from_mysql_conn();
-				server_fd=server_myds->fd;
-				server_myds->myds_type=MYDS_BACKEND;
-				server_myds->DSS=STATE_READY;
-			}
+        	//server_myds->myconn->set_MCA(MyConnPool, m->address, userinfo_client.username, userinfo_client.password, userinfo_client.schemaname, m->port);
+		server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);
+		mybe->myconn=server_myds->myconn;
+		mybe->myconn->reusable=true;
+		server_myds->myconn->fd=server_myds->fd;
+		status=CONNECTING_SERVER;
+		server_myds->DSS=STATE_NOT_CONNECTED;
+	} else {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection found = %p\n", this, mybe->myconn);
+		server_myds->myconn=mybe->myconn;
+		server_myds->assign_fd_from_mysql_conn();
+		server_fd=server_myds->fd;
+		server_myds->myds_type=MYDS_BACKEND;
+		server_myds->DSS=STATE_READY;
+	}
 }
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend() {

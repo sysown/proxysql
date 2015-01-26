@@ -319,13 +319,13 @@ int pkt_com_query(unsigned char *pkt, unsigned int length) {
 	return PKT_PARSED;
 }
 
-int pkt_ok(unsigned char *pkt, unsigned int length) {
+int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 	if (length < 7) return PKT_ERROR;
 
    uint64_t affected_rows;
    uint64_t  insert_id;
-   uint64_t  status;  // FIXME: uint16_t
-   uint64_t  warns;  // FIXME: uint16_t
+   //uint64_t  status;  // FIXME: uint16_t
+   uint16_t  warns;  // FIXME: uint16_t
    unsigned char msg[length];
 
 	unsigned int p=0;
@@ -337,7 +337,7 @@ int pkt_ok(unsigned char *pkt, unsigned int length) {
 	pkt	+= rc; p+=rc;
 	rc=mysql_decode_length(pkt,&insert_id);
 	pkt	+= rc; p+=rc;
-	status=CPY2(pkt);
+	mp->prot_status=CPY2(pkt);
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
 	warns=CPY2(pkt);
@@ -352,24 +352,25 @@ int pkt_ok(unsigned char *pkt, unsigned int length) {
 		msg[0]=0;
 	}
 
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)status, (uint16_t)warns, msg);
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)mp->prot_status, (uint16_t)warns, msg);
 	
 	return PKT_PARSED;
 }
 
 
-int pkt_end(unsigned char *pkt, unsigned int length)
+
+int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
 {
 	if(*pkt != 0xFE || length > 5) return PKT_ERROR;
 
 	uint16_t warns = 0;
-	uint16_t status = 0;
+	//uint16_t status = 0;
 
 	if(length > 1) { // 4.1+
 		pkt++;
 		warns    = CPY2(pkt);
 		pkt    += 2;
-		status  = CPY2(pkt);
+		mp->prot_status  = CPY2(pkt);
 
 /*
       if((tag->state == STATE_TXT_ROW || tag->state == STATE_BIN_ROW) &&
@@ -379,7 +380,7 @@ int pkt_end(unsigned char *pkt, unsigned int length)
    }
 */
 	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n", status, warns);
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n", mp->prot_status, warns);
 
 //	if(status & SERVER_MORE_RESULTS_EXISTS) {
 //		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n");
@@ -389,14 +390,14 @@ int pkt_end(unsigned char *pkt, unsigned int length)
 }
 
 
-int pkt_handshake_server(unsigned char *pkt, unsigned int length) {
+int pkt_handshake_server(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 	//return PKT_PARSED;
 	if (*pkt != 0x0A || length < 29) return PKT_ERROR;
 
 	uint8_t protocol;
 	uint16_t capabilities;
 	uint8_t charset;
-	uint16_t status;
+	//uint16_t status;
 	uint32_t thread_id;
 
 	unsigned char * version;
@@ -415,7 +416,7 @@ int pkt_handshake_server(unsigned char *pkt, unsigned int length) {
 	pkt    += sizeof(uint16_t);
 	charset = *(uint8_t *)pkt;
 	pkt    += sizeof(uint8_t);
-	status  = CPY2(pkt);
+	mp->prot_status  = CPY2(pkt);
 	pkt    += 15; // 2 for status, 13 for zero-byte padding
 	salt2   = pkt;
 
@@ -425,7 +426,7 @@ int pkt_handshake_server(unsigned char *pkt, unsigned int length) {
 	salt2 = pkt;
 	
 
-   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, status);
+   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, mp->prot_status);
 //   if(op.verbose) unmask_caps(caps);
 
    return PKT_PARSED;
@@ -516,7 +517,7 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
 				return PKT_ERROR;
 			}
-			if (pkt_handshake_server(payload, hdr.pkt_length)==PKT_PARSED) {
+			if (pkt_handshake_server(payload, hdr.pkt_length, this)==PKT_PARSED) {
 				*DSS=STATE_SERVER_HANDSHAKE;
 				return PKT_PARSED;
 			}
@@ -541,7 +542,7 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 			c=mysql_response(payload, hdr.pkt_length);
 			switch (c) {
 				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length)==PKT_PARSED) {
+					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
 						*DSS=STATE_SLEEP;
 						return PKT_PARSED;
 					}
@@ -578,13 +579,13 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 			c=mysql_response(payload, hdr.pkt_length);
 			switch (c) {
 				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length)==PKT_PARSED) {
+					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
 						*DSS=STATE_SLEEP;
 						return PKT_PARSED;
 					}
 					break;
 				case EOF_Packet:
-					pkt_end(payload, hdr.pkt_length);
+					pkt_end(payload, hdr.pkt_length, this);
 					break;
 				default:
 					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
@@ -1285,8 +1286,8 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 
 	uint64_t affected_rows;
 	uint64_t  insert_id;
-	uint64_t  status;  // FIXME: uint16_t
-	uint64_t  warns;  // FIXME: uint16_t
+	//uint16_t  status;
+	uint16_t  warns;
 	unsigned char msg[len];
 
 	unsigned int p=0;
@@ -1298,7 +1299,7 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 	pkt += rc; p+=rc;
 	rc=mysql_decode_length(pkt,&insert_id);
 	pkt += rc; p+=rc;
-	status=CPY2(pkt);
+	prot_status=CPY2(pkt);
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
 	warns=CPY2(pkt);
@@ -1313,9 +1314,19 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 		msg[0]=0;
 	}
 
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)status, (uint16_t)warns, msg);
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)prot_status, (uint16_t)warns, msg);
 	
 	return true;
+}
+
+bool MySQL_Protocol::process_pkt_EOF(unsigned char *pkt, unsigned int len) {
+	int ret;
+	mysql_hdr hdr;
+	unsigned char *payload;
+	memcpy(&hdr,pkt,sizeof(mysql_hdr));
+	payload=pkt+sizeof(mysql_hdr);
+	ret=pkt_end(payload, hdr.pkt_length, this);
+	return ( ret==PKT_PARSED ? true : false );
 }
 
 //bool MySQL_Protocol::process_pkt_COM_QUERY(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
@@ -1350,7 +1361,7 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 	uint8_t protocol;
 	uint16_t capabilities;
 	uint8_t charset;
-	uint16_t status;
+	//uint16_t status;
 	uint32_t thread_id;
 
 	unsigned char * version;
@@ -1369,7 +1380,7 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 	pkt    += sizeof(uint16_t);
 	charset = *(uint8_t *)pkt;
 	pkt    += sizeof(uint8_t);
-	status  = CPY2(pkt);
+	prot_status  = CPY2(pkt);
 	pkt    += 15; // 2 for status, 13 for zero-byte padding
 	salt2   = pkt;
 
@@ -1379,7 +1390,7 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 	salt2 = pkt;
 	
 
-   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, status);
+   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, prot_status);
 //   if(op.verbose) unmask_caps(caps);
 
 
@@ -1515,4 +1526,5 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	return ret;
 }
 
-
+//uint16_t get_status(unsigned char *pkt, unsigned int len) {
+//}

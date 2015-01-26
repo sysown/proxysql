@@ -474,7 +474,8 @@ __start_label:
 	// start all services
 
 
-	listen_fd=listen_on_port((char *)"127.0.0.1",6033, 50);
+	//listen_fd=listen_on_port((char *)"127.0.0.1",6033, 50);
+	listen_fd=listen_on_port((char *)"0.0.0.0",6033, 50);
 	socket_fd=listen_on_unix((char *)"/tmp/proxysql.sock", 50);
 	ioctl_FIONBIO(listen_fd, 1);
 	ioctl_FIONBIO(socket_fd, 1);

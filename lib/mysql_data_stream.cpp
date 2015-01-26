@@ -246,28 +246,28 @@ void MySQL_Data_Stream::check_data_flow() {
 int MySQL_Data_Stream::read_from_net() {
 	if ((revents & POLLIN)==0) return 0;
 	int r;
-    int s=queue_available(queueIN);
-    r = ( encrypted ? SSL_read (ssl, queue_w_ptr(queueIN), s) : recv(fd, queue_w_ptr(queueIN), s, 0) );
-    proxy_debug(PROXY_DEBUG_NET, 5, "read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
+	int s=queue_available(queueIN);
+	r = ( encrypted ? SSL_read (ssl, queue_w_ptr(queueIN), s) : recv(fd, queue_w_ptr(queueIN), s, 0) );
+	proxy_debug(PROXY_DEBUG_NET, 5, "read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
 	//proxy_error("read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
-    if (r < 1) {
-			if (encrypted==false) {
-				if (r==0 || (r==-1 && errno != EINTR && errno != EAGAIN)) {
+	if (r < 1) {
+		if (encrypted==false) {
+			if (r==0 || (r==-1 && errno != EINTR && errno != EAGAIN)) {
 				shut_soft();
-			} else {
-				int ssl_ret=SSL_get_error(ssl, r);
-				if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
 			}
+		} else {
+			int ssl_ret=SSL_get_error(ssl, r);
+			if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
 		}
 	} else {
-        queue_w(queueIN,r);
-        bytes_info.bytes_recv+=r;
-				if (mypolls) mypolls->last_recv[poll_fds_idx]=sess->thread->curtime;
-        if (mybe) {
-             //__sync_fetch_and_add(&myds->mybe->mshge->server_bytes.bytes_recv,r);
-        }
-    }
-    return r;
+		queue_w(queueIN,r);
+		bytes_info.bytes_recv+=r;
+		if (mypolls) mypolls->last_recv[poll_fds_idx]=sess->thread->curtime;
+		if (mybe) {
+            //__sync_fetch_and_add(&myds->mybe->mshge->server_bytes.bytes_recv,r);
+		}
+	}
+	return r;
 }
 
 int MySQL_Data_Stream::write_to_net() {
@@ -562,13 +562,24 @@ void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 	}
 }
 
+/*
 int MySQL_Data_Stream::assign_mshge(unsigned int hid) {
 	assert (myconn);
 	return myconn->assign_mshge(hid);
 }
+*/
 
 int MySQL_Data_Stream::assign_fd_from_mysql_conn() {
 	assert(myconn);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->myconn.net.fd);
 	fd=myconn->myconn.net.fd;
+}
+
+void MySQL_Data_Stream::unplug_backend() {
+	DSS=STATE_NOT_INITIALIZED;
+	myconn=NULL;
+	myds_type=MYDS_BACKEND_NOT_CONNECTED;
+  mypolls->remove_index_fast(poll_fds_idx);
+  mypolls=NULL;
+  fd=0;
 }

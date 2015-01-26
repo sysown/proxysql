@@ -99,7 +99,9 @@ class MySQL_Data_Stream
 	int read_pkts();
 	int write_pkts();
 
-	int assign_mshge(unsigned int);
+	void unplug_backend();
+
+	//int assign_mshge(unsigned int);
 	int myds_connect(char *, int, int *); // the data stream MUST be initialized
 
 	void check_data_flow();
