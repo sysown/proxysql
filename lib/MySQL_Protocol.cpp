@@ -434,7 +434,7 @@ int pkt_handshake_server(unsigned char *pkt, unsigned int length, MySQL_Protocol
 }
 
 
-void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Session_userinfo *__userinfo, MySQL_Session *__sess) {
+void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, MySQL_Session *__sess) {
 	myds=__myds;
 	userinfo=__userinfo;
 	sess=__sess;
@@ -1511,13 +1511,13 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		myc.options.max_allowed_packet=max_pkt;
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
-		userinfo->username=l_strdup((const char *)user);
-		userinfo->password=l_strdup((const char *)password);
+		userinfo->username=strdup((const char *)user);
+		userinfo->password=strdup((const char *)password);
 		if (db) userinfo->set_schemaname(db,strlen(db));
 	} else {
 		// we always duplicate username and password, or crashes happen
-		userinfo->username=l_strdup((const char *)user);
-		if (pass_len) userinfo->password=l_strdup((const char *)"");
+		userinfo->username=strdup((const char *)user);
+		if (pass_len) userinfo->password=strdup((const char *)"");
 	}
 	//if (password) free(password);
 	if (password) l_free_string(password);

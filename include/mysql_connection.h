@@ -4,6 +4,20 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+class MySQL_Connection_userinfo {
+  public:
+	char *username;
+	char *password;
+	char *schemaname;
+	MySQL_Connection_userinfo();
+	~MySQL_Connection_userinfo();
+	void set(char *, char *, char *);
+	void set(MySQL_Connection_userinfo *);
+	bool set_schemaname(char *, int);
+};
+
+
+
 class MySQL_Connection {
 	private:
 	MyConnArray *MCA;
@@ -14,6 +28,7 @@ class MySQL_Connection {
 	MySrvC *parent;
 //	void * operator new(size_t);
 //	void operator delete(void *);
+	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
 	MYSQL myconn;
 	MySQL_Hostgroup_Entry *mshge;

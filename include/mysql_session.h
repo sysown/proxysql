@@ -2,7 +2,7 @@
 #define __CLASS_MYSQL_SESSION_H
 #include "proxysql.h"
 #include "cpp.h"
-
+/*
 class MySQL_Session_userinfo {
 	public:
   char *username;
@@ -14,7 +14,7 @@ class MySQL_Session_userinfo {
 	void set(MySQL_Session_userinfo *);
 	bool set_schemaname(char *, int);
 };
-
+*/
 class Query_Info {
 	public:
 	unsigned long long start_time;
@@ -75,8 +75,8 @@ class MySQL_Session
 	Query_Info CurrentQuery;
 	//void *query_parser_args;
 	unsigned long long pause;
-	MySQL_Session_userinfo userinfo_client;
-	MySQL_Session_userinfo userinfo_server;
+	//MySQL_Session_userinfo userinfo_client;
+	//MySQL_Session_userinfo userinfo_server;
 //	char *username;
 //	char *password;
 //	char *schema_name;

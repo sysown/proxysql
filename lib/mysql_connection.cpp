@@ -10,6 +10,55 @@ void MySQL_Connection::operator delete(void *ptr) {
 	l_free(sizeof(MySQL_Connection),ptr);
 }
 */
+
+//extern __thread char *mysql_thread___default_schema;
+
+MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
+	username=NULL;
+	password=NULL;
+	schemaname=NULL;
+	//schemaname=strdup(mysql_thread___default_schema);
+}
+
+MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
+	if (username) free(username);
+	if (password) free(password);
+	if (schemaname) free(schemaname);
+}
+
+void MySQL_Connection_userinfo::set(char *u, char *p, char *s) {
+	if (u) {
+		if (username) free(username);
+		username=strdup(u);
+	}
+	if (p) {
+		if (password) free(password);
+		password=strdup(p);
+	}
+	if (s) {
+		if (schemaname) free(schemaname);
+		schemaname=strdup(s);
+	}
+}
+
+void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
+	set(ui->username, ui->password, ui->schemaname);
+}
+
+
+bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
+	if ((schemaname==NULL) || (strncmp(_new,schemaname,l))) {
+		if (schemaname) free(schemaname);
+		schemaname=(char *)malloc(l+1);
+		memcpy(schemaname,_new,l);
+		schemaname[l]=0;
+		return true;
+	}
+	return false;
+}
+
+
+
 MySQL_Connection::MySQL_Connection() {
 	memset(&myconn,0,sizeof(MYSQL));
 	MCA=NULL;
@@ -18,6 +67,7 @@ MySQL_Connection::MySQL_Connection() {
 	inserted_into_pool=0;
 	reusable=false;
 	parent=NULL;
+	userinfo=new MySQL_Connection_userinfo();
 	fd=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
@@ -44,6 +94,10 @@ MySQL_Connection::~MySQL_Connection() {
 	if (mshge) {
 	__sync_add_and_fetch(&mshge->references,-1);
 	};
+	if (userinfo) {
+		delete userinfo;
+		userinfo=NULL;
+	}
 };
 
 

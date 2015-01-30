@@ -179,7 +179,8 @@ typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 #ifndef PROXYSQL_CLASSES
 #define PROXYSQL_CLASSES
 class MySQL_Data_Stream;
-class MySQL_Session_userinfo;
+//class MySQL_Session_userinfo;
+class MySQL_Connection_userinfo;
 class MySQL_Session;
 class MySQL_Backend;
 class MySQL_Thread;

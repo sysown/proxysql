@@ -6,7 +6,7 @@ extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
 
 static unsigned int __debugging_mp=0;
-
+/*
 MySQL_Session_userinfo::MySQL_Session_userinfo() {
 	username=NULL;
 	password=NULL;
@@ -49,7 +49,7 @@ bool MySQL_Session_userinfo::set_schemaname(char *_new, int l) {
 	}
 	return false;
 }
-
+*/
 
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryPointer=(mysql_header ? _p+5 : _p);
@@ -108,8 +108,10 @@ MySQL_Session::MySQL_Session() {
 	default_hostgroup=-1;
 	transaction_persistent=false;
 	active_transactions=0;
-	myprot_client.init(&client_myds, &userinfo_client, this);
-	myprot_server.init(&server_myds, &userinfo_server, this);
+	//myprot_client.init(&client_myds, &userinfo_client, this);
+	//myprot_server.init(&server_myds, &userinfo_server, this);
+	//myprot_client.init(&client_myds, client_myds->myconn->userinfo, this);
+	myprot_server.init(&server_myds, NULL, this);
 }
 
 MySQL_Session::MySQL_Session(int _fd) {
@@ -346,6 +348,7 @@ int MySQL_Session::handler() {
 			assert(mybe->myconn==NULL);
 
 			handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+			myprot_server.init(&server_myds, mybe->myconn->userinfo, this);
 
 			// FIXME : handle missing connection from connection pool
 			// FIXME : perhaps is a goto __exit_DSS__STATE_NOT_INITIALIZED after setting time wait
@@ -360,7 +363,8 @@ int MySQL_Session::handler() {
 		}    // TRY #1
 		if (server_myds->myds_type==MYDS_BACKEND && server_myds->DSS==STATE_READY) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT , server_myds==STATE_READY , server_myds->myds_type==MYDS_BACKEND\n", this);
-			if (strcmp(userinfo_client.schemaname,userinfo_server.schemaname)==0) {
+			//if (strcmp(userinfo_client.schemaname,userinfo_server.schemaname)==0) {
+			if ((mybe->myconn->userinfo->schemaname==NULL) || strcmp(client_myds->myconn->userinfo->schemaname,mybe->myconn->userinfo->schemaname)==0) {
 				//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				server_myds->DSS=STATE_QUERY_SENT;
 				status=WAITING_SERVER_DATA;
@@ -555,6 +559,7 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_NOT_CONNECTED(Ptr
 	if (myprot_server.process_pkt_initial_handshake((unsigned char *)pkt->ptr,pkt->size)==true) {
 		l_free(pkt->size,pkt->ptr);
 		//myprot_server.generate_pkt_handshake_response(server_myds,true,NULL,NULL);
+		server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myprot_server.generate_pkt_handshake_response(true,NULL,NULL);
 		////status=WAITING_CLIENT_DATA;
 		server_myds->DSS=STATE_CLIENT_HANDSHAKE;
@@ -584,8 +589,8 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(
 		l_free(pkt->size,pkt->ptr);	
 		*wrong_pass=true;
 		client_myds->DSS=STATE_QUERY_SENT;
-		char *_s=(char *)malloc(strlen(userinfo_client.username)+100);
-		sprintf(_s,"Access denied for user '%s' (using password: %s)", userinfo_client.username, (userinfo_client.password ? "YES" : "NO"));
+		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
+		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 		myprot_client.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000", _s);
 		free(_s);
 		client_myds->DSS=STATE_SLEEP;
@@ -609,8 +614,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		l_free(pkt->size,pkt->ptr);
 		if (client_myds->encrypted==false) {
+			if (client_myds->myconn->userinfo->schemaname==NULL) {
+				client_myds->myconn->userinfo->set_schemaname(mysql_thread___default_schema,strlen(mysql_thread___default_schema));
+			}
 			myprot_client.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
-			userinfo_server.set(&userinfo_client);
+			//server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;
 		} else {
@@ -630,8 +638,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		*wrong_pass=true;
 		// FIXME: this should become close connection
 		client_myds->DSS=STATE_QUERY_SENT;
-		char *_s=(char *)malloc(strlen(userinfo_client.username)+100);
-		sprintf(_s,"Access denied for user '%s' (using password: %s)", userinfo_client.username, (userinfo_client.password ? "YES" : "NO"));
+		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
+		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 		myprot_client.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
 		free(_s);
 		client_myds->DSS=STATE_SLEEP;
@@ -643,7 +651,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(PtrSize_
 	if (myprot_client.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) {
 		l_free(pkt->size,pkt->ptr);
 		myprot_client.generate_pkt_OK(true,NULL,NULL,3,0,0,0,0,NULL);
-		userinfo_server.set(&userinfo_client);
+		server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 	} else {
@@ -700,7 +708,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (admin==false) {
-		userinfo_client.set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
+		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 		l_free(pkt->size,pkt->ptr);
 		client_myds->DSS=STATE_QUERY_SENT;
 		myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
@@ -780,8 +788,10 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend() {
 	server_myds->move_from_OUT_to_OUTpending();
-	userinfo_server.set_schemaname(userinfo_client.schemaname,strlen(userinfo_client.schemaname));
-	myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
+	//userinfo_server.set_schemaname(userinfo_client.schemaname,strlen(userinfo_client.schemaname));
+	mybe->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
+	//myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
+	myprot_server.generate_COM_INIT_DB(true,NULL,NULL,mybe->myconn->userinfo->schemaname);
 	server_myds->DSS=STATE_QUERY_SENT;
 	status=CHANGING_SCHEMA;
 }

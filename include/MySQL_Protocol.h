@@ -8,7 +8,7 @@
 class MySQL_Protocol {
 	private:
 	MySQL_Data_Stream **myds;
-	MySQL_Session_userinfo *userinfo;
+	MySQL_Connection_userinfo *userinfo;
 	MySQL_Session *sess;
 	public:
 #ifdef DEBUG
@@ -16,7 +16,7 @@ class MySQL_Protocol {
 #endif
 	uint16_t prot_status;
 	MySQL_Data_Stream *get_myds() { return *myds; }
-	void init(MySQL_Data_Stream **, MySQL_Session_userinfo *, MySQL_Session *);
+	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
 	int pkt_handshake_client(unsigned char *, unsigned int);
 	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);
 //	void generate_server_handshake();

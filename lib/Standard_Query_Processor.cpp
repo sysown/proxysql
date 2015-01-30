@@ -522,13 +522,13 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 			continue;
 		}
 		if (qr->username) {
-			if (strcmp(qr->username,sess->userinfo_client.username)!=0) {
+			if (strcmp(qr->username,sess->client_myds->myconn->userinfo->username)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching username\n", qr->rule_id);
 				continue;
 			}
 		}
 		if (qr->schemaname) {
-			if (strcmp(qr->schemaname,sess->userinfo_client.schemaname)!=0) {
+			if (strcmp(qr->schemaname,sess->client_myds->myconn->userinfo->schemaname)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching schemaname\n", qr->rule_id);
 				continue;
 			}
