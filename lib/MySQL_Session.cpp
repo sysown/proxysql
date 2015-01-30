@@ -347,6 +347,9 @@ int MySQL_Session::handler() {
 
 			handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 
+			// FIXME : handle missing connection from connection pool
+			// FIXME : perhaps is a goto __exit_DSS__STATE_NOT_INITIALIZED after setting time wait
+
 			thread->mypolls.add(POLLIN|POLLOUT, server_fd, server_myds, curtime);
 
 			if (server_myds->DSS!=STATE_READY) {
@@ -518,7 +521,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 		if (c==0xfe) {
 			myprot_server.process_pkt_EOF((unsigned char *)pkt->ptr,pkt->size);
 			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, myprot_server.prot_status);
-			if ((myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0) {
+			if ((mybe->myconn->reusable==true) && ((myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				MyHGM->push_MyConn_to_pool(mybe->myconn);
 				mybe->myconn=NULL;
 				server_myds->unplug_backend();
@@ -752,6 +755,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			// Get a MySQL Connection
 
 	mybe->myconn=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+	mybe->myconn->myds=server_myds;
 
 	if (mybe->myconn->fd==-1) {
 		// we didn't get a valid connection, we need to create one

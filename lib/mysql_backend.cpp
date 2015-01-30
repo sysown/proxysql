@@ -160,7 +160,7 @@ void MySQL_Backend::reset() {
 		server_myds=NULL;
 	}
 	if (myconn) {
-		if (myconn->reusable==true) {
+		if (myconn->reusable==true && ((myconn->myds->sess->myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 			//server_myds->myconn=NULL;
 			//delete myconn;
 			MyHGM->push_MyConn_to_pool(myconn);
@@ -168,6 +168,7 @@ void MySQL_Backend::reset() {
 			myconn=NULL;
 		} else {
 //			MyConnArray *MCA=MyConnPool->MyConnArray_lookup(myconn->mshge->MSptr->address, myconn->myconn.user, myconn->mshge->MSptr->password, myconn->mshge->MSptr->db, myconn->mshge->MSptr->port);
+			MyHGM->destroy_MyConn_from_pool(myconn);
 			delete myconn;
 		}
 	};

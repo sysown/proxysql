@@ -1925,6 +1925,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 
 
 void Standard_ProxySQL_Admin::stats___mysql_commands_counters() {
+	if (!GloQPro) return;
 	SQLite3_result * resultset=GloQPro->get_stats_commands_counters();
 	if (resultset==NULL) return;
 //	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
@@ -1946,7 +1947,9 @@ void Standard_ProxySQL_Admin::stats___mysql_commands_counters() {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+
 void Standard_ProxySQL_Admin::stats___mysql_query_rules() {
+	if (!GloQPro) return;
 	SQLite3_result * resultset=GloQPro->get_stats_query_rules();
 	if (resultset==NULL) return;
 //	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
