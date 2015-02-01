@@ -218,9 +218,10 @@ int MySQL_Session::handler() {
 				mybe=find_or_create_backend(current_hostgroup,server_myds);
 				assert(server_myds);
 				assert(server_myds->myconn);
-				assert(server_myds->myconn->mshge);
-				assert(server_myds->myconn->mshge->MSptr);
-	      server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
+				// FIXME: This part should be replaced
+				//assert(server_myds->myconn->mshge);
+				//assert(server_myds->myconn->mshge->MSptr);
+	      //server_fd=server_myds->myds_connect(server_myds->myconn->mshge->MSptr->address, server_myds->myconn->mshge->MSptr->port, &pending_connect);
 				server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);
 				thread->mypolls.add(POLLIN|POLLOUT, server_fd, server_myds, curtime);
 				status=CONNECTING_SERVER;

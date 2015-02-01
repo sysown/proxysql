@@ -83,7 +83,7 @@ MySQL_Hostgroup_Entry * MSHGE_find(unsigned int, char *, uint16_t)
 #define __CLASS_MYSQL_BACKEND_H
 #include "proxysql.h"
 #include "cpp.h"
-
+/*
 class MySQL_Server {
 	public:
 	char *address;
@@ -108,7 +108,8 @@ class MySQL_Server {
 		if (address) free(address);
 	};
 };
-
+*/
+/*
 class MySQL_Hostgroup_Entry {
 	public:
 	unsigned int hostgroup_id;
@@ -149,7 +150,7 @@ class MySQL_Hostgroup {
 	void add(MySQL_Server *msptr, unsigned int _weight=1);
 	bool del(MySQL_Hostgroup_Entry *mshge);
 	bool del(MySQL_Server *msptr);
-/*
+*//*
 	void add(MySQL_Hostgroup_Entry *mshge) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL_Hostgroup_Entry %p to Hostgroup %p with HID %d\n", mshge, this, hostgroup_id);	
 		MSHGEs.push_back(mshge);
@@ -180,7 +181,7 @@ class MySQL_Hostgroup {
 		}
 		return false;
 	};
-*/
+*//*
 	public:
 	unsigned int hostgroup_id;
 	//std::vector<MySQL_Hostgroup_Entry *> MSHGEs;
@@ -200,7 +201,7 @@ class MySQL_Hostgroup {
 		}
 	};
 	MySQL_Hostgroup_Entry * MSHGE_find(MySQL_Server *msptr);
-/*
+*//*
 	MySQL_Hostgroup_Entry * MSHGE_find(MySQL_Server *msptr) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Searching MySQL_Hostgroup_Entry for MySQL_Server %p from Hostgroup %p with HID %d\n", msptr, this, hostgroup_id);	
 		for (std::vector<MySQL_Hostgroup_Entry *>::iterator it = MSHGEs.begin(); it != MSHGEs.end(); ++it) {
@@ -213,7 +214,7 @@ class MySQL_Hostgroup {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Hostgroup_Entry not found\n");
 		return NULL;
 	};
-*/
+*//*
 	MySQL_Hostgroup_Entry * server_add(MySQL_Server *msptr, unsigned int _weight) {
 		MySQL_Hostgroup_Entry *mshge=NULL;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Trying to add MySQL_Server %p to MSHGE %p with HID %d\n",msptr, this, hostgroup_id);	
@@ -255,7 +256,7 @@ class MySQL_HostGroups_Handler {
 	PtrArray * MyHostGroups;
 	PtrArray * Servers;
 	void reset();
-/*
+*//*
 	void reset() {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Resetting all MSHGE from Global Handler\n");
 		if (MyHostGroups.empty()==false) MyHostGroups.clear();
@@ -274,10 +275,10 @@ class MySQL_HostGroups_Handler {
 //			delete srv;
 //		}
 	};
-*/
+*//*
 	MySQL_Hostgroup * MyHostGroups_idx(unsigned int hid);
 	void insert_hostgroup(MySQL_Hostgroup *myhg);
-/*
+*//*
 	void insert_hostgroup(MySQL_Hostgroup *myhg) {
 		unsigned int p=myhg->hostgroup_id;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Inserting hostgroup %p with HID %d in Global Handler\n", myhg, p);
@@ -287,7 +288,7 @@ class MySQL_HostGroups_Handler {
 		//MyHostGroups.insert(MyHostGroups.begin()+p,myhg);
 		MyHostGroups[p]=myhg;
 	};
-*/
+*//*
 	void create_hostgroup(unsigned int hid) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating hostgroup %d in Global Handler\n", hid);	
 		MySQL_Hostgroup *myhg=new MySQL_Hostgroup(hid);	
@@ -331,7 +332,7 @@ class MySQL_HostGroups_Handler {
 //		return MyHostGroups[hid]->servers_in_hostgroup();
 //	};
 	MySQL_Server * server_find(char *add, uint16_t p);
-/*
+*//*
 	MySQL_Server * server_find(char *add, uint16_t p) {
 		for (std::vector<MySQL_Server *>::iterator it = Servers.begin(); it != Servers.end(); ++it) {
 			MySQL_Server *srv=*it;
@@ -341,7 +342,7 @@ class MySQL_HostGroups_Handler {
 		}
 		return NULL;
 	};
-*/
+*//*
 	MySQL_Server * server_add(char *add=NULL, uint16_t p=3306) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL server %s:%d in Global Handler\n", add, p);
 		MySQL_Server *srv=NULL;
@@ -352,7 +353,7 @@ class MySQL_HostGroups_Handler {
 		}
 		return srv;
 	};
-/*
+*//*
 	MySQL_Hostgroup_Entry * server_add_hg(unsigned int hid, char *add=NULL, uint16_t p=3306, unsigned int _weight=1) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL server %s:%d in Global Handler in hostgroup\n", add, p, hid);
 		if (hid>=MyHostGroups.size()) {
@@ -371,7 +372,7 @@ class MySQL_HostGroups_Handler {
 		if (srv==NULL) return NULL;	// server not found
 		return MSHGE_find(hid,srv);
 	};
-*/
+*//*
 	MySQL_Hostgroup_Entry * server_add_hg(unsigned int hid, char *add=NULL, uint16_t p=3306, unsigned int _weight=1);
 	MySQL_Hostgroup_Entry * MSHGE_find(unsigned int hid, MySQL_Server *srv);
 	MySQL_Hostgroup_Entry * MSHGE_find(unsigned int hid, char *add, uint16_t p);
@@ -380,16 +381,16 @@ class MySQL_HostGroups_Handler {
 //		return MyHostGroups[hid]->set_HG_entry_status(msptr,_status);
 //	};
 	MySQL_Hostgroup_Entry * set_HG_entry_status(unsigned int hid, char *add, uint16_t p, enum proxysql_server_status _status);
-/*
+*//*
 	MySQL_Hostgroup_Entry * set_HG_entry_status(unsigned int hid, char *add, uint16_t p, enum proxysql_server_status _status) {
 		MySQL_Server *msptr=server_find(add,p);
 		if (msptr==NULL) return NULL;	// server not found
 		return MyHostGroups[hid]->set_HG_entry_status(msptr,_status);
 	};
-*/
+*//*
 	MySQL_Hostgroup_Entry * get_random_hostgroup_entry(unsigned int hid);
 };
-
+*/
 
 
 class MySQL_Backend

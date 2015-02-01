@@ -3,7 +3,7 @@
 
 extern __thread MySQL_Connection_Pool * MyConnPool;
 
-
+/*
 MySQL_Server * MySQL_HostGroups_Handler::server_add(MySQL_Server *srv) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL_Server %p in Global Handler\n", srv);
 	Servers->add(srv);
@@ -132,7 +132,7 @@ MySQL_Hostgroup_Entry * MySQL_HostGroups_Handler::get_random_hostgroup_entry(uns
 	rdunlock();
 	return mshge;
 }
-
+*/
 
 void * MySQL_Backend::operator new(size_t size) {
 	return l_alloc(size);
@@ -179,7 +179,7 @@ void MySQL_Backend::reset() {
 
 
 
-
+/*
 void MySQL_Hostgroup::add(MySQL_Hostgroup_Entry *mshge) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Adding MySQL_Hostgroup_Entry %p to Hostgroup %p with HID %d\n", mshge, this, hostgroup_id);
 	MSHGEs->add(mshge);
@@ -262,3 +262,4 @@ MySQL_Hostgroup_Entry * MySQL_Hostgroup::get_random_hostgroup_entry() {
 	}
 	return NULL;
 }
+*/

@@ -62,7 +62,7 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 MySQL_Connection::MySQL_Connection() {
 	memset(&myconn,0,sizeof(MYSQL));
 	MCA=NULL;
-	mshge=NULL;
+	//mshge=NULL;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -91,9 +91,9 @@ MySQL_Connection::~MySQL_Connection() {
 	if (myconn.charset) free(const_cast<charset_info_st *>(myconn.charset));
 //	if (myconn.charset) l_free(sizeof(charset_info_st), const_cast<charset_info_st *>(myconn.charset));
 //	if (myconn.charset) free(myconn.charset);
-	if (mshge) {
-	__sync_add_and_fetch(&mshge->references,-1);
-	};
+//	if (mshge) {
+//	__sync_add_and_fetch(&mshge->references,-1);
+//	};
 	if (userinfo) {
 		delete userinfo;
 		userinfo=NULL;
@@ -115,6 +115,7 @@ bool MySQL_Connection::return_to_connection_pool() {
 	return true;
 }
 
+/*
 void MySQL_Connection::set_mshge(MySQL_Hostgroup_Entry *_mshge) {
 	mshge=_mshge;
 	__sync_add_and_fetch(&mshge->references,1);
@@ -124,14 +125,14 @@ void MySQL_Connection::free_mshge() {
 	__sync_add_and_fetch(&mshge->references,-1);
 	mshge=NULL;
 };
-
-int MySQL_Connection::assign_mshge(unsigned int hid) { // FIXME
+*/
+//int MySQL_Connection::assign_mshge(unsigned int hid) { // FIXME
 /*	FIXME
 		a) shouldn't always return 0
 		b) MSHGE_find should get a random server
 */
 	//MyHGH->rdlock();
-	if (mshge) { free_mshge(); }
+//	if (mshge) { free_mshge(); }
 	//MySQL_Hostgroup_Entry *_mshge=MyHGH->MSHGE_find(hid,(char *)"127.0.0.1", 3306);
 	//MySQL_Hostgroup_Entry *_mshge=MyHGH->get_random_hostgroup_entry(hid);
 	//assert(_mshge);
@@ -139,8 +140,8 @@ int MySQL_Connection::assign_mshge(unsigned int hid) { // FIXME
 	//	set_mshge(_mshge);
 	//}
 	//MyHGH->rdunlock();
-	return 0;
-};
+//	return 0;
+//};
 
 bool MySQL_Connection::is_expired(unsigned long long timeout) {
 // FIXME: here the check should be a sanity check

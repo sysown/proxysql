@@ -197,12 +197,12 @@ class MyConnArray;
 class MySQL_Connection_Pool;
 class PtrArray;
 class ProxySQL_ConfigFile;
-class MySQL_Server;
+//class MySQL_Server;
 class SQLite3_result;
 //class MySQL_Servers;
-class MySQL_Hostgroup_Entry;
-class MySQL_Hostgroup;
-class MySQL_HostGroups_Handler;
+//class MySQL_Hostgroup_Entry;
+//class MySQL_Hostgroup;
+//class MySQL_HostGroups_Handler;
 class MySQL_HostGroups_Manager;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
