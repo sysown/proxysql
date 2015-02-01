@@ -601,12 +601,12 @@ GOptionEntry cmd_option_entries[] =
 #endif // GLOBAL_DEFINED_OPTS_ENTRIES 
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
-MySQL_HostGroups_Handler *MyHGH;
+//MySQL_HostGroups_Handler *MyHGH;
 MySQL_HostGroups_Manager *MyHGM;
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
 extern ProxySQL_GlobalVariables GloVars;
-extern MySQL_HostGroups_Handler *MyHGH;
+//extern MySQL_HostGroups_Handler *MyHGH;
 extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
 #endif /* PROXYSQL_EXTERN */

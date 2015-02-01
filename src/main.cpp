@@ -399,7 +399,7 @@ __start_label:
 	GloQC=NULL;
 	GloQPro=NULL;
 	GloMTH=NULL;
-	MyHGH=new MySQL_HostGroups_Handler();
+//	MyHGH=new MySQL_HostGroups_Handler();
 	MyHGM=new MySQL_HostGroups_Manager();
 
 	GloMTH=create_MySQL_Threads_Handler();
@@ -581,7 +581,7 @@ __shutdown:
 	}
 
 	delete GloAdmin;
-	delete MyHGH;
+	//delete MyHGH;
 	delete MyHGM;
 
 	if (glovars.reload) {

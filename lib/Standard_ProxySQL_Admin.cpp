@@ -2401,17 +2401,17 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,weight FROM main.mysql_hostgroup_entries";
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	MyHGH->wrlock();
+	//MyHGH->wrlock();
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
 			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), MYSQL_SERVER_STATUS_ONLINE);
-			MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
+			//MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
 		}
 	}
-	MyHGH->wrunlock();
+	//MyHGH->wrunlock();
 	MyHGM->commit();
 //	if (error) free(error);
 	if (resultset) delete resultset;
