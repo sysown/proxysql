@@ -40,7 +40,7 @@ LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR)
 
 
 CFLAGS=-std=c++0x $(IDIRS) $(OPTZ) $(DEBUG)
-LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ljemalloc -lconfig++ -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl
+LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ljemalloc -lconfig++ -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl $(EXTRALINK)
 #LIBS=-rdynamic -Wl,-Bstatic -lproxysql -ljemalloc -levent $(GLIB_LIB) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
