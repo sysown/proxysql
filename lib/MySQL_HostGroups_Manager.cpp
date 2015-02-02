@@ -287,6 +287,8 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	myhgc=MyHGC_find(_hid);
 	if (myhgc==NULL) {
 		myhgc=MyHGC_create(_hid);
+	} else {
+		return myhgc;
 	}
 	assert(myhgc);
 	MyHostGroups->add(myhgc);
