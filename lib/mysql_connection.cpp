@@ -60,7 +60,7 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 
 
 MySQL_Connection::MySQL_Connection() {
-	memset(&myconn,0,sizeof(MYSQL));
+	//memset(&myconn,0,sizeof(MYSQL));
 	MCA=NULL;
 	//mshge=NULL;
 	myds=NULL;
@@ -69,26 +69,27 @@ MySQL_Connection::MySQL_Connection() {
 	parent=NULL;
 	userinfo=new MySQL_Connection_userinfo();
 	fd=-1;
+	options.server_version=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
-	if (myconn.host) free(myconn.host);
-	if (myconn.user) free(myconn.user);
-	if (myconn.passwd) free(myconn.passwd);
-	if (myconn.db) free(myconn.db);
+	//if (myconn.host) free(myconn.host);
+	//if (myconn.user) free(myconn.user);
+	//if (myconn.passwd) free(myconn.passwd);
+	//if (myconn.db) free(myconn.db);
 /*
 	if (myconn.user) l_free_string(myconn.user);
 	if (myconn.passwd) l_free_string(myconn.passwd);
 	if (myconn.db) l_free_string(myconn.db);
 */
-	if (myconn.unix_socket) free(myconn.unix_socket);
-	if (myconn.server_version) free(myconn.server_version);
-	if (myconn.host_info) free(myconn.host_info);
-	if (myconn.info) free(myconn.info);
+	//if (myconn.unix_socket) free(myconn.unix_socket);
+	if (options.server_version) free(options.server_version);
+	//if (myconn.host_info) free(myconn.host_info);
+	//if (myconn.info) free(myconn.info);
 //	if (myconn.server_version) l_free_string(myconn.server_version);
-	if (myconn.charset) free(const_cast<charset_info_st *>(myconn.charset));
+	//if (myconn.charset) free(const_cast<charset_info_st *>(myconn.charset));
 //	if (myconn.charset) l_free(sizeof(charset_info_st), const_cast<charset_info_st *>(myconn.charset));
 //	if (myconn.charset) free(myconn.charset);
 //	if (mshge) {

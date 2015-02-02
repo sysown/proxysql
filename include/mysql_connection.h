@@ -25,12 +25,20 @@ class MySQL_Connection {
 	unsigned long long inserted_into_pool;
 	public:
 	int fd;
+	char scramble_buff[40];
+	struct {
+		uint32_t max_allowed_pkt;
+		uint32_t server_capabilities;
+		char *server_version;
+		uint8_t protocol_version;
+		uint8_t charset;
+	} options;
 	MySrvC *parent;
 //	void * operator new(size_t);
 //	void operator delete(void *);
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
-	MYSQL myconn;
+	//MYSQL myconn;
 	//MySQL_Hostgroup_Entry *mshge;
 	bool reusable;
 	MySQL_Connection();

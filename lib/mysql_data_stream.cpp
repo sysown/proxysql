@@ -194,7 +194,7 @@ void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int
 	fd=_fd;
 	proxy_debug(PROXY_DEBUG_NET,1, "Initialized Data Stream. Session=%p, DataStream=%p, type=%d, fd=%d, myconn=%p\n" , sess, this, myds_type, fd, myconn);
 	//if (myconn==NULL) myconn = new MySQL_Connection();
-	if (myconn) myconn->myconn.net.fd=fd;
+	if (myconn) myconn->fd=fd;
 }
 
 
@@ -226,14 +226,16 @@ void MySQL_Data_Stream::check_data_flow() {
 		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len , queue_data(queueIN) , PSarrayOUT->len , queue_data(queueOUT));
 		shut_soft();
 	}
-	if ((myds_type==MYDS_BACKEND) && (myconn->myconn.net.fd==0) && (revents & POLLOUT)) {
+	//if ((myds_type==MYDS_BACKEND) && (myconn->myconn.net.fd==0) && (revents & POLLOUT)) {
+	if ((myds_type==MYDS_BACKEND) && (myconn->fd==0) && (revents & POLLOUT)) {
 		int rc;
 		int error;
 		socklen_t len = sizeof(error);
 		rc=getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len);
 		assert(rc==0);
 		if (error==0) {
-			myconn->myconn.net.fd=fd; // connect succeeded
+			//myconn->myconn.net.fd=fd; // connect succeeded
+			myconn->fd=fd; // connect succeeded
 		} else {
 			errno=error;
 			perror("check_data_flow");
@@ -545,9 +547,12 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 	} else {
 		*pending_connect=0;
 	}
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, old_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->myconn.net.fd, s);
-	myconn->myconn.net.fd=s;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, new_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->myconn.net.fd, s);
+	//proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, old_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->myconn.net.fd, s);
+	//myconn->myconn.net.fd=s;
+	//proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, new_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->myconn.net.fd, s);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, old_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->fd, s);
+	myconn->fd=s;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, new_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->fd, s);
 	return s;
 
 }
@@ -571,8 +576,11 @@ int MySQL_Data_Stream::assign_mshge(unsigned int hid) {
 
 int MySQL_Data_Stream::assign_fd_from_mysql_conn() {
 	assert(myconn);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->myconn.net.fd);
-	fd=myconn->myconn.net.fd;
+	//proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->myconn.net.fd);
+	//fd=myconn->myconn.net.fd;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->fd);
+	fd=myconn->fd;
+	return fd;
 }
 
 void MySQL_Data_Stream::unplug_backend() {

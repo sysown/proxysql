@@ -478,7 +478,7 @@ int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length
 		if (pass_len==0 && strlen(password)==0) {
 			ret=PKT_PARSED;
 		} else {
-			proxy_scramble(reply, (*myds)->myconn->myconn.scramble_buff, password);
+			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
 			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 				ret=PKT_PARSED;
 			}
@@ -1132,7 +1132,7 @@ bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsi
 		+ strlen(userinfo->schemaname) + 1
 		+ strlen((char *)"mysql_native_password") + 1;
 
-	MYSQL &myc=(*myds)->myconn->myconn;
+	//MYSQL &myc=(*myds)->myconn->myconn;
 
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
   unsigned char *_ptr=(unsigned char *)l_alloc(size);
@@ -1153,7 +1153,7 @@ bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsi
 		_ptr[l++]=20;
 		char reply[SHA_DIGEST_LENGTH+1];
   	reply[SHA_DIGEST_LENGTH]='\0';
-    proxy_scramble(reply, myc.scramble_buff, userinfo->password);
+    proxy_scramble(reply, (*myds)->myconn->scramble_buff, userinfo->password);
 		memcpy(_ptr+l,reply,20); l+=20;
 	} else {
 		_ptr[l++]=0;
@@ -1221,17 +1221,17 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 //#ifdef MARIADB_BASE_VERSION
 //  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
 //#else
-  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+0,8,(struct rand_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->scramble_buff+0,8,(struct rand_struct *)&rand_st);
 //#endif
 
   int i;
   for (i=0;i<8;i++) {
-    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
-      (*myds)->myconn->myconn.scramble_buff[i]='a';
+    if ((*myds)->myconn->scramble_buff[i]==0) {
+      (*myds)->myconn->scramble_buff[i]='a';
     }
   }
 
-  memcpy(_ptr+l, (*myds)->myconn->myconn.scramble_buff+0, 8); l+=8;
+  memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
   _ptr[l]=0x00; l+=1; //0x00
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
   memcpy(_ptr+l,&server_language, sizeof(server_language)); l+=sizeof(server_language);
@@ -1242,17 +1242,17 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 //#ifdef MARIADB_BASE_VERSION
 //  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
 //#else
-  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+8,12,(struct rand_struct *)&rand_st);
+  proxy_create_random_string((*myds)->myconn->scramble_buff+8,12,(struct rand_struct *)&rand_st);
 //#endif
   //create_random_string(scramble_buf+8,12,&rand_st);
 
   for (i=8;i<20;i++) {
-    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
-      (*myds)->myconn->myconn.scramble_buff[i]='a';
+    if ((*myds)->myconn->scramble_buff[i]==0) {
+      (*myds)->myconn->scramble_buff[i]='a';
     }
   }
 
-  memcpy(_ptr+l, (*myds)->myconn->myconn.scramble_buff+8, 12); l+=12;
+  memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00
   memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
 
@@ -1354,7 +1354,7 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	//Copy4B(&hdr,pkt);
 	pkt     += sizeof(mysql_hdr);
-	MYSQL &myc=(*myds)->myconn->myconn;
+	//MYSQL &myc=(*myds)->myconn->myconn;
 
 	if (*pkt != 0x0A || len < 33) goto exit_process_pkt_initial_handshake;
 
@@ -1395,17 +1395,18 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 
 
 
-	myc.server_capabilities=capabilities;
+	(*myds)->myconn->options.server_capabilities=capabilities;
 	//myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
-	myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
-	const_cast<charset_info_st *>(myc.charset)->nr=charset;
-	myc.thread_id=thread_id;
+	//myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
+	//const_cast<charset_info_st *>(myc.charset)->nr=charset;
+	//myc.thread_id=thread_id;
 	//myc.server_version=l_strdup((const char *)version);
-	myc.server_version=strdup((const char *)version);
-	myc.protocol_version=protocol;
+	(*myds)->myconn->options.server_version=strdup((const char *)version);
+	(*myds)->myconn->options.protocol_version=protocol;
+	(*myds)->myconn->options.charset=charset;
 	
-	memcpy(myc.scramble_buff,(const char *)salt1,strlen((char *)salt1));
-	memcpy(myc.scramble_buff+strlen((char *)salt1),(const char *)salt2,strlen((char *)salt2));	
+	memcpy((*myds)->myconn->scramble_buff,(const char *)salt1,strlen((char *)salt1));
+	memcpy((*myds)->myconn->scramble_buff+strlen((char *)salt1),(const char *)salt2,strlen((char *)salt2));	
 
 	ret=true;
 
@@ -1470,7 +1471,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			proxy_scramble(reply, (*myds)->myconn->myconn.scramble_buff, password);
+			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
 			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 				ret=true;
 			}
@@ -1492,23 +1493,23 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	if (use_ssl) return true;
 
 	if (ret==true) {
-		MYSQL &myc=(*myds)->myconn->myconn;
-		myc.user=strdup((const char *)user);
-		if (password) myc.passwd=strdup(password);
-		if (db) myc.db=strdup((const char *)db);
+		//MYSQL &myc=(*myds)->myconn->myconn;
+		//myc.user=strdup((const char *)user);
+		//if (password) myc.passwd=strdup(password);
+		//if (db) myc.db=strdup((const char *)db);
 /*
 		myc.user=l_strdup((const char *)user);
 		if (password) myc.passwd=l_strdup(password);
 		if (db) myc.db=l_strdup((const char *)db);
 */
-		myc.server_capabilities=capabilities;
-		myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
+		//myc.server_capabilities=capabilities;
+		//myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
 //		myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
-		const_cast<charset_info_st *>(myc.charset)->nr=charset;
+		//onst_cast<charset_info_st *>(myc.charset)->nr=charset;
 		//myds->myconn->myconn
 
 
-		myc.options.max_allowed_packet=max_pkt;
+		(*myds)->myconn->options.max_allowed_pkt=max_pkt;
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
 		userinfo->username=strdup((const char *)user);

@@ -18,6 +18,10 @@
 *.out
 *.app
 
+# gcov
+*.gcda
+*.gcno
+
 oldcode/tests/connect_speed
 
 *.swp

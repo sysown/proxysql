@@ -539,7 +539,7 @@ virtual MySQL_Session * create_new_session_and_client_data_stream(int _fd) {
 #endif
 	sess->client_myds->myconn=new MySQL_Connection();  // 20141011
 	sess->client_myds->myconn->myds=sess->client_myds; // 20141011
-	sess->client_myds->myconn->myconn.net.fd=sess->client_myds->fd; // 20141011
+	sess->client_myds->myconn->fd=sess->client_myds->fd; // 20141011
 	sess->myprot_client.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 	return sess;
 };
