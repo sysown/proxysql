@@ -128,7 +128,6 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	queue_destroy(queueOUT);
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
-	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) delete myconn; // 20141011
 	PtrSize_t pkt;
 	if (PSarrayIN) {
 		while (PSarrayIN->len) {
@@ -167,6 +166,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 //		close(fd);
 		}
 	}
+	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
 		if (ssl) SSL_free(ssl);
 //		if (ssl_ctx) SSL_CTX_free(ssl_ctx);

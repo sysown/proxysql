@@ -362,15 +362,15 @@ class admin_main_loop_listeners {
 	}
 
 
-	void update_ifaces(char *list, ifaces_desc *ifd) {
+	void update_ifaces(char *list, ifaces_desc **ifd) {
 		wrlock();
-		delete ifd;
-		ifd=new ifaces_desc();
+		delete *ifd;
+		*ifd=new ifaces_desc();
 		int i=0;
 		tokenizer_t tok = tokenizer( list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
 		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-			ifd->add(token);
+			(*ifd)->add(token);
 			i++;
 		}
 		free_tokenizer( &tok );
@@ -1447,9 +1447,9 @@ bool Standard_ProxySQL_Admin::init() {
 //	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
 //	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
 //	S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.descriptor_new.telnet_stats_ifaces);
-	S_amll.update_ifaces(variables.mysql_ifaces, S_amll.ifaces_mysql);
-	S_amll.update_ifaces(variables.telnet_admin_ifaces, S_amll.ifaces_telnet_admin);
-	S_amll.update_ifaces(variables.telnet_stats_ifaces, S_amll.ifaces_telnet_stats);
+	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
+	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
+	S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);
 
 	
 	//fill_table__server_status(admindb);
@@ -1845,7 +1845,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			variables.mysql_ifaces=strdup(value);
 			if (update_creds && variables.mysql_ifaces) {
 				//S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
-				S_amll.update_ifaces(variables.mysql_ifaces, S_amll.ifaces_mysql);
+				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
 			}
 			return true;
 		} else {
@@ -1860,7 +1860,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			variables.telnet_admin_ifaces=strdup(value);
 			if (update_creds && variables.telnet_admin_ifaces) {
 				//S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
-				S_amll.update_ifaces(variables.telnet_admin_ifaces, S_amll.ifaces_telnet_admin);
+				S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
 			}
 			return true;
 		} else {
@@ -1875,7 +1875,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			variables.telnet_stats_ifaces=strdup(value);
 			if (update_creds && variables.telnet_stats_ifaces) {
 				//S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.descriptor_new.telnet_stats_ifaces);
-				S_amll.update_ifaces(variables.telnet_stats_ifaces, S_amll.ifaces_telnet_stats);
+				S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);
 			}
 			return true;
 		} else {
