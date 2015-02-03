@@ -1282,6 +1282,12 @@ __end_while_pool:
 		
 	}
 	//if (__sync_add_and_fetch(shutdown,0)==0) __sync_add_and_fetch(shutdown,1);
+	for (i=0; i<nfds; i++) {
+		char *add=NULL; char *port=NULL;
+		close(fds[i].fd);
+		c_split_2(socket_names[i], ":" , &add, &port);
+		if (atoi(port)==0) { unlink(socket_names[i]); }
+	}
 	free(arg);
 	return NULL;
 }
