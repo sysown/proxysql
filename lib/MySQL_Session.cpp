@@ -123,9 +123,9 @@ MySQL_Session::~MySQL_Session() {
 	if (client_myds) {
 		delete client_myds;
 	}
-	if (server_myds) {
-		delete server_myds;
-	}
+	//if (server_myds) {
+	//	delete server_myds;
+	//}
 	reset_all_backends();
 	delete mybes;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);

@@ -577,7 +577,7 @@ virtual void run() {
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
 
 		curtime=monotonic_time();
-		if (curtime>oldtime+mysql_thread___poll_timeout) {
+		if (curtime>(oldtime+(mysql_thread___poll_timeout*1000))) {
 			oldtime=curtime;
 			GloQPro->update_query_processor_stats();
 		}

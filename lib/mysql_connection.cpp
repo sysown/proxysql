@@ -99,6 +99,12 @@ MySQL_Connection::~MySQL_Connection() {
 		delete userinfo;
 		userinfo=NULL;
 	}
+	if (myds) {
+		myds->shut_hard();
+	} else {
+		shutdown(fd, SHUT_RDWR);
+		close(fd);
+	}
 };
 
 

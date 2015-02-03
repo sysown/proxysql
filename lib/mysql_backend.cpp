@@ -155,12 +155,8 @@ MySQL_Backend::~MySQL_Backend() {
 }
 
 void MySQL_Backend::reset() {
-	if (server_myds) {
-		//delete server_myds;
-		server_myds=NULL;
-	}
 	if (myconn) {
-		if (myconn->reusable==true && ((myconn->myds->sess->myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+		if (server_myds->DSS==STATE_READY && myconn->reusable==true && ((myconn->myds->sess->myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 			//server_myds->myconn=NULL;
 			//delete myconn;
 			MyHGM->push_MyConn_to_pool(myconn);
@@ -169,12 +165,16 @@ void MySQL_Backend::reset() {
 		} else {
 //			MyConnArray *MCA=MyConnPool->MyConnArray_lookup(myconn->mshge->MSptr->address, myconn->myconn.user, myconn->mshge->MSptr->password, myconn->mshge->MSptr->db, myconn->mshge->MSptr->port);
 			MyHGM->destroy_MyConn_from_pool(myconn);
-			delete myconn;
+			//delete myconn;
 		}
 	};
 	//if (mshge) {
 		// FIXME: what to do with it?
 	//}
+	if (server_myds) {
+		delete server_myds;
+		//server_myds=NULL;
+	}
 }
 
 
