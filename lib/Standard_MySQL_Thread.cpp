@@ -725,11 +725,13 @@ virtual void run() {
 			} else {
 				if (sess->to_process==1 || sess->pause<=curtime ) {
 					if (sess->pause <= curtime ) sess->pause=0;
-					rc=sess->handler();
-					if (rc==-1) {
-						unregister_session(n);
-						n--;
-						delete sess;
+					if (sess->pause_until <= curtime) {
+						rc=sess->handler();
+						if (rc==-1) {
+							unregister_session(n);
+							n--;
+							delete sess;
+						}
 					}
 				}
 			}

@@ -90,6 +90,7 @@ void MySQL_Session::operator delete(void *ptr) {
 
 MySQL_Session::MySQL_Session() {
 	pause=0;
+	pause_until=0;
 	status=NONE;
 	qpo=NULL;
 	healthy=1;
@@ -349,6 +350,10 @@ int MySQL_Session::handler() {
 			assert(mybe->myconn==NULL);
 
 			handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+			if (mybe->myconn==NULL) {
+				pause_until=thread->curtime+100*1000;
+				goto __exit_DSS__STATE_NOT_INITIALIZED;
+			}
 			myprot_server.init(&server_myds, mybe->myconn->userinfo, this);
 
 			// FIXME : handle missing connection from connection pool
@@ -762,8 +767,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
-
-	mybe->myconn=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+	
+	if (rand()%3==0) {
+		mybe->myconn=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+	}
+	if (mybe->myconn==NULL) { return; }
 	mybe->myconn->myds=server_myds;
 
 	if (mybe->myconn->fd==-1) {
