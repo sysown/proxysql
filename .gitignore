@@ -22,6 +22,8 @@
 *.gcda
 *.gcno
 
+callgrind.out.*
+
 oldcode/tests/connect_speed
 
 *.swp
