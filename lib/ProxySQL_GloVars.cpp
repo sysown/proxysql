@@ -35,6 +35,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
+	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
 	global.gdb=0;
@@ -65,6 +66,7 @@ opt.add(
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
+	opt->add((const char *)"",0,1,0,(const char *)"Disable custom memory allocator",(const char *)"-m",(const char *)"--no-memory");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,1,0,(const char *)"Configuration DB path",(const char *)"-a",(const char *)"--admin-pathdb");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
@@ -116,6 +118,9 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		GloVars.__cmd_proxysql_datadir=strdup(datadir.c_str());
 	}
 
+	if (opt->isSet("-m")) {
+		global.use_proxysql_mem=true;
+	}
 
 #ifdef DEBUG
 	init_debug_struct();

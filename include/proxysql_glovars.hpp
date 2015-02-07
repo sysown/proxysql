@@ -26,6 +26,7 @@ class ProxySQL_GlobalVariables {
 	struct  {
 		bool gdbg;
 		bool nostart;
+		bool use_proxysql_mem;
 		pthread_mutex_t start_mutex;
 		bool foreground;
 #ifdef DEBUG

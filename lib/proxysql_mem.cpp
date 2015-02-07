@@ -39,34 +39,41 @@ static inline void __push_mem_block(l_sfc *sfc, void *m) {
 
 l_sfp * l_mem_init() {
   l_sfp *s=(l_sfp *)__x_malloc(sizeof(l_sfp));
-  int i;
-  for (i=0; i<L_SFP_ARRAY_LEN; i++) {
-    s->sfc[i].stack=NULL;
-    s->sfc[i].mem_blocks=NULL;
-    s->sfc[i].elem_size=L_SFC_MIN_ELEM_SIZE * (1 << i) ;
-    s->sfc[i].alloc_cnt=0;
-    s->sfc[i].free_cnt=0;
-    s->sfc[i].blocks_cnt=0;
-    s->sfc[i].__mem_l_free_count=0;
-  }
+	if (GloVars.global.use_proxysql_mem==true) {
+	  int i;
+  	for (i=0; i<L_SFP_ARRAY_LEN; i++) {
+	    s->sfc[i].stack=NULL;
+  	  s->sfc[i].mem_blocks=NULL;
+    	s->sfc[i].elem_size=L_SFC_MIN_ELEM_SIZE * (1 << i) ;
+	    s->sfc[i].alloc_cnt=0;
+  	  s->sfc[i].free_cnt=0;
+    	s->sfc[i].blocks_cnt=0;
+	    s->sfc[i].__mem_l_free_count=0;
+  	}
+	}
   return s;
 }
 
 
 void l_mem_destroy(l_sfp *s) {
   size_t i,j;
-  for (i=0; i<L_SFP_ARRAY_LEN; i++) {
-    for (j=0;j<s->sfc[i].blocks_cnt;j++) {
-      free(s->sfc[i].mem_blocks[j]);
-    }
-    if (s->sfc[i].mem_blocks) {
-      free(s->sfc[i].mem_blocks);
-    }
-  }
+	if (GloVars.global.use_proxysql_mem==true) {
+	  for (i=0; i<L_SFP_ARRAY_LEN; i++) {
+  	  for (j=0;j<s->sfc[i].blocks_cnt;j++) {
+	      free(s->sfc[i].mem_blocks[j]);
+	    }
+  	  if (s->sfc[i].mem_blocks) {
+	      free(s->sfc[i].mem_blocks);
+  	  }
+	  }
+	}
 	free(s);
 }
 
 void * __l_alloc(l_sfp *sfp, size_t size) {
+	if (GloVars.global.use_proxysql_mem==false) {
+		return malloc(size);
+	}
   if (size>L_SFC_MAX_ELEM_SIZE) {
     return __x_malloc(size);
   }
@@ -119,6 +126,10 @@ void * l_alloc0(size_t size) {
 
 
 void __l_free(l_sfp *sfp, size_t size, void *p) {
+	if (GloVars.global.use_proxysql_mem==false) {
+		free(p);
+		return;
+	}
   if (size>L_SFC_MAX_ELEM_SIZE) {
     free(p);
     return;
