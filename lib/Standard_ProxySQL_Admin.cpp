@@ -168,6 +168,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	} variables;
 
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
+	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	//void fill_table__server_status(SQLite3DB *db);
 
@@ -1114,7 +1115,7 @@ __exit_child_mysql:
 	delete sess;
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
-	
+	delete mysql_thr;	
 	l_mem_destroy(__thr_sfp);	
 	return NULL;
 }
@@ -1497,6 +1498,12 @@ void Standard_ProxySQL_Admin::admin_shutdown() {
 	if (main_callback_func) {
 		free(main_callback_func);
 	}
+	drop_tables_defs(tables_defs_admin);
+	delete tables_defs_admin;
+	drop_tables_defs(tables_defs_stats);
+	delete tables_defs_stats;
+	drop_tables_defs(tables_defs_config);
+	delete tables_defs_config;
 };
 
 Standard_ProxySQL_Admin::~Standard_ProxySQL_Admin() {
@@ -1562,6 +1569,19 @@ void Standard_ProxySQL_Admin::insert_into_tables_defs(std::vector<table_def_t *>
 	td->table_name=strdup(table_name);
 	td->table_def=strdup(table_def);
 	tables_defs->push_back(td);
+};
+
+void Standard_ProxySQL_Admin::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
+	table_def_t *td;
+	while (!tables_defs->empty()) {
+		td=tables_defs->back();
+		free(td->table_name);
+		td->table_name=NULL;
+		free(td->table_def);
+		td->table_def=NULL;
+		tables_defs->pop_back();
+		delete td;
+	}
 };
 
 /*
