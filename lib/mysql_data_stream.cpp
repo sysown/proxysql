@@ -277,8 +277,15 @@ int MySQL_Data_Stream::write_to_net() {
 	int s = queue_data(queueOUT);
     if (s==0) return 0;
 	VALGRIND_DISABLE_ERROR_REPORTING;
-//	bytes_io = send(fd, queue_r_ptr(queueOUT), s, 0);
-  bytes_io = ( encrypted ? SSL_write (ssl, queue_r_ptr(queueOUT), s) : send(fd, queue_r_ptr(queueOUT), s, 0) );
+  //bytes_io = ( encrypted ? SSL_write (ssl, queue_r_ptr(queueOUT), s) : send(fd, queue_r_ptr(queueOUT), s, 0) );
+	// splitting the ternary operation in IF condition for better readability 
+	if (encrypted) {
+		bytes_io = SSL_write (ssl, queue_r_ptr(queueOUT), s);
+	} else {
+		//bytes_io = send(fd, queue_r_ptr(queueOUT), s, 0);
+		// fix on bug #183
+		bytes_io = send(fd, queue_r_ptr(queueOUT), s, MSG_NOSIGNAL);
+	}
 	VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
