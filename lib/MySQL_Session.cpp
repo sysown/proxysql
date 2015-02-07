@@ -768,9 +768,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
 	
-	if (rand()%3==0) {
+//	if (rand()%3==0) {
 		mybe->myconn=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
-	}
+//	}
 	if (mybe->myconn==NULL) { return; }
 	mybe->myconn->myds=server_myds;
 
