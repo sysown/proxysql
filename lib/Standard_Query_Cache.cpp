@@ -321,6 +321,14 @@ virtual double area() const {
 };
 
 Standard_Query_Cache() {
+#ifdef DEBUG
+	if (glovars.has_debug==false) {
+#else
+	if (glovars.has_debug==true) {
+#endif /* DEBUG */
+		perror("Incompatible debagging version");
+		exit(EXIT_FAILURE);
+	}
 	QCnow=time(NULL);
 	//test=0;
 	size=SHARED_QUERY_CACHE_HASH_TABLES;

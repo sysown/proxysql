@@ -205,6 +205,14 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	} variables;
 	public:
 	Standard_MySQL_Threads_Handler() {
+#ifdef DEBUG
+		if (glovars.has_debug==false) {
+#else
+		if (glovars.has_debug==true) {
+#endif /* DEBUG */
+			perror("Incompatible debagging version");
+			exit(EXIT_FAILURE);
+		}
 		num_threads=0;
 		mysql_threads=NULL;
 		stacksize=0;

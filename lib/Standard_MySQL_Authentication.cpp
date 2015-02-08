@@ -40,6 +40,14 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 //	PtrArray cred_array;
 	public:
 	Standard_MySQL_Authentication() {
+#ifdef DEBUG
+		if (glovars.has_debug==false) {
+#else
+		if (glovars.has_debug==true) {
+#endif /* DEBUG */
+			perror("Incompatible debagging version");
+			exit(EXIT_FAILURE);
+		}
 		spinlock_rwlock_init(&creds_backends.lock);
 		spinlock_rwlock_init(&creds_frontends.lock);
 	};

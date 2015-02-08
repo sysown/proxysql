@@ -243,6 +243,14 @@ protected:
 
 public:
 Standard_Query_Processor() {
+#ifdef DEBUG
+	if (glovars.has_debug==false) {
+#else
+	if (glovars.has_debug==true) {
+#endif /* DEBUG */
+		perror("Incompatible debagging version");
+		exit(EXIT_FAILURE);
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
 	spinlock_rwlock_init(&rwlock);
 	version=0;

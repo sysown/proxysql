@@ -3,4 +3,3 @@
 //#include "proxysql_glovars.hpp"
 #include "cpp.h"
 //ProxySQL_GlobalVariables GloVars;
-
