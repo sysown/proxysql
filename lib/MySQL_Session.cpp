@@ -370,12 +370,27 @@ int MySQL_Session::handler() {
 		if (server_myds->myds_type==MYDS_BACKEND && server_myds->DSS==STATE_READY) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT , server_myds==STATE_READY , server_myds->myds_type==MYDS_BACKEND\n", this);
 			//if (strcmp(userinfo_client.schemaname,userinfo_server.schemaname)==0) {
-			if ((mybe->myconn->userinfo->schemaname==NULL) || strcmp(client_myds->myconn->userinfo->schemaname,mybe->myconn->userinfo->schemaname)==0) {
+			if (
+				(client_myds->myconn->userinfo->hash!=mybe->myconn->userinfo->hash)
+/*
+				(mybe->myconn->userinfo->schemaname==NULL)
+				||
+				strcmp(client_myds->myconn->userinfo->schemaname,mybe->myconn->userinfo->schemaname)
+				||
+				strcmp(client_myds->myconn->userinfo->username,mybe->myconn->userinfo->username)
+*/
+			) {
+				if (strcmp(client_myds->myconn->userinfo->username,mybe->myconn->userinfo->username)) {
+					// username don't match, we must change user
+					handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();
+				} else {
+					// we should chek that schema is different, but here we assume that if we reach here user is identical, but schema is not
+					handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
+				}
+			} else {
 				//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				server_myds->DSS=STATE_QUERY_SENT;
 				status=WAITING_SERVER_DATA;
-			} else {
-				handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
 			}
 		}
 							//	}   TRY #1
@@ -427,7 +442,15 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				break;
 
 			case CHANGING_SCHEMA:
-				handler___status_CHANGING_SCHEMA(&pkt);
+				if (handler___status_CHANGING_SCHEMA(&pkt)==false) {
+					return -1;
+				}
+				break;
+
+			case CHANGING_USER_SERVER:
+				if (handler___status_CHANGING_USER_SERVER(&pkt)==false) {
+					return -1;
+				}
 				break;
 
 			default:
@@ -454,7 +477,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 }
 
 
-void MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
+bool MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_SCHEMA - UNKNWON\n");
 	if (myprot_server.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
 		l_free(pkt->size,pkt->ptr);
@@ -468,9 +491,44 @@ void MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
 			server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
 			server_myds->DSS=STATE_QUERY_SENT;
 		}
+		return true;
+	} else {
+		l_free(pkt->size,pkt->ptr);
+		healthy=0;
+		mybe->myconn=server_myds->myconn;
+		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
+		// although we enforce this here
+		server_myds->myconn->reusable=false;
+		return false;
+	}
+	return false;
+}
+
+bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_USER_SERVER - UNKNWON\n");
+	if (myprot_server.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
+		l_free(pkt->size,pkt->ptr);
+		server_myds->DSS=STATE_READY;
+		mybe->myconn=server_myds->myconn;
+		status=WAITING_SERVER_DATA;
+		unsigned int k;
+		PtrSize_t pkt2;
+		for (k=0; k<server_myds->PSarrayOUTpending->len;) {
+			server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
+			server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+			server_myds->DSS=STATE_QUERY_SENT;
+		}
+		return true;
 	} else {
 		l_free(pkt->size,pkt->ptr);	
+		healthy=0;
+		mybe->myconn=server_myds->myconn;
+		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
+		// although we enforce this here
+		server_myds->myconn->reusable=false;
+		return false;
 	}
+	return false;
 }
 
 
@@ -804,3 +862,15 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend() 
 	server_myds->DSS=STATE_QUERY_SENT;
 	status=CHANGING_SCHEMA;
 }
+
+void MySQL_Session::handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend() {
+	server_myds->move_from_OUT_to_OUTpending();
+	//userinfo_server.set_schemaname(userinfo_client.schemaname,strlen(userinfo_client.schemaname));
+	//mybe->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
+	mybe->myconn->userinfo->set(client_myds->myconn->userinfo);
+	//myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
+	myprot_server.generate_COM_CHANGE_USER(true,NULL,NULL);
+	server_myds->DSS=STATE_QUERY_SENT;
+	status=CHANGING_USER_SERVER;
+}
+

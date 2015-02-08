@@ -33,7 +33,8 @@ class Query_Info {
 class MySQL_Session
 {
 	private:
-	void handler___status_CHANGING_SCHEMA(PtrSize_t *);
+	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
+	bool handler___status_CHANGING_USER_SERVER(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t *);
@@ -51,6 +52,7 @@ class MySQL_Session
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 	void handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();	
+	void handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();	
 
 	public:
 	void * operator new(size_t);

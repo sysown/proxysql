@@ -685,7 +685,7 @@ enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args) {
 	while (libinjection_sqli_tokenize(&qp->sf)) {
 		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
 			char c1=toupper(qp->sf.current->val[0]);
-			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", c1, qp->sf.current->val, c1);
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", qp->sf.current->val, c1);
 			switch (c1) {
 				case 'A':
 					if (!strcasecmp("ALTER",qp->sf.current->val)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
