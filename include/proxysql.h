@@ -78,8 +78,12 @@
 //#include "cpp.h"
 
 
-
-#define PROXYSQL_VERSION	"20140617"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define PROXYSQL_VERSION	"20140617" DEB
 #define PROXYSQL_CODENAME	"Hebe"
 
 #ifndef PROXYSQL_FUNC_DEFS
