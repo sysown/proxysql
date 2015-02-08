@@ -16,7 +16,12 @@ extern "C" {
 #endif /* __cplusplus */
 
 
-#define MYSQL_THREAD_VERSION "0.1.1114"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define MYSQL_THREAD_VERSION "0.1.1114" DEB
 
 
 #define DEFAULT_NUM_THREADS	4

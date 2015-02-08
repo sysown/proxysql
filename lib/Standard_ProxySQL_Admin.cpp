@@ -1293,8 +1293,12 @@ __end_while_pool:
 	return NULL;
 }
 
-
-#define PROXYSQL_ADMIN_VERSION "0.1.0815"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define PROXYSQL_ADMIN_VERSION "0.1.0815" DEB
 
 //class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 /*

@@ -29,7 +29,12 @@
 	} while(0) 
 
 
-#define QUERY_CACHE_VERSION "0.1.0629"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define QUERY_CACHE_VERSION "0.1.0629" DEB
 
 __thread uint64_t __thr_cntSet=0;
 __thread uint64_t __thr_cntGet=0;

@@ -14,7 +14,12 @@ typedef struct _account_details_t {
 	bool transaction_persistent;
 } account_details_t;
 
-#define MYSQL_AUTHENTICATION_VERSION "0.1.0706"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define MYSQL_AUTHENTICATION_VERSION "0.1.0706" DEB
 
 //#define MY_SEPERATOR_HASH	"__uy1gf2doi3ujh4ge5__"
 

@@ -9,7 +9,12 @@
 #include "../deps/libinjection/libinjection_sqli.h"
 
 
-#define QUERY_PROCESSOR_VERSION "0.1.728"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define QUERY_PROCESSOR_VERSION "0.1.728" DEB
 
 
 #define strdup_null(__c) ( __c ? strdup(__c) : __c )
