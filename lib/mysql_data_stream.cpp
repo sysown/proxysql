@@ -335,9 +335,15 @@ int MySQL_Data_Stream::write_to_net_poll() {
 	int rc=0;
 	if (active==FALSE) return rc;	
 	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p --\n", sess, this);
-	if (queue_data(queueOUT) && poll_fds_idx>-1 && (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
-	//if (queue_data(queueOUT)) { //FIXME
-		rc=write_to_net();
+	if (queue_data(queueOUT)) {
+		if ((sess->admin==false)) {
+			if (poll_fds_idx>-1 && (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+				if (net_failure==false)
+					rc=write_to_net();
+			}
+		} else {
+			rc=write_to_net();
+		}
 	}
 	if (fd>0 && sess->admin==false) set_pollout();
 	return rc;

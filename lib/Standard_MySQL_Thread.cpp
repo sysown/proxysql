@@ -654,18 +654,56 @@ void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 				myds->revents=mypolls.fds[n].revents;
 				myds->read_from_net();
 				myds->read_pkts();
+
+				if ( (mypolls.fds[n].events & POLLOUT) 
+						&&
+						( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) )
+				) {
+					myds->net_failure=true;
+				}
+
 				myds->check_data_flow();
 				myds->sess->to_process=1;
+
+
+	      if (myds->active==FALSE) {
+					if (myds->sess->client_myds==myds) {
+						proxy_debug(PROXY_DEBUG_NET,1, "Session=%p, DataStream=%p -- Deleting FD %d\n", myds->sess, myds, myds->fd);
+						myds->sess->healthy=0;
+					}
+				}
+
+/*
 	      if (myds->active==FALSE) {
 					mypolls.remove_index_fast(n);
 					proxy_debug(PROXY_DEBUG_NET,1, "Session=%p, DataStream=%p -- Deleting FD %d\n", myds->sess, myds, myds->fd);
-					myds->shut_hard();
+					//myds->shut_hard();
 					MySQL_Session *sess=myds->sess;
+					if (
+						(sess->server_myds==myds)
+						&&
+						(myds->myds_type==MYDS_BACKEND)
+						&&
+						(myds->DSS==STATE_READY)
+					) {
+						if (sess->mybe->myconn) {
+							MyHGM->destroy_MyConn_from_pool(sess->mybe->myconn);
+							sess->mybe->myconn=NULL;
+						}
+						// This is a failed backend, let's try to save the session
+						return;
+					}
+
 					sess->healthy=0;
-					if (sess->client_myds==myds) sess->client_myds=NULL;
-					if (sess->server_myds==myds) sess->server_myds=NULL;
-					delete myds;
-					myds=NULL; // useless?
+					if (sess->client_myds==myds) {
+						sess->client_myds=NULL;
+						delete myds;
+					}
+					if (sess->server_myds==myds) {
+						sess->server_myds=NULL;
+					}
+					//delete myds;
+					//myds=NULL; // useless?
 // FIXME
 //  	   		if (sess->client_myds==NULL && sess->server_myds==NULL) {
 //						mysql_sessions->remove_fast(sess);
@@ -673,6 +711,7 @@ void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 //						continue;
 //					}
 				}
+*/
 }
 
 void process_all_sessions() {

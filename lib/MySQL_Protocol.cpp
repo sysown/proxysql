@@ -785,7 +785,8 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
-			case STATE_QUERY_SENT:
+			case STATE_QUERY_SENT_DS:
+			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_ERR;
 				break;
 			default:
@@ -839,7 +840,8 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
-			case STATE_QUERY_SENT:
+			case STATE_QUERY_SENT_DS:
+			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_OK;
 				break;
 			default:
