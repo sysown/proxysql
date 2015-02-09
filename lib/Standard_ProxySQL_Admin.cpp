@@ -1293,8 +1293,12 @@ __end_while_pool:
 	return NULL;
 }
 
-
-#define PROXYSQL_ADMIN_VERSION "0.1.0815"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define PROXYSQL_ADMIN_VERSION "0.1.0815" DEB
 
 //class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 /*
@@ -1315,6 +1319,14 @@ public:
 */
 Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
 //	int i;
+#ifdef DEBUG
+		if (glovars.has_debug==false) {
+#else
+		if (glovars.has_debug==true) {
+#endif /* DEBUG */
+			perror("Incompatible debagging version");
+			exit(EXIT_FAILURE);
+		}
 
 	SPA=this;
 	spinlock_rwlock_init(&rwlock);

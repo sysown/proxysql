@@ -190,6 +190,12 @@ int main(int argc, const char * argv[]) {
 
 
 {
+#ifdef DEBUG
+	glovars.has_debug=true;
+#else
+	glovars.has_debug=false;
+#endif /* DEBUG */
+
 	__thr_sfp=l_mem_init();
 
 	{

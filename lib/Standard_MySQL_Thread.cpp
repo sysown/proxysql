@@ -16,7 +16,12 @@ extern "C" {
 #endif /* __cplusplus */
 
 
-#define MYSQL_THREAD_VERSION "0.1.1114"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define MYSQL_THREAD_VERSION "0.1.1114" DEB
 
 
 #define DEFAULT_NUM_THREADS	4
@@ -200,6 +205,14 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	} variables;
 	public:
 	Standard_MySQL_Threads_Handler() {
+#ifdef DEBUG
+		if (glovars.has_debug==false) {
+#else
+		if (glovars.has_debug==true) {
+#endif /* DEBUG */
+			perror("Incompatible debagging version");
+			exit(EXIT_FAILURE);
+		}
 		num_threads=0;
 		mysql_threads=NULL;
 		stacksize=0;

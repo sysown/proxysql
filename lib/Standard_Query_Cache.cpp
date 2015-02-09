@@ -29,7 +29,12 @@
 	} while(0) 
 
 
-#define QUERY_CACHE_VERSION "0.1.0629"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define QUERY_CACHE_VERSION "0.1.0629" DEB
 
 __thread uint64_t __thr_cntSet=0;
 __thread uint64_t __thr_cntGet=0;
@@ -316,6 +321,14 @@ virtual double area() const {
 };
 
 Standard_Query_Cache() {
+#ifdef DEBUG
+	if (glovars.has_debug==false) {
+#else
+	if (glovars.has_debug==true) {
+#endif /* DEBUG */
+		perror("Incompatible debagging version");
+		exit(EXIT_FAILURE);
+	}
 	QCnow=time(NULL);
 	//test=0;
 	size=SHARED_QUERY_CACHE_HASH_TABLES;

@@ -14,7 +14,12 @@ typedef struct _account_details_t {
 	bool transaction_persistent;
 } account_details_t;
 
-#define MYSQL_AUTHENTICATION_VERSION "0.1.0706"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define MYSQL_AUTHENTICATION_VERSION "0.1.0706" DEB
 
 //#define MY_SEPERATOR_HASH	"__uy1gf2doi3ujh4ge5__"
 
@@ -35,6 +40,14 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 //	PtrArray cred_array;
 	public:
 	Standard_MySQL_Authentication() {
+#ifdef DEBUG
+		if (glovars.has_debug==false) {
+#else
+		if (glovars.has_debug==true) {
+#endif /* DEBUG */
+			perror("Incompatible debagging version");
+			exit(EXIT_FAILURE);
+		}
 		spinlock_rwlock_init(&creds_backends.lock);
 		spinlock_rwlock_init(&creds_frontends.lock);
 	};

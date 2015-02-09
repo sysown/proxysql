@@ -9,7 +9,12 @@
 #include "../deps/libinjection/libinjection_sqli.h"
 
 
-#define QUERY_PROCESSOR_VERSION "0.1.728"
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define QUERY_PROCESSOR_VERSION "0.1.728" DEB
 
 
 #define strdup_null(__c) ( __c ? strdup(__c) : __c )
@@ -238,6 +243,14 @@ protected:
 
 public:
 Standard_Query_Processor() {
+#ifdef DEBUG
+	if (glovars.has_debug==false) {
+#else
+	if (glovars.has_debug==true) {
+#endif /* DEBUG */
+		perror("Incompatible debagging version");
+		exit(EXIT_FAILURE);
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
 	spinlock_rwlock_init(&rwlock);
 	version=0;
