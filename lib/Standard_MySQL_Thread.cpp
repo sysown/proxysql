@@ -604,10 +604,11 @@ virtual MySQL_Session * create_new_session_and_client_data_stream(int _fd) {
 	int arg_on=1;
 	MySQL_Session *sess=new MySQL_Session;
 	register_session(sess); // register session
-	sess->client_fd=_fd;
-	setsockopt(sess->client_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
+	//sess->client_fd=_fd;
 	sess->client_myds = new MySQL_Data_Stream();
-	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_fd);
+	sess->client_myds->fd=_fd;
+	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
+	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
 	//sess->prot.generate_server_handshake(sess->client_myds);
 #ifdef DEBUG
@@ -875,9 +876,9 @@ void Standard_MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *my
 		//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 		//sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL);
-		ioctl_FIONBIO(sess->client_fd, 1);
-		mypolls.add(POLLIN|POLLOUT, sess->client_fd, sess->client_myds, curtime);
-		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_fd);
+		ioctl_FIONBIO(sess->client_myds->fd, 1);
+		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
+		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
 	} else {
 		// if we arrive here, accept() failed
 		// because multiple threads try to handle the same incoming connection, this is OK

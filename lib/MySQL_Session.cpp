@@ -104,8 +104,8 @@ MySQL_Session::MySQL_Session() {
 	admin=false;
 	stats=false;
 	admin_func=NULL;
-	client_fd=0;
-	server_fd=0;
+	//client_fd=0;
+	//server_fd=0;
 	client_myds=NULL;
 	server_myds=NULL;
 	to_process=0;
@@ -122,10 +122,12 @@ MySQL_Session::MySQL_Session() {
 	//myprot_server.init(&server_myds, NULL, this);
 }
 
+/*
 MySQL_Session::MySQL_Session(int _fd) {
 	MySQL_Session();
 	client_fd=_fd;
 }
+*/
 
 MySQL_Session::~MySQL_Session() {
 	if (client_myds) {
@@ -218,7 +220,8 @@ int MySQL_Session::handler() {
 	unsigned int j;
 	unsigned char c;
 
-
+/*
+ * FIXME: this code is obscure and needs improvements . Commenting for now
 	if (pause>0 || (status==CONNECTING_SERVER && server_myds && ( server_myds->myds_type==MYDS_BACKEND_FAILED_CONNECT || server_myds->myds_type==MYDS_BACKEND_PAUSE_CONNECT ))) {
 		server_myds->connect_tries++;
 		if (server_myds->connect_tries<10) {
@@ -260,6 +263,7 @@ int MySQL_Session::handler() {
 			//assert(0);
 		}
 	}
+*/
 
 	for (j=0; j<client_myds->PSarrayIN->len;) {
 		client_myds->PSarrayIN->remove_index(0,&pkt);
@@ -387,7 +391,7 @@ __get_a_backend:
 			// FIXME : handle missing connection from connection pool
 			// FIXME : perhaps is a goto __exit_DSS__STATE_NOT_INITIALIZED after setting time wait
 
-			thread->mypolls.add(POLLIN|POLLOUT, server_fd, server_myds, curtime);
+			thread->mypolls.add(POLLIN|POLLOUT, server_myds->fd, server_myds, curtime);
 
 			if (server_myds->DSS!=STATE_READY) {
 				server_myds->move_from_OUT_to_OUTpending();
@@ -513,12 +517,12 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 					MyHGM->destroy_MyConn_from_pool(mybe->myconn);
 					mybe->myconn=NULL;
 				}
-				if (server_fd) {
+				if (server_myds->fd) {
 					shutdown(server_myds->fd,SHUT_RDWR);
 					close(server_myds->fd);
 					server_myds->fd=0;
 					thread->mypolls.remove_index_fast(server_myds->poll_fds_idx);
-					server_fd=0;
+					//server_fd=0;
 				}
 				server_myds->net_failure=false;
 				server_myds->active=1;
@@ -967,8 +971,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		// we didn't get a valid connection, we need to create one
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection has no FD\n", this);
 		server_myds->myconn=mybe->myconn;
-		server_fd=server_myds->myds_connect(mybe->myconn->parent->address, mybe->myconn->parent->port, &pending_connect);
-		server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, server_fd);
+		int __fd;
+		__fd=server_myds->myds_connect(mybe->myconn->parent->address, mybe->myconn->parent->port, &pending_connect);
+		server_myds->init((pending_connect==1 ? MYDS_BACKEND_NOT_CONNECTED : MYDS_BACKEND), this, __fd);
 		mybe->myconn=server_myds->myconn;
 		mybe->myconn->reusable=true;
 		server_myds->myconn->fd=server_myds->fd;
@@ -978,7 +983,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection found = %p\n", this, mybe->myconn);
 		server_myds->myconn=mybe->myconn;
 		server_myds->assign_fd_from_mysql_conn();
-		server_fd=server_myds->fd;
+		//server_fd=server_myds->fd;
 		server_myds->myds_type=MYDS_BACKEND;
 		server_myds->DSS=STATE_READY;
 	}

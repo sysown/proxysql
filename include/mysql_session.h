@@ -68,8 +68,8 @@ class MySQL_Session
 	bool admin;
 	bool stats;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
-	int client_fd;
-	int server_fd;
+//	int client_fd;
+//	int server_fd;
 	enum session_status status;
 	int current_hostgroup;
 	int default_hostgroup;
@@ -97,7 +97,7 @@ class MySQL_Session
 	PtrArray *mybes;
 
 	MySQL_Session();
-	MySQL_Session(int);
+//	MySQL_Session(int);
 	~MySQL_Session();
 
 
