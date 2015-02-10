@@ -47,6 +47,7 @@ class MySQL_Data_Stream
 	int array2buffer_full();
 	//int listener;
 	MySQL_Connection *myconn;
+	MySQL_Protocol myprot;
 	enum mysql_data_stream_status DSS;
 	enum MySQL_DS_type myds_type;
 	MySQL_Session *sess;  // pointer to the session using this data stream

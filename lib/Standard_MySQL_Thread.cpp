@@ -611,12 +611,16 @@ virtual MySQL_Session * create_new_session_and_client_data_stream(int _fd) {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
 	//sess->prot.generate_server_handshake(sess->client_myds);
 #ifdef DEBUG
-	sess->myprot_client.dump_pkt=true;
+	//sess->myprot_client.dump_pkt=true;
+	sess->client_myds->myprot.dump_pkt=true;
 #endif
 	sess->client_myds->myconn=new MySQL_Connection();  // 20141011
 	sess->client_myds->myconn->myds=sess->client_myds; // 20141011
 	sess->client_myds->myconn->fd=sess->client_myds->fd; // 20141011
-	sess->myprot_client.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
+
+	// FIXME: initializing both, later we will drop one
+	//sess->myprot_client.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
+	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 	return sess;
 };
 
@@ -869,7 +873,8 @@ void Standard_MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *my
 		mypolls.fds[n].revents=0;
 		MySQL_Session *sess=create_new_session_and_client_data_stream(c);
 		//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
-		sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
+		//sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
+		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL);
 		ioctl_FIONBIO(sess->client_fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_fd);

@@ -101,8 +101,8 @@ class MySQL_Session
 	~MySQL_Session();
 
 
-	MySQL_Protocol myprot_client;
-	MySQL_Protocol myprot_server;
+	//MySQL_Protocol myprot_client;
+	//MySQL_Protocol myprot_server;
 	int handler();
 
 	MySQL_Backend * find_backend(int);

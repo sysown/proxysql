@@ -430,10 +430,10 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (rc) {
 			//nostart_=false;
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Starting ProxySQL following PROXYSQL START command\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		} else {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "ProxySQL was already started when received PROXYSQL START command\n");
-			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"ProxySQL already started");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL already started");
 		}
 		return false;
 	}
@@ -516,10 +516,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			int rc=SPA->load_debug_to_runtime();
 			if (rc) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded debug levels to RUNTIME\n");
-				SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			} else {
 				proxy_debug(PROXY_DEBUG_ADMIN, 1, "Error while loading debug levels to RUNTIME\n");
-				SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"Error while loading debug levels to RUNTIME");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Error while loading debug levels to RUNTIME");
 			}
 			return false;
 		}
@@ -537,7 +537,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->save_debug_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved debug levels from RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -587,7 +587,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->init_users();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users to RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -604,7 +604,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->save_mysql_users_runtime_to_database();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -652,7 +652,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->load_mysql_variables_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -669,7 +669,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->save_mysql_variables_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql variables from RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -688,7 +688,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->flush_mysql_servers__from_disk_to_memory();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -703,7 +703,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->flush_mysql_servers__from_memory_to_disk();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers to DISK\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -720,7 +720,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->load_mysql_servers_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 /*
@@ -756,7 +756,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->flush_mysql_query_rules__from_disk_to_memory();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -771,7 +771,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->flush_mysql_query_rules__from_memory_to_disk();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules to DISK\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -789,9 +789,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			char *err=SPA->load_mysql_query_rules_to_runtime();
 			if (err==NULL) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
-				SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			} else {
-				SPA->send_MySQL_ERR(&sess->myprot_client, err);
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, err);
 			}
 			return false;
 		}
@@ -809,7 +809,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->save_mysql_query_rules_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules from RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 	}
@@ -857,7 +857,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->load_admin_variables_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -874,7 +874,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
 			SPA->save_admin_variables_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved admin variables from RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -994,7 +994,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			(strncasecmp("ATTACH",query_no_space,6)==0)
 		) {
 			proxy_error("[WARNING]: Commands executed from stats interface in Admin Module: \"%s\"\n", query_no_space);
-			SPA->send_MySQL_ERR(&sess->myprot_client, (char *)"Command not allowed");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Command not allowed");
 			run_query=false;
 		}
 	}
@@ -1009,7 +1009,7 @@ __run_query:
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
 		}
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
@@ -1074,7 +1074,7 @@ void *child_mysql(void *arg) {
 	fds[0].events=POLLIN|POLLOUT;
 
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
-	sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
+	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL);
 
 	unsigned long oldtime=monotonic_time();
 	unsigned long curtime=monotonic_time();

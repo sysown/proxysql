@@ -156,7 +156,7 @@ MySQL_Backend::~MySQL_Backend() {
 
 void MySQL_Backend::reset() {
 	if (myconn) {
-		if (server_myds->DSS==STATE_READY && myconn->reusable==true && ((myconn->myds->sess->myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+		if (server_myds->DSS==STATE_READY && myconn->reusable==true && ((myconn->myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 			//server_myds->myconn=NULL;
 			//delete myconn;
 			MyHGM->push_MyConn_to_pool(myconn);
