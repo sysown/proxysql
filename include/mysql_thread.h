@@ -270,6 +270,44 @@ class MySQL_Threads_Handler
 	virtual SQLite3_result * SQL3_Threads_status(MySQL_Session *) {return NULL;}
 };
 
+class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
+{
+	private:
+	size_t stacksize;
+	pthread_attr_t attr;
+	rwlock_t rwlock;
+	struct {
+		char *default_schema;
+		char *server_version;
+		bool servers_stats;
+#ifdef DEBUG
+		bool session_debug;
+#endif /* DEBUG */
+		uint16_t server_capabilities;
+		int poll_timeout;
+	} variables;
+	public:
+	Standard_MySQL_Threads_Handler();
+	virtual ~Standard_MySQL_Threads_Handler();
+	virtual SQLite3_result * SQL3_Threads_status(MySQL_Session *);
+	
+	virtual void wrlock();
+	virtual void wrunlock();
+	virtual void commit();
+
+	char *get_variable_string(char *name);
+	uint16_t get_variable_uint16(char *name);
+	int get_variable_int(char *name);
+	virtual char * get_variable(char *name); // this is the public function, accessible from admin
+	virtual bool set_variable(char *name, char *value);// this is the public function, accessible from admin
+	virtual char **get_variables_list();
+	virtual void print_version();
+	virtual void init(unsigned int num, size_t stack);
+	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *));
+	virtual void shutdown_threads();
+};
+
+
 typedef MySQL_Threads_Handler * create_MySQL_Threads_Handler_t();
 typedef void destroy_MySQL_Threads_Handler_t(MySQL_Threads_Handler *);
 
