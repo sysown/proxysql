@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "SpookyV2.h"
 
 /*
 void * MySQL_Connection::operator new(size_t size) {
@@ -17,6 +18,7 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
 	password=NULL;
 	schemaname=NULL;
+	hash=0;
 	//schemaname=strdup(mysql_thread___default_schema);
 }
 
@@ -24,6 +26,42 @@ MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
 	if (password) free(password);
 	if (schemaname) free(schemaname);
+}
+
+uint64_t MySQL_Connection_userinfo::compute_hash() {
+	int l=0;
+	if (username)
+		l+=strlen(username);
+	if (password)
+		l+=strlen(password);
+	if (schemaname)
+		l+=strlen(schemaname);
+// two random seperator
+#define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
+#define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
+	l+=strlen(_COMPUTE_HASH_DEL1_);
+	l+=strlen(_COMPUTE_HASH_DEL2_);
+	char *buf=(char *)malloc(l);
+	l=0;
+	if (username) {
+		strcpy(buf+l,username);
+		l+=strlen(username);
+	}
+	strcpy(buf+l,_COMPUTE_HASH_DEL1_);
+	l+=strlen(_COMPUTE_HASH_DEL1_);
+	if (password) {
+		strcpy(buf+l,password);
+		l+=strlen(password);
+	}
+	if (schemaname) {
+		strcpy(buf+l,schemaname);
+		l+=strlen(schemaname);
+	}
+	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
+	l+=strlen(_COMPUTE_HASH_DEL2_);
+	hash=SpookyHash::Hash64(buf,l,0);
+	free(buf);
+	return hash;
 }
 
 void MySQL_Connection_userinfo::set(char *u, char *p, char *s) {
@@ -39,6 +77,7 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s) {
 		if (schemaname) free(schemaname);
 		schemaname=strdup(s);
 	}
+	compute_hash();
 }
 
 void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
@@ -52,6 +91,7 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 		schemaname=(char *)malloc(l+1);
 		memcpy(schemaname,_new,l);
 		schemaname[l]=0;
+		compute_hash();
 		return true;
 	}
 	return false;

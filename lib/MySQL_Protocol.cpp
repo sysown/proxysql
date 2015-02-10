@@ -785,7 +785,8 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
-			case STATE_QUERY_SENT:
+			case STATE_QUERY_SENT_DS:
+			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_ERR;
 				break;
 			default:
@@ -839,7 +840,8 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
-			case STATE_QUERY_SENT:
+			case STATE_QUERY_SENT_DS:
+			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_OK;
 				break;
 			default:
@@ -1098,7 +1100,6 @@ bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsi
   mysql_hdr myhdr;
   myhdr.pkt_id=1;
 
-
 	uint32_t capabilities = CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | CLIENT_CONNECT_WITH_DB | CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS ;
 	uint32_t max_allowed_packet=1*1024*1024;
 	uint8_t charset=21;
@@ -1172,6 +1173,51 @@ bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsi
 
 	return true;
 }
+
+bool MySQL_Protocol::generate_COM_CHANGE_USER(bool send, void **ptr, unsigned int *len) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating response handshake pkt\n");
+	mysql_hdr myhdr;
+	myhdr.pkt_id=0;
+	uint8_t _tmp;
+
+
+	myhdr.pkt_length= 1 // COM_CHANGE_USER
+		+ strlen(userinfo->username)+1 // user
+		+ ( strlen(userinfo->password) ? 21 : 1 )
+		+ strlen(userinfo->schemaname) + 1;
+
+	unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+	unsigned char *_ptr=(unsigned char *)l_alloc(size);
+	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+	int l=sizeof(mysql_hdr);
+	_ptr[l++]=0x11; // COM_CHANGE_USER
+	_tmp=strlen(userinfo->username);
+	if (_tmp) {
+		memcpy(_ptr+l,userinfo->username,_tmp); l+=_tmp;
+	}
+	_ptr[l++]=0;
+	if (strlen(userinfo->password)) {
+		_ptr[l++]=20;
+		char reply[SHA_DIGEST_LENGTH+1];
+		reply[SHA_DIGEST_LENGTH]='\0';
+		proxy_scramble(reply, (*myds)->myconn->scramble_buff, userinfo->password);
+		memcpy(_ptr+l,reply,20); l+=20;
+	} else {
+		_ptr[l++]=0;
+	}
+	_tmp=strlen(userinfo->schemaname);
+	memcpy(_ptr+l,userinfo->schemaname,_tmp+1);
+
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
+	if (len) { *len=size; }
+	if (ptr) { *ptr=(void *)_ptr; }
+#ifdef DEBUG
+	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+#endif
+
+	return true;
+}
+
 
 //bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len) {

@@ -180,12 +180,24 @@ void MySQL_Session::reset_all_backends() {
 
 void MySQL_Session::writeout() {
 	if (client_myds) client_myds->array2buffer_full();
-	if (server_myds && server_myds->myds_type==MYDS_BACKEND) server_myds->array2buffer_full();
-
+	if (server_myds && server_myds->myds_type==MYDS_BACKEND) {
+		if (admin==false) {
+			if (server_myds->net_failure==false) { 
+				if (server_myds->poll_fds_idx>-1 && (server_myds->mypolls->fds[server_myds->poll_fds_idx].revents & POLLOUT)) {
+					server_myds->array2buffer_full();
+				}
+			} else {
+				server_myds->move_from_OUT_to_OUTpending();
+			}
+		} else {
+			server_myds->array2buffer_full();
+		}
+	}
 	// FIXME: experimental
 	//if (client_myds) client_myds->set_pollout();
 	//if (server_myds) server_myds->set_pollout();
 	if (client_myds) client_myds->write_to_net_poll();
+	//if (server_myds && server_myds->net_failure==false) server_myds->write_to_net_poll();
 	if (server_myds) server_myds->write_to_net_poll();
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
@@ -287,7 +299,7 @@ int MySQL_Session::handler() {
 									server_myds=mybe->server_myds;
 								} 
 								server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-								client_myds->DSS=STATE_QUERY_SENT;
+								client_myds->DSS=STATE_QUERY_SENT_NET;
 							} else {
 								// this is processed by the admin module
 								admin_func(this, GloAdmin, &pkt);
@@ -334,12 +346,13 @@ int MySQL_Session::handler() {
 
 
 
+__get_a_backend:
 
-	if (client_myds->DSS==STATE_QUERY_SENT) {
+	if (client_myds->DSS==STATE_QUERY_SENT_NET) {
 	// the client has completely sent the query, now we should handle it server side
 	//
 		if (server_myds->DSS==STATE_NOT_INITIALIZED) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT , server_myds==STATE_NOT_INITIALIZED\n", this);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET , server_myds==STATE_NOT_INITIALIZED\n", this);
 			// DSS is STATE_NOT_INITIALIZED. It means we are not connected to any server
 			// try to connect
 			pending_connect=1;
@@ -368,14 +381,29 @@ int MySQL_Session::handler() {
 								//} else {  TRY #1
 		}    // TRY #1
 		if (server_myds->myds_type==MYDS_BACKEND && server_myds->DSS==STATE_READY) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT , server_myds==STATE_READY , server_myds->myds_type==MYDS_BACKEND\n", this);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET , server_myds==STATE_READY , server_myds->myds_type==MYDS_BACKEND\n", this);
 			//if (strcmp(userinfo_client.schemaname,userinfo_server.schemaname)==0) {
-			if ((mybe->myconn->userinfo->schemaname==NULL) || strcmp(client_myds->myconn->userinfo->schemaname,mybe->myconn->userinfo->schemaname)==0) {
-				//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-				server_myds->DSS=STATE_QUERY_SENT;
-				status=WAITING_SERVER_DATA;
+			if (
+				(client_myds->myconn->userinfo->hash!=mybe->myconn->userinfo->hash)
+/*
+				(mybe->myconn->userinfo->schemaname==NULL)
+				||
+				strcmp(client_myds->myconn->userinfo->schemaname,mybe->myconn->userinfo->schemaname)
+				||
+				strcmp(client_myds->myconn->userinfo->username,mybe->myconn->userinfo->username)
+*/
+			) {
+				if (strcmp(client_myds->myconn->userinfo->username,mybe->myconn->userinfo->username)) {
+					// username don't match, we must change user
+					handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();
+				} else {
+					// we should chek that schema is different, but here we assume that if we reach here user is identical, but schema is not
+					handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
+				}
 			} else {
-				handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
+				//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+				server_myds->DSS=STATE_QUERY_SENT_DS;
+				status=WAITING_SERVER_DATA;
 			}
 		}
 							//	}   TRY #1
@@ -409,7 +437,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 			case WAITING_SERVER_DATA:
 
 				switch (server_myds->DSS) {
-					case STATE_QUERY_SENT:
+					case STATE_QUERY_SENT_NET:
 						handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(&pkt);
 						break;
 
@@ -427,7 +455,15 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				break;
 
 			case CHANGING_SCHEMA:
-				handler___status_CHANGING_SCHEMA(&pkt);
+				if (handler___status_CHANGING_SCHEMA(&pkt)==false) {
+					return -1;
+				}
+				break;
+
+			case CHANGING_USER_SERVER:
+				if (handler___status_CHANGING_USER_SERVER(&pkt)==false) {
+					return -1;
+				}
 				break;
 
 			default:
@@ -438,6 +474,48 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	}
 
 	writeout();
+
+	if (
+		server_myds
+		&&
+		server_myds->DSS==STATE_QUERY_SENT_DS
+		&&
+		server_myds->PSarrayOUT->len==0
+		&&
+		server_myds->net_failure==false
+		&&
+		server_myds->available_data_out()==false
+	) {
+		server_myds->DSS=STATE_QUERY_SENT_NET;
+	}
+	if (server_myds) {
+		if (server_myds->net_failure) {
+			if (( server_myds->DSS==STATE_READY || server_myds->DSS==STATE_QUERY_SENT_DS ) && server_myds->myds_type==MYDS_BACKEND) {
+				server_myds->myconn=NULL;
+				server_myds->DSS=STATE_NOT_INITIALIZED;
+				server_myds->move_from_OUT_to_OUTpending();
+				if (mybe->myconn) {
+					MyHGM->destroy_MyConn_from_pool(mybe->myconn);
+					mybe->myconn=NULL;
+				}
+				if (server_fd) {
+					shutdown(server_myds->fd,SHUT_RDWR);
+					close(server_myds->fd);
+					server_myds->fd=0;
+					thread->mypolls.remove_index_fast(server_myds->poll_fds_idx);
+					server_fd=0;
+				}
+				server_myds->net_failure=false;
+				server_myds->active=1;
+				goto __get_a_backend;
+			} else {
+				healthy=0;
+			}
+		}
+	}
+
+	//writeout();
+
 /*
 	if (  // FIXME: this implementation is horrible
 		(server_myds ? server_myds->PSarrayIN->len==0 : 1 ) && 
@@ -454,7 +532,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 }
 
 
-void MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
+bool MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_SCHEMA - UNKNWON\n");
 	if (myprot_server.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
 		l_free(pkt->size,pkt->ptr);
@@ -466,11 +544,46 @@ void MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
 		for (k=0; k<server_myds->PSarrayOUTpending->len;) {
 			server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
 			server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-			server_myds->DSS=STATE_QUERY_SENT;
+			server_myds->DSS=STATE_QUERY_SENT_DS;
 		}
+		return true;
+	} else {
+		l_free(pkt->size,pkt->ptr);
+		healthy=0;
+		mybe->myconn=server_myds->myconn;
+		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
+		// although we enforce this here
+		server_myds->myconn->reusable=false;
+		return false;
+	}
+	return false;
+}
+
+bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_USER_SERVER - UNKNWON\n");
+	if (myprot_server.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
+		l_free(pkt->size,pkt->ptr);
+		server_myds->DSS=STATE_READY;
+		mybe->myconn=server_myds->myconn;
+		status=WAITING_SERVER_DATA;
+		unsigned int k;
+		PtrSize_t pkt2;
+		for (k=0; k<server_myds->PSarrayOUTpending->len;) {
+			server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
+			server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+			server_myds->DSS=STATE_QUERY_SENT_DS;
+		}
+		return true;
 	} else {
 		l_free(pkt->size,pkt->ptr);	
+		healthy=0;
+		mybe->myconn=server_myds->myconn;
+		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
+		// although we enforce this here
+		server_myds->myconn->reusable=false;
+		return false;
 	}
+	return false;
 }
 
 
@@ -588,13 +701,13 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(
 		for (k=0; k<server_myds->PSarrayOUTpending->len;) {
 			server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
 			server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-			server_myds->DSS=STATE_QUERY_SENT;
+			server_myds->DSS=STATE_QUERY_SENT_DS;
 		}
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for backend: disconnecting\n");
 		l_free(pkt->size,pkt->ptr);	
 		*wrong_pass=true;
-		client_myds->DSS=STATE_QUERY_SENT;
+		client_myds->DSS=STATE_QUERY_SENT_NET;
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
 		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 		myprot_client.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000", _s);
@@ -643,7 +756,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
 		*wrong_pass=true;
 		// FIXME: this should become close connection
-		client_myds->DSS=STATE_QUERY_SENT;
+		client_myds->DSS=STATE_QUERY_SENT_NET;
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
 		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 		myprot_client.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
@@ -677,7 +790,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	v=*((char *)pkt->ptr+3);
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_SET_OPTION packet , value %d\n", v);
 	// FIXME: ProxySQL doesn't support yet CLIENT_MULTI_STATEMENTS 
-	client_myds->DSS=STATE_QUERY_SENT;
+	client_myds->DSS=STATE_QUERY_SENT_NET;
 	if (v==1) {
 		myprot_client.generate_pkt_EOF(true,NULL,NULL,1,0,0);
 	} else {
@@ -690,7 +803,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_PING packet\n");
 	l_free(pkt->size,pkt->ptr);
-	client_myds->DSS=STATE_QUERY_SENT;
+	client_myds->DSS=STATE_QUERY_SENT_NET;
 	myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
 	client_myds->DSS=STATE_SLEEP;
 }
@@ -699,12 +812,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (admin==false) {
 		/* FIXME: temporary */
 		l_free(pkt->size,pkt->ptr);
-		client_myds->DSS=STATE_QUERY_SENT;
+		client_myds->DSS=STATE_QUERY_SENT_NET;
 		myprot_client.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
-		client_myds->DSS=STATE_QUERY_SENT;
+		client_myds->DSS=STATE_QUERY_SENT_NET;
 		myprot_client.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
 		client_myds->DSS=STATE_SLEEP;
 	}
@@ -716,12 +829,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (admin==false) {
 		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 		l_free(pkt->size,pkt->ptr);
-		client_myds->DSS=STATE_QUERY_SENT;
+		client_myds->DSS=STATE_QUERY_SENT_NET;
 		myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
-		client_myds->DSS=STATE_QUERY_SENT;
+		client_myds->DSS=STATE_QUERY_SENT_NET;
 		myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
 		client_myds->DSS=STATE_SLEEP;
 	}
@@ -760,7 +873,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_STATISTICS packet\n");
 	l_free(pkt->size,pkt->ptr);
-	client_myds->DSS=STATE_QUERY_SENT;
+	client_myds->DSS=STATE_QUERY_SENT_NET;
 	myprot_client.generate_statistics_response(true,NULL,NULL);
 	client_myds->DSS=STATE_SLEEP;	
 }
@@ -801,6 +914,18 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend() 
 	mybe->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
 	//myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
 	myprot_server.generate_COM_INIT_DB(true,NULL,NULL,mybe->myconn->userinfo->schemaname);
-	server_myds->DSS=STATE_QUERY_SENT;
+	server_myds->DSS=STATE_QUERY_SENT_DS;
 	status=CHANGING_SCHEMA;
 }
+
+void MySQL_Session::handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend() {
+	server_myds->move_from_OUT_to_OUTpending();
+	//userinfo_server.set_schemaname(userinfo_client.schemaname,strlen(userinfo_client.schemaname));
+	//mybe->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
+	mybe->myconn->userinfo->set(client_myds->myconn->userinfo);
+	//myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
+	myprot_server.generate_COM_CHANGE_USER(true,NULL,NULL);
+	server_myds->DSS=STATE_QUERY_SENT_DS;
+	status=CHANGING_USER_SERVER;
+}
+

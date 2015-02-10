@@ -5,10 +5,13 @@
 #include "cpp.h"
 
 class MySQL_Connection_userinfo {
+	private:
+	uint64_t compute_hash();
   public:
 	char *username;
 	char *password;
 	char *schemaname;
+	uint64_t hash;
 	MySQL_Connection_userinfo();
 	~MySQL_Connection_userinfo();
 	void set(char *, char *, char *);
