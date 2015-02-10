@@ -33,6 +33,7 @@ extern MySQL_Threads_Handler *GloMTH;
 int rc, arg_on=1, arg_off=0;
 
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define LINESIZE	2048
 
@@ -95,7 +96,8 @@ static t_symstruct lookuptable[] = {
 
 #define NKEYS (sizeof(lookuptable)/sizeof(t_symstruct))
 
-
+/*
+ // moved to gen_utils.cpp
 int remove_spaces(const char *s) {
 	char *inp = (char *)s, *outp = (char *)s;
 	bool prev_space = false;
@@ -114,7 +116,7 @@ int remove_spaces(const char *s) {
 	*outp = '\0';
 	return strlen(s);
 }
-
+*/
 static uint32_t keyfromhash(uint32_t hash) {
 	uint32_t i;
 	for (i=0; i < NKEYS; i++) {
@@ -222,7 +224,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void save_mysql_users_runtime_to_database();
 	virtual void admin_shutdown();
 	bool is_command(std::string);
-	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
+//	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
 //	virtual void admin_session_handler(MySQL_Session *sess);
@@ -1007,7 +1009,8 @@ __run_query:
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
 		}
-		SPA->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->myprot_client);
+		delete resultset;
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
@@ -1091,8 +1094,10 @@ void *child_mysql(void *arg) {
 			if (curtime>oldtime+__admin_refresh_interval) {
 				oldtime=curtime;
 				Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)GloAdmin;
+				pthread_mutex_lock(&admin_mutex);
 				SPA->stats___mysql_query_rules();
 				SPA->stats___mysql_commands_counters();
+				pthread_mutex_unlock(&admin_mutex);
 			}
 		}
 		if (rc == -1) {
@@ -2297,7 +2302,7 @@ void Standard_ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) 
 	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",msg);
 	myds->DSS=STATE_SLEEP;
 }
-
+/*
 void Standard_ProxySQL_Admin::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
@@ -2350,6 +2355,7 @@ void Standard_ProxySQL_Admin::SQLite3_to_MySQL(SQLite3_result *result, char *err
 		myds->DSS=STATE_SLEEP;
 	}
 }
+*/
 
 void Standard_ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
 	char *error=NULL;

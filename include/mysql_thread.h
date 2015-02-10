@@ -128,6 +128,7 @@ class ProxySQL_Poll {
   };
 
   public:
+	unsigned long loops;
   unsigned int len;
   unsigned int size;
   struct pollfd *fds;
@@ -136,6 +137,7 @@ class ProxySQL_Poll {
 	unsigned long long *last_sent;
 //  unsigned char *status=NULL;   // this should be moved within the Data Stream
   ProxySQL_Poll() {
+		loops=0;
     size=MIN_POLL_LEN;
     // preallocate MIN_POLL_LEN slots
     fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
@@ -220,7 +222,7 @@ class MySQL_Thread
 	virtual void poll_listener_add(int fd) {};
 	virtual void run() {};
 
-
+	virtual SQLite3_result * SQL3_Thread_status(MySQL_Session *) {return NULL;};
 
 	virtual void register_session(MySQL_Session *) {};
 	virtual void unregister_session(int) {};
@@ -265,6 +267,7 @@ class MySQL_Threads_Handler
 	virtual char *get_variable(char *name) {return NULL;};
 	virtual bool set_variable(char *name, char *value) {return false;};
 	virtual char **get_variables_list() {return NULL;}
+	virtual SQLite3_result * SQL3_Threads_status(MySQL_Session *) {return NULL;}
 };
 
 typedef MySQL_Threads_Handler * create_MySQL_Threads_Handler_t();
@@ -282,6 +285,9 @@ __EXTERN __thread char *mysql_thread___default_schema;
 __EXTERN __thread char *mysql_thread___server_version;
 __EXTERN __thread uint16_t mysql_thread___server_capabilities;
 __EXTERN __thread int mysql_thread___poll_timeout;
-__EXTERN __thread int mysql_thread___servers_stats;
+__EXTERN __thread bool mysql_thread___servers_stats;
+#ifdef DEBUG
+__EXTERN __thread bool mysql_thread___session_debug;
+#endif /* DEBUG */
 
 #endif /* __CLASS_MYSQL_THREAD_H */

@@ -16,12 +16,14 @@
 #endif /* DEBUG */
 #define QUERY_PROCESSOR_VERSION "0.1.728" DEB
 
-
+/*
+moved to proxysql_macros.h
 #define strdup_null(__c) ( __c ? strdup(__c) : __c )
 #define char_malloc (char *)malloc
 #define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
 
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
+*/
 
 class QP_rule_text_hitsonly {
 	public:
@@ -414,7 +416,7 @@ virtual void commit() {
 
 
 virtual SQLite3_result * get_stats_commands_counters() {
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping commands counters%d\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping commands counters\n");
 	SQLite3_result *result=new SQLite3_result(15);
 	result->add_column_definition(SQLITE_TEXT,"Command");
 	result->add_column_definition(SQLITE_TEXT,"Total_Cnt");

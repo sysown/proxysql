@@ -46,6 +46,9 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
+#ifdef DEBUG
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_debug(PtrSize_t *);
+#endif /* DEBUG */
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *);
@@ -105,6 +108,10 @@ class MySQL_Session
 	MySQL_Backend * find_backend(int);
 	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	
+	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
+	SQLite3_result * SQL3_Session_status();
+
 	void reset_all_backends();
 	void writeout();
 

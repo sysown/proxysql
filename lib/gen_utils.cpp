@@ -31,6 +31,26 @@ char * gen_random_string(const int len) {
 }
 */
 
+
+int remove_spaces(const char *s) {
+	char *inp = (char *)s, *outp = (char *)s;
+	bool prev_space = false;
+	while (*inp) {
+		if (isspace(*inp)) {
+			if (!prev_space) {
+				*outp++ = ' ';
+				prev_space = true;
+			}
+		} else {
+			*outp++ = *inp;
+			prev_space = 0;
+		}
+		++inp;
+	}
+	*outp = '\0';
+	return strlen(s);
+}
+
 #define MIN_ARRAY_LEN	8
 #define MIN_ARRAY_DELETE_RATIO	8
 

@@ -150,3 +150,4 @@ inline unsigned long long monotonic_time() {
 bool Proxy_file_exists(const char *);
 bool Proxy_file_regular(const char *);
 
+int remove_spaces(const char *);
