@@ -608,6 +608,19 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	if (c==0 || c==0xff) {
 		server_myds->DSS=STATE_READY;
+		/* multi-plexing attempt */
+		if (c==0) {
+			myprot_server.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size);
+			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, myprot_server.prot_status);
+			if ((mybe->myconn->reusable==true) && ((myprot_server.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				MyHGM->push_MyConn_to_pool(mybe->myconn);
+				mybe->myconn=NULL;
+				server_myds->unplug_backend();
+				unsigned int aa=__sync_fetch_and_add(&__debugging_mp,1);
+				if (aa%1000==0) fprintf(stderr,"mp=%u\n", aa);
+			}
+		}
+		/* multi-plexing attempt */	
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
