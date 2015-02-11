@@ -227,7 +227,7 @@ void MySQL_Data_Stream::check_data_flow() {
 		shut_soft();
 	}
 	//if ((myds_type==MYDS_BACKEND) && (myconn->myconn.net.fd==0) && (revents & POLLOUT)) {
-	if ((myds_type==MYDS_BACKEND) && (myconn->fd==0) && (revents & POLLOUT)) {
+	if ((myds_type==MYDS_BACKEND) && myconn && (myconn->fd==0) && (revents & POLLOUT)) {
 		int rc;
 		int error;
 		socklen_t len = sizeof(error);

@@ -403,7 +403,7 @@ class MySQL_Backend
 //  mysql_cp_entry_t *server_mycpe;
   bytes_stats_t server_bytes_at_cmd;
 	//MySQL_Hostgroup_Entry *mshge;
-	MySQL_Connection *myconn;
+	//MySQL_Connection *myconn;
 	MySQL_Backend();
 	~MySQL_Backend();
 	void reset();

@@ -1402,8 +1402,9 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 	pkt     += sizeof(mysql_hdr);
 	//MYSQL &myc=(*myds)->myconn->myconn;
 
-	if (*pkt != 0x0A || len < 33) goto exit_process_pkt_initial_handshake;
-
+	if (*pkt != 0x0A || len < 33) {
+		goto exit_process_pkt_initial_handshake;
+	}
 	uint8_t protocol;
 	uint16_t capabilities;
 	uint8_t charset;

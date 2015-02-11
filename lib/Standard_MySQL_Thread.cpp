@@ -937,7 +937,7 @@ SQLite3_result * Standard_MySQL_Thread::SQL3_Thread_status(MySQL_Session *sess) 
 	for (unsigned int i=0; i < mysql_sessions->len; i++) {
 		MySQL_Session *s=(MySQL_Session *)mysql_sessions->pdata[i];
 		MySQL_Connection_userinfo *ui=s->client_myds->myconn->userinfo;
-		sprintf(buf, "session[%d] = %p :\n\tuserinfo={%s,%s} , status=%d , myds={%p,%p} , HG={d:%d,c:%d}\n\tLast query= ", i, s, ui->username, ui->schemaname, s->status, s->client_myds, s->server_myds, s->default_hostgroup, s->current_hostgroup);
+		sprintf(buf, "session[%d] = %p :\n\tuserinfo={%s,%s} , status=%d , myds={%p,%p} , HG={d:%d,c:%d}\n\tLast query= ", i, s, ui->username, ui->schemaname, s->status, s->client_myds, ( s->mybe ? s->mybe->server_myds : NULL ) , s->default_hostgroup, s->current_hostgroup);
 		status_str.append(buf);
 		if (s->CurrentQuery.QueryLength && s->CurrentQuery.MyComQueryCmd!=MYSQL_COM_QUERY___NONE) {
 			status_str.append((char *)s->CurrentQuery.QueryPointer);

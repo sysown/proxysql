@@ -145,7 +145,7 @@ void MySQL_Backend::operator delete(void *ptr) {
 MySQL_Backend::MySQL_Backend() {
 	hostgroup_id=-1;
 	server_myds=NULL;
-	myconn=NULL;
+	//myconn=NULL;
 	server_bytes_at_cmd.bytes_recv=0;
 	server_bytes_at_cmd.bytes_sent=0;
 	//mshge=NULL;
@@ -155,16 +155,17 @@ MySQL_Backend::~MySQL_Backend() {
 }
 
 void MySQL_Backend::reset() {
-	if (myconn) {
-		if (server_myds->DSS==STATE_READY && myconn->reusable==true && ((myconn->myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+	if (server_myds->myconn) {
+		if (server_myds->DSS==STATE_READY && server_myds->myconn->reusable==true && ((server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 			//server_myds->myconn=NULL;
 			//delete myconn;
-			MyHGM->push_MyConn_to_pool(myconn);
+			MyHGM->push_MyConn_to_pool(server_myds->myconn);
 //			myconn->return_to_connection_pool();
-			myconn=NULL;
+			server_myds->myconn=NULL;
 		} else {
 //			MyConnArray *MCA=MyConnPool->MyConnArray_lookup(myconn->mshge->MSptr->address, myconn->myconn.user, myconn->mshge->MSptr->password, myconn->mshge->MSptr->db, myconn->mshge->MSptr->port);
-			MyHGM->destroy_MyConn_from_pool(myconn);
+			MyHGM->destroy_MyConn_from_pool(server_myds->myconn);
+			server_myds->myconn=NULL;
 			//delete myconn;
 		}
 	};
