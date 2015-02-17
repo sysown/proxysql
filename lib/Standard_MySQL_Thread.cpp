@@ -535,6 +535,7 @@ class Standard_MySQL_Thread: public MySQL_Thread {
 
 private:
 	MySQL_Connection **my_idle_conns;
+	MySQL_Data_Stream **my_idle_myds;
 	bool processing_idles;
 	unsigned long long last_processing_idles;
 	PtrArray *mysql_sessions_connections_handler;
@@ -548,6 +549,7 @@ Standard_MySQL_Thread() {
 	mypolls.fds=NULL;
 	mypolls.myds=NULL;
 	my_idle_conns=NULL;
+	my_idle_myds=NULL;
 	processing_idles=false;
 	last_processing_idles=0;
 	__thread_MySQL_Thread_Variables_version=0;
@@ -610,6 +612,8 @@ virtual ~Standard_MySQL_Thread() {
 
 	if (my_idle_conns)
 		free(my_idle_conns);
+	if (my_idle_myds)
+		free(my_idle_myds);
 	GloQPro->end_thread();
 	delete MyConnPool;
 
@@ -630,6 +634,7 @@ virtual bool init() {
 	}
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
+	my_idle_myds=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	GloQPro->init_thread();
 	MyConnPool=new MySQL_Connection_Pool();
 	return true;
@@ -721,8 +726,9 @@ virtual void run() {
 
 	while (shutdown==0) {
 
+	int num_idles;
 	if (processing_idles==false &&  (last_processing_idles < curtime-5*1000000) ) {
-		int num_idles, i;
+		int i;
 		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-5*1000000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 		for (i=0; i<num_idles; i++) {
 			MySQL_Data_Stream *myds;
@@ -734,6 +740,7 @@ virtual void run() {
 			MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(i);
 			myds->sess=sess;
 			myds->init();
+			my_idle_myds[i]=myds;
 			sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
 			sess->mybe->server_myds=myds;
 			sess->to_process=1;
@@ -745,11 +752,30 @@ virtual void run() {
 			myds->array2buffer_full();
 			myds->DSS=STATE_QUERY_SENT_DS;
 			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, curtime);
-
-
+			processing_idles=true;
+			last_processing_idles=curtime;
 		}
 	}
-	
+
+	if (processing_idles==true &&	(last_processing_idles < curtime-2*1000000)) {
+		int i;
+		for (i=0; i<num_idles; i++) {
+			MySQL_Data_Stream *myds;
+			myds=my_idle_myds[i];
+			if (myds->myconn) {
+				MyHGM->destroy_MyConn_from_pool(myds->myconn);
+				myds->myconn=NULL;
+				if (myds->fd) {
+					myds->shut_hard();
+//					shutdown(myds->fd,SHUT_RDWR);
+//					close(myds->fd);
+					myds->fd=0;
+          mypolls.remove_index_fast(myds->poll_fds_idx);
+				}
+			}
+		}
+	}
+
 
 
 		for (n = 0; n < mypolls.len; n++) {
