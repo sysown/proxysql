@@ -104,6 +104,7 @@ class MySQL_Session
 //	MySQL_Session(int);
 	~MySQL_Session();
 
+	void set_unhealthy();
 
 	//MySQL_Protocol myprot_client;
 	//MySQL_Protocol myprot_server;

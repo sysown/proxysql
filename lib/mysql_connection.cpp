@@ -142,6 +142,7 @@ MySQL_Connection::~MySQL_Connection() {
 	if (myds) {
 		myds->shut_hard();
 	} else {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection %p , fd:%d\n", this, fd);
 		shutdown(fd, SHUT_RDWR);
 		close(fd);
 	}

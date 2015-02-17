@@ -160,7 +160,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 	if (fd>0) {
 		if (myconn==NULL || myconn->reusable==false) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "MySQL_Connection %p %s: shutdown socket\n", myconn, (myconn ? "not reusable" : "is empty"));
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p , MYDS:%p , MySQL_Connection %p %s: shutdown socket\n", sess, this, myconn, (myconn ? "not reusable" : "is empty"));
 			shut_hard();
 //		shutdown(fd,SHUT_RDWR);
 //		close(fd);
@@ -203,14 +203,14 @@ void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int
 void MySQL_Data_Stream::shut_soft() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown soft fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
 	active=FALSE;
-	net_failure=true;
+	set_net_failure();
 	//if (sess) sess->net_failure=1;
 }
 
 // Hard shutdown of socket
 void MySQL_Data_Stream::shut_hard() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown hard fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
-	net_failure=true;
+	set_net_failure();
 	if (fd >= 0) {
 		shutdown(fd, SHUT_RDWR);
 		close(fd);
@@ -604,4 +604,24 @@ void MySQL_Data_Stream::unplug_backend() {
   mypolls->remove_index_fast(poll_fds_idx);
   mypolls=NULL;
   fd=0;
+}
+
+void MySQL_Data_Stream::clean_net_failure() {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p\n", this->sess, this);
+	net_failure=false;
+}
+
+void MySQL_Data_Stream::set_net_failure() {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p , myds_type:%d\n", this->sess, this, myds_type);
+#ifdef DEBUG
+	if (myds_type!=MYDS_FRONTEND) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p , myds_type:%d not frontend\n", this->sess, this, myds_type);
+	}
+#endif /* DEBUG */
+	net_failure=true;
+}
+
+void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p\n", this->sess, this);
+	DSS=STATE_QUERY_SENT_NET;
 }

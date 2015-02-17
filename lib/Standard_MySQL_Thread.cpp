@@ -728,6 +728,7 @@ virtual void run() {
 
 	while (shutdown==0) {
 
+/*
 	int num_idles;
 	if (processing_idles==false &&  (last_processing_idles < curtime-5*1000000) ) {
 		int i;
@@ -778,7 +779,7 @@ virtual void run() {
 		}
 	}
 
-
+*/
 
 		for (n = 0; n < mypolls.len; n++) {
 			mypolls.fds[n].revents=0;
@@ -870,7 +871,7 @@ virtual void run() {
 						// detected an error on backend
 						if ( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) ) {
 							// FIXME: try to handle it in a more graceful way
-							myds->sess->healthy=0;
+							myds->sess->set_unhealthy();
 						}
 						break;
 					default:
@@ -896,7 +897,7 @@ void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 						&&
 						( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) )
 				) {
-					myds->net_failure=true;
+					myds->set_net_failure();
 				}
 
 				myds->check_data_flow();
@@ -906,7 +907,7 @@ void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 	      if (myds->active==FALSE) {
 					if (myds->sess->client_myds==myds) {
 						proxy_debug(PROXY_DEBUG_NET,1, "Session=%p, DataStream=%p -- Deleting FD %d\n", myds->sess, myds, myds->fd);
-						myds->sess->healthy=0;
+						myds->sess->set_unhealthy();
 					}
 				}
 

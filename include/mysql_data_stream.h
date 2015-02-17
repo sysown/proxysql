@@ -97,6 +97,10 @@ class MySQL_Data_Stream
 	void set_pollout();	
 	void mysql_free();
 
+	void clean_net_failure();
+	void set_net_failure();
+	void setDSS_STATE_QUERY_SENT_NET();
+
 	int read_pkts();
 	int write_pkts();
 
