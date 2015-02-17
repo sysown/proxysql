@@ -128,7 +128,9 @@ class ProxySQL_Poll {
   };
 
   public:
+	int poll_timeout;
 	unsigned long loops;
+	StatCounters *loop_counters;
   unsigned int len;
   unsigned int size;
   struct pollfd *fds;
@@ -137,7 +139,10 @@ class ProxySQL_Poll {
 	unsigned long long *last_sent;
 //  unsigned char *status=NULL;   // this should be moved within the Data Stream
   ProxySQL_Poll() {
+		loop_counters=new StatCounters(15,10,false);
+		poll_timeout=0;
 		loops=0;
+		len=0;
     size=MIN_POLL_LEN;
     // preallocate MIN_POLL_LEN slots
     fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
@@ -158,6 +163,7 @@ class ProxySQL_Poll {
     free(fds);
 		free(last_recv);
 		free(last_sent);
+		delete loop_counters;
   };
 
 
@@ -273,10 +279,13 @@ class MySQL_Threads_Handler
 class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 {
 	private:
+	int shutdown;
 	size_t stacksize;
 	pthread_attr_t attr;
 	rwlock_t rwlock;
 	struct {
+		int connect_timeout_server;
+		char *connect_timeout_server_error;
 		char *default_schema;
 		char *server_version;
 		bool servers_stats;
@@ -305,6 +314,8 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	virtual void init(unsigned int num, size_t stack);
 	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *));
 	virtual void shutdown_threads();
+	pthread_t connection_manager_thread_id;
+	void connection_manager_thread();
 };
 
 
@@ -321,6 +332,8 @@ typedef void destroy_MySQL_Threads_Handler_t(MySQL_Threads_Handler *);
 
 __EXTERN __thread char *mysql_thread___default_schema;
 __EXTERN __thread char *mysql_thread___server_version;
+__EXTERN __thread int mysql_thread___connect_timeout_server;
+__EXTERN __thread char *mysql_thread___connect_timeout_server_error;
 __EXTERN __thread uint16_t mysql_thread___server_capabilities;
 __EXTERN __thread int mysql_thread___poll_timeout;
 __EXTERN __thread bool mysql_thread___servers_stats;

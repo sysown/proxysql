@@ -505,6 +505,7 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 
 	if (myconn==NULL) myconn= new MySQL_Connection(); // FIXME: why here? // 20141011
 
+	myconn->last_time_used=sess->thread->curtime;
 	struct sockaddr_un u;
 	struct sockaddr_in a;
 	int s=0;

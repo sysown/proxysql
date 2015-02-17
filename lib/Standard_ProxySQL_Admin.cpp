@@ -1065,6 +1065,7 @@ void *child_mysql(void *arg) {
 //	MySQL_Thread *mysql_thr=create_MySQL_Thread_func();
 	Standard_MySQL_Thread *mysql_thr=new Standard_MySQL_Thread();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	sess->thread=mysql_thr;
 	sess->admin=true;
 	sess->admin_func=admin_session_handler;
 	MySQL_Data_Stream *myds=sess->client_myds;

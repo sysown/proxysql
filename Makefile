@@ -7,11 +7,17 @@ O1=-O1
 O3=-O3 -mtune=native
 OPTZ=$(O0)
 EXTRALINK=#-pg
-export DEBUG
+#export DEBUG
 export OPTZ
 export EXTRALINK
 
-default: deps lib src
+debug:
+	DEBUG="${ALL_DEBUG}" make default
+
+default:
+	make deps
+	make lib
+	make src
 .PHONY: default
 
 .PHONY: deps

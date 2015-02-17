@@ -24,9 +24,9 @@ enum MySerStatus {
 class MySrvConnList {
 	private:
 	MySrvC *mysrvc;
-	PtrArray *conns;
 	int find_idx(MySQL_Connection *);
 	public:
+	PtrArray *conns;
 	MySrvConnList(MySrvC *);
 	~MySrvConnList();
 	void add(MySQL_Connection *);
@@ -51,10 +51,10 @@ class MySrvC {	// MySQL Server Container
 class MySrvList {	// MySQL Server List
 	private:
 	MyHGC *myhgc;
-	PtrArray *servers;
 	int find_idx(MySrvC *);
 //	int find_idx(MySQL_Connection *);
 	public:
+	PtrArray *servers;
 	unsigned int cnt();
 	MySrvList(MyHGC *);
 	~MySrvList();
@@ -98,6 +98,8 @@ class MySQL_HostGroups_Manager {
 	void MyConn_add_to_pool(MySQL_Connection *);
 
 	MySQL_Connection * get_MyConn_from_pool(unsigned int);
+
+	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
 
 	void push_MyConn_to_pool(MySQL_Connection *);
 	void destroy_MyConn_from_pool(MySQL_Connection *);	

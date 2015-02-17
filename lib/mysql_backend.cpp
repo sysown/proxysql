@@ -159,6 +159,7 @@ void MySQL_Backend::reset() {
 		if (server_myds->DSS==STATE_READY && server_myds->myconn->reusable==true && ((server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 			//server_myds->myconn=NULL;
 			//delete myconn;
+			server_myds->myconn->last_time_used=server_myds->sess->thread->curtime;
 			MyHGM->push_MyConn_to_pool(server_myds->myconn);
 //			myconn->return_to_connection_pool();
 			server_myds->myconn=NULL;

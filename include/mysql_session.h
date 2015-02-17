@@ -23,6 +23,7 @@ class Query_Info {
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
 	unsigned char *QueryPointer;
 	int QueryLength;
+	Query_Info();
 	void init(unsigned char *_p, int len, bool mysql_header=false);
 	void query_parser_init(); 
 	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
@@ -36,6 +37,7 @@ class MySQL_Session
 	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
 	bool handler___status_CHANGING_USER_SERVER(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *);
+	void handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t *);
 	void handler___status_CONNECTING_SERVER___STATE_NOT_CONNECTED(PtrSize_t *);
@@ -64,8 +66,10 @@ class MySQL_Session
 	MySQL_Connection_Pool *MyConnPool;
 //	enum session_states sess_states;
 	QP_out_t *qpo;
+	StatCounters *command_counters;
 	int healthy;
 	bool admin;
+	bool connections_handler;
 	bool stats;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
 //	int client_fd;

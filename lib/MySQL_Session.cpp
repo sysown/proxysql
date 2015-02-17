@@ -52,6 +52,12 @@ bool MySQL_Session_userinfo::set_schemaname(char *_new, int l) {
 }
 */
 
+Query_Info::Query_Info() {
+	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
+	QueryPointer=NULL;
+	QueryLength=0;
+}
+
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=(mysql_header ? len-5 : len);
 	QueryPointer=(unsigned char *)l_alloc(QueryLength+1);
@@ -100,8 +106,10 @@ MySQL_Session::MySQL_Session() {
 	pause_until=0;
 	status=NONE;
 	qpo=NULL;
+	command_counters=new StatCounters(15,10,false);
 	healthy=1;
 	admin=false;
+	connections_handler=false;
 	stats=false;
 	admin_func=NULL;
 	//client_fd=0;
@@ -139,6 +147,7 @@ MySQL_Session::~MySQL_Session() {
 	reset_all_backends();
 	delete mybes;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
+	delete command_counters;
 }
 
 
@@ -267,6 +276,10 @@ int MySQL_Session::handler() {
 	}
 */
 
+	if (client_myds==NULL) {
+		goto __exit_DSS__STATE_NOT_INITIALIZED;
+	}
+
 	for (j=0; j<client_myds->PSarrayIN->len;) {
 		client_myds->PSarrayIN->remove_index(0,&pkt);
 		//prot.parse_mysql_pkt(&pkt,client_myds);
@@ -289,6 +302,7 @@ int MySQL_Session::handler() {
 			case WAITING_CLIENT_DATA:
 				switch (client_myds->DSS) {
 					case STATE_SLEEP:
+						command_counters->incr(thread->curtime/1000000);
 						current_hostgroup=default_hostgroup;
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n");
 						//unsigned char c;
@@ -298,7 +312,14 @@ int MySQL_Session::handler() {
 #ifdef DEBUG
 								if (mysql_thread___session_debug) {
 									if ((pkt.size>9) && strncasecmp("dbg ",(const char *)pkt.ptr+sizeof(mysql_hdr)+1,4)==0) {
+										CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
+										CurrentQuery.start_time=thread->curtime;
+										CurrentQuery.query_parser_init();
+										CurrentQuery.query_parser_command_type();
+										CurrentQuery.query_parser_free();
 										handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_debug(&pkt);
+										CurrentQuery.end_time=thread->curtime;
+										CurrentQuery.query_parser_update_counters();
 										break;
 									}
 								}
@@ -368,6 +389,10 @@ int MySQL_Session::handler() {
 
 
 __get_a_backend:
+
+	if (client_myds==NULL) {
+		goto __exit_DSS__STATE_NOT_INITIALIZED;
+	}
 
 	if (client_myds->DSS==STATE_QUERY_SENT_NET) {
 	// the client has completely sent the query, now we should handle it server side
@@ -459,6 +484,10 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 			case WAITING_SERVER_DATA:
 
 				switch (mybe->server_myds->DSS) {
+					case STATE_PING_SENT_NET:
+						handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(&pkt);
+						break;
+
 					case STATE_QUERY_SENT_NET:
 						handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(&pkt);
 						break;
@@ -510,7 +539,11 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		&&
 		mybe->server_myds->available_data_out()==false
 	) {
-		mybe->server_myds->DSS=STATE_QUERY_SENT_NET;
+		if (connections_handler) {
+			mybe->server_myds->DSS=STATE_PING_SENT_NET;
+		} else {
+			mybe->server_myds->DSS=STATE_QUERY_SENT_NET;
+		}
 	}
 	if (mybe && mybe->server_myds) {
 		if (mybe->server_myds->net_failure) {
@@ -611,6 +644,32 @@ bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 }
 
 
+void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *pkt) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_PING_SENT\n");
+	unsigned char c;
+	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
+	if (c==0 || c==0xff) {
+		mybe->server_myds->DSS=STATE_READY;
+		/* multi-plexing attempt */
+		if (c==0) {
+			mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size);
+			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, myprot_server.prot_status);
+			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				mybe->server_myds->myconn->last_time_used=thread->curtime;
+				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);
+				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
+				mybe->server_myds->myconn=NULL;
+				mybe->server_myds->unplug_backend();
+				unsigned int aa=__sync_fetch_and_add(&__debugging_mp,1);
+				if (aa%1000==0) fprintf(stderr,"mp=%u\n", aa);
+			}
+		}
+		/* multi-plexing attempt */	
+		status=NONE;
+	}
+	l_free(pkt->size,pkt->ptr);
+}
+
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_QUERY_SENT\n");
 	unsigned char c;
@@ -622,7 +681,9 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 			mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size);
 			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, myprot_server.prot_status);
 			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				mybe->server_myds->myconn->last_time_used=thread->curtime;
 				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);
+				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
 				mybe->server_myds->myconn=NULL;
 				mybe->server_myds->unplug_backend();
 				unsigned int aa=__sync_fetch_and_add(&__debugging_mp,1);
@@ -682,7 +743,9 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 			mybe->server_myds->myprot.process_pkt_EOF((unsigned char *)pkt->ptr,pkt->size);
 			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, server_myds->myprot.prot_status);
 			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				mybe->server_myds->myconn->last_time_used=thread->curtime;
 				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);
+				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);;
 				mybe->server_myds->myconn=NULL;
 				mybe->server_myds->unplug_backend();
 				unsigned int aa=__sync_fetch_and_add(&__debugging_mp,1);

@@ -13,6 +13,7 @@
 #include "kv_btree_array.hpp"
 #include "advanced_kv.h"
 #include "gen_utils.h"
+#include "StatCounters.h"
 #include "MySQL_Protocol.h"
 #include "MySQL_Authentication.hpp"
 #include "fileutils.hpp"

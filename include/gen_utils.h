@@ -21,6 +21,7 @@ struct _PtrSize_t {
 	unsigned int size;
 }; 
 */
+
 class PtrArray {
 	private:
 	volatile unsigned int size;

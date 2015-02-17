@@ -386,3 +386,33 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	myhgc->mysrvs->add(mysrvc);
 }
+
+
+int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned long long _max_last_time_used, MySQL_Connection **conn_list, int num_conn) {
+	wrlock();
+	int num_conn_current=0;
+	int i,j, k;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			PtrArray *pa=mysrvc->ConnectionsFree->conns;
+			for (k=0; k<(int)pa->len; k++) {
+				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
+					if (mc->last_time_used < _max_last_time_used) {
+						mc=(MySQL_Connection *)pa->remove_index_fast(k);
+						mysrvc->ConnectionsUsed->add(mc);
+						k--;
+						conn_list[num_conn_current]=mc;
+						num_conn_current++;
+						if (num_conn_current>=num_conn) goto __exit_get_multiple_idle_connections;
+					}
+			}
+		}
+	}
+__exit_get_multiple_idle_connections:
+	wrunlock();
+	return num_conn_current;
+}
+

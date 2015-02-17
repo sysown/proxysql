@@ -36,6 +36,7 @@ class MySQL_Connection {
 		uint8_t protocol_version;
 		uint8_t charset;
 	} options;
+	unsigned long long last_time_used;
 	MySrvC *parent;
 //	void * operator new(size_t);
 //	void operator delete(void *);

@@ -73,6 +73,7 @@ enum mysql_data_stream_status {
 	STATE_READY,
 	STATE_QUERY_SENT_DS,
 	STATE_QUERY_SENT_NET,
+	STATE_PING_SENT_NET,
 	STATE_COLUMN_COUNT,
 	STATE_COLUMN_DEFINITION,
 	STATE_ROW,
@@ -199,6 +200,7 @@ class MySQL_Connection;
 class MyConnArray;
 class MySQL_Connection_Pool;
 class PtrArray;
+class StatCounters;
 class ProxySQL_ConfigFile;
 //class MySQL_Server;
 class SQLite3_result;
