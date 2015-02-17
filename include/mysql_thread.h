@@ -314,8 +314,8 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	virtual void init(unsigned int num, size_t stack);
 	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *));
 	virtual void shutdown_threads();
-	pthread_t connection_manager_thread_id;
-	void connection_manager_thread();
+//	pthread_t connection_manager_thread_id;
+//	void connection_manager_thread();
 };
 
 

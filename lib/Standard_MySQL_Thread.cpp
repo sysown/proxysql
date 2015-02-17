@@ -240,6 +240,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 
 //__thread l_sfp *__thr_sfp=NULL;
 
+/*
 static void * connection_manager_thread_callback(void *args) {
 	//Standard_MySQL_Threads_Handler *MTH=(Standard_MySQL_Threads_Handler *)GloMTH;
 	__thr_sfp=l_mem_init();
@@ -247,7 +248,7 @@ static void * connection_manager_thread_callback(void *args) {
 	l_mem_destroy(__thr_sfp);
 	return NULL;
 }
-
+*/
 
 
 Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
@@ -498,9 +499,9 @@ void Standard_MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 }
 
 proxysql_mysql_thread_t * Standard_MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *)) {
-	if (tn==0) {
-		pthread_create(&connection_manager_thread_id, &attr, connection_manager_thread_callback, NULL);
-	}
+//	if (tn==0) {
+//		pthread_create(&connection_manager_thread_id, &attr, connection_manager_thread_callback, NULL);
+//	}
 	pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
 	return NULL;
 }
@@ -514,7 +515,7 @@ void Standard_MySQL_Threads_Handler::shutdown_threads() {
 	for (i=0; i<num_threads; i++) {
 		pthread_join(mysql_threads[i].thread_id,NULL);
 	}
-	pthread_join(connection_manager_thread_id,NULL);
+//	pthread_join(connection_manager_thread_id,NULL);
 }
 
 
@@ -1128,6 +1129,7 @@ SQLite3_result * Standard_MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Sessi
 	return result;
 }
 
+/*
 void Standard_MySQL_Threads_Handler::connection_manager_thread() {
 	MySQL_Thread *mythr=new MySQL_Thread();
 	MySQL_Session *sess=new MySQL_Session();
@@ -1165,15 +1167,6 @@ void Standard_MySQL_Threads_Handler::connection_manager_thread() {
 			myds->DSS=STATE_QUERY_SENT_DS;
 			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, mythr->curtime);
 //			mydses[i]=myds;
-/*
-			// destroy
-			myds=mydses[i];
-			mc=myds->myconn;
-			//MyHGM->destroy_MyConn_from_pool(mc);
-			MyHGM->push_MyConn_to_pool(mc);
-			myds->myconn=NULL;
-			delete myds;
-*/
 		}
 		if (rc) more_poll=true;
 		while (more_poll) {
@@ -1245,6 +1238,7 @@ void Standard_MySQL_Threads_Handler::connection_manager_thread() {
 	delete sess;
 //	free(mydses);
 }
+*/
 
 extern "C" MySQL_Threads_Handler * create_MySQL_Threads_Handler_func() {
     return new Standard_MySQL_Threads_Handler();
