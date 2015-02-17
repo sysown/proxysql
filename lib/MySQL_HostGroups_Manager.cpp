@@ -315,6 +315,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 //	}
 	wrlock();
 	mysrvc=(MySrvC *)c->parent;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
   mysrvc->ConnectionsUsed->remove(c);
 	mysrvc->ConnectionsFree->add(c);
 	wrunlock();
@@ -329,8 +330,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 	if (l) {
 		i=rand()%l;
 		mysrvc=mysrvs->idx(i);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
 		return mysrvc;
 	}
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
 	return NULL; // if we reach here, we couldn't find any target
 }
 
@@ -347,10 +350,12 @@ MySQL_Connection * MySrvConnList::get_random_MyConn() {
 	if (l) {
 		i=rand()%l;
 		conn=(MySQL_Connection *)conns->remove_index_fast(i);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return conn;
 	} else {
 		conn = new MySQL_Connection();
 		conn->parent=mysrvc;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return  conn;
 	}
 	return NULL; // never reach here
@@ -369,12 +374,14 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	}
 //	conn->parent=mysrvc;
 	wrunlock();
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 	return conn;
 }
 
 void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 	wrlock();
 	MySrvC *mysrvc=(MySrvC *)c->parent;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 	mysrvc->ConnectionsUsed->remove(c);
 	delete c;
 	wrunlock();
@@ -383,6 +390,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 
 
 void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding MySrvC %p (%s:%d) for hostgroup %d\n", mysrvc, mysrvc->address, mysrvc->port, _hid);
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	myhgc->mysrvs->add(mysrvc);
 }
@@ -413,6 +421,7 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	}
 __exit_get_multiple_idle_connections:
 	wrunlock();
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning %d idle connections\n", num_conn_current);
 	return num_conn_current;
 }
 

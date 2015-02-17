@@ -1038,6 +1038,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 //	if (rand()%3==0) {
 		mybe->server_myds->myconn=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
 //	}
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
 	if (mybe->server_myds->myconn==NULL) { return; }
 	//mybe->myconn->myds=mybe->server_myds;
 	//mybe->myconn=mybe->server_myds->myconn;
