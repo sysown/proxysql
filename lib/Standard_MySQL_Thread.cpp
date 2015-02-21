@@ -728,7 +728,6 @@ virtual void run() {
 
 	while (shutdown==0) {
 
-/*
 	int num_idles;
 	if (processing_idles==false &&  (last_processing_idles < curtime-5*1000000) ) {
 		int i;
@@ -779,7 +778,6 @@ virtual void run() {
 		}
 	}
 
-*/
 
 		for (n = 0; n < mypolls.len; n++) {
 			mypolls.fds[n].revents=0;
