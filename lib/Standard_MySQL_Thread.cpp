@@ -187,6 +187,8 @@ volatile static unsigned int __global_MySQL_Thread_Variables_version;
 static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_error",
+	(char *)"ping_interval_server",
+	(char *)"ping_timeout_server",
 	(char *)"default_schema",
 	(char *)"poll_timeout",
 	(char *)"server_capabilities",
@@ -267,6 +269,8 @@ Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
 	spinlock_rwlock_init(&rwlock);
 	pthread_attr_init(&attr);
 	variables.connect_timeout_server=10000;
+	variables.ping_interval_server=5000;
+	variables.ping_timeout_server=100;
 	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.server_version=strdup((char *)"5.1.30");
@@ -311,6 +315,8 @@ int Standard_MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
+	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
+	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
@@ -331,6 +337,14 @@ char * Standard_MySQL_Threads_Handler::get_variable(char *name) {	// this is the
 	}
 	if (!strcasecmp(name,"connect_timeout_server")) {
 		sprintf(intbuf,"%d",variables.connect_timeout_server);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"ping_interval_server")) {
+		sprintf(intbuf,"%d",variables.ping_interval_server);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"ping_timeout_server")) {
+		sprintf(intbuf,"%d",variables.ping_timeout_server);
 		return strdup(intbuf);
 	}
 	if (!strcmp(name,"poll_timeout")) {
@@ -369,6 +383,24 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 	// 
 	size_t vallen=strlen(value);
 
+	if (!strcasecmp(name,"ping_interval_server")) {
+		int intv=atoi(value);
+		if (intv > 1000 && intv < 7*24*3600*1000) {
+			variables.ping_interval_server=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"ping_timeout_server")) {
+		int intv=atoi(value);
+		if (intv > 10 && intv < 600000) {
+			variables.ping_timeout_server=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"connect_timeout_server")) {
 		int intv=atoi(value);
 		if (intv > 10 && intv < 600000) {
@@ -566,6 +598,8 @@ Standard_MySQL_Thread() {
 void refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
+	mysql_thread___ping_interval_server=GloMTH->get_variable_int((char *)"ping_interval_server");
+	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
 	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
 	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
@@ -729,9 +763,9 @@ virtual void run() {
 	while (shutdown==0) {
 
 	int num_idles;
-	if (processing_idles==false &&  (last_processing_idles < curtime-5*1000000) ) {
+	if (processing_idles==false &&  (last_processing_idles < curtime-mysql_thread___ping_interval_server*1000) ) {
 		int i;
-		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-5*1000000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
+		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 		for (i=0; i<num_idles; i++) {
 			MySQL_Data_Stream *myds;
 			myds=new MySQL_Data_Stream();
@@ -746,6 +780,7 @@ virtual void run() {
 			sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
 			sess->mybe->server_myds=myds;
 			sess->to_process=1;
+			myds->timeout=curtime+mysql_thread___ping_timeout_server*1000;	// max_timeout
 			sess->status=WAITING_SERVER_DATA;
 			myds->mypolls=&mypolls;
 			mc->last_time_used=curtime;
@@ -759,7 +794,9 @@ virtual void run() {
 		}
 	}
 
-	if (processing_idles==true &&	(last_processing_idles < curtime-2*1000000)) {
+	if (processing_idles==true &&	(last_processing_idles < curtime-10*mysql_thread___ping_timeout_server*1000)) {
+		processing_idles=false;
+/*
 		int i;
 		for (i=0; i<num_idles; i++) {
 			MySQL_Data_Stream *myds;
@@ -776,8 +813,8 @@ virtual void run() {
 				}
 			}
 		}
+*/
 	}
-
 
 		for (n = 0; n < mypolls.len; n++) {
 			mypolls.fds[n].revents=0;
@@ -978,6 +1015,7 @@ void process_all_sessions() {
 
 	void process_all_sessions_connections_handler();
 	void register_session_connection_handler(MySQL_Session *_sess);
+	void unregister_session_connection_handler(int idx);
 	void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
 	void myds_backend_pause_connect(MySQL_Data_Stream *myds);
 	void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
@@ -992,8 +1030,17 @@ void Standard_MySQL_Thread::process_all_sessions_connections_handler() {
 	for (n=0; n<mysql_sessions_connections_handler->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(n);
 		if (sess->to_process==1) {
-			sess->handler();
-			sess->to_process=0;
+			rc=sess->handler();
+			if (rc==-1) {
+				unregister_session_connection_handler(n);
+				n--;
+				delete sess;
+				//sess=new MySQL_Session();
+				//mysql_sessions_connections_handler->pdata[n]=sess;
+				
+			} else {
+				sess->to_process=0;
+			}
 		}
 	}
 }
@@ -1005,6 +1052,12 @@ void Standard_MySQL_Thread::register_session_connection_handler(MySQL_Session *_
 	_sess->connections_handler=true;
 	_sess->MyConnPool=MyConnPool;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session for connection handler\n", _sess->thread, _sess);
+};
+
+void Standard_MySQL_Thread::unregister_session_connection_handler(int idx) {
+	if (mysql_sessions_connections_handler==NULL) return;
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions_connections_handler->index(idx));
+	mysql_sessions_connections_handler->remove_index_fast(idx);
 };
 
 

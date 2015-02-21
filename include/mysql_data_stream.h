@@ -57,6 +57,7 @@ class MySQL_Data_Stream
 	bytes_stats_t bytes_info; // bytes statistics
 	int fd; // file descriptor
 
+	unsigned long long timeout;
 	int poll_fds_idx;
 	short revents;
 

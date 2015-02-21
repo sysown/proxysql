@@ -277,6 +277,22 @@ int MySQL_Session::handler() {
 */
 
 	if (client_myds==NULL) {
+		// if we are here, probably we are trying to ping backends
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
+		assert(mybe);
+		assert(mybe->server_myds);
+		assert(mybe->server_myds->myconn);
+		if (mybe->server_myds->DSS==STATE_PING_SENT_NET) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds . server_myds=%p , myconn=%p , fd=%d , timeout=%llu , curtime=%llu\n", this, mybe->server_myds , mybe->server_myds->myconn, mybe->server_myds->myconn->fd , mybe->server_myds->timeout , thread->curtime);
+			//fprintf(stderr,"Processing session %p without client_myds . server_myds=%p , myconn=%p , fd=%d , timeout=%llu , curtime=%llu , time=%llu\n", this, mybe->server_myds , mybe->server_myds->myconn, mybe->server_myds->myconn->fd , mybe->server_myds->timeout , thread->curtime, monotonic_time());
+			if (mybe->server_myds->timeout < thread->curtime) {
+				MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
+				mybe->server_myds->myconn=NULL;
+				mybe->server_myds->fd=-1;
+				thread->mypolls.remove_index_fast(mybe->server_myds->poll_fds_idx);
+				return -1;
+			}
+		}
 		goto __exit_DSS__STATE_NOT_INITIALIZED;
 	}
 
@@ -542,6 +558,8 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		mybe->server_myds->available_data_out()==false
 	) {
 		if (connections_handler) {
+			//fprintf(stderr,"time=%llu\n",monotonic_time());
+			//mybe->server_myds->timeout=thread->curtime+100;
 			mybe->server_myds->DSS=STATE_PING_SENT_NET;
 		} else {
 			mybe->server_myds->setDSS_STATE_QUERY_SENT_NET();

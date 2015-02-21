@@ -284,6 +284,8 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	pthread_attr_t attr;
 	rwlock_t rwlock;
 	struct {
+		int ping_interval_server;
+		int ping_timeout_server;
 		int connect_timeout_server;
 		char *connect_timeout_server_error;
 		char *default_schema;
@@ -332,6 +334,8 @@ typedef void destroy_MySQL_Threads_Handler_t(MySQL_Threads_Handler *);
 
 __EXTERN __thread char *mysql_thread___default_schema;
 __EXTERN __thread char *mysql_thread___server_version;
+__EXTERN __thread int mysql_thread___ping_interval_server;
+__EXTERN __thread int mysql_thread___ping_timeout_server;
 __EXTERN __thread int mysql_thread___connect_timeout_server;
 __EXTERN __thread char *mysql_thread___connect_timeout_server_error;
 __EXTERN __thread uint16_t mysql_thread___server_capabilities;

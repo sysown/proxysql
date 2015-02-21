@@ -95,6 +95,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	pkts_recv=0;
 	pkts_sent=0;
 
+	timeout=0;
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
