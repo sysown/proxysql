@@ -584,6 +584,7 @@ Standard_MySQL_Thread() {
 	my_idle_myds=NULL;
 	processing_idles=false;
 	last_processing_idles=0;
+	mysql_sessions_connections_handler=NULL;
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___connect_timeout_server_error=NULL;
 	mysql_thread___server_version=NULL;
