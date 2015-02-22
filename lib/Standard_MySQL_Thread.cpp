@@ -1,7 +1,8 @@
-#define __CLASS_STANDARD_MYSQL_THREAD_H
+//#define __CLASS_STANDARD_MYSQL_THREAD_H
 #define MYSQL_THREAD_IMPLEMENTATION
 #include "proxysql.h"
 #include "cpp.h"
+#include "Standard_MySQL_Thread.h"
 
 extern Query_Processor *GloQPro;
 extern Standard_MySQL_Threads_Handler *GloMTH;
@@ -562,7 +563,7 @@ Standard_MySQL_Threads_Handler::~Standard_MySQL_Threads_Handler() {
 
 //extern Standard_MySQL_Threads_Handler *GloMTH;
 
-
+/*
 class Standard_MySQL_Thread: public MySQL_Thread {
 
 private:
@@ -575,33 +576,8 @@ public:
 //ProxySQL_Poll mypolls;
 rwlock_t thread_mutex;
 	Standard_MySQL_Thread();
-void refresh_variables() {
-	GloMTH->wrlock();
-	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
-	mysql_thread___ping_interval_server=GloMTH->get_variable_int((char *)"ping_interval_server");
-	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
-	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
-	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
-	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
-	if (mysql_thread___server_version) free(mysql_thread___server_version);
-	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
-	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
-	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
-	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
-	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
-#ifdef DEBUG
-	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
-#endif /* DEBUG */
-	GloMTH->wrunlock();
-}
-
-virtual ~Standard_MySQL_Thread() {
-//	if (mypolls.fds)
-//		free(mypolls.fds);
-//	if (mypolls.myds)
-//		free(mypolls.myds);
-//	destroy_all_sessions(mysql_sessions);
+*/
+Standard_MySQL_Thread::~Standard_MySQL_Thread() {
 
 	if (mysql_sessions) {
 		while(mysql_sessions->len) {
@@ -634,27 +610,7 @@ virtual ~Standard_MySQL_Thread() {
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 
-};
-
-virtual bool init() {
-	int i;
-	mysql_sessions = new PtrArray();
-	assert(mysql_sessions);
-	mysql_sessions_connections_handler = new PtrArray();
-	assert(mysql_sessions_connections_handler);
-	for (i=0; i<SESSIONS_FOR_CONNECTIONS_HANDLER;i++) {
-		MySQL_Session *sess=new MySQL_Session();
-		register_session_connection_handler(sess);
-	}
-	shutdown=0;
-	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
-	memset(my_idle_conns,0,sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
-	my_idle_myds=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
-	memset(my_idle_myds,0,sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
-	GloQPro->init_thread();
-	MyConnPool=new MySQL_Connection_Pool();
-	return true;
-};
+}
 
 /*
 void MySQL_Thread::init_poll() {
@@ -671,37 +627,29 @@ void MySQL_Thread::init_poll() {
 //	fprintf(stderr,"Standard MySQL Thread rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 //};
 
-inline virtual struct pollfd * get_pollfd(unsigned int i) {
-	return &mypolls.fds[i];
-};
+/*
+	MySQL_Session * create_new_session_and_client_data_stream(int _fd);
+	bool init();
+	void run();
+	void poll_listener_add(int sock);
+	void register_session(MySQL_Session*);
+	void unregister_session(int);
+	struct pollfd * get_pollfd(unsigned int i);
+	void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
+	void process_all_sessions();
+	void refresh_variables();
+	void process_all_sessions_connections_handler();
+	void register_session_connection_handler(MySQL_Session *_sess);
+	void unregister_session_connection_handler(int idx);
+	void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
+	void myds_backend_pause_connect(MySQL_Data_Stream *myds);
+	void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
+	void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
+	SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
+*/
+//};   // end class Standard_MySQL_Thread
 
-virtual void poll_listener_add(int sock) {
-	MySQL_Data_Stream *listener_DS = new MySQL_Data_Stream;	
-	listener_DS->myds_type=MYDS_LISTENER;
-	listener_DS->fd=sock;
-
-	proxy_debug(PROXY_DEBUG_NET,1,"Created listener %p for socket %d\n", listener_DS, sock);
-	//mypoll_add(&mypolls, POLLIN, sock, listener_DS);	
-	mypolls.add(POLLIN, sock, listener_DS, monotonic_time());	
-};
-
-
-virtual void register_session(MySQL_Session *_sess) {
-	if (mysql_sessions==NULL) return;
-	mysql_sessions->add(_sess);
-	_sess->thread=this;
-	_sess->MyConnPool=MyConnPool;
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
-};
-
-virtual void unregister_session(int idx) {
-	if (mysql_sessions==NULL) return;
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions->index(idx));
-	mysql_sessions->remove_index_fast(idx);
-};
-
-
-virtual MySQL_Session * create_new_session_and_client_data_stream(int _fd) {
+MySQL_Session * Standard_MySQL_Thread::create_new_session_and_client_data_stream(int _fd) {
 	int arg_on=1;
 	MySQL_Session *sess=new MySQL_Session;
 	register_session(sess); // register session
@@ -725,10 +673,61 @@ virtual MySQL_Session * create_new_session_and_client_data_stream(int _fd) {
 	//sess->myprot_client.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 	return sess;
-};
+}
+
+bool Standard_MySQL_Thread::init() {
+	int i;
+	mysql_sessions = new PtrArray();
+	assert(mysql_sessions);
+	mysql_sessions_connections_handler = new PtrArray();
+	assert(mysql_sessions_connections_handler);
+	for (i=0; i<SESSIONS_FOR_CONNECTIONS_HANDLER;i++) {
+		MySQL_Session *sess=new MySQL_Session();
+		register_session_connection_handler(sess);
+	}
+	shutdown=0;
+	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
+	memset(my_idle_conns,0,sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
+	my_idle_myds=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
+	memset(my_idle_myds,0,sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
+	GloQPro->init_thread();
+	MyConnPool=new MySQL_Connection_Pool();
+	refresh_variables();
+	return true;
+}
+
+struct pollfd * Standard_MySQL_Thread::get_pollfd(unsigned int i) {
+	return &mypolls.fds[i];
+}
+
+void Standard_MySQL_Thread::poll_listener_add(int sock) {
+	MySQL_Data_Stream *listener_DS = new MySQL_Data_Stream;	
+	listener_DS->myds_type=MYDS_LISTENER;
+	listener_DS->fd=sock;
+
+	proxy_debug(PROXY_DEBUG_NET,1,"Created listener %p for socket %d\n", listener_DS, sock);
+	//mypoll_add(&mypolls, POLLIN, sock, listener_DS);	
+	mypolls.add(POLLIN, sock, listener_DS, monotonic_time());	
+}
+
+
+void Standard_MySQL_Thread::register_session(MySQL_Session *_sess) {
+	if (mysql_sessions==NULL) return;
+	mysql_sessions->add(_sess);
+	_sess->thread=this;
+	_sess->MyConnPool=MyConnPool;
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
+}
+
+void Standard_MySQL_Thread::unregister_session(int idx) {
+	if (mysql_sessions==NULL) return;
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions->index(idx));
+	mysql_sessions->remove_index_fast(idx);
+}
+
 
 // main loop
-virtual void run() {
+void Standard_MySQL_Thread::run() {
 	unsigned int n;
 	int rc;
 	//int arg_on=1;
@@ -900,9 +899,9 @@ virtual void run() {
 		process_all_sessions();
 		process_all_sessions_connections_handler();
 	}
-};
+}
 
-void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
+void Standard_MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 				mypolls.last_recv[n]=curtime;
 				myds->revents=mypolls.fds[n].revents;
 				myds->read_from_net();
@@ -967,7 +966,8 @@ void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 */
 }
 
-void process_all_sessions() {
+
+void Standard_MySQL_Thread::process_all_sessions() {
 	unsigned int n;
 	int rc;
 	for (n=0; n<mysql_sessions->len; n++) {
@@ -992,17 +992,26 @@ void process_all_sessions() {
 	}
 }
 
-
-	void process_all_sessions_connections_handler();
-	void register_session_connection_handler(MySQL_Session *_sess);
-	void unregister_session_connection_handler(int idx);
-	void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
-	void myds_backend_pause_connect(MySQL_Data_Stream *myds);
-	void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
-	void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
-	SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
-};   // end class Standard_MySQL_Thread
-
+void Standard_MySQL_Thread::refresh_variables() {
+	GloMTH->wrlock();
+	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
+	mysql_thread___ping_interval_server=GloMTH->get_variable_int((char *)"ping_interval_server");
+	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
+	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
+	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
+	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
+	if (mysql_thread___server_version) free(mysql_thread___server_version);
+	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
+	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
+	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
+	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
+	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
+#ifdef DEBUG
+	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
+#endif /* DEBUG */
+	GloMTH->wrunlock();
+}
 
 Standard_MySQL_Thread::Standard_MySQL_Thread() {
 	spinlock_rwlock_init(&thread_mutex);
@@ -1055,13 +1064,13 @@ void Standard_MySQL_Thread::register_session_connection_handler(MySQL_Session *_
 	_sess->connections_handler=true;
 	_sess->MyConnPool=MyConnPool;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session for connection handler\n", _sess->thread, _sess);
-};
+}
 
 void Standard_MySQL_Thread::unregister_session_connection_handler(int idx) {
 	if (mysql_sessions_connections_handler==NULL) return;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions_connections_handler->index(idx));
 	mysql_sessions_connections_handler->remove_index_fast(idx);
-};
+}
 
 
 void Standard_MySQL_Thread::myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n) {

@@ -243,23 +243,6 @@ typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
 
 
 
-#ifndef __CLASS_STANDARD_MYSQL_THREAD_H
-#define __CLASS_STANDARD_MYSQL_THREAD_H
-class Standard_MySQL_Thread: public MySQL_Thread
-{
-	private:
-	MySQL_Connection **my_idle_conns;
-	MySQL_Data_Stream **my_idle_myds;
-	bool processing_idles;
-	unsigned long long last_processing_idles;
-	PtrArray *mysql_sessions_connections_handler;
-
-	public:
-//	Standard_MySQL_Thread();
-//	 ~Standard_MySQL_Thread();
-	MySQL_Session * create_new_session_and_client_data_stream(int);
-};
-#endif /* __CLASS_STANDARD_MYSQL_THREAD_H */
 
 
 class MySQL_Threads_Handler
@@ -332,13 +315,13 @@ typedef MySQL_Threads_Handler * create_MySQL_Threads_Handler_t();
 typedef void destroy_MySQL_Threads_Handler_t(MySQL_Threads_Handler *);
 
 
-
+/*
 #ifndef MYSQL_THREAD_IMPLEMENTATION
 #define __EXTERN extern
 #else
 #define __EXTERN
-#endif /* MYSQL_THREAD_IMPLEMENTATION */
-
+#endif */ /* MYSQL_THREAD_IMPLEMENTATION */
+/*
 __EXTERN __thread char *mysql_thread___default_schema;
 __EXTERN __thread char *mysql_thread___server_version;
 __EXTERN __thread int mysql_thread___ping_interval_server;
@@ -350,6 +333,6 @@ __EXTERN __thread int mysql_thread___poll_timeout;
 __EXTERN __thread bool mysql_thread___servers_stats;
 #ifdef DEBUG
 __EXTERN __thread bool mysql_thread___session_debug;
-#endif /* DEBUG */
+#endif */ /* DEBUG */
 
 #endif /* __CLASS_MYSQL_THREAD_H */

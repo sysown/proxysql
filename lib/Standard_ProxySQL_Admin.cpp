@@ -15,6 +15,8 @@
 #include <pthread.h>
 
 #include "SpookyV2.h"
+//#define MYSQL_THREAD_IMPLEMENTATION
+#include "Standard_MySQL_Thread.h"
 
 
 static volatile int load_main_=0;
@@ -1064,6 +1066,7 @@ void *child_mysql(void *arg) {
 	pthread_mutex_unlock(&sock_mutex);
 //	MySQL_Thread *mysql_thr=create_MySQL_Thread_func();
 	Standard_MySQL_Thread *mysql_thr=new Standard_MySQL_Thread();
+	mysql_thr->refresh_variables();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->admin=true;

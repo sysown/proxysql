@@ -610,10 +610,37 @@ GOptionEntry cmd_option_entries[] =
 #define GLOBAL_DEFINED_HOSTGROUP
 //MySQL_HostGroups_Handler *MyHGH;
 MySQL_HostGroups_Manager *MyHGM;
+__thread char *mysql_thread___default_schema;
+__thread char *mysql_thread___server_version;
+__thread int mysql_thread___ping_interval_server;
+__thread int mysql_thread___ping_timeout_server;
+__thread int mysql_thread___connect_timeout_server;
+__thread char *mysql_thread___connect_timeout_server_error;
+__thread uint16_t mysql_thread___server_capabilities;
+__thread int mysql_thread___poll_timeout;
+__thread bool mysql_thread___servers_stats;
+#ifdef DEBUG
+__thread bool mysql_thread___session_debug;
+#endif /* DEBUG */
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
 extern ProxySQL_GlobalVariables GloVars;
 //extern MySQL_HostGroups_Handler *MyHGH;
 extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
+extern __thread char *mysql_thread___default_schema;
+extern __thread char *mysql_thread___server_version;
+extern __thread int mysql_thread___ping_interval_server;
+extern __thread int mysql_thread___ping_timeout_server;
+extern __thread int mysql_thread___connect_timeout_server;
+extern __thread char *mysql_thread___connect_timeout_server_error;
+extern __thread uint16_t mysql_thread___server_capabilities;
+extern __thread int mysql_thread___poll_timeout;
+extern __thread bool mysql_thread___servers_stats;
+#ifdef DEBUG
+extern __thread bool mysql_thread___session_debug;
+#endif /* DEBUG */
 #endif /* PROXYSQL_EXTERN */
+
+
+

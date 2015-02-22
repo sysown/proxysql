@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "Standard_MySQL_Thread.h"
 
 extern MySQL_Authentication *GloMyAuth;
 
