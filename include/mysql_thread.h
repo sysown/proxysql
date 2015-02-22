@@ -247,6 +247,13 @@ typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
 #define __CLASS_STANDARD_MYSQL_THREAD_H
 class Standard_MySQL_Thread: public MySQL_Thread
 {
+	private:
+	MySQL_Connection **my_idle_conns;
+	MySQL_Data_Stream **my_idle_myds;
+	bool processing_idles;
+	unsigned long long last_processing_idles;
+	PtrArray *mysql_sessions_connections_handler;
+
 	public:
 //	Standard_MySQL_Thread();
 //	 ~Standard_MySQL_Thread();

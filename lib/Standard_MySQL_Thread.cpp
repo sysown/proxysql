@@ -574,28 +574,7 @@ private:
 public:
 //ProxySQL_Poll mypolls;
 rwlock_t thread_mutex;
-Standard_MySQL_Thread() {
-	spinlock_rwlock_init(&thread_mutex);
-	mypolls.len=0;
-	mypolls.size=0;
-	mypolls.fds=NULL;
-	mypolls.myds=NULL;
-	my_idle_conns=NULL;
-	my_idle_myds=NULL;
-	processing_idles=false;
-	last_processing_idles=0;
-	mysql_sessions_connections_handler=NULL;
-	__thread_MySQL_Thread_Variables_version=0;
-	mysql_thread___connect_timeout_server_error=NULL;
-	mysql_thread___server_version=NULL;
-//	GloQPro->init_thread();
-//	MyConnPool=new MySQL_Connection_Pool();
-	//events=NULL;
-//	mypolls.fds=NULL;
-//	mypolls.myds=NULL;
-//	mysql_sessions=NULL;
-};
-
+	Standard_MySQL_Thread();
 void refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
@@ -1023,6 +1002,29 @@ void process_all_sessions() {
 	void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
 	SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
 };   // end class Standard_MySQL_Thread
+
+
+Standard_MySQL_Thread::Standard_MySQL_Thread() {
+	spinlock_rwlock_init(&thread_mutex);
+	mypolls.len=0;
+	mypolls.size=0;
+	mypolls.fds=NULL;
+	mypolls.myds=NULL;
+	my_idle_conns=NULL;
+	my_idle_myds=NULL;
+	processing_idles=false;
+	last_processing_idles=0;
+	mysql_sessions_connections_handler=NULL;
+	__thread_MySQL_Thread_Variables_version=0;
+	mysql_thread___connect_timeout_server_error=NULL;
+	mysql_thread___server_version=NULL;
+//	GloQPro->init_thread();
+//	MyConnPool=new MySQL_Connection_Pool();
+	//events=NULL;
+//	mypolls.fds=NULL;
+//	mypolls.myds=NULL;
+//	mysql_sessions=NULL;
+}
 
 
 void Standard_MySQL_Thread::process_all_sessions_connections_handler() {

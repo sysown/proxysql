@@ -64,8 +64,8 @@ OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
 
 #_SHARED_OBJ= Standard_Query_Cache.ko Standard_MySQL_Thread.ko
 
-Standard_ProxySQL_Admin.so: Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.ko libproxysql.a
-	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.ko libproxysql.a -lcrypto $(LIBS)
+Standard_ProxySQL_Admin.so: Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.cpp libproxysql.a
+	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.cpp libproxysql.a -lcrypto $(LIBS)
 
 Standard_Query_Processor.so: Standard_Query_Processor.ko libproxysql.a
 	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_Query_Processor.ko libproxysql.a -lcrypto $(LIBS) -linjection
