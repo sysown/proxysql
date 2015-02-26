@@ -32,6 +32,7 @@ class MySrvConnList {
 	void add(MySQL_Connection *);
 	void remove(MySQL_Connection *);
 	MySQL_Connection * get_random_MyConn();
+	void drop_all_connections();
 };
 
 class MySrvC {	// MySQL Server Container

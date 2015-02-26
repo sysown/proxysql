@@ -93,6 +93,15 @@ void MySrvConnList::remove(MySQL_Connection *c) {
 	conns->remove_index_fast((unsigned int)i);
 }
 
+void MySrvConnList::drop_all_connections() {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Dropping all connections (%lu total) on MySrvConnList %p for server %s:%d , hostgroup=%d , status=%d\n", conns->len, this, mysrvc->address, mysrvc->port, mysrvc->myhgc->hid, mysrvc->status);
+	while (conns->len) {
+		MySQL_Connection *conn=(MySQL_Connection *)conns->remove_index_fast(0);
+		delete conn;
+	}
+}
+
+
 MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _status) {
 	address=strdup(add);
 	port=p;
@@ -494,17 +503,21 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
+				mysrvc->ConnectionsFree->drop_all_connections();
+			}
 			PtrArray *pa=mysrvc->ConnectionsFree->conns;
 			for (k=0; k<(int)pa->len; k++) {
 				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
-					if (mc->last_time_used < _max_last_time_used) {
-						mc=(MySQL_Connection *)pa->remove_index_fast(k);
-						mysrvc->ConnectionsUsed->add(mc);
-						k--;
-						conn_list[num_conn_current]=mc;
-						num_conn_current++;
-						if (num_conn_current>=num_conn) goto __exit_get_multiple_idle_connections;
-					}
+				if (mc->last_time_used < _max_last_time_used) {
+					mc=(MySQL_Connection *)pa->remove_index_fast(k);
+					mysrvc->ConnectionsUsed->add(mc);
+					k--;
+					conn_list[num_conn_current]=mc;
+					num_conn_current++;
+					if (num_conn_current>=num_conn) goto __exit_get_multiple_idle_connections;
+				}
 			}
 		}
 	}
