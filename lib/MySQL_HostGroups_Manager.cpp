@@ -211,6 +211,7 @@ void MySQL_HostGroups_Manager::wrunlock() {
 // we always assume that the calling thread has acquired a rdlock()
 bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t p, unsigned int _weight, enum MySerStatus status) {
 	bool ret;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u and status %u\n", add,p,hid,_weight,status);
 	char *q=(char *)"INSERT INTO mysql_servers_incoming VALUES (%u, \"%s\", %u, %u, %u)";
 	char *query=(char *)malloc(strlen(q)+strlen(add)+100);
 	sprintf(query,q,hid,add,p,_weight,status);
@@ -218,6 +219,7 @@ bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t 
 	free(query);
 	return ret;
 }
+
 
 
 bool MySQL_HostGroups_Manager::commit() {
@@ -232,6 +234,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+// FIXME: this part is for debugging only, needs to be removed/cleaned
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[0]);
@@ -240,9 +243,14 @@ bool MySQL_HostGroups_Manager::commit() {
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 
-	mydb->execute("INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status) SELECT hostgroup_id, hostname, port, weight, status FROM mysql_servers_incoming");	
+// INSERT OR IGNORE INTO mysql_servers SELECT ... FROM mysql_servers_incoming
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status) SELECT hostgroup_id, hostname, port, weight, status FROM mysql_servers_incoming\n");
+	mydb->execute("INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status) SELECT hostgroup_id, hostname, port, weight, status FROM mysql_servers_incoming");
 
+
+	// SELECT FROM mysql_servers whatever is not identical in mysql_servers_incoming, or where mem_pointer=0 (where there is no pointer yet)
 	query=(char *)"SELECT t1.*, t2.weight, t2.status FROM mysql_servers t1 JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE mem_pointer=0 OR t1.weight<>t2.weight OR t1.status<>t2.status";
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -250,21 +258,69 @@ bool MySQL_HostGroups_Manager::commit() {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[5]);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d , weight=%d, status=%d, mem_pointer=%llu, hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), ptr, atoi(r->fields[0]));
 			fprintf(stderr,"%lld\n", ptr);
 			if (ptr==0) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Creating new server %s:%d , weight=%d, status=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]));
 				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]));
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), mysrvc, atoi(r->fields[0]));
 				add(mysrvc,atoi(r->fields[0]));
+			} else {
+				MySrvC *mysrvc=(MySrvC *)ptr;
+				if (atoi(r->fields[3])!=atoi(r->fields[6])) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[3] , mysrvc->weight , atoi(r->fields[6]));
+					mysrvc->weight=atoi(r->fields[6]);
+				}
+				if (atoi(r->fields[4])!=atoi(r->fields[7])) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing status for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->status , atoi(r->fields[7]));
+					mysrvc->status=(MySerStatus)atoi(r->fields[7]);
+				}
 			}
-	
 		}
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
-
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
 	mydb->execute("DELETE FROM mysql_servers_incoming");	
 
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+	mydb->execute("DELETE FROM mysql_servers");
+
+	// FIXME: scan all servers and recreate mysql_servers
+	generate_mysql_servers_table();
 
 	wrunlock();
 	return true;
+}
+
+void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		MySrvC *mysrvc=NULL;
+		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+			mysrvc=myhgc->mysrvs->idx(j);
+			uintptr_t ptr=(uintptr_t)mysrvc;
+			char *q=(char *)"INSERT INTO mysql_servers VALUES(%d,\"%s\",%d,%d,%d,%llu)";
+			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+16+32);
+			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, ptr);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+			fprintf(stderr,"%s\n",query);
+			mydb->execute(query);
+			free(query);
+		}
+	}
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
+	wrlock();
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT hostgroup_id, hostname, port, weight, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" END FROM mysql_servers";
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	wrunlock();
+	return resultset;
 }
 
 MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {

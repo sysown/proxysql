@@ -42,7 +42,8 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 //#define ADMIN_SQLITE_TABLE_MYSQL_SERVER_STATUS "CREATE TABLE mysql_server_status ( status INT NOT NULL PRIMARY KEY, status_desc VARCHAR NOT NULL, UNIQuE(status_desc) )"
 //#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT NOT NULL DEFAULT 0 REFERENCES server_status(status) , PRIMARY KEY(hostname, port) )"
 //#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (status IN ('OFFLINE_HARD', 'OFFLINE_SOFT', 'SHUNNED', 'ONLINE')) NOT NULL DEFAULT 'OFFLINE_HARD', PRIMARY KEY(hostname, port) )"
-#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('OFFLINE_HARD', 'OFFLINE_SOFT', 'SHUNNED', 'ONLINE')) NOT NULL DEFAULT 'OFFLINE_HARD', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+//#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('OFFLINE_HARD', 'OFFLINE_SOFT', 'SHUNNED', 'ONLINE')) NOT NULL DEFAULT 'OFFLINE_HARD', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 //#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS "CREATE TABLE mysql_hostgroups ( hostgroup_id INT NOT NULL , description VARCHAR, PRIMARY KEY(hostgroup_id) )"
 //#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES "CREATE TABLE mysql_hostgroup_entries ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , FOREIGN KEY (hostname, port) REFERENCES mysql_servers (hostname, port) , FOREIGN KEY (hostgroup_id) REFERENCES mysql_hostgroups (hostgroup_id) , PRIMARY KEY (hostgroup_id, hostname, port) )"
 //#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend) , FOREIGN KEY (default_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
@@ -191,6 +192,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 //	void __attach_configdb_to_admindb();
 	void __attach_db_to_admindb(SQLite3DB *db, char *alias);
 
+
 	void __add_active_users(enum cred_username_type usertype);
 	void __delete_inactive_users(enum cred_username_type usertype);
 //	void add_default_user(char *, char *);
@@ -227,6 +229,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual void init_mysql_servers();
 	virtual void init_mysql_query_rules();
 	void save_mysql_users_runtime_to_database();
+	void save_mysql_servers_runtime_to_database();
 	virtual void admin_shutdown();
 	bool is_command(std::string);
 //	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
@@ -728,7 +731,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
-/*
+
 		if (
 			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO MEMORY") && !strncasecmp("SAVE MYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
 			||
@@ -740,12 +743,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
 			Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-			SPA->save_mysql_users_runtime_to_database();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
-			SPA->send_MySQL_OK(&sess->myprot_client, NULL);
+			SPA->save_mysql_servers_runtime_to_database();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
-*/
 	}
 
 	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL QUERY RULES ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL QUERY RULES ", query_no_space, 23))) ) {
@@ -1457,6 +1459,11 @@ bool Standard_ProxySQL_Admin::init() {
 	//__attach_configdb_to_admindb();
 	__attach_db_to_admindb(configdb, (char *)"disk");
 	__attach_db_to_admindb(statsdb, (char *)"stats");
+
+#ifdef DEBUG	
+	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
+#endif /* DEBUG */
+
 #ifdef DEBUG
 	flush_debug_levels_runtime_to_database(configdb, false);
 	flush_debug_levels_runtime_to_database(admindb, true);
@@ -1474,6 +1481,12 @@ bool Standard_ProxySQL_Admin::init() {
 	__insert_or_replace_maintable_select_disktable();
 
 	flush_admin_variables___database_to_runtime(admindb,true);
+#ifdef DEBUG
+	if (GloVars.global.gdbg==false && GloVars.__cmd_proxysql_gdbg) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Enabling GloVars.global.gdbg because GloVars.__cmd_proxysql_gdbg==%d\n", GloVars.__cmd_proxysql_gdbg);
+		GloVars.global.gdbg=true;
+	}
+#endif /* DEBUG */
 	flush_mysql_variables___database_to_runtime(admindb,true);
 
 
@@ -2452,6 +2465,25 @@ void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
 void Standard_ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 }
 
+void Standard_ProxySQL_Admin::save_mysql_servers_runtime_to_database() {
+	char *query=(char *)"DELETE FROM main.mysql_servers";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	SQLite3_result *resultset=MyHGM->dump_table_mysql_servers();
+	if (!resultset) return;
+	char *q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s)";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+16);
+		sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[4], r->fields[3]);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+		fprintf(stderr,"%s\n",query);
+		admindb->execute(query);
+		free(query);
+	}
+	if(resultset) delete resultset;
+}
+
 
 void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	char *error=NULL;
@@ -2459,15 +2491,32 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	//char *query=(char *)"SELECT hostgroup_id,hostname,port,weight FROM main.mysql_hostgroup_entries";
-	char *query=(char *)"SELECT hostgroup_id,hostname,port,weight FROM main.mysql_servers";
+	char *query=(char *)"SELECT hostgroup_id,hostname,port,status,weight FROM main.mysql_servers";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	//MyHGH->wrlock();
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-      SQLite3_row *r=*it;
-			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), MYSQL_SERVER_STATUS_ONLINE);
+			SQLite3_row *r=*it;
+			MySerStatus status=MYSQL_SERVER_STATUS_ONLINE;
+			if (strcasecmp(r->fields[3],"ONLINE")) {
+				if (!strcasecmp(r->fields[3],"SHUNNED")) {
+					status=MYSQL_SERVER_STATUS_SHUNNED;
+				}	else {
+					if (!strcasecmp(r->fields[3],"OFFLINE_SOFT")) {
+						status=MYSQL_SERVER_STATUS_OFFLINE_SOFT;
+					} else {
+						if (!strcasecmp(r->fields[3],"OFFLINE_HARD")) {
+							status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
+						}
+					}
+				}
+			}
+			//MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), MYSQL_SERVER_STATUS_ONLINE);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "hid=%d , hostname=%s , port=%d , status=%s , weight=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), r->fields[3], atoi(r->fields[4]));
+			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), status);
 			//MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
 		}
 	}

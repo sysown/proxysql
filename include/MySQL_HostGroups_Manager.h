@@ -82,6 +82,7 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_create(unsigned int);
 
 	void add(MySrvC *, unsigned int);
+	void generate_mysql_servers_table();
 
 	public:
 	MySQL_HostGroups_Manager();
@@ -93,6 +94,7 @@ class MySQL_HostGroups_Manager {
 	bool server_add(unsigned int hid, char *add, uint16_t p=3306, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE);
 	bool commit();
 
+	SQLite3_result *dump_table_mysql_servers();
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);

@@ -543,6 +543,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	writeout();
 
+	// FIXME: see bug #211
 	if (
 		mybe
 		&&
