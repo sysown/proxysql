@@ -371,9 +371,14 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 //	}
 	wrlock();
 	mysrvc=(MySrvC *)c->parent;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
   mysrvc->ConnectionsUsed->remove(c);
-	mysrvc->ConnectionsFree->add(c);
+	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+		mysrvc->ConnectionsFree->add(c);
+	} else {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+		delete c;
+	}
 	wrunlock();
 }
 
@@ -381,13 +386,41 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 
 MySrvC *MyHGC::get_random_MySrvC() {
 	MySrvC *mysrvc=NULL;
-	unsigned int i;
+	unsigned int j;
+	unsigned int sum=0;
 	unsigned int l=mysrvs->cnt();
 	if (l) {
+		//int j=0;
+		for (j=0; j<l; j++) {
+			mysrvc=mysrvs->idx(j);
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+				sum+=mysrvc->weight;
+			}
+		}
+		if (sum==0) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+			return NULL; // if we reach here, we couldn't find any target
+		}
+		unsigned int k=rand()%sum;
+  	k++;
+		sum=0;
+
+		for (j=0; j<l; j++) {
+			mysrvc=mysrvs->idx(j);
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+				sum+=mysrvc->weight;
+				if (k<=sum) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+					return mysrvc;
+				}
+			}
+		}
+/*
 		i=rand()%l;
 		mysrvc=mysrvs->idx(i);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
 		return mysrvc;
+*/
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
 	return NULL; // if we reach here, we couldn't find any target
