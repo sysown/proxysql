@@ -504,7 +504,8 @@ int MySQL_Data_Stream::array2buffer_full() {
 int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pending_connect) {
 	//assert(myconn==NULL);
 
-	if (myconn==NULL) myconn= new MySQL_Connection(); // FIXME: why here? // 20141011
+	assert(myconn); // this assert() is to remove the next condition
+	if (myconn==NULL) myconn= new MySQL_Connection(); // FIXME: why here? // 20141011 /// should be removed
 
 	myconn->last_time_used=sess->thread->curtime;
 	struct sockaddr_un u;
