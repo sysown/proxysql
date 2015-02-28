@@ -280,6 +280,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		char *connect_timeout_server_error;
 		char *default_schema;
 		char *server_version;
+		uint8_t default_charset;
 		bool servers_stats;
 #ifdef DEBUG
 		bool session_debug;
@@ -297,6 +298,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	virtual void commit();
 
 	char *get_variable_string(char *name);
+	uint8_t get_variable_uint8(char *name);
 	uint16_t get_variable_uint16(char *name);
 	int get_variable_int(char *name);
 	virtual char * get_variable(char *name); // this is the public function, accessible from admin

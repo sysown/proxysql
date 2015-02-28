@@ -188,6 +188,7 @@ volatile static unsigned int __global_MySQL_Thread_Variables_version;
 static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_error",
+	(char *)"default_charset",
 	(char *)"ping_interval_server",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -274,6 +275,7 @@ Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
 	variables.ping_timeout_server=100;
 	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
 	variables.default_schema=strdup((char *)"information_schema");
+	variables.default_charset=33;
 	variables.server_version=strdup((char *)"5.1.30");
 	variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 	variables.poll_timeout=2000;
@@ -311,6 +313,12 @@ uint16_t Standard_MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	return 0;
 }
 
+uint8_t Standard_MySQL_Threads_Handler::get_variable_uint8(char *name) {
+	if (!strcmp(name,"default_charset")) return variables.default_charset;
+	proxy_error("Not existing variable: %s\n", name); assert(0);
+	return 0;
+}
+
 int Standard_MySQL_Threads_Handler::get_variable_int(char *name) {
 #ifdef DEBUG
 	if (!strcmp(name,"session_debug")) return (int)variables.session_debug;
@@ -334,6 +342,10 @@ char * Standard_MySQL_Threads_Handler::get_variable(char *name) {	// this is the
 	if (!strcmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
 		sprintf(intbuf,"%d",variables.server_capabilities);
+		return strdup(intbuf);
+	}
+	if (!strcmp(name,"default_charset")) {
+		sprintf(intbuf,"%d",variables.default_charset);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"connect_timeout_server")) {
@@ -447,10 +459,19 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"server_capabilities")) {
+	if (!strcmp(name,"poll_timeout")) {
 		int intv=atoi(value);
-		if (intv > 0) {
-			variables.server_capabilities=intv;
+		if (intv > 10 && intv < 20000) {
+			variables.poll_timeout=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcmp(name,"default_charset")) {
+		int intv=atoi(value);
+		if (intv > 0 && intv < 256) {
+			variables.default_charset=intv;
 			return true;
 		} else {
 			return false;
@@ -1005,6 +1026,7 @@ void Standard_MySQL_Thread::refresh_variables() {
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
+	mysql_thread___default_charset=GloMTH->get_variable_uint8((char *)"default_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 #ifdef DEBUG
@@ -1154,7 +1176,7 @@ SQLite3_result * Standard_MySQL_Thread::SQL3_Thread_status(MySQL_Session *sess) 
 
 	status_str+="\ndefault_schema : "; status_str.append(mysql_thread___default_schema);
 	status_str+="\nserver_version : "; status_str.append(mysql_thread___server_version);
-	sprintf(buf,"\ncapabilities   : %d\npoll_timeout   : %d\n", mysql_thread___server_capabilities, mysql_thread___poll_timeout);
+	sprintf(buf,"\ncapabilities   : %d\npoll_timeout   : %d\ncharset        : %d\n", mysql_thread___server_capabilities, mysql_thread___poll_timeout, mysql_thread___default_charset);
 	status_str.append(buf);
 	status_str+= "\n";
 

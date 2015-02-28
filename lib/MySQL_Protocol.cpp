@@ -603,7 +603,7 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 
 static unsigned char protocol_version=10;
 //static uint16_t server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
-static uint8_t server_language=33;
+//static uint8_t server_language=33;
 static uint16_t server_status=1;
 //static char *mysql_server_version = (char *)"5.1.30";
 
@@ -1234,7 +1234,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
     //+ sizeof(glovars.server_language)
     //+ sizeof(glovars.server_status)
     + sizeof(mysql_thread___server_capabilities)
-    + sizeof(server_language)
+    + sizeof(mysql_thread___default_charset)
     + sizeof(server_status)
     + 3 // unknown stuff
     + 10 // filler
@@ -1281,7 +1281,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
   _ptr[l]=0x00; l+=1; //0x00
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
-  memcpy(_ptr+l,&server_language, sizeof(server_language)); l+=sizeof(server_language);
+  memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
   memcpy(_ptr+l,"\x0f\x80\x15",3); l+=3;
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
