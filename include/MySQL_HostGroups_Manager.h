@@ -3,8 +3,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0, compression INT CHECK (compression IN (0,1)) NOT NULL DEFAULT 0 , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
-#define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0, compression INT CHECK (compression IN (0,1)) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port))"
+#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0, compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0, compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port))"
 
 
 class MySrvConnList;
@@ -43,7 +43,7 @@ class MySrvC {	// MySQL Server Container
 	uint16_t flags;
 	unsigned int weight;
 	enum MySerStatus status;
-	bool compression;
+	unsigned int compression;
 	//uint8_t charset;
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
@@ -94,7 +94,7 @@ class MySQL_HostGroups_Manager {
 	void rdunlock();
 	void wrlock();
 	void wrunlock();
-	bool server_add(unsigned int hid, char *add, uint16_t p=3306, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, bool _comp=0);
+	bool server_add(unsigned int hid, char *add, uint16_t p=3306, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0);
 	bool commit();
 
 	SQLite3_result *dump_table_mysql_servers();

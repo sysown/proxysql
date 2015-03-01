@@ -204,7 +204,7 @@ bool MySQL_Connection::is_expired(unsigned long long timeout) {
 	return false;
 }
 
-MySQL_Connection::set_status_transaction(bool v) {
+void MySQL_Connection::set_status_transaction(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_TRANSACTION;
 	} else {
@@ -212,7 +212,7 @@ MySQL_Connection::set_status_transaction(bool v) {
 	}
 }
 
-MySQL_Connection::set_status_compression(bool v) {
+void MySQL_Connection::set_status_compression(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_COMPRESSION;
 	} else {
@@ -220,7 +220,7 @@ MySQL_Connection::set_status_compression(bool v) {
 	}
 }
 
-MySQL_Connection::set_status_user_variable(bool v) {
+void MySQL_Connection::set_status_user_variable(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_USER_VARIABLE;
 	} else {
@@ -228,7 +228,7 @@ MySQL_Connection::set_status_user_variable(bool v) {
 	}
 }
 
-MySQL_Connection::set_status_prepared_statement(bool v) {
+void MySQL_Connection::set_status_prepared_statement(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
 	} else {

@@ -107,7 +107,7 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	port=p;
 	weight=_weight;
 	status=_status;
-	compression=(bool)_compression;
+	compression=_compression;
 	//charset=_charset;
 	myhgc=NULL;
 	ConnectionsUsed=new MySrvConnList(this);
@@ -220,7 +220,7 @@ void MySQL_HostGroups_Manager::wrunlock() {
 
 // add a new row in mysql_servers_incoming
 // we always assume that the calling thread has acquired a rdlock()
-bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t p, unsigned int _weight, enum MySerStatus status, bool _comp /*, uint8_t _charset */) {
+bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t p, unsigned int _weight, enum MySerStatus status, unsigned int _comp /*, uint8_t _charset */) {
 	bool ret;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u , status %u, %s compression and charset %d\n", add,p,hid,_weight,status, (_comp ? "with" : "without") /*, _charset */);
 	char *q=(char *)"INSERT INTO mysql_servers_incoming VALUES (%u, \"%s\", %u, %u, %u, %u)";
@@ -288,7 +288,7 @@ bool MySQL_HostGroups_Manager::commit() {
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[9])) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing compression for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->compression , atoi(r->fields[9]));
-					mysrvc->compression=(bool)atoi(r->fields[9]);
+					mysrvc->compression=atoi(r->fields[9]);
 				}
 			}
 		}
