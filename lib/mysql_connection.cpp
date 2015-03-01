@@ -148,6 +148,11 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 };
 
+uint8_t MySQL_Connection::set_charset(uint8_t _c) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
+	options.charset=_c;
+	return _c;
+}
 
 MyConnArray * MySQL_Connection::set_MCA(MySQL_Connection_Pool *_MyConnPool, const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection_Pool=%p, Host=%s, user=%s, pass=%s, db=%s, port=%d\n", _MyConnPool, hostname, username, password, db, port);

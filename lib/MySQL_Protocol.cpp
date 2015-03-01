@@ -900,6 +900,28 @@ bool MySQL_Protocol::generate_COM_INIT_DB(bool send, void **ptr, unsigned int *l
 	return true;
 }
 
+bool MySQL_Protocol::generate_COM_QUERY(bool send, void **ptr, unsigned int *len, char *query) {
+	uint32_t query_len=strlen(query);
+	mysql_hdr myhdr;
+	myhdr.pkt_id=0;
+	myhdr.pkt_length=1+query_len;
+  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+  unsigned char *_ptr=(unsigned char *)l_alloc(size);
+  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+  //Copy4B(_ptr, &myhdr);
+  int l=sizeof(mysql_hdr);
+	_ptr[l]=0x03; l++;
+	memcpy(_ptr+l, query, query_len);
+	
+	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
+	if (len) { *len=size; }
+	if (ptr) { *ptr=(void *)_ptr; }
+#ifdef DEBUG
+	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+#endif
+	return true;
+}
+
 //bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len) {
 	mysql_hdr myhdr;
@@ -1103,7 +1125,10 @@ bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsi
 
 	uint32_t capabilities = CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | CLIENT_CONNECT_WITH_DB | CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS ;
 	uint32_t max_allowed_packet=1*1024*1024;
-	uint8_t charset=21;
+	assert(sess);
+	assert(sess->client_myds);
+	assert(sess->client_myds->myconn);
+	uint8_t charset=sess->client_myds->myconn->options.charset;
 	uint8_t _tmp;
 /*
   pkt     += sizeof(mysql_hdr);
@@ -1533,7 +1558,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	}
   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
             (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
-
+	assert(sess);
+	assert(sess->client_myds);
+	assert(sess->client_myds->myconn);
+	sess->client_myds->myconn->set_charset(charset);
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,len); }
 #endif

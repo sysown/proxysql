@@ -41,6 +41,7 @@ class MySQL_Protocol {
 	bool generate_COM_QUIT(bool send, void **ptr, unsigned int *len);
 	bool generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema);
 	bool generate_COM_PING(bool send, void **ptr, unsigned int *len);
+	bool generate_COM_QUERY(bool send, void **ptr, unsigned int *len, char *query);
 	bool generate_COM_RESET_CONNECTION(bool send, void **ptr, unsigned int *len);
 	bool generate_COM_CHANGE_USER(bool send, void **ptr, unsigned int *len);
 

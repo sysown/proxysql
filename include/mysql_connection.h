@@ -52,6 +52,7 @@ class MySQL_Connection {
 //	void free_mshge();
 	MyConnArray *set_MCA(MySQL_Connection_Pool *_MyConnPool, const char *hostname, const char *username, const char *password, const char *db, unsigned int port);
 	bool return_to_connection_pool();
+	uint8_t set_charset(uint8_t);
 	friend class MyConnArray;
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */
