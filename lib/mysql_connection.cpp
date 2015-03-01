@@ -109,6 +109,8 @@ MySQL_Connection::MySQL_Connection() {
 	parent=NULL;
 	userinfo=new MySQL_Connection_userinfo();
 	fd=-1;
+	status_flags=0;
+	options.compression_min_length=0;
 	options.server_version=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
@@ -200,4 +202,52 @@ bool MySQL_Connection::is_expired(unsigned long long timeout) {
 // FIXME: here the check should be a sanity check
 // FIXME: for now this is just a temporary (and stupid) check
 	return false;
+}
+
+MySQL_Connection::set_status_transaction(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_TRANSACTION;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_TRANSACTION;
+	}
+}
+
+MySQL_Connection::set_status_compression(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_COMPRESSION;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_COMPRESSION;
+	}
+}
+
+MySQL_Connection::set_status_user_variable(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_USER_VARIABLE;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_USER_VARIABLE;
+	}
+}
+
+MySQL_Connection::set_status_prepared_statement(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
+	}
+}
+
+bool MySQL_Connection::get_status_transaction() {
+	return status_flags & STATUS_MYSQL_CONNECTION_TRANSACTION;
+}
+
+bool MySQL_Connection::get_status_compression() {
+	return status_flags & STATUS_MYSQL_CONNECTION_COMPRESSION;
+}
+
+bool MySQL_Connection::get_status_user_variable() {
+	return status_flags & STATUS_MYSQL_CONNECTION_USER_VARIABLE;
+}
+
+bool MySQL_Connection::get_status_prepared_statement() {
+	return status_flags & STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
 }

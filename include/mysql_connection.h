@@ -4,6 +4,12 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001
+#define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
+#define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
+#define STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT   0x00000008
+
+
 class MySQL_Connection_userinfo {
 	private:
 	uint64_t compute_hash();
@@ -35,7 +41,9 @@ class MySQL_Connection {
 		char *server_version;
 		uint8_t protocol_version;
 		uint8_t charset;
+		unsigned int compression_min_length;
 	} options;
+	uint32_t status_flags;
 	unsigned long long last_time_used;
 	MySrvC *parent;
 //	void * operator new(size_t);
@@ -53,6 +61,16 @@ class MySQL_Connection {
 	MyConnArray *set_MCA(MySQL_Connection_Pool *_MyConnPool, const char *hostname, const char *username, const char *password, const char *db, unsigned int port);
 	bool return_to_connection_pool();
 	uint8_t set_charset(uint8_t);
+
+	void set_status_transaction(bool);
+	void set_status_compression(bool);
+	void set_status_prepared_statement(bool);
+	void set_status_user_variable(bool);
+	bool get_status_transaction();
+	bool get_status_compression();
+	bool get_status_prepared_statement();
+	bool get_status_user_variable();
+
 	friend class MyConnArray;
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */
