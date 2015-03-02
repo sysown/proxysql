@@ -1,10 +1,12 @@
 #include "ezOptionParser.hpp"
+#include "fileutils.hpp"
 #include "proxysql.h"
 #include "cpp.h"
 #include <string>
 
 
 
+using namespace std;
 static void term_handler(int sig) {
   proxy_error("Received TERM signal: shutdown in progress...\n");
 #ifdef DEBUG
@@ -169,7 +171,7 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 	if (config_file==NULL) {
 		config_file=(char *)"proxysql.cnf";
 		//if (!g_file_test(config_file,(GFileTest)(G_FILE_TEST_EXISTS|G_FILE_TEST_IS_REGULAR))) {
-		if (Proxy_file_regular(config_file)==false) {
+		if (FileUtils::Proxy_file_regular(config_file)==false) {
 			config_file=(char *)"/etc/proxysql.cnf";
 		}
 	}

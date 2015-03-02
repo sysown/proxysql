@@ -286,18 +286,3 @@ void PtrSizeArray::copy_add(PtrSizeArray *psa, unsigned int from, unsigned int c
 		add(psp->ptr,psp->size);
 	}
 }
-
-bool Proxy_file_exists(const char *path) {
-	struct stat sb;
-	int rc=stat(path, &sb);
-	if (rc==0) return true;
-	return false;
-}
-
-bool Proxy_file_regular(const char *path) {
-	struct stat sb;
-	int rc=stat(path, &sb);
-	if (rc==0)
-		if (sb.st_mode & S_IFREG) return true;
-	return false;
-}
