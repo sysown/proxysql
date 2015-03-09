@@ -189,6 +189,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_error",
 	(char *)"default_charset",
+	(char *)"have_compress",
 	(char *)"ping_interval_server",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -279,6 +280,7 @@ Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
 	variables.server_version=strdup((char *)"5.1.30");
 	variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 	variables.poll_timeout=2000;
+	variables.have_compress=true;
 	variables.servers_stats=true;
 #ifdef DEBUG
 	variables.session_debug=true;
@@ -326,6 +328,7 @@ int Standard_MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
+	if (!strcmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
@@ -377,6 +380,9 @@ char * Standard_MySQL_Threads_Handler::get_variable(char *name) {	// this is the
 		return strdup((variables.session_debug ? "true" : "false"));
 	}
 #endif /* DEBUG */
+	if (!strcmp(name,"have_compress")) {
+		return strdup((variables.have_compress ? "true" : "false"));
+	}
 	if (!strcmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
 	}
@@ -450,10 +456,10 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"poll_timeout")) {
+	if (!strcmp(name,"server_capbilities")) {
 		int intv=atoi(value);
-		if (intv > 10 && intv < 20000) {
-			variables.poll_timeout=intv;
+		if (intv > 10 && intv <= 65535) {
+			variables.server_capabilities=intv;
 			return true;
 		} else {
 			return false;
@@ -508,6 +514,17 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 		return false;
 	}
 #endif /* DEBUG */
+	if (!strcmp(name,"have_compress")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.have_compress=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.have_compress=false;
+			return true;
+		}
+		return false;
+	}
 	if (!strcmp(name,"servers_stats")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.servers_stats=true;
@@ -685,10 +702,16 @@ MySQL_Session * Standard_MySQL_Thread::create_new_session_and_client_data_stream
 	//sess->myprot_client.dump_pkt=true;
 	sess->client_myds->myprot.dump_pkt=true;
 #endif
-	sess->client_myds->myconn=new MySQL_Connection();  // 20141011
-	sess->client_myds->myconn->last_time_used=curtime;
-	sess->client_myds->myconn->myds=sess->client_myds; // 20141011
-	sess->client_myds->myconn->fd=sess->client_myds->fd; // 20141011
+	sess->client_myds->myconn=new MySQL_Connection();
+	MySQL_Connection *myconn=sess->client_myds->myconn;
+	//myconn=new MySQL_Connection();  // 20141011
+//	if (mysql_thread___have_compress) {
+//		myconn->options.compression_min_length=50;
+//		myconn->options.server_capabilities|=CLIENT_COMPRESS;
+//	}
+	myconn->last_time_used=curtime;
+	myconn->myds=sess->client_myds; // 20141011
+	myconn->fd=sess->client_myds->fd; // 20141011
 
 	// FIXME: initializing both, later we will drop one
 	//sess->myprot_client.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
@@ -1028,6 +1051,7 @@ void Standard_MySQL_Thread::refresh_variables() {
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___default_charset=GloMTH->get_variable_uint8((char *)"default_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");

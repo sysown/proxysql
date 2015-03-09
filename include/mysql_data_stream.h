@@ -39,6 +39,7 @@ class MySQL_Data_Stream
 	//mysql_data_buffer_t bufferOUT;
 	int array2buffer();
 	int buffer2array();
+	void generate_compressed_packet();
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);

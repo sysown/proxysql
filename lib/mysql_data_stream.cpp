@@ -1,6 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
-
+#include <zlib.h>
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX    108
 #endif 
@@ -380,20 +380,40 @@ int MySQL_Data_Stream::buffer2array() {
 		queueIN.pkt.size=0;
 		return ret;
 	}
-	if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
-		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
-		memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
-		//Copy4B(&queueIN.hdr,queue_r_ptr(queueIN));
-		queue_r(queueIN,sizeof(mysql_hdr));
-		//proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Allocating %d bytes for a new packet\n", myds->input.hdr.pkt_length+sizeof(mysql_hdr));
-		queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr);
-		queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
-
-		//MEM_COPY_FWD((unsigned char *)queueIN.pkt.ptr, (unsigned char *)&queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
-		memcpy(queueIN.pkt.ptr, &queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
-		//Copy4B(queueIN.pkt.ptr,&queueIN.hdr);
-		queueIN.partial=sizeof(mysql_hdr);
-		ret+=sizeof(mysql_hdr);
+/**/
+	if (myconn->get_status_compression()==true) {
+		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=7) {
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new compressed packet\n");
+ 			memcpy(&queueIN.hdr,queue_r_ptr(queueIN), sizeof(mysql_hdr));
+			queue_r(queueIN,sizeof(mysql_hdr));
+			queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr)+3;
+			queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
+			memcpy(queueIN.pkt.ptr, &queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
+			memcpy((unsigned char *)queueIN.pkt.ptr+sizeof(mysql_hdr), queue_r_ptr(queueIN), 3); // copy 3 bytes, the length of the uncompressed payload
+			queue_r(queueIN,3);
+			queueIN.partial=7;
+			mysql_hdr *_hdr;
+			_hdr=(mysql_hdr *)queueIN.pkt.ptr;
+			myconn->compression_pkt_id=_hdr->pkt_id;
+			ret+=7;
+		}
+	} else {
+/**/
+		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
+			memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
+			queue_r(queueIN,sizeof(mysql_hdr));
+			queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr);
+			queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
+			memcpy(queueIN.pkt.ptr, &queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
+			queueIN.partial=sizeof(mysql_hdr);
+			ret+=sizeof(mysql_hdr);
+//			if (myconn->get_status_compression()==true) {
+//				mysql_hdr *_hdr;
+//				_hdr=(mysql_hdr *)queueIN.pkt.ptr;
+//				myconn->compression_pkt_id=_hdr->pkt_id;
+//			}
+		}
 	}
 	if ((queueIN.pkt.size>0) && queue_data(queueIN)) {
 		int b= ( queue_data(queueIN) > (queueIN.pkt.size - queueIN.partial) ? (queueIN.pkt.size - queueIN.partial) : queue_data(queueIN) );
@@ -404,14 +424,108 @@ int MySQL_Data_Stream::buffer2array() {
 		ret+=b;
 	}
 	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
-		PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
-		pkts_recv++;
-		queueIN.pkt.size=0;
-		queueIN.pkt.ptr=NULL;
-	}  
+		if (myconn->get_status_compression()==true) {
+			Bytef *dest;
+			uLongf destLen;
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied the whole compressed packet\n");
+			unsigned int progress=0;
+			unsigned int datalength;
+			unsigned int payload_length=0;
+			unsigned char *u;
+			u=(unsigned char *)queueIN.pkt.ptr;
+			payload_length=*(u+6);
+			payload_length=payload_length*256+*(u+5);
+			payload_length=payload_length*256+*(u+4);
+			unsigned char *_ptr=(unsigned char *)queueIN.pkt.ptr+7;
+			
+			if (payload_length) {
+				// the payload is compressed
+				destLen=payload_length;
+				dest=(Bytef *)l_alloc(destLen);
+				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
+				assert(rc==Z_OK); 
+				datalength=payload_length;
+				// change _ptr to the new buffer
+				_ptr=dest;
+			} else {
+				// the payload is not compressed
+				datalength=queueIN.pkt.size-7;
+			}
+			while (progress<datalength) {
+				mysql_hdr _a;
+				memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+				unsigned int size=_a.pkt_length+sizeof(mysql_hdr);
+				unsigned char *ptrP=(unsigned char *)l_alloc(size);
+				memcpy(ptrP,_ptr+progress,size);
+				progress+=size;
+				PSarrayIN->add(ptrP,size);
+			}
+			if (payload_length) {
+				l_free(destLen,dest);
+			}
+			l_free(queueIN.pkt.size,queueIN.pkt.ptr);
+			pkts_recv++;
+			queueIN.pkt.size=0;
+			queueIN.pkt.ptr=NULL;
+		} else {
+			PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+			pkts_recv++;
+			queueIN.pkt.size=0;
+			queueIN.pkt.ptr=NULL;
+		}
+	}
 	return ret;
 }
 
+
+void MySQL_Data_Stream::generate_compressed_packet() {
+#define MAX_COMPRESSED_PACKET_SIZE	10*1024*1024
+	unsigned int total_size=0;
+	unsigned int i=0;
+	PtrSize_t *p=NULL;
+	while (i<PSarrayOUT->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
+		p=PSarrayOUT->index(i);
+		total_size+=p->size;
+		i++;
+	}
+	if (i>=2) {
+		// we successfully read at least 2 packets
+		if (total_size>MAX_COMPRESSED_PACKET_SIZE) {
+			// total_size is too big, we remove the last packet read
+			total_size-=p->size;
+		}
+	}
+	uLong sourceLen=total_size;
+	Bytef *source=(Bytef *)l_alloc(total_size);
+	uLongf destLen=total_size*120/100+12;
+	Bytef *dest=(Bytef *)malloc(destLen);
+	i=0;
+	total_size=0;
+	while (total_size<sourceLen) {
+		//p=PSarrayOUT->index(i);
+		PtrSize_t p2;
+		PSarrayOUT->remove_index(0,&p2);
+		memcpy(source+total_size,p2.ptr,p2.size);
+		//i++;
+		total_size+=p2.size;
+		l_free(p2.size,p2.ptr);
+	}
+	//PSarrayOUT->remove_index_range(0,i);
+	int rc=compress(dest, &destLen, source, sourceLen);
+	assert(rc==Z_OK);
+	l_free(total_size, source);
+	queueOUT.pkt.size=destLen+7;
+	queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
+	mysql_hdr hdr;
+	hdr.pkt_length=destLen;
+	//hdr.pkt_id=++myconn->compression_pkt_id;
+	hdr.pkt_id=1;
+	memcpy((unsigned char *)queueOUT.pkt.ptr,&hdr,sizeof(mysql_hdr));
+	hdr.pkt_length=total_size;
+	memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);
+	memcpy((unsigned char *)queueOUT.pkt.ptr+7,dest,destLen);
+	free(dest);
+}
 
 
 int MySQL_Data_Stream::array2buffer() {
@@ -428,7 +542,26 @@ int MySQL_Data_Stream::array2buffer() {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					queueOUT.pkt.ptr=NULL;
 				}
-				PSarrayOUT->remove_index(0,&queueOUT.pkt);
+				if (myconn->get_status_compression()==true) {
+					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
+					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
+				} else {
+					PSarrayOUT->remove_index(0,&queueOUT.pkt);
+					// this is a special case, needed because compression is enabled *after* the first OK
+					if (DSS==STATE_CLIENT_AUTH_OK) {
+						DSS=STATE_SLEEP;
+						// enable compression
+						if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+							if (myconn->options.compression_min_length) {
+								myconn->set_status_compression(true);
+							}
+						} else {
+							//explicitly disable compression
+							myconn->options.compression_min_length=0;
+							myconn->set_status_compression(false);
+						}
+					}
+				}
 				//memcpy(&queueOUT.pkt,PSarrayOUT->index(idx),sizeof(PtrSize_t));
 #ifdef DEBUG
 				{ __dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size); }
@@ -548,6 +681,8 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 
 	if (connect_port) {
 		rc=connect(s, (struct sockaddr *) &a, sizeof(a));
+		int arg_on=1;
+		setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
 	} else {
 		rc=connect(s, (struct sockaddr *) &u, len);
 	}

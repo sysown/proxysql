@@ -461,8 +461,10 @@ MySQL_Connection * MySrvConnList::get_random_MyConn() {
 		conn->parent=mysrvc;
 		//conn->options.charset=mysrvc->charset;
 		conn->options.server_capabilities=0;
-		conn->options.server_capabilities|=CLIENT_COMPRESS;
-		
+		if (mysql_thread___have_compress==true && mysrvc->compression) {
+			conn->options.server_capabilities|=CLIENT_COMPRESS;
+			conn->options.compression_min_length=mysrvc->compression;
+		}
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return  conn;
 	}

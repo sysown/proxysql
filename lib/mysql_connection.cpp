@@ -112,6 +112,7 @@ MySQL_Connection::MySQL_Connection() {
 	status_flags=0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
+	compression_pkt_id=0;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 

@@ -1124,6 +1124,19 @@ bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsi
   myhdr.pkt_id=1;
 
 	uint32_t capabilities = CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | CLIENT_CONNECT_WITH_DB | CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS ;
+
+	// enable compression
+	assert(sess);
+	assert(sess->mybe);	
+	assert(sess->mybe->server_myds);	
+	MySQL_Connection *myconn=sess->mybe->server_myds->myconn;
+	assert(myconn);
+	if (myconn->options.compression_min_length) {
+		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+			capabilities|=CLIENT_COMPRESS;
+		}
+	}
+
 	uint32_t max_allowed_packet=1*1024*1024;
 	assert(sess);
 	assert(sess->client_myds);
@@ -1305,6 +1318,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
   _ptr[l]=0x00; l+=1; //0x00
+	if (mysql_thread___have_compress) {
+		mysql_thread___server_capabilities |= CLIENT_COMPRESS; // FIXME: shouldn't be here
+		//(*myds)->myconn->options.compression_min_length=50;
+	}
+	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
   memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
@@ -1432,7 +1450,9 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 		goto exit_process_pkt_initial_handshake;
 	}
 	uint8_t protocol;
-	uint16_t capabilities;
+	uint16_t capabilities_lower;
+	uint16_t capabilities_upper;
+	uint32_t capabilities;
 	uint8_t charset;
 	//uint16_t status;
 	uint32_t thread_id;
@@ -1449,12 +1469,15 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 	pkt      += sizeof(uint32_t);
 	salt1     = pkt;
 	pkt      += strlen((char *)salt1) + 1;
-	capabilities = CPY2(pkt);
+	capabilities_lower = CPY2(pkt);
 	pkt    += sizeof(uint16_t);
 	charset = *(uint8_t *)pkt;
 	pkt    += sizeof(uint8_t);
 	prot_status  = CPY2(pkt);
-	pkt    += 15; // 2 for status, 13 for zero-byte padding
+	pkt    += sizeof(uint16_t);
+	capabilities_upper = CPY2(pkt);
+	pkt    += sizeof(uint16_t);
+	pkt    += 11;
 	salt2   = pkt;
 
 	// FIXME: the next two lines are here just to prevent this: warning: variable ‘salt2’ set but not used [-Wunused-but-set-variable]
@@ -1462,6 +1485,8 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 	salt2++;
 	salt2 = pkt;
 	
+	capabilities=capabilities_upper << 16;
+	capabilities+=capabilities_lower;
 
    proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, prot_status);
 //   if(op.verbose) unmask_caps(caps);
@@ -1560,8 +1585,16 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
             (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
 	assert(sess);
 	assert(sess->client_myds);
-	assert(sess->client_myds->myconn);
-	sess->client_myds->myconn->set_charset(charset);
+	MySQL_Connection *myconn=sess->client_myds->myconn;
+	assert(myconn);
+	myconn->set_charset(charset);
+	// enable compression
+	if (capabilities & CLIENT_COMPRESS) {
+		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+			myconn->options.compression_min_length=50;
+			//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
+		}
+	}
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,len); }
 #endif

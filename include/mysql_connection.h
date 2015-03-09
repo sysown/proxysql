@@ -45,6 +45,7 @@ class MySQL_Connection {
 	} options;
 	uint32_t status_flags;
 	unsigned long long last_time_used;
+	uint8_t compression_pkt_id;
 	MySrvC *parent;
 //	void * operator new(size_t);
 //	void operator delete(void *);

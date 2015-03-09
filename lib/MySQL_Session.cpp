@@ -858,17 +858,29 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_NOT_CONNECTED(Ptr
 
 void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CONNECTING_SERVER - STATE_CLIENT_HANDSHAKE\n");
-	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	if (myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
 		l_free(pkt->size,pkt->ptr);
-		mybe->server_myds->DSS=STATE_READY;
+		myds->DSS=STATE_READY;
 		//mybe->myconn=server_myds->myconn;
 		status=WAITING_SERVER_DATA;
 		unsigned int k;
 		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
+		for (k=0; k<myds->PSarrayOUTpending->len;) {
+			myds->PSarrayOUTpending->remove_index(0,&pkt2);
+			myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+			myds->DSS=STATE_QUERY_SENT_DS;
+		}
+		MySQL_Connection *myconn=myds->myconn;
+		// enable compression
+		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+			if (myconn->options.compression_min_length) {
+				myconn->set_status_compression(true);
+			}
+		} else {
+			// explicitly disable compression
+			myconn->options.compression_min_length=0;
+			myconn->set_status_compression(false);
 		}
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for backend: disconnecting\n");
@@ -906,7 +918,20 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
 			//server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 			status=WAITING_CLIENT_DATA;
-			client_myds->DSS=STATE_SLEEP;
+			client_myds->DSS=STATE_CLIENT_AUTH_OK;
+			MySQL_Connection *myconn=client_myds->myconn;
+/*
+			// enable compression
+			if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+				if (myconn->options.compression_min_length) {
+					myconn->set_status_compression(true);
+				}
+			} else {
+				//explicitly disable compression
+				myconn->options.compression_min_length=0;
+				myconn->set_status_compression(false);
+			}
+*/
 		} else {
 			// use SSL
 			client_myds->DSS=STATE_SSL_INIT;
@@ -1149,7 +1174,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend(
 	//mybe->server_myds->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
 	//myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
 	//mybe->server_myds->myprot.generate_COM_INIT_DB(true,NULL,NULL,mybe->server_myds->myconn->userinfo->schemaname);
-	mybe->server_myds->myprot.generate_COM_QUERY(true,NULL,NULL,"SET NAMES utf8");
+	mybe->server_myds->myprot.generate_COM_QUERY(true,NULL,NULL,(char *)"SET NAMES utf8");
 	mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 	status=CHANGING_SCHEMA;
 }

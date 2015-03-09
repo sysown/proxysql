@@ -282,6 +282,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		char *server_version;
 		uint8_t default_charset;
 		bool servers_stats;
+		bool have_compress;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */

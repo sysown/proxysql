@@ -68,6 +68,7 @@ enum mysql_data_stream_status {
 	STATE_NOT_CONNECTED,
 	STATE_SERVER_HANDSHAKE,
 	STATE_CLIENT_HANDSHAKE,
+	STATE_CLIENT_AUTH_OK,
 	STATE_SSL_INIT,
 	STATE_SLEEP,
 	STATE_CLIENT_COM_QUERY,
@@ -620,6 +621,7 @@ __thread char *mysql_thread___connect_timeout_server_error;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
 __thread int mysql_thread___poll_timeout;
+__thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
@@ -639,6 +641,7 @@ extern __thread char *mysql_thread___connect_timeout_server_error;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
 extern __thread int mysql_thread___poll_timeout;
+extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;

@@ -1,5 +1,5 @@
 #include "proxysql.h"
-
+#include "proxysql_atomic.h"
 #include <cxxabi.h>
 
 
@@ -12,6 +12,14 @@
 //extern debug_level *gdbg_lvl;
 //extern int gdbg;
 
+static unsigned long long pretime=0;
+static spinlock debug_spinlock;
+
+static inline unsigned long long debug_monotonic_time() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
+}
 
 void crash_handler(int sig) {
 #ifdef DEBUG
@@ -42,6 +50,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, const char *fmt, 
 #define DEBUG_MSG_MAXSIZE	1024
 
 #ifdef DEBUG
+
 void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {
 	assert(module<PROXY_DEBUG_UNKNOWN);
 	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity) return;
@@ -53,8 +62,11 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		va_start(ap, fmt);
 		vsnprintf(debugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
+		spin_lock(&debug_spinlock);
+		unsigned long long curtime=debug_monotonic_time();
 		//fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
-		sprintf(longdebugbuff, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
+		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, verbosity, debugbuff);
+		pretime=curtime;
 	}
 	if (GloVars.global.gdbg_lvl[module].verbosity>=10) {
 		void *arr[20];
@@ -86,6 +98,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 //		fprintf(stderr, "%s", longdebugbuff);
 	}
 	if (strlen(longdebugbuff)) fprintf(stderr, "%s", longdebugbuff);
+	spin_unlock(&debug_spinlock);
 	if (GloVars.global.foreground) {
 		return;
 	}
@@ -129,8 +142,10 @@ void proxy_error_func(const char *fmt, ...) {
 };
 
 #ifdef DEBUG
-void init_debug_struct() {
+void init_debug_struct() {	
 	int i;
+	spinlock_init(&debug_spinlock);
+	pretime=debug_monotonic_time();
 	GloVars.global.gdbg_lvl= (debug_level *) malloc(PROXY_DEBUG_UNKNOWN*sizeof(debug_level));
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		GloVars.global.gdbg_lvl[i].module=(enum debug_module)i;
