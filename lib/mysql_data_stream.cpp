@@ -486,6 +486,13 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	while (i<PSarrayOUT->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
 		p=PSarrayOUT->index(i);
 		total_size+=p->size;
+		if (i==0) {
+			mysql_hdr hdr;
+			memcpy(&hdr,p->ptr,sizeof(mysql_hdr));
+			if (hdr.pkt_id==0) {
+				myconn->compression_pkt_id=-1;
+			}
+		}
 		i++;
 	}
 	if (i>=2) {
@@ -518,8 +525,8 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
 	mysql_hdr hdr;
 	hdr.pkt_length=destLen;
-	//hdr.pkt_id=++myconn->compression_pkt_id;
-	hdr.pkt_id=1;
+	hdr.pkt_id=++myconn->compression_pkt_id;
+	//hdr.pkt_id=1;
 	memcpy((unsigned char *)queueOUT.pkt.ptr,&hdr,sizeof(mysql_hdr));
 	hdr.pkt_length=total_size;
 	memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);

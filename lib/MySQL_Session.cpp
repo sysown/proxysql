@@ -356,7 +356,7 @@ int MySQL_Session::handler() {
 									mybe=find_or_create_backend(current_hostgroup);
 									//if (server_myds!=mybe->server_myds) {
 									//	server_myds=mybe->server_myds;
-									//} 
+									//}
 									mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
@@ -618,7 +618,11 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	to_process=0;
 	}
 */
-	if (wrong_pass==true) return -1;
+	if (wrong_pass==true) {
+		client_myds->array2buffer_full();
+		client_myds->write_to_net();
+		return -1;
+	}
 	return 0;
 }
 
