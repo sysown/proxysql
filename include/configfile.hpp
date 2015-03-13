@@ -12,9 +12,9 @@ using namespace libconfig;
 class ProxySQL_ConfigFile {
   private:
   struct stat statbuf;
-  Config cfg;
   char *filename;
   public:
+  Config cfg;
   ProxySQL_ConfigFile();
   bool OpenFile(const char *);
 	bool ReadGlobals();

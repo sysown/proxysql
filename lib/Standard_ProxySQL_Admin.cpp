@@ -217,6 +217,10 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 
+
+	void Read_MySQL_Users_from_configfile();
+	void Read_MySQL_Servers_from_configfile();
+
 	public:
 	SQLite3DB *admindb;	// in memory
 	SQLite3DB *statsdb;	// in memory
@@ -1480,6 +1484,9 @@ bool Standard_ProxySQL_Admin::init() {
 
 	__insert_or_replace_maintable_select_disktable();
 
+	Read_MySQL_Servers_from_configfile();	
+	Read_MySQL_Users_from_configfile();	
+
 	flush_admin_variables___database_to_runtime(admindb,true);
 #ifdef DEBUG
 	if (GloVars.global.gdbg==false && GloVars.__cmd_proxysql_gdbg) {
@@ -2558,6 +2565,43 @@ char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	return NULL;
 }
 
+void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	if (root.exists("mysql_users")==false) return;
+	const Setting &mysql_users = root["mysql_users"];
+	int count = mysql_users.getLength();
+	fprintf(stderr, "Found %d users\n",count);
+	int i;
+	for (i=0; i< count; i++) {
+		const Setting &user = mysql_users[i];
+		std::string username;
+		std::string password="";
+		int active=1;
+		if (user.lookupValue("username", username)==false) continue;
+		user.lookupValue("password", password);
+		user.lookupValue("active", active);
+		fprintf(stderr, "INSERT INTO mysql_users (username, password, active) VALUES (\"%s\", \"%s\", %d)\n", username.c_str(), password.c_str(), active);
+	}
+}
+
+void Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	if (root.exists("mysql_servers")==false) return;
+	const Setting &mysql_servers = root["mysql_servers"];
+	int count = mysql_servers.getLength();
+	fprintf(stderr, "Found %d servers\n",count);
+	int i;
+	for (i=0; i< count; i++) {
+		const Setting &server = mysql_servers[i];
+		std::string address;
+		int port;
+		int hostgroup;
+		if (server.lookupValue("address", address)==false) continue;
+		if (server.lookupValue("port", port)==false) continue;
+		if (server.lookupValue("hostgroup", hostgroup)==false) continue;
+		fprintf(stderr, "INSERT INTO mysql_servers (hostname, port, hostgroup_id) VALUES (\"%s\", %d, %d)\n", address.c_str(), port, hostgroup);
+	}
+}
 
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func() {
 	return new Standard_ProxySQL_Admin();

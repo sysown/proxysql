@@ -66,8 +66,7 @@ bool ProxySQL_ConfigFile::OpenFile(const char *__filename) {
 		return false;
 	}
 	return true;
-	};
-
+};
 
 bool ProxySQL_ConfigFile::ReadGlobals() {
 /*

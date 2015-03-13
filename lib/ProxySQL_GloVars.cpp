@@ -44,7 +44,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->overview="High Performance Advanced Proxy for MySQL";
 	opt->syntax="proxysql [OPTIONS]";
 	std::string s = "\n\nProxySQL " ;
-	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2014 René Cannaò\nThis program is free and without warranty\n";
+	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2015 René Cannaò\nThis program is free and without warranty\n";
 	opt->footer =s.c_str();
 
 /*
@@ -164,7 +164,7 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 	proxy_debug(PROXY_DEBUG_GENERIC, 4, "processing opts\n");
 
   //gchar *config_file=*config_file_ptr;
-	char *config_file=GloVars.__cmd_proxysql_config_file;
+	config_file=GloVars.__cmd_proxysql_config_file;
 
 	if (config_file==NULL) {
 		config_file=(char *)"proxysql.cnf";

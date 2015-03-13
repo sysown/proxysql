@@ -237,18 +237,20 @@ int main(int argc, const char * argv[]) {
 
 }
 
-	if (GloVars.confFile->OpenFile("proxysql.cnf2") == true) {
-		// open config file
-	} else {
-		std::cerr << "Cannot open config file, aborted" << endl;
-		//exit(EXIT_FAILURE);
-	}
-	GloVars.confFile->ReadGlobals();
-
 	GloVars.parse(argc,argv);
 
 	GloVars.process_opts_pre();
 	GloVars.process_opts_post();
+
+	//if (GloVars.confFile->OpenFile("proxysql.cnf2") == true) {
+	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
+		// open config file
+	} else {
+		std::cerr << "[Warning]: Cannot open config file " << GloVars.config_file << endl;
+		//exit(EXIT_FAILURE);
+	}
+	GloVars.confFile->ReadGlobals();
+
 
 
 	bool rc;

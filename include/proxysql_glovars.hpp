@@ -23,6 +23,7 @@ class ProxySQL_GlobalVariables {
 	int __cmd_proxysql_foreground;
 	int __cmd_proxysql_gdbg;
 	char *__cmd_proxysql_admin_socket;
+	char *config_file;
 	struct  {
 		bool gdbg;
 		bool nostart;
