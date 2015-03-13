@@ -63,6 +63,7 @@ bool ProxySQL_ConfigFile::OpenFile(const char *__filename) {
 	{
 		std::cerr << "Parse error at " << pex.getFile() << ":" << pex.getLine()
               << " - " << pex.getError() << std::endl;
+			exit(EXIT_FAILURE);
 		return false;
 	}
 	return true;

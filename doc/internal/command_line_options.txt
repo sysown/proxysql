@@ -1,0 +1,19 @@
+Command Line Options
+
+Configuration of proxysql is performed through the processing of a config file, or a database file, or a combination of both.
+
+Config file is a read only file that proxysql does not modify.
+Database file is a read write file that proxysql can modify.
+The path of the config file can be passed to proxysql through the --config option.
+The path to the database file cannot be passed to proxysql directly, instead it is possible to pass its directory (called datadir) through the --datadir option.
+The database file is named proxysql.db inside the datadir.
+Both config file and datadir have default values if not specified in the command line.
+
+If a datadir is not provided in the command line, the config file is read to parse a possible datadir.
+
+If a database file is present in the datadir, its configuration is used by proxysql.
+
+If the option --initial is present, the database file is deleted.
+If a database file does not exist (or deleted because of --initial), the config file is parsed and a new database file is created based on its content.
+
+If the option --reload is specified, the config file is parsed and an attempt to merge its content with the database file is performed.

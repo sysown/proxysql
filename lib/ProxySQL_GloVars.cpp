@@ -30,7 +30,14 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
 	__cmd_proxysql_datadir=NULL;
-	__cmd_proxysql_admin_pathdb=NULL;
+//	__cmd_proxysql_admin_pathdb=NULL;
+
+	config_file=NULL;
+	datadir=NULL;
+	configfile_open=false;
+
+	__cmd_proxysql_initial=false;
+	__cmd_proxysql_reload=false;
 
 	global.gdbg=false;
 	global.nostart=false;
@@ -68,7 +75,9 @@ opt.add(
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
 	opt->add((const char *)"",0,1,0,(const char *)"Disable custom memory allocator",(const char *)"-m",(const char *)"--no-memory");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
-	opt->add((const char *)"",0,1,0,(const char *)"Configuration DB path",(const char *)"-a",(const char *)"--admin-pathdb");
+	opt->add((const char *)"",0,1,0,(const char *)"Rename/empty database file",(const char *)"--initial");
+	opt->add((const char *)"",0,1,0,(const char *)"Merge config file into database file",(const char *)"--reload");
+//	opt->add((const char *)"",0,1,0,(const char *)"Configuration DB path",(const char *)"-a",(const char *)"--admin-pathdb");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 //	opt.add("",0,0,0,"","-d","--debug");
 //	opt.add("",0,0,0,"","-d","--debug");
@@ -122,6 +131,24 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.use_proxysql_mem=true;
 	}
 
+	if (opt->isSet("--initial")) {
+		__cmd_proxysql_initial=true;
+	}
+
+	if (opt->isSet("--reload")) {
+		__cmd_proxysql_reload=true;
+	}
+
+	
+	config_file=GloVars.__cmd_proxysql_config_file;
+
+	if (config_file==NULL) {
+		config_file=(char *)"proxysql.cnf";
+		//if (!g_file_test(config_file,(GFileTest)(G_FILE_TEST_EXISTS|G_FILE_TEST_IS_REGULAR))) {
+		if (Proxy_file_regular(config_file)==false) {
+			config_file=(char *)"/etc/proxysql.cnf";
+		}
+	}
 #ifdef DEBUG
 	init_debug_struct();
 #endif
@@ -139,7 +166,7 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 	if (opt->isSet("-f")) {
 		global.foreground=true;
 	}
-
+/*
 	if (opt->isSet("-D")) {
 		std::string datadir;
 		opt->get("-D")->getString(datadir);
@@ -153,7 +180,7 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		if (GloVars.__cmd_proxysql_admin_pathdb) free(GloVars.__cmd_proxysql_admin_pathdb);
 		GloVars.__cmd_proxysql_admin_pathdb=strdup(admindb_path.c_str());
 	}
-
+*/
 	if (opt->isSet("-S")) {
 		std::string admin_socket;
 		opt->get("-S")->getString(admin_socket);
@@ -164,15 +191,6 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 	proxy_debug(PROXY_DEBUG_GENERIC, 4, "processing opts\n");
 
   //gchar *config_file=*config_file_ptr;
-	config_file=GloVars.__cmd_proxysql_config_file;
-
-	if (config_file==NULL) {
-		config_file=(char *)"proxysql.cnf";
-		//if (!g_file_test(config_file,(GFileTest)(G_FILE_TEST_EXISTS|G_FILE_TEST_IS_REGULAR))) {
-		if (Proxy_file_regular(config_file)==false) {
-			config_file=(char *)"/etc/proxysql.cnf";
-		}
-	}
 
 //	rc=config_file_is_readable(config_file);
 //	if (rc==0) {
@@ -195,10 +213,10 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		free(glovars.proxy_datadir);
 		glovars.proxy_datadir=strdup(GloVars.__cmd_proxysql_datadir);
 	}
-	if (GloVars.__cmd_proxysql_admin_pathdb) {
-		free(glovars.proxy_admin_pathdb);
-		glovars.proxy_admin_pathdb=strdup(GloVars.__cmd_proxysql_admin_pathdb);
-	}
+//	if (GloVars.__cmd_proxysql_admin_pathdb) {
+//		free(glovars.proxy_admin_pathdb);
+//		glovars.proxy_admin_pathdb=strdup(GloVars.__cmd_proxysql_admin_pathdb);
+//	}
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		free(glovars.proxy_admin_socket);
 		glovars.proxy_admin_socket=strdup(GloVars.__cmd_proxysql_admin_socket);

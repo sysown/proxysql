@@ -15,15 +15,20 @@ class ProxySQL_GlobalVariables {
 	ez::ezOptionParser *opt;
 	//ezOptionParser *opt;
 	ProxySQL_ConfigFile *confFile;
+	bool configfile_open;
 	char *__cmd_proxysql_config_file;
 	char *__cmd_proxysql_datadir;
-	char *__cmd_proxysql_admin_pathdb;
+	//char *__cmd_proxysql_admin_pathdb;
 //	bool __cmd_proxysql_print_version=false;
 	int __cmd_proxysql_nostart;
 	int __cmd_proxysql_foreground;
 	int __cmd_proxysql_gdbg;
+	bool __cmd_proxysql_initial;
+	bool __cmd_proxysql_reload;
 	char *__cmd_proxysql_admin_socket;
 	char *config_file;
+	char *datadir;
+	char *admindb;
 	struct  {
 		bool gdbg;
 		bool nostart;

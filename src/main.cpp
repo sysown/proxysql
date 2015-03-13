@@ -240,8 +240,56 @@ int main(int argc, const char * argv[]) {
 	GloVars.parse(argc,argv);
 
 	GloVars.process_opts_pre();
+
+	// alwasy try to open a config file
+	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
+		GloVars.configfile_open=true;
+	}
+
+	if (GloVars.__cmd_proxysql_datadir==NULL) {
+		// datadir was not specified , try to read config file
+		if (GloVars.configfile_open==true) {
+			const Setting& root = GloVars.confFile->cfg.getRoot(); 
+			if (root.exists("datadir")==true) {
+				// reading datadir from config file
+				std::string datadir;
+				bool rc;
+				rc=root.lookupValue("datadir", datadir);
+				if (rc==true) {
+					GloVars.datadir=strdup(datadir.c_str());
+				} else {
+					GloVars.datadir=(char *)"/var/run/proxysql";
+				}
+			} else {
+			// datadir was not specified in config file
+			GloVars.datadir=(char *)"/var/run/proxysql";
+			}
+		} else {
+			// config file not readable
+			GloVars.datadir=(char *)"/var/run/proxysql";
+			std::cerr << "[Warning]: Cannot open config file " << GloVars.config_file << ". Using default datadir " << GloVars.datadir << endl;
+		}
+	} else {
+		GloVars.datadir=GloVars.__cmd_proxysql_datadir;
+	}
+
+	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
+	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
+
+	if (GloVars.__cmd_proxysql_initial==true) {
+		std::cerr << "Renaming database file " << GloVars.admindb << endl;
+		char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
+		sprintf(newpath,"%s.bak",GloVars.admindb);
+		rename(GloVars.admindb,newpath);	// FIXME: should we check return value, or ignore whatever it successed or not?
+	}
+
+	GloVars.confFile->ReadGlobals();
+
+
+
 	GloVars.process_opts_post();
 
+/*
 	//if (GloVars.confFile->OpenFile("proxysql.cnf2") == true) {
 	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
 		// open config file
@@ -249,11 +297,11 @@ int main(int argc, const char * argv[]) {
 		std::cerr << "[Warning]: Cannot open config file " << GloVars.config_file << endl;
 		//exit(EXIT_FAILURE);
 	}
-	GloVars.confFile->ReadGlobals();
+*/
 
 
 
-	bool rc;
+	//bool rc;
 
 	dlerror();
 	char* dlsym_error = NULL;
