@@ -217,7 +217,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 
-
+	void Read_Global_Variables_from_configfile(const char *prefix);
 	void Read_MySQL_Users_from_configfile();
 	void Read_MySQL_Servers_from_configfile();
 
@@ -1496,6 +1496,8 @@ bool Standard_ProxySQL_Admin::init() {
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial) {
 		Read_MySQL_Servers_from_configfile();	
 		Read_MySQL_Users_from_configfile();
+		Read_Global_Variables_from_configfile("admin");
+		Read_Global_Variables_from_configfile("mysql");
 		__insert_or_replace_disktable_select_maintable();
 	}
 
@@ -2566,6 +2568,45 @@ char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 //	if (error) free(error);
 	if (resultset) delete resultset;
 	return NULL;
+}
+
+void Standard_ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
+	sprintf(groupname,"%s%s",prefix,"_variables");
+	if (root.exists(groupname)==false) {
+		free(groupname);
+		return;
+	}
+	const Setting &group = root[(const char *)groupname];
+	int count = group.getLength();
+	fprintf(stderr, "Found %d %s_variables\n",count, prefix);
+	int i;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO global_variables VALUES (\"%s-%s\", \"%s\")";
+	for (i=0; i< count; i++) {
+		const Setting &sett = group[i];
+		const char *n=sett.getName();
+		bool value_bool;
+		int value_int;
+		std::string value_string="";
+		if (group.lookupValue(n, value_bool)) {
+			value_string = (value_bool ? "true" : "false");
+		} else {
+			if (group.lookupValue(n, value_int)) {
+				value_string = std::to_string(value_int);
+			} else {
+				group.lookupValue(n, value_string);
+			}
+		}
+		fprintf(stderr,"%s = %s\n", n, value_string.c_str());
+		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
+		sprintf(query,q, prefix, n, value_string.c_str());
+		fprintf(stderr, "%s\n", query);
+  	admindb->execute(query);
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	free(groupname);
 }
 
 void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
