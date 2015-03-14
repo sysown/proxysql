@@ -1484,9 +1484,6 @@ bool Standard_ProxySQL_Admin::init() {
 
 	__insert_or_replace_maintable_select_disktable();
 
-	Read_MySQL_Servers_from_configfile();	
-	Read_MySQL_Users_from_configfile();	
-
 	flush_admin_variables___database_to_runtime(admindb,true);
 #ifdef DEBUG
 	if (GloVars.global.gdbg==false && GloVars.__cmd_proxysql_gdbg) {
@@ -1495,6 +1492,12 @@ bool Standard_ProxySQL_Admin::init() {
 	}
 #endif /* DEBUG */
 	flush_mysql_variables___database_to_runtime(admindb,true);
+
+	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial) {
+		Read_MySQL_Servers_from_configfile();	
+		Read_MySQL_Users_from_configfile();
+		__insert_or_replace_disktable_select_maintable();
+	}
 
 
 //	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
@@ -2228,7 +2231,7 @@ void Standard_ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 //  admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers_new SELECT * FROM main.mysql_servers_new");
 //  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroups SELECT * FROM main.mysql_hostgroups");
 //  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroup_entries SELECT * FROM main.mysql_hostgroup_entries");
-  admindb->execute("INSERT OR REPLACE INTO disk.query_rules SELECT * FROM main.query_rules");
+  admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
@@ -2572,16 +2575,27 @@ void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 	int count = mysql_users.getLength();
 	fprintf(stderr, "Found %d users\n",count);
 	int i;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup) VALUES (\"%s\", \"%s\", %d, %d)";
 	for (i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
 		std::string password="";
 		int active=1;
+		int default_hostgroup=0;
 		if (user.lookupValue("username", username)==false) continue;
 		user.lookupValue("password", password);
+		user.lookupValue("hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
-		fprintf(stderr, "INSERT INTO mysql_users (username, password, active) VALUES (\"%s\", \"%s\", %d)\n", username.c_str(), password.c_str(), active);
+		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+128);
+		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup);
+		//fprintf(stderr, "INSERT INTO mysql_servers (hostname, port, hostgroup_id) VALUES (\"%s\", %d, %d)\n", address.c_str(), port, hostgroup);
+		fprintf(stderr, "%s\n", query);
+  	admindb->execute(query);
+		free(query);
+		//fprintf(stderr, "INSERT INTO mysql_users (username, password, active) VALUES (\"%s\", \"%s\", %d)\n", username.c_str(), password.c_str(), active);
 	}
+	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
 void Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
@@ -2591,16 +2605,38 @@ void Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 	int count = mysql_servers.getLength();
 	fprintf(stderr, "Found %d servers\n",count);
 	int i;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, hostgroup_id, compression, weight, status) VALUES (\"%s\", %d, %d, %d, %d, \"%s\")";
 	for (i=0; i< count; i++) {
 		const Setting &server = mysql_servers[i];
 		std::string address;
+		std::string status="ONLINE";
 		int port;
 		int hostgroup;
+		int weight=1;
+		int compression=0;
 		if (server.lookupValue("address", address)==false) continue;
 		if (server.lookupValue("port", port)==false) continue;
 		if (server.lookupValue("hostgroup", hostgroup)==false) continue;
-		fprintf(stderr, "INSERT INTO mysql_servers (hostname, port, hostgroup_id) VALUES (\"%s\", %d, %d)\n", address.c_str(), port, hostgroup);
+		server.lookupValue("status", status);
+		if (
+			(strcasecmp(status.c_str(),(char *)"ONLINE"))
+			&& (strcasecmp(status.c_str(),(char *)"SHUNNED"))
+			&& (strcasecmp(status.c_str(),(char *)"OFFLINE_SOFT"))
+			&& (strcasecmp(status.c_str(),(char *)"OFFLINE_HARD"))
+		) {
+				status="ONLINE";
+		}
+		server.lookupValue("compression", compression);
+		server.lookupValue("weight", weight);
+		char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+128);
+		sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str());
+		//fprintf(stderr, "INSERT INTO mysql_servers (hostname, port, hostgroup_id) VALUES (\"%s\", %d, %d)\n", address.c_str(), port, hostgroup);
+		fprintf(stderr, "%s\n", query);
+  	admindb->execute(query);
+		free(query);
 	}
+	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func() {
