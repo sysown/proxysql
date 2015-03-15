@@ -234,7 +234,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	virtual void admin_shutdown();
 	bool is_command(std::string);
 //	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
-	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg);
+	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
 //	virtual void admin_session_handler(MySQL_Session *sess);
 #ifdef DEBUG
@@ -261,7 +261,7 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void stats___mysql_commands_counters();
 
 
-	void Read_Global_Variables_from_configfile(const char *prefix);
+	int Read_Global_Variables_from_configfile(const char *prefix);
 	void Read_MySQL_Users_from_configfile();
 	void Read_MySQL_Servers_from_configfile();
 
@@ -705,10 +705,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (GloVars.configfile_open) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
 				if (GloVars.confFile->OpenFile(NULL)==true) {
+					int rows=0;
 					Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-					SPA->Read_Global_Variables_from_configfile("mysql");
+					rows=SPA->Read_Global_Variables_from_configfile("mysql");
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
-					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
@@ -2413,11 +2414,11 @@ void Standard_ProxySQL_Admin::__refresh_users() {
 	__add_active_users(USERNAME_FRONTEND);
 }
 
-void Standard_ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg) {
+void Standard_ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
-	myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,msg);
+	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg);
 	myds->DSS=STATE_SLEEP;
 }
 
@@ -2656,13 +2657,13 @@ char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	return NULL;
 }
 
-void Standard_ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
+int Standard_ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 	const Setting& root = GloVars.confFile->cfg->getRoot();
 	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
 	sprintf(groupname,"%s%s",prefix,"_variables");
 	if (root.exists(groupname)==false) {
 		free(groupname);
-		return;
+		return 0;
 	}
 	const Setting &group = root[(const char *)groupname];
 	int count = group.getLength();
@@ -2693,6 +2694,7 @@ void Standard_ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	free(groupname);
+	return i;
 }
 
 void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
