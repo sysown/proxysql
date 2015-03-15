@@ -14,9 +14,10 @@ class ProxySQL_ConfigFile {
   struct stat statbuf;
   char *filename;
   public:
-  Config cfg;
+  Config *cfg;
   ProxySQL_ConfigFile();
   bool OpenFile(const char *);
+	void CloseFile();
 	bool ReadGlobals();
 	bool configVariable(const char *, const char *, int &, int, int, int, int);
 	bool configVariable(const char *, const char *, int64_t &, int64_t, int64_t, int64_t, int64_t);

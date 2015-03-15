@@ -249,7 +249,7 @@ int main(int argc, const char * argv[]) {
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
 		// datadir was not specified , try to read config file
 		if (GloVars.configfile_open==true) {
-			const Setting& root = GloVars.confFile->cfg.getRoot(); 
+			const Setting& root = GloVars.confFile->cfg->getRoot(); 
 			if (root.exists("datadir")==true) {
 				// reading datadir from config file
 				std::string datadir;
@@ -467,6 +467,9 @@ __start_label:
 	GloAdmin->init();
 }
 
+	if (GloVars.configfile_open) {
+		GloVars.confFile->CloseFile();
+	}
 
 	GloMyAuth = create_MySQL_Authentication();
 	GloMyAuth->print_version();

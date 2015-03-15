@@ -217,9 +217,6 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 
-	void Read_Global_Variables_from_configfile(const char *prefix);
-	void Read_MySQL_Users_from_configfile();
-	void Read_MySQL_Servers_from_configfile();
 
 	public:
 	SQLite3DB *admindb;	// in memory
@@ -262,6 +259,12 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 
 	void stats___mysql_query_rules();
 	void stats___mysql_commands_counters();
+
+
+	void Read_Global_Variables_from_configfile(const char *prefix);
+	void Read_MySQL_Users_from_configfile();
+	void Read_MySQL_Servers_from_configfile();
+
 };
 
 static Standard_ProxySQL_Admin *SPA=NULL;
@@ -600,6 +603,30 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			SPA->init_users();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users to RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL USERS FROM CONFIG") && !strncasecmp("LOAD MYSQL USERS FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+					SPA->Read_MySQL_Users_from_configfile();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					GloVars.confFile->CloseFile();
+				} else {
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
 			return false;
 		}
 
@@ -1494,11 +1521,13 @@ bool Standard_ProxySQL_Admin::init() {
 	flush_mysql_variables___database_to_runtime(admindb,true);
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial) {
-		Read_MySQL_Servers_from_configfile();	
-		Read_MySQL_Users_from_configfile();
-		Read_Global_Variables_from_configfile("admin");
-		Read_Global_Variables_from_configfile("mysql");
-		__insert_or_replace_disktable_select_maintable();
+			if (GloVars.configfile_open) {
+			Read_MySQL_Servers_from_configfile();	
+			Read_MySQL_Users_from_configfile();
+			Read_Global_Variables_from_configfile("admin");
+			Read_Global_Variables_from_configfile("mysql");
+			__insert_or_replace_disktable_select_maintable();
+		}
 	}
 
 
@@ -2571,7 +2600,7 @@ char * Standard_ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 }
 
 void Standard_ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
+	const Setting& root = GloVars.confFile->cfg->getRoot();
 	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
 	sprintf(groupname,"%s%s",prefix,"_variables");
 	if (root.exists(groupname)==false) {
@@ -2610,7 +2639,7 @@ void Standard_ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *
 }
 
 void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
+	const Setting& root = GloVars.confFile->cfg->getRoot();
 	if (root.exists("mysql_users")==false) return;
 	const Setting &mysql_users = root["mysql_users"];
 	int count = mysql_users.getLength();
@@ -2640,7 +2669,7 @@ void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 }
 
 void Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
+	const Setting& root = GloVars.confFile->cfg->getRoot();
 	if (root.exists("mysql_servers")==false) return;
 	const Setting &mysql_servers = root["mysql_servers"];
 	int count = mysql_servers.getLength();

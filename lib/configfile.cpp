@@ -48,11 +48,16 @@ ProxySQL_ConfigFile::ProxySQL_ConfigFile() {
 
 
 bool ProxySQL_ConfigFile::OpenFile(const char *__filename) {
-	filename=strdup(__filename);
+	cfg = new Config();
+	if (__filename) {
+		filename=strdup(__filename);
+	} else {
+		assert(filename);
+	}
 	if (FileUtils::isReadable(filename)==false) return false;
 	try
 	{
-		cfg.readFile(filename);
+		cfg->readFile(filename);
 	}
 	catch(const FileIOException &fioex)
 	{
@@ -63,11 +68,18 @@ bool ProxySQL_ConfigFile::OpenFile(const char *__filename) {
 	{
 		std::cerr << "Parse error at " << pex.getFile() << ":" << pex.getLine()
               << " - " << pex.getError() << std::endl;
-			exit(EXIT_FAILURE);
+			if (__filename) {
+				// exit with failure only if it is the first time it is opened
+				exit(EXIT_FAILURE);
+			}
 		return false;
 	}
 	return true;
 };
+
+void ProxySQL_ConfigFile::CloseFile() {
+	delete cfg;
+}
 
 bool ProxySQL_ConfigFile::ReadGlobals() {
 /*
@@ -136,7 +148,7 @@ bool ProxySQL_ConfigFile::ReadGlobals() {
 
 
 bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, int &variable, int defValue, int minValue, int maxValue, int multiplier) {
-	const Setting& root = cfg.getRoot();
+	const Setting& root = cfg->getRoot();
 	if (root.exists(group)==true) {
 		const Setting& mygroup=root[group];
 		if (mygroup.isGroup()==true) {
@@ -175,7 +187,7 @@ bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, int
 }
 
 bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, int64_t &variable, int64_t defValue, int64_t minValue, int64_t maxValue, int64_t multiplier) {
-	const Setting& root = cfg.getRoot();
+	const Setting& root = cfg->getRoot();
 	if (root.exists(group)==true) {
 		const Setting& mygroup=root[group];
 		if (mygroup.isGroup()==true) {
@@ -214,7 +226,7 @@ bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, int
 }
 
 bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, bool & variable, bool defValue) {
-	const Setting& root = cfg.getRoot();
+	const Setting& root = cfg->getRoot();
 	if (root.exists(group)==true) {
 		const Setting& mygroup=root[group];
 		if (mygroup.isGroup()==true) {
@@ -243,7 +255,7 @@ bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, boo
 }
 
 bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, char **variable, const char *defValue) {
-	const Setting& root = cfg.getRoot();
+	const Setting& root = cfg->getRoot();
 	if (root.exists(group)==true) {
 		const Setting& mygroup=root[group];
 		if (mygroup.isGroup()==true) {
