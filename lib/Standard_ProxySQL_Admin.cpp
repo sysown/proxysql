@@ -262,8 +262,8 @@ class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
-	void Read_MySQL_Users_from_configfile();
-	void Read_MySQL_Servers_from_configfile();
+	int Read_MySQL_Users_from_configfile();
+	int Read_MySQL_Servers_from_configfile();
 
 };
 
@@ -614,9 +614,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-					SPA->Read_MySQL_Users_from_configfile();
+					int rows=0;
+					rows=SPA->Read_MySQL_Users_from_configfile();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users from CONFIG\n");
-					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
@@ -802,9 +803,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
-					SPA->Read_MySQL_Servers_from_configfile();
+					int rows=0;
+					rows=SPA->Read_MySQL_Servers_from_configfile();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers from CONFIG\n");
-					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
@@ -2697,13 +2699,14 @@ int Standard_ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *p
 	return i;
 }
 
-void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
+int Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 	const Setting& root = GloVars.confFile->cfg->getRoot();
-	if (root.exists("mysql_users")==false) return;
+	if (root.exists("mysql_users")==false) return 0;
 	const Setting &mysql_users = root["mysql_users"];
 	int count = mysql_users.getLength();
 	fprintf(stderr, "Found %d users\n",count);
 	int i;
+	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup) VALUES (\"%s\", \"%s\", %d, %d)";
 	for (i=0; i< count; i++) {
@@ -2722,18 +2725,21 @@ void Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);
+		rows++;
 		//fprintf(stderr, "INSERT INTO mysql_users (username, password, active) VALUES (\"%s\", \"%s\", %d)\n", username.c_str(), password.c_str(), active);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
 }
 
-void Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
+int Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 	const Setting& root = GloVars.confFile->cfg->getRoot();
-	if (root.exists("mysql_servers")==false) return;
+	if (root.exists("mysql_servers")==false) return 0;
 	const Setting &mysql_servers = root["mysql_servers"];
 	int count = mysql_servers.getLength();
 	fprintf(stderr, "Found %d servers\n",count);
 	int i;
+	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, hostgroup_id, compression, weight, status) VALUES (\"%s\", %d, %d, %d, %d, \"%s\")";
 	for (i=0; i< count; i++) {
@@ -2764,8 +2770,10 @@ void Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 		fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);
+		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
 }
 
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func() {
