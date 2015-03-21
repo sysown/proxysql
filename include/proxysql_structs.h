@@ -84,6 +84,7 @@ enum mysql_data_stream_status {
 	STATE_OK,
 	STATE_ERR,
 
+	STATE_READING_COM_STMT_PREPARE_RESPONSE,
 
 	STATE_END
 /*

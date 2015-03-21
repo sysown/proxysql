@@ -5,6 +5,18 @@
 #include "cpp.h"
 
 
+class MySQL_Prepared_Stmt_info {
+	public:
+	uint32_t statement_id;
+	uint16_t num_columns;
+	uint16_t num_params;
+	uint16_t warning_count;
+	uint16_t pending_num_columns;
+	uint16_t pending_num_params;
+	MySQL_Prepared_Stmt_info(unsigned char *, unsigned int);
+};
+
+
 class MySQL_Protocol {
 	private:
 	MySQL_Data_Stream **myds;
@@ -14,6 +26,7 @@ class MySQL_Protocol {
 #ifdef DEBUG
 	bool dump_pkt;
 #endif
+	MySQL_Prepared_Stmt_info *current_PreStmt;
 	uint16_t prot_status;
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);

@@ -54,6 +54,9 @@ class MySQL_Connection {
 	//MYSQL myconn;
 	//MySQL_Hostgroup_Entry *mshge;
 	bool reusable;
+	bool has_prepared_statement;
+	bool processing_prepared_statement_prepare;
+	bool processing_prepared_statement_execute;
 	MySQL_Connection();
 	~MySQL_Connection();
 //	int assign_mshge(unsigned int);

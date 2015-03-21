@@ -435,10 +435,29 @@ int pkt_handshake_server(unsigned char *pkt, unsigned int length, MySQL_Protocol
 }
 
 
+
+MySQL_Prepared_Stmt_info::MySQL_Prepared_Stmt_info(unsigned char *pkt, unsigned int length) {
+	pkt += 5;
+	statement_id = CPY4(pkt);
+	pkt += sizeof(uint32_t);
+	num_columns = CPY2(pkt);
+	pkt += sizeof(uint16_t);
+	num_params = CPY2(pkt);
+	pkt += sizeof(uint16_t);
+	pkt++; // reserved_1
+	warning_count = CPY2(pkt);
+	fprintf(stderr,"Generating prepared statement with id=%d, cols=%d, params=%d, warns=%d\n", statement_id, num_columns, num_params, warning_count);
+	pending_num_columns=num_columns;
+	pending_num_params=num_params;
+}
+
+
+
 void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, MySQL_Session *__sess) {
 	myds=__myds;
 	userinfo=__userinfo;
 	sess=__sess;
+	current_PreStmt=NULL;
 }
 
 int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length) {
