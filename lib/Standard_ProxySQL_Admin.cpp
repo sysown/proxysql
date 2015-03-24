@@ -1578,7 +1578,6 @@ bool Standard_ProxySQL_Admin::init() {
 		GloVars.global.gdbg=true;
 	}
 #endif /* DEBUG */
-	flush_mysql_variables___database_to_runtime(admindb,true);
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial) {
 			if (GloVars.configfile_open) {
@@ -1589,7 +1588,8 @@ bool Standard_ProxySQL_Admin::init() {
 			__insert_or_replace_disktable_select_maintable();
 		}
 	}
-
+	flush_admin_variables___database_to_runtime(admindb,true);
+	flush_mysql_variables___database_to_runtime(admindb,true);
 
 //	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
 //	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
