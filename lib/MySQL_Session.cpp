@@ -302,7 +302,17 @@ int MySQL_Session::handler() {
 		//prot.parse_mysql_pkt(&pkt,client_myds);
 
 		switch (status) {
-
+/*
+			case CHANGING_USER_CLIENT:
+				switch (client_myds->DSS) {
+					case STATE_CLIENT_HANDSHAKE:
+						handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(&pkt, &wrong_pass);
+						break;
+					default:
+						assert(0);
+				}
+				break;
+*/
 			case CONNECTING_CLIENT:
 				switch (client_myds->DSS) {
 					case STATE_SERVER_HANDSHAKE:
@@ -365,8 +375,8 @@ int MySQL_Session::handler() {
 									l_free(pkt.size,pkt.ptr);
 								}
 								break;
-							case _MYSQL_COM_STMT_PREPARE:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(&pkt);
+							case _MYSQL_COM_CHANGE_USER:
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
 							case _MYSQL_COM_STMT_EXECUTE:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(&pkt);
@@ -1065,6 +1075,28 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(
 
 
 
+void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
+	// FIXME: no support for SSL yet
+	if (
+		client_myds->myprot.process_pkt_auth_swich_response((unsigned char *)pkt->ptr,pkt->size)==true
+	) {
+		l_free(pkt->size,pkt->ptr);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);	
+		status=WAITING_CLIENT_DATA;
+		client_myds->DSS=STATE_SLEEP;
+	} else {
+		l_free(pkt->size,pkt->ptr);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
+		*wrong_pass=true;
+		// FIXME: this should become close connection
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
+		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
+		free(_s);
+	}
+}
+
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	if ( 
 		(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) 
@@ -1312,6 +1344,35 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	client_myds->myprot.generate_statistics_response(true,NULL,NULL);
 	client_myds->DSS=STATE_SLEEP;	
+}
+
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *wrong_pass) {
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
+	if (admin==false) {
+		if (client_myds->myprot.process_pkt_COM_CHANGE_USER((unsigned char *)pkt->ptr, pkt->size)==true) {
+			l_free(pkt->size,pkt->ptr);
+			//client_myds->myprot.generate_pkt_auth_switch_request(true,NULL,NULL);
+			//client_myds->DSS=STATE_CLIENT_HANDSHAKE;
+			//status=CHANGING_USER_CLIENT;
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			wrong_pass=false;
+		} else {
+			l_free(pkt->size,pkt->ptr);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
+			*wrong_pass=true;
+		// FIXME: this should become close connection
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
+			sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
+			free(_s);
+		}
+	} else {
+		//FIXME: send an error message saying "not supported" or disconnect
+		l_free(pkt->size,pkt->ptr);
+	}
 }
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {

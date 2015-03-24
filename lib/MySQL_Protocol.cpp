@@ -1276,6 +1276,38 @@ bool MySQL_Protocol::generate_COM_CHANGE_USER(bool send, void **ptr, unsigned in
 	return true;
 }
 
+bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, unsigned int *len) {
+  proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating auth switch request pkt\n");
+  mysql_hdr myhdr;
+  myhdr.pkt_id=1;
+  myhdr.pkt_length=1 // fe
+		+ (strlen("mysql_native_password")+1)
+		+ 20 // scramble
+		+ 1; // 00
+  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+  unsigned char *_ptr=(unsigned char *)l_alloc0(size);
+  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+  int l;
+  l=sizeof(mysql_hdr);
+  _ptr[l]=0xfe; l++; //0xfe
+
+  memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
+	l+=strlen("mysql_native_password");
+	_ptr[l]=0x00; l++;
+  memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 20); l+=20;
+  _ptr[l]=0x00; //l+=1; //0x00
+	if (send==true) {
+		(*myds)->PSarrayOUT->add((void *)_ptr,size);
+		(*myds)->DSS=STATE_SERVER_HANDSHAKE;
+		(*myds)->sess->status=CONNECTING_CLIENT;
+	}
+	if (len) { *len=size; }
+	if (ptr) { *ptr=(void *)_ptr; }
+#ifdef DEBUG
+	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+#endif
+	return true;
+}
 
 //bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len) {
@@ -1530,6 +1562,132 @@ bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned 
 exit_process_pkt_initial_handshake:
    return ret;
 
+}
+
+bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
+	bool ret=false;
+	char *password=NULL;
+
+	if (len!=sizeof(mysql_hdr)+20) {
+		return ret;
+	}
+	mysql_hdr hdr;
+	memcpy(&hdr,pkt,sizeof(mysql_hdr));
+	int default_hostgroup=-1;
+	bool transaction_persistent;
+	bool _ret_use_ssl=false;
+	unsigned char pass[128];
+	memset(pass,0,128);
+	pkt+=sizeof(mysql_hdr);
+	memcpy(pass, pkt, 20);
+	char reply[SHA_DIGEST_LENGTH+1];
+	reply[SHA_DIGEST_LENGTH]='\0';
+	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
+	if (password==NULL) {
+		ret=false;
+	} else {
+//		if (pass_len==0 && strlen(password)==0) {
+//			ret=true;
+//		} else {
+			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+				ret=true;
+			}
+//		}
+//		if (_ret_use_ssl==true) {
+//			ret=false;
+//		}
+	}
+	return ret;
+}
+
+
+bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len) {
+	// FIXME: very buggy function, it doesn't perform any real check
+	bool ret=false;
+  int cur=sizeof(mysql_hdr);
+	unsigned char *user=NULL;
+	char *password=NULL;
+	char *db=NULL;
+	mysql_hdr hdr;
+	memcpy(&hdr,pkt,sizeof(mysql_hdr));
+	int default_hostgroup=-1;
+	bool transaction_persistent;
+	bool _ret_use_ssl=false;
+	cur++;
+	user=pkt+cur;
+	cur+=strlen((const char *)user);
+	cur++;
+	unsigned char pass_len=pkt[cur];
+	cur++;
+	unsigned char pass[128];
+	memset(pass,0,128);
+	//pkt+=sizeof(mysql_hdr);
+	memcpy(pass, pkt+cur, pass_len);
+	char reply[SHA_DIGEST_LENGTH+1];
+	reply[SHA_DIGEST_LENGTH]='\0';
+	cur+=pass_len;
+	db=(char *)pkt+cur;
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
+	(*myds)->sess->default_hostgroup=default_hostgroup;
+	(*myds)->sess->transaction_persistent=transaction_persistent;
+	if (password==NULL) {
+		ret=false;
+	} else {
+		if (pass_len==0 && strlen(password)==0) {
+			ret=true;
+		} else {
+			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+				ret=true;
+			}
+		}
+		if (_ret_use_ssl==true) {
+			// if we reached here, use_ssl is false , but _ret_use_ssl is true
+			// it means that a client is required to use SSL , but it is not
+			ret=false;
+		}
+	}
+	if (userinfo->username) free(userinfo->username);
+	if (userinfo->password) free(userinfo->password);
+	if (ret==true) {
+		//(*myds)->myconn->options.max_allowed_pkt=max_pkt;
+		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
+
+		userinfo->username=strdup((const char *)user);
+		userinfo->password=strdup((const char *)password);
+		if (db) userinfo->set_schemaname(db,strlen(db));
+	} else {
+		// we always duplicate username and password, or crashes happen
+		userinfo->username=strdup((const char *)user);
+		/*if (pass_len) */ userinfo->password=strdup((const char *)"");
+	}
+	//if (password) free(password);
+	if (password) l_free_string(password);
+
+/*
+  //cur+=1;
+//  g_free(sess->mysql_username);
+	free(userinfo->username);
+ 	//unsigned char *_ptr=pkt+cur;
+	user=pkt+cur;
+  //sess->mysql_username=g_strdup(ptr);
+  cur+=strlen((const char *)user);
+  cur+=2;
+  //memcpy(sess->scramble_buf,mypkt->data+cur,20);
+  memcpy((*myds)->myconn->scramble_buff, pkt+cur, 20);	
+  cur+=20;
+  //g_free(sess->mysql_schema_cur);
+  //ptr=mypkt->data+cur;
+	db=pkt+cur;  
+	//sess->mysql_schema_cur=g_strdup(ptr);
+	userinfo->username=strdup((const char *)user);
+  //  userinfo->password=strdup((const char *)password);
+  if (strlen((char *)db)) userinfo->set_schemaname((char *)db,strlen((char *)db)); // FIXME: buggy
+  proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "CHANGE USER: Username %s , schema %s\n" , userinfo->username, userinfo->schemaname);
+*/
+//  ret=true;
+	return ret;
 }
 
 //bool MySQL_Protocol::process_pkt_handshake_response(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {

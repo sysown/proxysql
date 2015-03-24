@@ -58,6 +58,9 @@ class MySQL_Protocol {
 	bool generate_COM_RESET_CONNECTION(bool send, void **ptr, unsigned int *len);
 	bool generate_COM_CHANGE_USER(bool send, void **ptr, unsigned int *len);
 
+	bool generate_pkt_auth_switch_request(bool send, void **ptr, unsigned int *len);
+	bool process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len);
+
 //	bool generate_pkt_column_count(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count);
 	bool generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count);
 //	bool generate_pkt_field(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue);
@@ -83,5 +86,6 @@ class MySQL_Protocol {
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
 	bool process_pkt_initial_handshake(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
+	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */
