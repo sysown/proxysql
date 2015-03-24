@@ -137,11 +137,10 @@ class Standard_MySQL_Authentication: public MySQL_Authentication {
 	virtual char * lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, bool *transaction_persistent) {
 		char *ret=NULL;
 		uint64_t hash1, hash2;
-		SpookyHash *myhash=new SpookyHash();
-		myhash->Init(1,2);
-		myhash->Update(username,strlen(username));
-		myhash->Final(&hash1,&hash2);
-		delete myhash;
+		SpookyHash myhash;
+		myhash.Init(1,2);
+		myhash.Update(username,strlen(username));
+		myhash.Final(&hash1,&hash2);
 
 		creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 

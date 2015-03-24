@@ -1357,7 +1357,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
-			wrong_pass=false;
+			*wrong_pass=false;
 		} else {
 			l_free(pkt->size,pkt->ptr);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
