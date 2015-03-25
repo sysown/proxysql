@@ -378,6 +378,9 @@ int MySQL_Session::handler() {
 							case _MYSQL_COM_CHANGE_USER:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
+							case _MYSQL_COM_STMT_PREPARE:
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(&pkt);
+								break;
 							case _MYSQL_COM_STMT_EXECUTE:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(&pkt);
 								break;
