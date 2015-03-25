@@ -1162,6 +1162,9 @@ void *child_mysql(void *arg) {
 	pthread_mutex_unlock(&sock_mutex);
 //	MySQL_Thread *mysql_thr=create_MySQL_Thread_func();
 	Standard_MySQL_Thread *mysql_thr=new Standard_MySQL_Thread();
+	//mysql_thr->mysql_sessions = new PtrArray();
+	mysql_thr->curtime=monotonic_time();
+	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
 	sess->thread=mysql_thr;
@@ -1217,7 +1220,7 @@ void *child_mysql(void *arg) {
 	}
 
 __exit_child_mysql:
-	delete sess;
+	//delete sess;
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	delete mysql_thr;	

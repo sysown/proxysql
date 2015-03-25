@@ -757,7 +757,9 @@ void Standard_MySQL_Thread::poll_listener_add(int sock) {
 
 
 void Standard_MySQL_Thread::register_session(MySQL_Session *_sess) {
-	if (mysql_sessions==NULL) return;
+	if (mysql_sessions==NULL) {
+		mysql_sessions = new PtrArray();
+	}
 	mysql_sessions->add(_sess);
 	_sess->thread=this;
 	_sess->MyConnPool=MyConnPool;
@@ -1068,6 +1070,7 @@ Standard_MySQL_Thread::Standard_MySQL_Thread() {
 	mypolls.myds=NULL;
 	my_idle_conns=NULL;
 	my_idle_myds=NULL;
+	mysql_sessions=NULL;
 	processing_idles=false;
 	last_processing_idles=0;
 	mysql_sessions_connections_handler=NULL;
