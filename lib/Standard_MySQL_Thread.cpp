@@ -456,7 +456,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"server_capbilities")) {
+	if (!strcmp(name,"server_capabilities")) {
 		int intv=atoi(value);
 		if (intv > 10 && intv <= 65535) {
 			variables.server_capabilities=intv;
@@ -494,7 +494,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 	}
 	if (!strcmp(name,"threads")) {
 		unsigned int intv=atoi(value);
-		if ((num_threads==0 || num_threads==intv) && intv > 0 && intv < 128) {
+		if ((num_threads==0 || num_threads==intv || mysql_threads==NULL) && intv > 0 && intv < 256) {
 			num_threads=intv;
 			return true;
 		} else {
@@ -597,6 +597,7 @@ Standard_MySQL_Threads_Handler::~Standard_MySQL_Threads_Handler() {
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.server_version) free(variables.server_version);
 	free(mysql_threads);
+	mysql_threads=NULL;
 }
 
 //extern Standard_MySQL_Threads_Handler *GloMTH;

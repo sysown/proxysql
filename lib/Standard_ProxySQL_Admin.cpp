@@ -1580,12 +1580,22 @@ bool Standard_ProxySQL_Admin::init() {
 #endif /* DEBUG */
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial) {
-			if (GloVars.configfile_open) {
-			Read_MySQL_Servers_from_configfile();	
-			Read_MySQL_Users_from_configfile();
-			Read_Global_Variables_from_configfile("admin");
-			Read_Global_Variables_from_configfile("mysql");
-			__insert_or_replace_disktable_select_maintable();
+		if (GloVars.configfile_open) {
+			if (GloVars.confFile->cfg) { 
+ 				Read_MySQL_Servers_from_configfile();	
+				Read_MySQL_Users_from_configfile();
+				Read_Global_Variables_from_configfile("admin");
+				Read_Global_Variables_from_configfile("mysql");
+				__insert_or_replace_disktable_select_maintable();
+			} else {
+				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {		
+ 					Read_MySQL_Servers_from_configfile();	
+					Read_MySQL_Users_from_configfile();
+					Read_Global_Variables_from_configfile("admin");
+					Read_Global_Variables_from_configfile("mysql");
+					__insert_or_replace_disktable_select_maintable();
+				}
+			}
 		}
 	}
 	flush_admin_variables___database_to_runtime(admindb,true);

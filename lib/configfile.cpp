@@ -79,6 +79,7 @@ bool ProxySQL_ConfigFile::OpenFile(const char *__filename) {
 
 void ProxySQL_ConfigFile::CloseFile() {
 	delete cfg;
+	cfg=NULL;
 }
 
 bool ProxySQL_ConfigFile::ReadGlobals() {
