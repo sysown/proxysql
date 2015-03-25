@@ -1090,6 +1090,7 @@ void Standard_MySQL_Thread::process_all_sessions_connections_handler() {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(n);
 		if (sess->to_process==1) {
 			rc=sess->handler();
+			sess->to_process=0;
 			if (rc==-1) {
 				unregister_session_connection_handler(n);
 				n--;
