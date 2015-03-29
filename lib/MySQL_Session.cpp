@@ -282,8 +282,8 @@ int MySQL_Session::handler() {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
 		assert(mybe);
 		assert(mybe->server_myds);
-		assert(mybe->server_myds->myconn);
 		if (mybe->server_myds->DSS==STATE_PING_SENT_NET) {
+			assert(mybe->server_myds->myconn);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds . server_myds=%p , myconn=%p , fd=%d , timeout=%llu , curtime=%llu\n", this, mybe->server_myds , mybe->server_myds->myconn, mybe->server_myds->myconn->fd , mybe->server_myds->timeout , thread->curtime);
 			//fprintf(stderr,"Processing session %p without client_myds . server_myds=%p , myconn=%p , fd=%d , timeout=%llu , curtime=%llu , time=%llu\n", this, mybe->server_myds , mybe->server_myds->myconn, mybe->server_myds->myconn->fd , mybe->server_myds->timeout , thread->curtime, monotonic_time());
 			if (mybe->server_myds->timeout < thread->curtime) {
