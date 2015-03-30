@@ -19,6 +19,7 @@ class Standard_MySQL_Thread: public MySQL_Thread
 	bool init();
 	void run();
 	void poll_listener_add(int sock);
+	void poll_listener_del(int sock);
 	void register_session(MySQL_Session*);
 	void unregister_session(int);
 	struct pollfd * get_pollfd(unsigned int i);

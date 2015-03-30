@@ -137,12 +137,16 @@ class ProxySQL_Poll {
   MySQL_Data_Stream **myds;
 	unsigned long long *last_recv;
 	unsigned long long *last_sent;
+	volatile int pending_listener_add;
+	volatile int pending_listener_del;
 //  unsigned char *status=NULL;   // this should be moved within the Data Stream
   ProxySQL_Poll() {
 		loop_counters=new StatCounters(15,10,false);
 		poll_timeout=0;
 		loops=0;
 		len=0;
+		pending_listener_add=0;
+		pending_listener_del=0;
     size=MIN_POLL_LEN;
     // preallocate MIN_POLL_LEN slots
     fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
@@ -203,6 +207,17 @@ class ProxySQL_Poll {
       shrink();
     }
   };  
+
+	int find_index(int fd) {
+		unsigned int i;
+		for (i=0; i<len; i++) {
+			if (fds[i].fd==fd) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
 };
 
 
@@ -226,6 +241,7 @@ class MySQL_Thread
 	virtual ~MySQL_Thread() {};
 	virtual bool init() {return false;};
 	virtual void poll_listener_add(int fd) {};
+	virtual void poll_listener_del(int fd) {};
 	virtual void run() {};
 
 	virtual SQLite3_result * SQL3_Thread_status(MySQL_Session *) {return NULL;};
@@ -242,6 +258,39 @@ typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
 
 
 
+class iface_info {
+	public:
+	char *iface;
+	char *address;
+	int port;
+	int fd;
+	iface_info(char *_i, char *_a, int p, int f) {
+		iface=strdup(_i);
+		address=strdup(_a);
+		port=p;
+		fd=f;
+	}
+	~iface_info() {
+		free(iface);
+		free(address);
+	}
+};
+
+
+
+class MySQL_Listeners_Manager {
+	private:
+	PtrArray *ifaces;
+	public:
+  MySQL_Listeners_Manager();
+	~MySQL_Listeners_Manager();
+	int add(const char *iface);
+	int add(const char *address, int port);
+	int find_idx(const char *iface);
+	int find_idx(const char *address, int port);
+	int get_fd(unsigned int idx);
+	void del(unsigned int idx);
+};
 
 
 
@@ -264,12 +313,17 @@ class MySQL_Threads_Handler
 	virtual bool set_variable(char *name, char *value) {return false;};
 	virtual char **get_variables_list() {return NULL;}
 	virtual SQLite3_result * SQL3_Threads_status(MySQL_Session *) {return NULL;}
+	virtual int listener_add(const char *iface) {return -1;}
+	virtual int listener_add(const char *address, int port) {return -1;}
+	virtual int listener_del(const char *iface) {return -1;}
+	virtual int listener_del(const char *address, int port) {return -1;}
+	virtual void start_listeners() {};
 };
 
 class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 {
 	private:
-	int shutdown;
+	int shutdown_;
 	size_t stacksize;
 	pthread_attr_t attr;
 	rwlock_t rwlock;
@@ -279,6 +333,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		int connect_timeout_server;
 		char *connect_timeout_server_error;
 		char *default_schema;
+		char *interfaces;
 		char *server_version;
 		uint8_t default_charset;
 		bool servers_stats;
@@ -289,6 +344,8 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 		uint16_t server_capabilities;
 		int poll_timeout;
 	} variables;
+	PtrArray *bind_fds;
+	MySQL_Listeners_Manager *MLM;
 	public:
 	Standard_MySQL_Threads_Handler();
 	virtual ~Standard_MySQL_Threads_Handler();
@@ -309,6 +366,11 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	virtual void init(unsigned int num, size_t stack);
 	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *));
 	virtual void shutdown_threads();
+	virtual int listener_add(const char *iface);
+	virtual int listener_add(const char *address, int port);
+	virtual int listener_del(const char *iface);
+	virtual void start_listeners();
+//	virtual int listener_del(const char *address, int port);
 //	pthread_t connection_manager_thread_id;
 //	void connection_manager_thread();
 };

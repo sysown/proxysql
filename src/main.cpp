@@ -162,8 +162,8 @@ void * mysql_worker_thread_func(void *arg) {
 	MySQL_Thread *worker = create_MySQL_Thread();
 	mysql_thread->worker=worker;
 	worker->init();
-	worker->poll_listener_add(listen_fd);
-	worker->poll_listener_add(socket_fd);
+//	worker->poll_listener_add(listen_fd);
+//	worker->poll_listener_add(socket_fd);
 	__sync_fetch_and_sub(&load_,1);
 //	if (__sync_fetch_and_sub(&load_,1)==(NUM_THREADS+1)) {
 //		worker->print_version();
@@ -534,10 +534,11 @@ __start_label:
 
 
 	//listen_fd=listen_on_port((char *)"127.0.0.1",6033, 50);
-	listen_fd=listen_on_port((char *)"0.0.0.0",6033, 50);
-	socket_fd=listen_on_unix((char *)"/tmp/proxysql.sock", 50);
-	ioctl_FIONBIO(listen_fd, 1);
-	ioctl_FIONBIO(socket_fd, 1);
+	//listen_fd=listen_on_port((char *)"0.0.0.0",6033, 50);
+	//socket_fd=listen_on_unix((char *)"/tmp/proxysql.sock", 50);
+	//ioctl_FIONBIO(listen_fd, 1);
+	//ioctl_FIONBIO(socket_fd, 1);
+
 	unsigned int i;
 
 
@@ -547,6 +548,7 @@ __start_label:
 	//assert(mysql_threads);
 	
 	load_ = GloMTH->num_threads + 1;
+
 
 /*
 	pthread_attr_t attr;
@@ -581,6 +583,32 @@ __start_label:
 
 
 	load_ = 0;
+
+/*
+ * few examples tests to demonstrate the ability to add and remove listeners at runtime
+	GloMTH->listener_add((char *)"0.0.0.0:6033");
+	sleep(3);
+	GloMTH->listener_add((char *)"127.0.0.1:5033");
+	sleep(3);
+	GloMTH->listener_add((char *)"127.0.0.2:5033");
+	sleep(3);
+	GloMTH->listener_add((char *)"/tmp/proxysql.sock");
+	for (int t=0; t<10; t++) {
+		GloMTH->listener_add((char *)"127.0.0.1",7000+t);
+		sleep(3);
+	}
+
+	GloMTH->listener_del((char *)"0.0.0.0:6033");
+	sleep(3);
+	GloMTH->listener_del((char *)"127.0.0.1:5033");
+	sleep(3);
+	GloMTH->listener_del((char *)"127.0.0.2:5033");
+	sleep(3);
+	GloMTH->listener_del((char *)"/tmp/proxysql.sock");
+*/
+
+
+	GloMTH->start_listeners();
 
 	//sleep(10);
 
