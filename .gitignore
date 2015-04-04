@@ -49,7 +49,6 @@ core
 
 #config
 proxysql.cnf*
-proxysql.cfg*
 proxysql.db*
 
 jeprof*heap
