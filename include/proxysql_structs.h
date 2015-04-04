@@ -200,8 +200,6 @@ class ProxySQL_Poll;
 class Shared_Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
-class MyConnArray;
-class MySQL_Connection_Pool;
 class PtrArray;
 class StatCounters;
 class ProxySQL_ConfigFile;

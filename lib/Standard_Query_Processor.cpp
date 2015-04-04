@@ -16,15 +16,6 @@
 #endif /* DEBUG */
 #define QUERY_PROCESSOR_VERSION "0.1.728" DEB
 
-/*
-moved to proxysql_macros.h
-#define strdup_null(__c) ( __c ? strdup(__c) : __c )
-#define char_malloc (char *)malloc
-#define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
-
-#define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
-*/
-
 class QP_rule_text_hitsonly {
 	public:
 	char **pta;
@@ -45,21 +36,6 @@ class QP_rule_text_hitsonly {
 class QP_rule_text {
 	public:
 	char **pta;
-/*
-	char * rule_id;
-	char * active;
-	char * username;
-	char * schemaname;
-	char * flagIN;
-	char * match_pattern;
-	char * negate_match_pattern;
-	char * flagOUT;
-	char * replace_pattern;
-	char * destination_hostgroup;
-	char * cache_ttl;
-	char * apply;
-	char * hits;
-*/
 	QP_rule_text(QP_rule_t *QPr) {
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*13);
@@ -76,42 +52,12 @@ class QP_rule_text {
 		itostr(pta[10], (long long)QPr->cache_ttl);
 		itostr(pta[11], (long long)QPr->apply);
 		itostr(pta[12], (long long)QPr->hits);
-/*
-		itostr(rule_id, QPr->rule_id);
-		itostr(active, QPr->active);
-		username=strdup_null(QPr->username);
-		schemaname=strdup_null(QPr->schemaname);
-		itostr(flagIN, QPr->flagIN);
-		match_pattern=strdup_null(QPr->match_pattern);
-		itostr(negate_match_pattern, QPr->negate_match_pattern);
-		itostr(flagOUT, QPr->flagOUT);
-		replace_pattern=strdup_null(QPr->replace_pattern);
-		itostr(destination_hostgroup, QPr->destination_hostgroup);
-		itostr(cache_ttl, QPr->cache_ttl);
-		itostr(apply, QPr->apply);
-		itostr(hits, QPr->hits);
-*/
 	}
 	~QP_rule_text() {
 		for(int i=0; i<13; i++) {
 			free_null(pta[i]);
 		}
 		free(pta);
-/*
-		free_null(rule_id);
-		free_null(active);
-		free_null(username);
-		free_null(schemaname);
-		free_null(flagIN);
-		free_null(match_pattern);
-		free_null(negate_match_pattern);
-		free_null(flagOUT);
-		free_null(replace_pattern);
-  	free_null(destination_hostgroup);
-		free_null(cache_ttl);
-		free_null(apply);
-		free_null(hits);
-*/
 	}
 };
 
@@ -362,29 +308,10 @@ virtual QP_rule_t * new_query_rule(int rule_id, bool active, char *username, cha
 
 virtual void delete_query_rule(QP_rule_t *qr) {
 	__delete_query_rule(qr);
-/*
-	if (qr->username)
-		free(qr->username);
-	if (qr->schemaname)
-		free(qr->schemaname);
-	if (qr->match_pattern)
-		free(qr->match_pattern);
-	if (qr->replace_pattern)
-		free(qr->replace_pattern);
-	free(qr);
-*/
 };
 
 virtual void reset_all(bool lock) {
 	if (lock) spin_wrlock(&rwlock);
-/*
-	QP_rule_t *qr;
-	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
-		qr=*it;
-		__delete_query_rule(qr);
-	}
-	rules.clear();
-*/
 	__reset_rules(&rules);
 	if (lock) spin_wrunlock(&rwlock);
 };
@@ -437,14 +364,6 @@ virtual SQLite3_result * get_stats_commands_counters() {
 		char **pta=commands_counters[i]->get_row();
 		result->add_row(pta);
 		commands_counters[i]->free_row(pta);
-/*
-		char **pta=(char **)malloc(sizeof(char *)*2);
-		pta[0]=commands_counters_desc[i];
-		itostr(pta[1], (long long)commands_counters[i]);
-		result->add_row(pta);
-		free(pta[1]);
-		free(pta);
-*/
 	}
 	return result;
 }
@@ -577,9 +496,7 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 			ret->cache_ttl=-1;
 			ret->new_query=NULL;
 		}
-		//__sync_fetch_and	_add(&qr->hits,1);
 		qr->hits++; // this is done without atomic function because it updates only the local variables
-			//ret=(QP_out_t *)malloc(sizeof(QP_out_t));
 
 /*
 {

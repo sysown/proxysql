@@ -59,13 +59,6 @@ static uint64_t Glo_cntPurge=0;
 static uint64_t Glo_size_values=0;
 static uint64_t Glo_total_freed_memory;
 
-/*
-*/
-/*
-*/
-
-/*
-*/
 class KV_BtreeArray;
 
 typedef struct __QC_entry_t QC_entry_t;
@@ -93,42 +86,16 @@ class KV_BtreeArray {
   rwlock_t lock;
   BtMap bt_map;
   PtrArray ptrArray;
-  //uint64_t dataSize;
   uint64_t purgeChunkSize;
   uint64_t purgeIdx;
   bool __insert(uint64_t, void *);
-
-
-//	uint64_t num_entries;
-//	uint64_t size_values;
-
 	uint64_t freeable_memory;
-
-//	uint64_t dataIN;
-//	uint64_t dataOUT;
-//	uint64_t cntGet;
-//	uint64_t cntGetOK;
-//	uint64_t cntSet;
-
-//	uint64_t cntPurge;
-//	uint64_t total_freed_memory;
-
   public:
 	uint64_t tottopurge;
   KV_BtreeArray() {
-//		num_entries=0;
-		//size_values=0;
 		freeable_memory=0;
-//		dataIN=0;
-//		dataOUT=0;
-//		cntGet=0;
-//		cntGetOK=0;
-//		cntSet=0;
-//		cntPurge=0;
-//		total_freed_memory=0;
 		tottopurge=0;
 		spinlock_rwlock_init(&lock);
-		//dataSize=0;
 	};
 
   ~KV_BtreeArray() {
@@ -159,13 +126,9 @@ class KV_BtreeArray {
 				_size+=qce->length;
 			}
 		}
-		//__sync_fetch_and_add(&tottopurge,1);
-		//__sync_fetch_and_add(&tottopurge,ret);
 		freeable_memory=_size;
-		//__sync_fetch_and_add(&tottopurge,i);
 		spin_rdunlock(&lock);
 		if ( (freeable_memory + ret * (sizeof(QC_entry_t)+sizeof(QC_entry_t *)*2+sizeof(uint64_t)*2) ) > get_data_size()*0.01) {
-			//fprintf(stderr,"F:%llu, T:%llu  ",freeable_memory/1024,get_data_size()/1024); 
 			uint64_t removed_entries=0;
 			uint64_t freed_memory=0;
 	  	spin_wrlock(&lock);
@@ -187,9 +150,6 @@ class KV_BtreeArray {
 				}
 			}
 	  	spin_wrunlock(&lock);
-			//__sync_fetch_and_sub(&Glo_num_entries,removed_entries);
-			//__thr_num_deleted+=removed_entries;
-			//THR_DECREASE_CNT(__thr_num_deleted,Glo_num_entries,removed_entries,100);
 			THR_DECREASE_CNT(__thr_num_deleted,Glo_num_entries,removed_entries,1);
 			if (removed_entries) {
 				__sync_fetch_and_add(&Glo_total_freed_memory,freed_memory);
@@ -207,22 +167,10 @@ class KV_BtreeArray {
 
 	bool replace(uint64_t key, QC_entry_t *entry) {
 	  spin_wrlock(&lock);
-		//cntSet++;
 		THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,100);
-		//__sync_fetch_and_add(&cntSet,1);
-	//__sync_fetch_and_add(&size_keys,kl);
-		//size_values+=entry->length;
-		//dataIN+=entry->length;
 		THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,100);
-		//__sync_fetch_and_add(&size_values,entry->length);
 		THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,100);
-		//__sync_fetch_and_add(&dataIN,entry->length);
-//	__sync_fetch_and_add(&size_metas,sizeof(fdb_hash_entry)+sizeof(fdb_hash_entry *));
-		//__sync_fetch_and_add(&size_metas,sizeof(QC_entry_t)+sizeof(QC_entry_t *)*4);
-		//THR_UPDATE_CNT(__thr_num_entries,Glo_num_entries,1,100);
 		THR_UPDATE_CNT(__thr_num_entries,Glo_num_entries,1,1);
-		//__sync_fetch_and_add(&num_entries,1);
-		//size_metas+=sizeof(QC_entry_t)+sizeof(QC_entry_t *)*4;
 
 		entry->ref_count=1;
 	  ptrArray.add(entry);
@@ -241,23 +189,14 @@ class KV_BtreeArray {
 	QC_entry_t *lookup(uint64_t key) {
 		QC_entry_t *entry=NULL;
 		spin_rdlock(&lock);
-		//__cntGet++;
 		THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,100);
-//		if (++__thr_cntGet==1000) {
-//			__sync_fetch_and_add(&cntGet,__thr_cntGet); __thr_cntGet=0;
-//		}
-	//	fdb_hash_entry *entry=(fdb_hash_entry *)g_hash_table_lookup(fdb_hashes[i].hash, kp);
 	  btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
 	  lookup = bt_map.find(key);
 	  if (lookup != bt_map.end()) {
 			entry=lookup->second;
 			__sync_fetch_and_add(&entry->ref_count,1);
 			THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,100);
-//			if (++__thr_cntGetOK==1000) {
-//				__sync_fetch_and_add(&cntGetOK,__thr_cntGetOK); __thr_cntGetOK=0;
-//			}
 			THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,10000);
-			//__sync_fetch_and_add(&dataOUT,entry->length);
 	 	}	
 		spin_rdunlock(&lock);
 		return entry;
@@ -287,7 +226,6 @@ class Standard_Query_Cache: public Query_Cache {
 
 
 private:
-//fdb_hash_t fdb_hashes[SHARED_QUERY_CACHE_HASH_TABLES];
 KV_BtreeArray KVs[SHARED_QUERY_CACHE_HASH_TABLES];
 
 
@@ -308,7 +246,6 @@ unsigned int current_used_memory_pct() {
 	float pctf = (float) cur_size*100/max_memory_size;
 	if (pctf > 100) return 100;
 	int pct=pctf;
-	//fprintf(stderr,"\npct:%d\n",pct);
 	return pct;
 }
 
@@ -330,14 +267,12 @@ Standard_Query_Cache() {
 		exit(EXIT_FAILURE);
 	}
 	QCnow=time(NULL);
-	//test=0;
 	size=SHARED_QUERY_CACHE_HASH_TABLES;
 	shutdown=0;
 	purge_loop_time=DEFAULT_purge_loop_time;
 	purge_total_time=DEFAULT_purge_total_time;
 	purge_threshold_pct_min=DEFAULT_purge_threshold_pct_min;
 	purge_threshold_pct_max=DEFAULT_purge_threshold_pct_max;
-	//max_memory_size=_max_memory_size;
 	max_memory_size=DEFAULT_SQC_size;
 };
 
@@ -350,11 +285,6 @@ virtual ~Standard_Query_Cache() {
 	unsigned int i;
 
 
-//	shutdown=1; //causes the purge thread to exit
-//	pthread_join(purge_thread_id,NULL);
-
-
-
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
 	}
 };
@@ -363,10 +293,6 @@ virtual ~Standard_Query_Cache() {
 
 virtual unsigned char * get(const unsigned char *kp, uint32_t *lv) {
 	unsigned char *result=NULL;
-	//uint32_t kl=strlen((const char *)kp);
-	//if (kl < 3) return result;
-	//i=(*((unsigned char *)kp))+(*((unsigned char *)kp+1))+(*((unsigned char *)kp+2));
-	//i=i%SHARED_QUERY_CACHE_HASH_TABLES;
 
 	uint64_t hk=SpookyHash::Hash64(kp,strlen((const char *)kp),0);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
@@ -387,16 +313,10 @@ virtual unsigned char * get(const unsigned char *kp, uint32_t *lv) {
 }
 
 virtual bool set(unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, time_t expire) {
-	//if (kl < 3) return false;
-	//fdb_hash_entry *entry = (fdb_hash_entry *)malloc(sizeof(fdb_hash_entry));
 	QC_entry_t *entry = (QC_entry_t *)malloc(sizeof(QC_entry_t));
 	entry->klen=kl;
 	entry->length=vl;
 	entry->ref_count=0;
-	//entry->key=(unsigned char *)calloc(1,kl);
-
-//	entry->key=(char *)malloc(kl);
-//	memcpy(entry->key,kp,kl);
 
 	entry->value=(char *)malloc(vl);
 	memcpy(entry->value,vp,vl);
@@ -407,8 +327,6 @@ virtual bool set(unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl,
 	} else {
 		entry->expire=QCnow+expire; // expire is seconds
 	}
-	//i=(*((unsigned char *)kp))+(*((unsigned char *)kp+1))+(*((unsigned char *)kp+2));
-	//i=i%SHARED_QUERY_CACHE_HASH_TABLES;
 	uint64_t hk=SpookyHash::Hash64(kp,strlen((const char *)kp),0);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 	entry->key=hk;
@@ -427,17 +345,8 @@ virtual uint64_t flush() {
 	return total_count;
 };
 
-/*
-virtual uint64_t current_free_memory() {
-	uint64_t cur_size=size_keys+size_values+size_metas;
-	return (cur_size > max_memory_size ? 0 : max_memory_size-cur_size);
-}
-
-
-*/
 
 virtual void * purgeHash_thread(void *) {
-	//uint64_t min_idx=0;
 	unsigned int i;
 	while (shutdown==0) {
 		usleep(purge_loop_time);
@@ -447,38 +356,6 @@ virtual void * purgeHash_thread(void *) {
 		if (current_used_memory_pct() < purge_threshold_pct_min ) continue;
 		for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
 			KVs[i].purge_some(QCnow);
-/*
-			spin_wrlock(&fdb_hashes[i].lock);
-			if (fdb_hashes[i].purgeIdx==0) {
-				if (fdb_hashes[i].ptrArray->len) {
-					fdb_hashes[i].purgeIdx=fdb_hashes[i].ptrArray->len;
-					fdb_hashes[i].purgeChunkSize=fdb_hashes[i].ptrArray->len*purge_loop_time/purge_total_time;
-					if (fdb_hashes[i].purgeChunkSize < 10) { fdb_hashes[i].purgeChunkSize=fdb_hashes[i].ptrArray->len; } // this should prevent a bug with few entries left in the cache
-				}
-			}
-			if (min_idx < fdb_hashes[i].purgeChunkSize ) min_idx=0;
-			if (fdb_hashes[i].purgeIdx) while( --fdb_hashes[i].purgeIdx > min_idx) {
-				fdb_hash_entry *entry=(fdb_hash_entry *)fdb_hashes[i].ptrArray->index(fdb_hashes[i].purgeIdx);
-				if (( entry->expire!=EXPIRE_DROPIT) && entry->expire <= QCnow) {
-					g_hash_table_remove(fdb_hashes[i].hash,entry->key);
-				}
-				if ( (entry->expire==EXPIRE_DROPIT)
-					&& (__sync_fetch_and_add(&entry->ref_count,0)==0)
-				) {
-					__sync_fetch_and_sub(&size_keys,entry->klen);
-					__sync_fetch_and_sub(&size_values,entry->length);
-					__sync_fetch_and_sub(&size_metas,sizeof(fdb_hash_entry)+sizeof(fdb_hash_entry *));
-					free(entry->key);
-					free(entry->value);
-					entry->self=NULL;
-					free(entry);
-
-					__sync_fetch_and_add(&cntPurge,1);
-					fdb_hashes[i].ptrArray->remove_index_fast(fdb_hashes[i].purgeIdx);
-				}
-			}
-			spin_wrunlock(&fdb_hashes[i].lock);
-*/
 		}
 	}
 	return NULL;

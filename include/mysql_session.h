@@ -74,7 +74,6 @@ class MySQL_Session
 	void * operator new(size_t);
 	void operator delete(void *);
 	MySQL_Thread *thread;
-	MySQL_Connection_Pool *MyConnPool;
 //	enum session_states sess_states;
 	QP_out_t *qpo;
 	StatCounters *command_counters;

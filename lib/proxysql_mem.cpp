@@ -111,13 +111,6 @@ void * __l_alloc(l_sfp *sfp, size_t size) {
   return NULL;
 }
 
-
-/*
-void * l_alloc(size_t size) {
-  return __l_alloc(__thr_sfp,size);
-}
-*/
-
 void * l_alloc0(size_t size) {
     void *p=l_alloc(size);
     memset(p,0,size);
@@ -164,13 +157,6 @@ void __l_free(l_sfp *sfp, size_t size, void *p) {
   }
 #endif /* __GNUC__ */
 }
-
-/*
-void l_free(size_t size, void *p) {
-//  free(p);
-  __l_free(__thr_sfp,size,p);
-}
-*/
 
 void *l_realloc(void *p, size_t old_size, size_t new_size) {
 	void *new_ptr=__l_alloc(__thr_sfp,new_size);
