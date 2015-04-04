@@ -25,6 +25,7 @@ void MySQL_Backend::reset() {
 			server_myds->myconn->last_time_used=server_myds->sess->thread->curtime;
 			MyHGM->push_MyConn_to_pool(server_myds->myconn);
 			server_myds->myconn=NULL;
+			server_myds->unplug_backend();
 		} else {
 			MyHGM->destroy_MyConn_from_pool(server_myds->myconn);
 			server_myds->myconn=NULL;
