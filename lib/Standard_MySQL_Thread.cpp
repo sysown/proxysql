@@ -831,7 +831,8 @@ void Standard_MySQL_Thread::run() {
 				}
 
 			} else {
-
+				// check if the FD is valid
+				assert(mypolls.fds[n].revents!=POLLNVAL);
 				switch(myds->myds_type) {
 					case MYDS_BACKEND_NOT_CONNECTED:
 //			if (myds->myds_type==MYDS_BACKEND_NOT_CONNECTED && mypolls.fds[n].revents) {
