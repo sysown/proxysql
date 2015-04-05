@@ -722,9 +722,9 @@ void Standard_MySQL_Thread::run() {
 			myds->array2buffer_full();
 			myds->DSS=STATE_QUERY_SENT_DS;
 			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, curtime);
-			processing_idles=true;
-			last_processing_idles=curtime;
 		}
+		processing_idles=true;
+		last_processing_idles=curtime;
 	}
 
 	if (processing_idles==true &&	(last_processing_idles < curtime-10*mysql_thread___ping_timeout_server*1000)) {
