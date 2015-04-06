@@ -146,7 +146,8 @@ void MySQL_Session::writeout() {
 	if (mybe && mybe->server_myds && mybe->server_myds->myds_type==MYDS_BACKEND) {
 		if (admin==false) {
 			if (mybe->server_myds->net_failure==false) { 
-				if (mybe->server_myds->poll_fds_idx>-1 && (mybe->server_myds->mypolls->fds[mybe->server_myds->poll_fds_idx].revents & POLLOUT)) {
+				//if (mybe->server_myds->poll_fds_idx>-1 && (mybe->server_myds->mypolls->fds[mybe->server_myds->poll_fds_idx].revents & POLLOUT)) {
+				if (mybe->server_myds->poll_fds_idx>-1) { // NOTE: attempt to force writes
 					mybe->server_myds->array2buffer_full();
 				}
 			} else {

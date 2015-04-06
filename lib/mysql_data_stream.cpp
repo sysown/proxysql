@@ -338,7 +338,8 @@ int MySQL_Data_Stream::write_to_net_poll() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p --\n", sess, this);
 	if (queue_data(queueOUT)) {
 		if ((sess->admin==false)) {
-			if (poll_fds_idx>-1 && (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+			//if (poll_fds_idx>-1 && (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+			if (poll_fds_idx>-1) { // NOTE: attempt to force writes
 				if (net_failure==false)
 					rc=write_to_net();
 			}
