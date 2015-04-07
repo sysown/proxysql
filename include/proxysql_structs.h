@@ -621,6 +621,7 @@ __thread char *mysql_thread___connect_timeout_server_error;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
 __thread int mysql_thread___poll_timeout;
+__thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 #ifdef DEBUG
@@ -641,6 +642,7 @@ extern __thread char *mysql_thread___connect_timeout_server_error;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
 extern __thread int mysql_thread___poll_timeout;
+extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
 #ifdef DEBUG

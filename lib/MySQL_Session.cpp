@@ -1280,7 +1280,15 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->myconn=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
 //	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
-	if (mybe->server_myds->myconn==NULL) { return; }
+	if (mybe->server_myds->myconn==NULL) {
+		// we couldn't get a connection for whatever reason, ex: no backends, or too busy
+		if (thread->mypolls.poll_timeout==0) { // tune poll timeout
+			if (thread->mypolls.poll_timeout > mysql_thread___poll_timeout_on_failure) {
+				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure;
+			}
+		}
+		return;
+	}
 	if (mybe->server_myds->myconn->fd==-1) {
 		// we didn't get a valid connection, we need to create one
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection has no FD\n", this);

@@ -121,6 +121,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
 	(char *)"poll_timeout",
+	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"servers_stats",
@@ -157,6 +158,7 @@ Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
 	variables.server_version=strdup((char *)"5.1.30");
 	variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 	variables.poll_timeout=2000;
+	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
 	variables.servers_stats=true;
 #ifdef DEBUG
@@ -261,6 +263,7 @@ int Standard_MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
+	if (!strcmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
@@ -296,6 +299,10 @@ char * Standard_MySQL_Threads_Handler::get_variable(char *name) {	// this is the
 	}
 	if (!strcmp(name,"poll_timeout")) {
 		sprintf(intbuf,"%d",variables.poll_timeout);
+		return strdup(intbuf);
+	}
+	if (!strcmp(name,"poll_timeout_on_failure")) {
+		sprintf(intbuf,"%d",variables.poll_timeout_on_failure);
 		return strdup(intbuf);
 	}
 	if (!strcmp(name,"threads")) {
@@ -410,6 +417,15 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 		int intv=atoi(value);
 		if (intv > 10 && intv < 20000) {
 			variables.poll_timeout=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcmp(name,"poll_timeout_on_failure")) {
+		int intv=atoi(value);
+		if (intv > 10 && intv < 20000) {
+			variables.poll_timeout_on_failure=intv;
 			return true;
 		} else {
 			return false;
@@ -977,6 +993,7 @@ void Standard_MySQL_Thread::refresh_variables() {
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___default_charset=GloMTH->get_variable_uint8((char *)"default_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 #ifdef DEBUG
