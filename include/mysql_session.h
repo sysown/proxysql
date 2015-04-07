@@ -74,7 +74,6 @@ class MySQL_Session
 	void * operator new(size_t);
 	void operator delete(void *);
 	MySQL_Thread *thread;
-	MySQL_Connection_Pool *MyConnPool;
 //	enum session_states sess_states;
 	QP_out_t *qpo;
 	StatCounters *command_counters;
@@ -82,6 +81,7 @@ class MySQL_Session
 	bool admin;
 	bool connections_handler;
 	bool stats;
+	bool session_fast_forward;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
 //	int client_fd;
 //	int server_fd;

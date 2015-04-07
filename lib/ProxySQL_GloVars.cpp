@@ -10,27 +10,19 @@ static void term_handler(int sig) {
 #ifdef DEBUG
 #endif
   __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
-//  sleep(5);
-//  exit(0);
 }
 
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
-	//opt->footer.clear();
 	delete opt;
 	delete confFile;
-//	for (std::vector<MySQL_Hostgroup *>::iterator it = MyHostGroups.begin(); it != MyHostGroups.end(); ++it) {
-//		MySQL_Hostgroup *myhg=*it;
-//		delete myhg;
-//	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
 	__cmd_proxysql_datadir=NULL;
-//	__cmd_proxysql_admin_pathdb=NULL;
 
 	config_file=NULL;
 	datadir=NULL;
@@ -54,22 +46,11 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2015 René Cannaò\nThis program is free and without warranty\n";
 	opt->footer =s.c_str();
 
-/*
-opt.add(
-		"", // Default.
-		0, // Required?
-		0, // Number of args expected.
-		0, // Delimiter if expecting multiple args.
-		"Display usage instructions.", // Help description.
-		"-h",     // Flag token. 
-		"-help",  // Flag token.
-		"--help", // Flag token.
-		"--usage" // Flag token.
-	);
-*/
 	opt->add((const char *)"",0,0,0,(const char *)"Display usage instructions.",(const char *)"-h",(const char *)"-help",(const char *)"--help",(const char *)"--usage");
 	opt->add((const char *)"",0,0,0,(const char *)"Print version",(const char *)"-V",(const char *)"--version");
+#ifdef DEBUG
 	opt->add((const char *)"",0,1,0,(const char *)"Enable debugging messages with specific verbosity",(const char *)"-d",(const char *)"--debug");
+#endif /* DEBUG */
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
@@ -77,15 +58,10 @@ opt.add(
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
-//	opt->add((const char *)"",0,1,0,(const char *)"Configuration DB path",(const char *)"-a",(const char *)"--admin-pathdb");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
-//	opt.add("",0,0,0,"","-d","--debug");
-//	opt.add("",0,0,0,"","-d","--debug");
 
 	confFile=new ProxySQL_ConfigFile();
 	signal(SIGTERM, term_handler);
-
-	//MyHostGroups=new MySQL_HostGroups();
 
 };
 
@@ -166,21 +142,7 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 	if (opt->isSet("-f")) {
 		global.foreground=true;
 	}
-/*
-	if (opt->isSet("-D")) {
-		std::string datadir;
-		opt->get("-D")->getString(datadir);
-		if (GloVars.__cmd_proxysql_datadir) free(GloVars.__cmd_proxysql_datadir);
-		GloVars.__cmd_proxysql_datadir=strdup(datadir.c_str());
-	}
 
-	if (opt->isSet("-a")) {
-		std::string admindb_path;
-		opt->get("-a")->getString(admindb_path);
-		if (GloVars.__cmd_proxysql_admin_pathdb) free(GloVars.__cmd_proxysql_admin_pathdb);
-		GloVars.__cmd_proxysql_admin_pathdb=strdup(admindb_path.c_str());
-	}
-*/
 	if (opt->isSet("-S")) {
 		std::string admin_socket;
 		opt->get("-S")->getString(admin_socket);
@@ -192,14 +154,6 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
   //gchar *config_file=*config_file_ptr;
 
-//	rc=config_file_is_readable(config_file);
-//	if (rc==0) {
-//		proxy_error("Config file does not exist, using defaults\n");
-//		init_global_variables(keyfile, 0);
-//    exit(EXIT_FAILURE);
-//	} else {
-//		// FIXME: process config file
-//	}
 
   // apply settings from cmdline, that have priority over config file
 #ifdef DEBUG
@@ -213,10 +167,6 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		free(glovars.proxy_datadir);
 		glovars.proxy_datadir=strdup(GloVars.__cmd_proxysql_datadir);
 	}
-//	if (GloVars.__cmd_proxysql_admin_pathdb) {
-//		free(glovars.proxy_admin_pathdb);
-//		glovars.proxy_admin_pathdb=strdup(GloVars.__cmd_proxysql_admin_pathdb);
-//	}
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		free(glovars.proxy_admin_socket);
 		glovars.proxy_admin_socket=strdup(GloVars.__cmd_proxysql_admin_socket);

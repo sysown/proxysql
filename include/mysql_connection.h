@@ -29,7 +29,6 @@ class MySQL_Connection_userinfo {
 
 class MySQL_Connection {
 	private:
-	MyConnArray *MCA;
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
 	public:
@@ -62,8 +61,6 @@ class MySQL_Connection {
 //	int assign_mshge(unsigned int);
 	//void set_mshge(MySQL_Hostgroup_Entry *);
 //	void free_mshge();
-	MyConnArray *set_MCA(MySQL_Connection_Pool *_MyConnPool, const char *hostname, const char *username, const char *password, const char *db, unsigned int port);
-	bool return_to_connection_pool();
 	uint8_t set_charset(uint8_t);
 
 	void set_status_transaction(bool);
@@ -74,7 +71,5 @@ class MySQL_Connection {
 	bool get_status_compression();
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
-
-	friend class MyConnArray;
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

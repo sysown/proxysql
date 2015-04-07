@@ -35,149 +35,6 @@ extern "C" {
 #define SESSIONS_FOR_CONNECTIONS_HANDLER	64
 
 
-/*
-#define MIN_POLL_LEN 8
-#define MIN_POLL_DELETE_RATIO  8
-
-
-
-static unsigned int near_pow_2 (unsigned int n) {
-  unsigned int i = 1;
-  while (i < n) i <<= 1;
-  return i ? i : n;
-}
-*/
-
-// this structure tries to emulate epoll()
-/*
-class ProxySQL_Poll {
-
-	private:
-	void shrink() {
-		unsigned int new_size=near_pow_2(len+1);
-		fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-		myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-//		status=(unsigned char *)realloc(status,new_size*sizeof(unsigned char));
-		size=new_size;
-	};
-	void expand(unsigned int more) {
-		if ( (len+more) > size ) {
-			unsigned int new_size=near_pow_2(len+more);
-			fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-			myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-//			status=(unsigned char *)realloc(status,new_size*sizeof(unsigned char));
-			size=new_size;
-		}
-	};
-
-	public:
-	unsigned int len=0;
-	unsigned int size=0;
-	struct pollfd *fds=NULL;
-	MySQL_Data_Stream **myds=NULL;
-//	unsigned char *status=NULL;   // this should be moved within the Data Stream
-	ProxySQL_Poll() {
-		size=MIN_POLL_LEN;
-		// preallocate MIN_POLL_LEN slots
-		fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
-		myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
-		//status=(unsigned char *)malloc(size*sizeof(unsigned char));
-	};
-
-	~ProxySQL_Poll() {
-		unsigned int i;
-		for (i=0;i<len;i++) {
-			if (myds[i]->myds_type==MYDS_LISTENER) {
-				delete myds[i];
-			}
-		}
-		free(myds);
-		free(fds);
-	};
-
-
-
-	void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds) {
-		if (len==size) {
-			expand(1);
-		}
-		myds[len]=_myds;
-		fds[len].fd=_fd;
-		fds[len].events=_events;
-		fds[len].revents=0;
-		len++;
-	};
-
-	void remove_index_fast(unsigned int i) {
-		if (i != (len-1)) {
-			myds[i]=myds[len-1];
-			fds[i].fd=fds[len-1].fd;
-			fds[i].events=fds[len-1].events;
-			fds[i].revents=fds[len-1].revents;
-			//status[i]=status[len-1];
-		}
-		len--;
-		if ( ( len>MIN_POLL_LEN ) && ( size > len*MIN_POLL_DELETE_RATIO ) ) {
-			shrink();
-		}
-	};	
-};
-
-*/
-
-
-/*
-void mypoll_add(proxy_poll_t *_myp, uint32_t _events, int _fd, MySQL_Data_Stream *_myds) {
-	struct pollfd _pollfd;
-	_pollfd.revents=0;
-	_pollfd.events=_events;
-	_pollfd.fd=_fd;
-	__mypoll_add(_myp, &_pollfd, _myds);
-}
-
-void __mypoll_add(proxy_poll_t *_myp, struct pollfd *_fd, MySQL_Data_Stream *_myds) {
-	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p -- Adding MySQL Data Stream %p for FD %d\n", _myds->sess, _myds, _myds, _fd->fd);
-	if (_myp->nfds==_myp->max_nfds) {  // no space left, expand
-		_myp->max_nfds+=MIN_POLL_FDS_PER_THREAD;
-		struct pollfd *fds_tmp=(struct pollfd *)malloc(sizeof(struct pollfd)*_myp->max_nfds);
-		assert(fds_tmp);
-		MySQL_Data_Stream **myds_tmp=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*_myp->max_nfds);
-		assert(myds_tmp);
-		memcpy(fds_tmp,_myp->fds,sizeof(struct pollfd)*_myp->nfds);
-		memcpy(myds_tmp,_myp->myds,sizeof(MySQL_Data_Stream *)*_myp->nfds);
-		free(_myp->fds);
-		free(_myp->myds);
-		_myp->fds=fds_tmp;
-		_myp->myds=myds_tmp;
-	}
-
-//	memcpy(&(_myp->fds[_myp->nfds]),&_fd,sizeof(struct pollfd));
-	_myp->fds[_myp->nfds].events=_fd->events;
-	_myp->fds[_myp->nfds].revents=_fd->revents;
-	_myp->fds[_myp->nfds].fd=_fd->fd;
-
-	_myp->myds[_myp->nfds]=_myds;
-	_myds->poll_fds_idx=_myp->nfds;	// pointer back
-	_myp->nfds+=1;
-}
-
-// return if data was moved or not
-int mypoll_del(proxy_poll_t *_myp, int i) {
-	if (i >= _myp->nfds) return 0;
-	if (i < _myp->nfds-1) {
-		_myp->nfds--;
-		memcpy(&_myp->fds[i],&_myp->fds[_myp->nfds],sizeof(struct pollfd));
-		_myp->myds[i]=_myp->myds[_myp->nfds];
-		_myp->myds[i]->poll_fds_idx=i;
-		return 1;
-	}
-	_myp->nfds--;
-	return 0;
-}
-*/
-
-__thread MySQL_Connection_Pool *MyConnPool;
-
 
 __thread unsigned int __thread_MySQL_Thread_Variables_version;
 
@@ -273,57 +130,6 @@ static char * mysql_thread_variables_names[]= {
 	NULL
 };
 
-
-/*
-class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
-{
-	private:
-	size_t stacksize;
-	pthread_attr_t attr;
-	rwlock_t rwlock;
-	struct {
-		char *default_schema;
-		char *server_version;
-		bool servers_stats;
-#ifdef DEBUG
-		bool session_debug;
-#endif
-		uint16_t server_capabilities;
-		int poll_timeout;
-	} variables;
-	public:
-	Standard_MySQL_Threads_Handler();
-	virtual ~Standard_MySQL_Threads_Handler();
-	virtual SQLite3_result * SQL3_Threads_status(MySQL_Session *);
-	
-	virtual void wrlock();
-	virtual void wrunlock();
-	virtual void commit();
-
-	char *get_variable_string(char *name);
-	uint16_t get_variable_uint16(char *name);
-	int get_variable_int(char *name);
-	virtual char * get_variable(char *name); // this is the public function, accessible from admin
-	virtual bool set_variable(char *name, char *value);// this is the public function, accessible from admin
-	virtual char **get_variables_list();
-	virtual void print_version();
-	virtual void init(unsigned int num, size_t stack);
-	virtual proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *));
-	virtual void shutdown_threads();
-};
-*/
-
-//__thread l_sfp *__thr_sfp=NULL;
-
-/*
-static void * connection_manager_thread_callback(void *args) {
-	//Standard_MySQL_Threads_Handler *MTH=(Standard_MySQL_Threads_Handler *)GloMTH;
-	__thr_sfp=l_mem_init();
-	GloMTH->connection_manager_thread();
-	l_mem_destroy(__thr_sfp);
-	return NULL;
-}
-*/
 
 
 Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
@@ -705,9 +511,6 @@ void Standard_MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 }
 
 proxysql_mysql_thread_t * Standard_MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *)) {
-//	if (tn==0) {
-//		pthread_create(&connection_manager_thread_id, &attr, connection_manager_thread_callback, NULL);
-//	}
 	pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
 	return NULL;
 }
@@ -721,7 +524,6 @@ void Standard_MySQL_Threads_Handler::shutdown_threads() {
 	for (i=0; i<num_threads; i++) {
 		pthread_join(mysql_threads[i].thread_id,NULL);
 	}
-//	pthread_join(connection_manager_thread_id,NULL);
 }
 
 void Standard_MySQL_Threads_Handler::start_listeners() {
@@ -750,22 +552,6 @@ Standard_MySQL_Threads_Handler::~Standard_MySQL_Threads_Handler() {
 	MLM=NULL;
 }
 
-//extern Standard_MySQL_Threads_Handler *GloMTH;
-
-/*
-class Standard_MySQL_Thread: public MySQL_Thread {
-
-private:
-	MySQL_Connection **my_idle_conns;
-	MySQL_Data_Stream **my_idle_myds;
-	bool processing_idles;
-	unsigned long long last_processing_idles;
-	PtrArray *mysql_sessions_connections_handler;
-public:
-//ProxySQL_Poll mypolls;
-rwlock_t thread_mutex;
-	Standard_MySQL_Thread();
-*/
 Standard_MySQL_Thread::~Standard_MySQL_Thread() {
 
 	if (mysql_sessions) {
@@ -794,49 +580,13 @@ Standard_MySQL_Thread::~Standard_MySQL_Thread() {
 	if (my_idle_myds)
 		free(my_idle_myds);
 	GloQPro->end_thread();
-	delete MyConnPool;
 
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 
 }
 
-/*
-void MySQL_Thread::init_poll() {
-//	mypolls.max_nfds = MIN_POLL_FDS_PER_THREAD;
-//	mypolls.fds=(struct pollfd *)malloc(sizeof(struct pollfd)*mypolls.max_nfds);
-//	assert(mypolls.fds);
-//	mypolls.myds=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*mypolls.max_nfds);
-//	assert(mypolls.myds);
-//	mypolls.nfds=0;
-}
-*/
 
-//virtual void print_version() {
-//	fprintf(stderr,"Standard MySQL Thread rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
-//};
-
-/*
-	MySQL_Session * create_new_session_and_client_data_stream(int _fd);
-	bool init();
-	void run();
-	void poll_listener_add(int sock);
-	void register_session(MySQL_Session*);
-	void unregister_session(int);
-	struct pollfd * get_pollfd(unsigned int i);
-	void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
-	void process_all_sessions();
-	void refresh_variables();
-	void process_all_sessions_connections_handler();
-	void register_session_connection_handler(MySQL_Session *_sess);
-	void unregister_session_connection_handler(int idx);
-	void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
-	void myds_backend_pause_connect(MySQL_Data_Stream *myds);
-	void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
-	void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
-	SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
-*/
-//};   // end class Standard_MySQL_Thread
 
 MySQL_Session * Standard_MySQL_Thread::create_new_session_and_client_data_stream(int _fd) {
 	int arg_on=1;
@@ -886,7 +636,6 @@ bool Standard_MySQL_Thread::init() {
 	my_idle_myds=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	memset(my_idle_myds,0,sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	GloQPro->init_thread();
-	MyConnPool=new MySQL_Connection_Pool();
 	refresh_variables();
 	return true;
 }
@@ -921,7 +670,6 @@ void Standard_MySQL_Thread::register_session(MySQL_Session *_sess) {
 	}
 	mysql_sessions->add(_sess);
 	_sess->thread=this;
-	_sess->MyConnPool=MyConnPool;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
 }
 
@@ -974,9 +722,9 @@ void Standard_MySQL_Thread::run() {
 			myds->array2buffer_full();
 			myds->DSS=STATE_QUERY_SENT_DS;
 			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, curtime);
-			processing_idles=true;
-			last_processing_idles=curtime;
 		}
+		processing_idles=true;
+		last_processing_idles=curtime;
 	}
 
 	if (processing_idles==true &&	(last_processing_idles < curtime-10*mysql_thread___ping_timeout_server*1000)) {
@@ -1083,7 +831,8 @@ void Standard_MySQL_Thread::run() {
 				}
 
 			} else {
-
+				// check if the FD is valid
+				assert(mypolls.fds[n].revents!=POLLNVAL);
 				switch(myds->myds_type) {
 					case MYDS_BACKEND_NOT_CONNECTED:
 //			if (myds->myds_type==MYDS_BACKEND_NOT_CONNECTED && mypolls.fds[n].revents) {
@@ -1251,12 +1000,6 @@ Standard_MySQL_Thread::Standard_MySQL_Thread() {
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___connect_timeout_server_error=NULL;
 	mysql_thread___server_version=NULL;
-//	GloQPro->init_thread();
-//	MyConnPool=new MySQL_Connection_Pool();
-	//events=NULL;
-//	mypolls.fds=NULL;
-//	mypolls.myds=NULL;
-//	mysql_sessions=NULL;
 }
 
 
@@ -1287,7 +1030,6 @@ void Standard_MySQL_Thread::register_session_connection_handler(MySQL_Session *_
 	mysql_sessions_connections_handler->add(_sess);
 	_sess->thread=this;
 	_sess->connections_handler=true;
-	_sess->MyConnPool=MyConnPool;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session for connection handler\n", _sess->thread, _sess);
 }
 
@@ -1449,117 +1191,6 @@ SQLite3_result * Standard_MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Sessi
 	return result;
 }
 
-/*
-void Standard_MySQL_Threads_Handler::connection_manager_thread() {
-	MySQL_Thread *mythr=new MySQL_Thread();
-	MySQL_Session *sess=new MySQL_Session();
-	sess->admin=false;
-	sess->thread=mythr;
-	ProxySQL_Poll mypolls;
-	MySQL_Connection **myconns;
-	//MySQL_Data_Stream **mydses;
-	int max_idle_connections=200;	// randomly hardcoded for now
-	int rc,i;
-	myconns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*max_idle_connections);
-	//mydses=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*max_idle_connections);
-	while (shutdown==0) {
-		sleep(1);
-		continue; // FIXME
-		bool more_poll=false;
-		MySQL_Data_Stream *myds=NULL;
-		mythr->curtime=monotonic_time();
-		unsigned long long exp=mythr->curtime-10*1000000;
-		rc=MyHGM->get_multiple_idle_connections(-1, exp, myconns, max_idle_connections);
-		fprintf(stderr,"Idle connections: %d\n", rc);
-		for (i=0;i<rc;i++) {
-			myds=new MySQL_Data_Stream();
-			MySQL_Connection *mc=myconns[i];
-			myds->myconn=mc;
-			myds->assign_fd_from_mysql_conn();
-			myds->myds_type=MYDS_BACKEND;
-			myds->init();
-			myds->mypolls=&mypolls;
-			//myds->DSS=STATE_READY;
-			mc->last_time_used=mythr->curtime;
-			myds->myprot.init(&myds, myds->myconn->userinfo, NULL);
-			myds->myprot.generate_COM_PING(true,NULL,NULL);
-			myds->array2buffer_full();
-			myds->DSS=STATE_QUERY_SENT_DS;
-			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, mythr->curtime);
-//			mydses[i]=myds;
-		}
-		if (rc) more_poll=true;
-		while (more_poll) {
-			unsigned int n;
-			for (n = 0; n < mypolls.len; n++) {
-				mypolls.fds[n].revents=0;
-				mypolls.myds[n]->set_pollout();
-      }
-
-			proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
-			rc=poll(mypolls.fds,mypolls.len, 2000);
-			proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");			
-
-			unsigned long long curtime2=monotonic_time();
-			for (n = 0; n < mypolls.len; n++) {
-				proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
-				if (mypolls.fds[n].revents==0) {
-					continue;
-				} else {
-					myds=mypolls.myds[n];
-					myds->sess=sess;
-					mypolls.last_recv[n]=mythr->curtime;
-					myds->revents=mypolls.fds[n].revents;
-					myds->read_from_net();
-					if ((myds->revents & POLLOUT) == POLLOUT) {
-						myds->write_to_net_poll();
-						myds->DSS=STATE_QUERY_SENT_NET;
-					}
-					if (((myds->revents & POLLIN) == POLLIN) && (myds->DSS==STATE_QUERY_SENT_NET) ) {
-					if (myds->PSarrayIN->len==1) {
-						PtrSize_t pkt;
-						myds->PSarrayIN->remove_index(0,&pkt);
-						if (myds->myprot.process_pkt_OK((unsigned char *)pkt.ptr,pkt.size)==true) {
-							mypolls.remove_index_fast(n);
-							MyHGM->push_MyConn_to_pool(myds->myconn);
-							myds->myconn=NULL;
-							l_free(pkt.size,pkt.ptr);
-							delete myds;
-							continue;
-						} else {
-							myds->active=FALSE;
-							l_free(pkt.size,pkt.ptr);
-						}
-					} else {
-						myds->active=FALSE;
-					}
-					}
-					if (myds->active==FALSE) {
-						mypolls.remove_index_fast(n);
-						MyHGM->destroy_MyConn_from_pool(myds->myconn);
-						myds->myconn=NULL;
-						delete myds;
-						continue;
-					}	
-				}
-			}
-			if (curtime2 > mythr->curtime+10000000) {
-				while(mypolls.len) {
-					mypolls.remove_index_fast(0);
-					myds=mypolls.myds[0];
-					MyHGM->destroy_MyConn_from_pool(myds->myconn);
-					delete myds;
-				}
-			}
-			if (mypolls.len==0) more_poll=false;
-		}
-	}
-	free(myconns);
-	delete sess;
-//	free(mydses);
-}
-*/
-
 extern "C" MySQL_Threads_Handler * create_MySQL_Threads_Handler_func() {
     return new Standard_MySQL_Threads_Handler();
 }
@@ -1575,6 +1206,3 @@ extern "C" MySQL_Thread * create_MySQL_Thread_func() {
 extern "C" void destroy_MySQL_Thread_func(MySQL_Thread * ms) {
     delete ms;
 }
-
-//typedef MySQL_Thread * create_MySQL_Thread_t();
-//typedef void destroy_QC_t(Query_Cache*);

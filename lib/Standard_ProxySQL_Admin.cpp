@@ -39,16 +39,8 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define LINESIZE	2048
 
-//#define ADMIN_SQLITE_TABLE_MYSQL_SERVER_STATUS "CREATE TABLE mysql_server_status ( status INT NOT NULL PRIMARY KEY, status_desc VARCHAR NOT NULL, UNIQuE(status_desc) )"
-//#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT NOT NULL DEFAULT 0 REFERENCES server_status(status) , PRIMARY KEY(hostname, port) )"
-//#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (status IN ('OFFLINE_HARD', 'OFFLINE_SOFT', 'SHUNNED', 'ONLINE')) NOT NULL DEFAULT 'OFFLINE_HARD', PRIMARY KEY(hostname, port) )"
-//#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('OFFLINE_HARD', 'OFFLINE_SOFT', 'SHUNNED', 'ONLINE')) NOT NULL DEFAULT 'OFFLINE_HARD', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
-//#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS "CREATE TABLE mysql_hostgroups ( hostgroup_id INT NOT NULL , description VARCHAR, PRIMARY KEY(hostgroup_id) )"
-//#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES "CREATE TABLE mysql_hostgroup_entries ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , FOREIGN KEY (hostname, port) REFERENCES mysql_servers (hostname, port) , FOREIGN KEY (hostgroup_id) REFERENCES mysql_hostgroups (hostgroup_id) , PRIMARY KEY (hostgroup_id, hostname, port) )"
-//#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend) , FOREIGN KEY (default_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
-//#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0, FOREIGN KEY (destination_hostgroup) REFERENCES mysql_hostgroups (hostgroup_id))"
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
 
@@ -63,10 +55,6 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif /* DEBUG */
 __thread l_sfp *__thr_sfp=NULL;
 
-
-//extern "C" MySQL_Thread * create_MySQL_Thread_func();
-//extern "C" void destroy_MySQL_Thread_func();
-//create_MySQL_Thread_t * create_MySQL_Thread = NULL;
 
 #define CMD1	1
 #define CMD2	2
@@ -102,27 +90,6 @@ static t_symstruct lookuptable[] = {
 
 #define NKEYS (sizeof(lookuptable)/sizeof(t_symstruct))
 
-/*
- // moved to gen_utils.cpp
-int remove_spaces(const char *s) {
-	char *inp = (char *)s, *outp = (char *)s;
-	bool prev_space = false;
-	while (*inp) {
-		if (isspace(*inp)) {
-			if (!prev_space) {
-				*outp++ = ' ';
-				prev_space = true;
-			}
-		} else {
-			*outp++ = *inp;
-			prev_space = 0;
-		}
-		++inp;
-	}
-	*outp = '\0';
-	return strlen(s);
-}
-*/
 static uint32_t keyfromhash(uint32_t hash) {
 	uint32_t i;
 	for (i=0; i < NKEYS; i++) {
@@ -136,17 +103,9 @@ static uint32_t keyfromhash(uint32_t hash) {
 }
 
 
-
-//constexpr uint32_t admin_hash(const char *s) {
-//	return (constexpr)SpookyHash::Hash32(s,strlen(s),0);
-//};
-
-//SQLite3DB db1;
-
 class Standard_ProxySQL_Admin: public ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
-//SQLite3DB *db3;
 
 	std::vector<table_def_t *> *tables_defs_admin;
 	std::vector<table_def_t *> *tables_defs_stats;
@@ -368,12 +327,6 @@ class admin_main_loop_listeners {
 		ifaces_telnet_admin=new ifaces_desc();
 		ifaces_telnet_stats=new ifaces_desc();
 		version=0;
-//		descriptor_old.mysql_ifaces=NULL;
-//		descriptor_old.telnet_admin_ifaces=NULL;
-//		descriptor_old.telnet_stats_ifaces=NULL;
-//		descriptor_new_copy.mysql_ifaces=NULL;
-//		descriptor_new_copy.telnet_admin_ifaces=NULL;
-//		descriptor_new_copy.telnet_stats_ifaces=NULL;
 		descriptor_new.mysql_ifaces=NULL;
 		descriptor_new.telnet_admin_ifaces=NULL;
 		descriptor_new.telnet_stats_ifaces=NULL;
@@ -415,18 +368,6 @@ class admin_main_loop_listeners {
 		wrunlock();
 		return true;
 	}
-/*
-	void copy_new_descriptors(ifaces_desc_t *src, ifaces_desc_t *dst, bool also_lock) {
-		if (also_lock) { wrlock(); }
-		dst->mysql_ifaces=reset_ifaces(dst->mysql_ifaces);
-		dst->telnet_admin_ifaces=reset_ifaces(dst->telnet_admin_ifaces);
-		dst->telnet_stats_ifaces=reset_ifaces(dst->telnet_stats_ifaces);
-		for (int i=0; i<MAX_IFACES; i++) { if (src->mysql_ifaces[i]) { dst->mysql_ifaces[i]=strdup(src->mysql_ifaces[i]); } }
-		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_admin_ifaces[i]) { dst->telnet_admin_ifaces[i]=strdup(src->telnet_stats_ifaces[i]); } }
-		for (int i=0; i<MAX_IFACES; i++) { if (src->telnet_stats_ifaces[i]) { dst->telnet_stats_ifaces[i]=strdup(src->telnet_stats_ifaces[i]); } }
-		if (also_lock) { wrunlock(); }
-	}
-*/
 };
 
 static admin_main_loop_listeners S_amll;
@@ -1112,32 +1053,6 @@ __run_query:
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
-/*
-	//MySQL_Protocol &myprot=sess->myprot_client;
-	sess->client_myds->DSS=STATE_QUERY_SENT;
-//	sess->myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
-	sess->myprot_client.generate_pkt_column_count(true,NULL,NULL,1,1);
-	sess->myprot_client.generate_pkt_field(true,NULL,NULL,2,(char *)"",(char *)"",(char *)"",(char *)"alias",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,true,0,(char *)"");
-	sess->client_myds->DSS=STATE_COLUMN_DEFINITION;
-	sess->myprot_client.generate_pkt_EOF(true,NULL,NULL,3,0,0);
-	char **p=(char **)malloc(sizeof(char*));
-	int *l=(int *)malloc(sizeof(int*));
-	//p[0]="column test";
-	int st=rand()%32+2;
-	p[0]=(char *)malloc(st+1);
-	for (int i=0; i<st; i++) {
-		p[0][i]='a'+rand()%25;
-	}
-	p[0][st]='\0';
-	l[0]=strlen(p[0]);
-	sess->client_myds->DSS=STATE_ROW;
-	sess->myprot_client.generate_pkt_row(true,NULL,NULL,4,1,l,p);
-	sess->myprot_client.generate_pkt_EOF(true,NULL,NULL,5,0,2);
-	sess->client_myds->DSS=STATE_SLEEP;
-	free(l);
-	free(p[0]);
-	free(p);
-*/
 }
 
 
@@ -1408,25 +1323,7 @@ __end_while_pool:
 #endif /* DEBUG */
 #define PROXYSQL_ADMIN_VERSION "0.1.0815" DEB
 
-//class Standard_ProxySQL_Admin: public ProxySQL_Admin {
-/*
-private:
-volatile int main_shutdown;
-SQLite3DB *admindb;	// in memory
-SQLite3DB *statsdb;	// in memory
-SQLite3DB *configdb; // on disk
-//SQLite3DB *db3;
-
-pthread_t admin_thr;
-
-int main_poll_nfds;
-struct pollfd *main_poll_fds;
-int *main_callback_func;
-
-public:
-*/
 Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
-//	int i;
 #ifdef DEBUG
 		if (glovars.has_debug==false) {
 #else
@@ -1438,15 +1335,6 @@ Standard_ProxySQL_Admin::Standard_ProxySQL_Admin() {
 
 	SPA=this;
 	spinlock_rwlock_init(&rwlock);
-/*
- * moved to main()
-	i=sqlite3_config(SQLITE_CONFIG_URI, 1);
-	if (i!=SQLITE_OK) {
-  	fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
-		assert(i==SQLITE_OK);
-		exit(EXIT_FAILURE);
-	}
-*/
 	variables.admin_credentials=strdup("admin:admin");
 	variables.stats_credentials=strdup("stats:stats");
 	variables.mysql_ifaces=strdup("127.0.0.1:6032");
@@ -1485,24 +1373,9 @@ bool Standard_ProxySQL_Admin::init() {
 	main_callback_func=(int *)malloc(sizeof(int)*MAX_ADMIN_LISTENERS);
 	main_poll_fds=(struct pollfd *)malloc(sizeof(struct pollfd)*MAX_ADMIN_LISTENERS);
 	main_poll_nfds=0;
-/*
-	main_poll_nfds=0;
-	for (i=0;i<main_poll_nfds-1;i++) {
-		main_poll_fds[i].fd=listen_on_port((char *)"127.0.0.1",9900+i, 50);
-		main_poll_fds[i].events=POLLIN;
-		main_poll_fds[i].revents=0;
-		main_callback_func[i]=rand()%2+1;
-		//main_callback_func[i]=0;
-	}
-	main_poll_fds[i].fd=listen_on_port((char *)"127.0.0.1",6032, 50);
-	main_poll_fds[i].events=POLLIN;
-	main_poll_fds[i].revents=0;
-	main_callback_func[i]=0;
-*/
 
 	pthread_attr_t attr; 
   pthread_attr_init(&attr);
-//  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   pthread_attr_setstacksize (&attr, mystacksize);
 
 	admindb=new SQLite3DB();
@@ -1517,11 +1390,7 @@ bool Standard_ProxySQL_Admin::init() {
 	tables_defs_stats=new std::vector<table_def_t *>;
 	tables_defs_config=new std::vector<table_def_t *>;
 
-//	insert_into_tables_defs(tables_defs_admin,"mysql_server_status", ADMIN_SQLITE_TABLE_MYSQL_SERVER_STATUS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
-//	insert_into_tables_defs(tables_defs_admin,"mysql_servers_new", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_NEW);
-//	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS);
-//	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -1529,11 +1398,7 @@ bool Standard_ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
 
-//	insert_into_tables_defs(tables_defs_config,"mysql_server_status", ADMIN_SQLITE_TABLE_MYSQL_SERVER_STATUS);
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
-//	insert_into_tables_defs(tables_defs_config,"mysql_servers_new", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_NEW);
-//	insert_into_tables_defs(tables_defs_config,"mysql_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUPS);
-//	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_entries", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ENTRIES);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -1550,7 +1415,6 @@ bool Standard_ProxySQL_Admin::init() {
 	check_and_build_standard_tables(configdb, tables_defs_config);
 	check_and_build_standard_tables(statsdb, tables_defs_stats);
 
-	//__attach_configdb_to_admindb();
 	__attach_db_to_admindb(configdb, (char *)"disk");
 	__attach_db_to_admindb(statsdb, (char *)"stats");
 
@@ -1565,9 +1429,6 @@ bool Standard_ProxySQL_Admin::init() {
 
 	flush_mysql_variables___runtime_to_database(configdb, false, false, false);
 	flush_mysql_variables___runtime_to_database(admindb, false, true, false);
-	// delete from mysql-threads from admindb . At this stage it is still unknwon
-	//admindb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads'");
-	//configdb->execute("DELETE FROM global_variables WHERE variable_name='mysql-threads' AND variable_value=0");
 
 	flush_admin_variables___runtime_to_database(configdb, false, false, false);
 	flush_admin_variables___runtime_to_database(admindb, false, true, false);
@@ -1604,18 +1465,11 @@ bool Standard_ProxySQL_Admin::init() {
 	flush_admin_variables___database_to_runtime(admindb,true);
 	flush_mysql_variables___database_to_runtime(admindb,true);
 
-//	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
-//	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
-//	S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.descriptor_new.telnet_stats_ifaces);
 	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
 	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
 	S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);
 
 	
-	//fill_table__server_status(admindb);
-	//fill_table__server_status(configdb);
-
-	//__refresh_users();
 
 //	pthread_t admin_thr;
 	struct _main_args *arg=(struct _main_args *)malloc(sizeof(struct _main_args));
@@ -1700,18 +1554,6 @@ void Standard_ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std
 		td=*it;
 		db->check_and_build_table(td->table_name, td->table_def);
 	}
-/*
-	for (i=0;i<sizeof(table_defs)/sizeof(admin_sqlite_table_def_t);i++) {
-		admin_sqlite_table_def_t *table_def=table_defs+i;
-		proxy_debug(PROXY_DEBUG_SQLITE, 6, "SQLITE: checking definition of table %s against \"%s\"\n" , table_def->table_name , table_def->table_def);
-		int match=__admin_sqlite3__check_table_structure(db, table_def->table_name , table_def->table_def);
-		if (match==0) {
-			proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Table %s does not exist or is corrupted. Creating!\n", table_def->table_name);
-			__admin_sqlite3__build_table_structure(db, table_def->table_name , table_def->table_def);
-		}
-	}
-	sqlite3_exec_exit_on_failure(db, "PRAGMA foreign_keys = ON");
-*/
 	db->execute("PRAGMA foreign_keys = ON");
 };
 
@@ -1736,19 +1578,6 @@ void Standard_ProxySQL_Admin::drop_tables_defs(std::vector<table_def_t *> *table
 		delete td;
 	}
 };
-
-/*
-// Function outdate because mysql_server_status is being removed
-void Standard_ProxySQL_Admin::fill_table__server_status(SQLite3DB *db) {
-	db->execute("PRAGMA foreign_keys = OFF");
-  db->execute("DELETE FROM mysql_server_status");
-  db->execute("INSERT INTO mysql_server_status VALUES (0, \"OFFLINE_HARD\")");
-  db->execute("INSERT INTO mysql_server_status VALUES (1, \"OFFLINE_SOFT\")");
-	db->execute("INSERT INTO mysql_server_status VALUES (2, \"SHUNNED\")");
-	db->execute("INSERT INTO mysql_server_status VALUES (3, \"ONLINE\")");
-	db->execute("PRAGMA foreign_keys = ON");
-}
-*/
 
 
 void Standard_ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
@@ -2023,7 +1852,6 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			free(variables.mysql_ifaces);
 			variables.mysql_ifaces=strdup(value);
 			if (update_creds && variables.mysql_ifaces) {
-				//S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.descriptor_new.mysql_ifaces);
 				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
 			}
 			return true;
@@ -2038,7 +1866,6 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			free(variables.telnet_admin_ifaces);
 			variables.telnet_admin_ifaces=strdup(value);
 			if (update_creds && variables.telnet_admin_ifaces) {
-				//S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.descriptor_new.telnet_admin_ifaces);
 				S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
 			}
 			return true;
@@ -2053,7 +1880,6 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			free(variables.telnet_stats_ifaces);
 			variables.telnet_stats_ifaces=strdup(value);
 			if (update_creds && variables.telnet_stats_ifaces) {
-				//S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.descriptor_new.telnet_stats_ifaces);
 				S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);
 			}
 			return true;
@@ -2061,17 +1887,6 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-/*
-	if (!strcmp(name,"stats_credentials")) {
-		if (vallen) {
-			free(variables.stats_credentials);
-			variables.stats_credentials=strdup(value);
-			return true;
-		} else {
-			return false;
-		}
-	}
-*/
 	if (!strcmp(name,"refresh_interval")) {
 		int intv=atoi(value);
 		if (intv > 100 && intv < 100000) {
@@ -2107,7 +1922,6 @@ void Standard_ProxySQL_Admin::stats___mysql_commands_counters() {
 	if (!GloQPro) return;
 	SQLite3_result * resultset=GloQPro->get_stats_commands_counters();
 	if (resultset==NULL) return;
-//	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_commands_counters");
 	char *a=(char *)"INSERT INTO stats_mysql_commands_counters VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
@@ -2119,7 +1933,6 @@ void Standard_ProxySQL_Admin::stats___mysql_commands_counters() {
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11],r->fields[12],r->fields[13],r->fields[14]);
-		//fprintf(stderr,"%s\n",query)
 		statsdb->execute(query);
 		free(query);
 	}
@@ -2131,7 +1944,6 @@ void Standard_ProxySQL_Admin::stats___mysql_query_rules() {
 	if (!GloQPro) return;
 	SQLite3_result * resultset=GloQPro->get_stats_query_rules();
 	if (resultset==NULL) return;
-//	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_query_rules");
 	char *a=(char *)"INSERT INTO stats_mysql_query_rules VALUES (\"%s\",\"%s\")";
@@ -2143,7 +1955,6 @@ void Standard_ProxySQL_Admin::stats___mysql_query_rules() {
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,r->fields[0],r->fields[1]);
-		//fprintf(stderr,"%s\n",query);
 		statsdb->execute(query);
 		free(query);
 	}
@@ -2154,7 +1965,6 @@ void Standard_ProxySQL_Admin::stats___mysql_query_rules() {
 void Standard_ProxySQL_Admin::save_mysql_query_rules_from_runtime() {
 	SQLite3_result * resultset=GloQPro->get_current_query_rules();
 	if (resultset==NULL) return;
-//	fprintf(stderr,"Number of columns: %d, rows: %d\n", result->columns, result->rows_count);
 	admindb->execute("DELETE FROM mysql_query_rules");
 	char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -2169,10 +1979,6 @@ void Standard_ProxySQL_Admin::save_mysql_query_rules_from_runtime() {
 		admindb->execute(query);
 		free(query);
 	}
-		
-	//admindb->execute("UPDATE mysql_query_rules SET username=NULL WHERE username=\"\"");
-	//admindb->execute("UPDATE mysql_query_rules SET schemaname=NULL WHERE schemaname=\"\"");
-	
 	delete resultset;
 }
 
@@ -2213,18 +2019,14 @@ void Standard_ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite
   }
   int l=strlen(a)+200;
 
-//	GloMTH->wrlock();
-	//char **varnames=GloMTH->get_variables_list();	
 	char **varnames=get_variables_list();	
   char *query=(char *)malloc(l);
 	for (int i=0; varnames[i]; i++) {
-		//char *val=GloMTH->get_variable(varnames[i]);
 		char *val=get_variable(varnames[i]);
 		sprintf(query, a, varnames[i], val);
 		db->execute(query);
 		free(val);
 	}
-//	GloMTH->wrunlock();
 	free(query);
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);
@@ -2248,7 +2050,6 @@ void Standard_ProxySQL_Admin::flush_debug_levels_runtime_to_database(SQLite3DB *
   for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
     char *query=(char *)malloc(l);
     sprintf(query, a, GloVars.global.gdbg_lvl[i].name, GloVars.global.gdbg_lvl[i].verbosity);
-    //proxy_debug(PROXY_DEBUG_SQLITE, 3, "SQLITE: %s\n",buff);
     db->execute(query);
     free(query);
   }
@@ -2288,9 +2089,6 @@ int Standard_ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *d
 void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
   admindb->execute("PRAGMA foreign_keys = OFF");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-//  admindb->execute("INSERT OR IGNORE INTO main.mysql_servers_new SELECT * FROM disk.mysql_servers_new");
-//  admindb->execute("INSERT OR IGNORE INTO main.mysql_hostgroups SELECT * FROM disk.mysql_hostgroups");
-//  admindb->execute("INSERT OR IGNORE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
   admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
@@ -2303,9 +2101,6 @@ void Standard_ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 void Standard_ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
   admindb->execute("PRAGMA foreign_keys = OFF");
   admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-//  admindb->execute("INSERT OR REPLACE INTO main.mysql_servers_new SELECT * FROM disk.mysql_servers_new");
-//  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroups SELECT * FROM disk.mysql_hostgroups");
-//  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
   admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
@@ -2317,14 +2112,9 @@ void Standard_ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 
 void Standard_ProxySQL_Admin::__delete_disktable() {
   admindb->execute("DELETE FROM disk.mysql_servers");
-//  admindb->execute("DELETE FROM disk.mysql_servers_new");
-//  admindb->execute("DELETE FROM disk.mysql_hostgroups");
-//  admindb->execute("DELETE FROM disk.mysql_hostgroup_entries");
-//  admindb->execute("DELETE FROM disk.query_rules");
   admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("DELETE FROM disk.mysql_query_rules");
 	admindb->execute("DELETE FROM disk.global_variables");
-//  admindb->execute("DELETE FROM disk.default_hostgroups");
 #ifdef DEBUG
   admindb->execute("DELETE FROM disk.debug_levels");
 #endif /* DEBUG */
@@ -2332,14 +2122,10 @@ void Standard_ProxySQL_Admin::__delete_disktable() {
 
 void Standard_ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-//  admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers_new SELECT * FROM main.mysql_servers_new");
-//  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroups SELECT * FROM main.mysql_hostgroups");
-//  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroup_entries SELECT * FROM main.mysql_hostgroup_entries");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
-//  admindb->execute("INSERT OR REPLACE INTO disk.default_hostgroups SELECT * FROM main.default_hostgroups");
 #ifdef DEBUG
   admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
 #endif /* DEBUG */
@@ -2350,9 +2136,6 @@ void Standard_ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
 	// FIXME : low-priority , this should be transactional
   admindb->execute("PRAGMA foreign_keys = OFF");
   admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-//  admindb->execute("INSERT OR REPLACE INTO main.mysql_servers_new SELECT * FROM disk.mysql_servers_new");
-//  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroups SELECT * FROM disk.mysql_hostgroups");
-//  admindb->execute("INSERT OR REPLACE INTO main.mysql_hostgroup_entries SELECT * FROM disk.mysql_hostgroup_entries");
   admindb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -2360,9 +2143,6 @@ void Standard_ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
 	// FIXME : low-priority , this should be transactional
   admindb->execute("PRAGMA foreign_keys = OFF");
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-//  admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers_new SELECT * FROM main.mysql_servers_new");
-//  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroups SELECT * FROM main.mysql_hostgroups");
-//  admindb->execute("INSERT OR REPLACE INTO disk.mysql_hostgroup_entries SELECT * FROM main.mysql_hostgroup_entries");
   admindb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -2381,14 +2161,6 @@ void Standard_ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 
 
 void Standard_ProxySQL_Admin::__attach_db_to_admindb(SQLite3DB *db, char *alias) {
-/*
- * const char *a="ATTACH DATABASE '%s' AS disk";
-	int l=strlen(a)+strlen(configdb->get_url())+5;
-	char *cmd=(char *)malloc(l);
-	sprintf(cmd,a,configdb->get_url());
-	admindb->execute(cmd);
-	free(cmd);
-*/
 	const char *a="ATTACH DATABASE '%s' AS %s";
 	int l=strlen(a)+strlen(db->get_url())+strlen(alias)+5;
 	char *cmd=(char *)malloc(l);
@@ -2543,38 +2315,6 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	free(query);
 }
 
-/*
-// deprecated, see issue #129
-void Standard_ProxySQL_Admin::add_default_user(char *user, char *password) {
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *q=(char *)"SELECT COUNT(*) FROM main.mysql_users WHERE active=1 AND frontend=1";
-	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-	int matching_rows=0;
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-	} else {
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-      SQLite3_row *r=*it;
-			matching_rows+=atoi(r->fields[0]);
-		}
-	}
-	if (resultset) delete resultset;
-	if (matching_rows<1000) { // FIXME, SMALL HACK
-		GloMyAuth->add(user,password, USERNAME_FRONTEND, false , -1, true);
-		proxy_error("Adding default user. Username=%s, Password=%s\n", user,password);
-		admindb->execute("PRAGMA foreign_keys = OFF");
-		char *str1=(char *)"INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,transaction_persistent,backend,frontend) VALUES('%s','%s',1,0,0,0,0,1)";
-		char *query=(char *)malloc(strlen(str1)+strlen(user)+strlen(password));
-		sprintf(query,str1,user,password);
-		admindb->execute(query);
-		admindb->execute("PRAGMA foreign_keys = ON");
-	}
-}
-*/
-
 
 void Standard_ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 }
@@ -2604,7 +2344,6 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	//char *query=(char *)"SELECT hostgroup_id,hostname,port,weight FROM main.mysql_hostgroup_entries";
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,status,weight,compression FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -2628,10 +2367,6 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 					}
 				}
 			}
-			//MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), MYSQL_SERVER_STATUS_ONLINE);
-			//bool comp=false;
-			//if (atoi(r->fields[5])==1) comp=true;
-			//const char *comps=  (comp ? "YES" : "NO" );
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "hid=%d , hostname=%s , port=%d , status=%s , weight=%d , compression=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), r->fields[3], atoi(r->fields[4]), atoi(r->fields[5]));
 			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), status, atoi(r->fields[5]));
 			//MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
@@ -2639,7 +2374,6 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	}
 	//MyHGH->wrunlock();
 	MyHGM->commit();
-//	if (error) free(error);
 	if (resultset) delete resultset;
 }
 
@@ -2734,12 +2468,10 @@ int Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		user.lookupValue("active", active);
 		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+128);
 		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup);
-		//fprintf(stderr, "INSERT INTO mysql_servers (hostname, port, hostgroup_id) VALUES (\"%s\", %d, %d)\n", address.c_str(), port, hostgroup);
 		fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);
 		rows++;
-		//fprintf(stderr, "INSERT INTO mysql_users (username, password, active) VALUES (\"%s\", \"%s\", %d)\n", username.c_str(), password.c_str(), active);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
@@ -2779,7 +2511,6 @@ int Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 		server.lookupValue("weight", weight);
 		char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+128);
 		sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str());
-		//fprintf(stderr, "INSERT INTO mysql_servers (hostname, port, hostgroup_id) VALUES (\"%s\", %d, %d)\n", address.c_str(), port, hostgroup);
 		fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);
