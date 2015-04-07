@@ -81,6 +81,7 @@ class MySQL_Session
 	bool admin;
 	bool connections_handler;
 	bool stats;
+	bool session_fast_forward;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
 //	int client_fd;
 //	int server_fd;

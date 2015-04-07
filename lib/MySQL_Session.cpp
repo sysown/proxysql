@@ -67,6 +67,7 @@ MySQL_Session::MySQL_Session() {
 	admin=false;
 	connections_handler=false;
 	stats=false;
+	session_fast_forward=false;
 	admin_func=NULL;
 	//client_fd=0;
 	//server_fd=0;
@@ -177,7 +178,7 @@ int MySQL_Session::handler() {
 	unsigned int j;
 	unsigned char c;
 
-
+	if (session_fast_forward==false) {
 	if (client_myds==NULL) {
 		// if we are here, probably we are trying to ping backends
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
@@ -196,7 +197,7 @@ int MySQL_Session::handler() {
 		}
 		goto __exit_DSS__STATE_NOT_INITIALIZED;
 	}
-
+	}
 	for (j=0; j<client_myds->PSarrayIN->len;) {
 		client_myds->PSarrayIN->remove_index(0,&pkt);
 		//prot.parse_mysql_pkt(&pkt,client_myds);
@@ -252,12 +253,14 @@ int MySQL_Session::handler() {
 								}
 #endif /* DEBUG */							
 								if (admin==false) {
+									if (session_fast_forward==false) {
 									CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
 									CurrentQuery.start_time=thread->curtime;
 									CurrentQuery.query_parser_init();
 									CurrentQuery.query_parser_command_type();
 									CurrentQuery.query_parser_free();
 									client_myds->myprot.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
+									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,false);
 									if (qpo) {
 										bool rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
@@ -315,13 +318,16 @@ int MySQL_Session::handler() {
 					default:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
 						assert(0); // FIXME: this should become close connection
-				}
+			}
 				
 				break;
-
+			case FAST_FORWARD:
+				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+				break;
 			case NONE:
 			default:
 				assert(0);
+				break;
 		}
 	}
 
@@ -333,7 +339,8 @@ __get_a_backend:
 		goto __exit_DSS__STATE_NOT_INITIALIZED;
 	}
 
-	if (client_myds->DSS==STATE_QUERY_SENT_NET) {
+	//if ((client_myds->DSS==STATE_QUERY_SENT_NET && session_fast_forward==false) || session_fast_forward==true) {
+	if (status!=FAST_FORWARD && client_myds->DSS==STATE_QUERY_SENT_NET) {
 	// the client has completely sent the query, now we should handle it server side
 	//
 		if (mybe && mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
@@ -369,6 +376,10 @@ __get_a_backend:
 			// END OF if (server_myds->DSS==STATE_NOT_INITIALIZED)
 								//} else {  TRY #1
 		}    // TRY #1
+		if (session_fast_forward==true && mybe && mybe->server_myds && mybe->server_myds->myconn) {
+			mybe->server_myds->myconn->reusable=false;
+		}
+		if (session_fast_forward==false) {
 		if (mybe && mybe->server_myds->myds_type==MYDS_BACKEND && mybe->server_myds->DSS==STATE_READY) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET , server_myds==STATE_READY , server_myds->myds_type==MYDS_BACKEND\n", this);
 			//if (strcmp(userinfo_client.schemaname,userinfo_server.schemaname)==0) {
@@ -404,6 +415,7 @@ __get_a_backend:
 			}
 		}
 							//	}   TRY #1
+		}
 	}
 
 __exit_DSS__STATE_NOT_INITIALIZED:
@@ -432,7 +444,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				break;
 
 			case WAITING_SERVER_DATA:
-
 				switch (mybe->server_myds->DSS) {
 					case STATE_PING_SENT_NET:
 						handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(&pkt);
@@ -477,8 +488,13 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				}
 				break;
 
+			case FAST_FORWARD:
+				client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+				break;
+
 			default:
-				assert(0);
+					assert(0);
+				break;
 		}
 
 		}
@@ -936,6 +952,10 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(
 		}
 		// set prepared statement processing
 		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
+		if (session_fast_forward==true) {
+			status=FAST_FORWARD;
+			myds->DSS=STATE_READY;
+		}
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for backend: disconnecting\n");
 		l_free(pkt->size,pkt->ptr);	
