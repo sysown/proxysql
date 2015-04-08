@@ -974,9 +974,56 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			goto __run_query;
 		}
 	}
+
+	if (strncasecmp("SHOW ", query_no_space, 5)) {
+		goto __end_show_commands; // in the next block there are only SHOW commands
+	}
+
+
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW MYSQL USERS") && !strncasecmp("SHOW MYSQL USERS",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT * FROM mysql_users ORDER BY username, active DESC, username ASC");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW MYSQL SERVERS") && !strncasecmp("SHOW MYSQL SERVERS",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (
+		(query_no_space_length==strlen("SHOW GLOBAL VARIABLES") && !strncasecmp("SHOW GLOBAL VARIABLES",query_no_space, query_no_space_length))
+		||
+		(query_no_space_length==strlen("SHOW ALL VARIABLES") && !strncasecmp("SHOW ALL VARIABLES",query_no_space, query_no_space_length))
+		||
+		(query_no_space_length==strlen("SHOW VARIABLES") && !strncasecmp("SHOW VARIABLES",query_no_space, query_no_space_length))
+	) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables ORDER BY variable_name");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW ADMIN VARIABLES") && !strncasecmp("SHOW ADMIN VARIABLES",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW MYSQL VARIABLES") && !strncasecmp("SHOW MYSQL VARIABLES",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mysql-\%' ORDER BY variable_name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -1014,6 +1061,8 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
+
+__end_show_commands:
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
