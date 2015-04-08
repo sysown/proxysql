@@ -1779,17 +1779,17 @@ char **Standard_ProxySQL_Admin::get_variables_list() {
 char * Standard_ProxySQL_Admin::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
-	if (!strcmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
-	if (!strcmp(name,"stats_credentials")) return strdup(variables.stats_credentials);
-	if (!strcmp(name,"mysql_ifaces")) return strdup(variables.mysql_ifaces);
-	if (!strcmp(name,"telnet_admin_ifaces")) return strdup(variables.telnet_admin_ifaces);
-	if (!strcmp(name,"telnet_stats_ifaces")) return strdup(variables.telnet_stats_ifaces);
-	if (!strcmp(name,"refresh_interval")) {
+	if (!strcasecmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
+	if (!strcasecmp(name,"stats_credentials")) return strdup(variables.stats_credentials);
+	if (!strcasecmp(name,"mysql_ifaces")) return strdup(variables.mysql_ifaces);
+	if (!strcasecmp(name,"telnet_admin_ifaces")) return strdup(variables.telnet_admin_ifaces);
+	if (!strcasecmp(name,"telnet_stats_ifaces")) return strdup(variables.telnet_stats_ifaces);
+	if (!strcasecmp(name,"refresh_interval")) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
 	}
 #ifdef DEBUG
-	if (!strcmp(name,"debug")) {
+	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
 	}
 #endif /* DEBUG */
@@ -1844,10 +1844,10 @@ void Standard_ProxySQL_Admin::delete_credentials(char *credentials) {
 bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
 	size_t vallen=strlen(value);
 
-	if (!strcmp(name,"admin_credentials")) {
+	if (!strcasecmp(name,"admin_credentials")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.admin_credentials==NULL) || strcmp(variables.admin_credentials,value) ) update_creds=true;
+			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
 			if (update_creds && variables.admin_credentials) {
 #ifdef DEBUG
 				delete_credentials((char *)"admin",variables.admin_credentials);
@@ -1869,10 +1869,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"stats_credentials")) {
+	if (!strcasecmp(name,"stats_credentials")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.stats_credentials==NULL) || strcmp(variables.stats_credentials,value) ) update_creds=true;
+			if ((variables.stats_credentials==NULL) || strcasecmp(variables.stats_credentials,value) ) update_creds=true;
 			if (update_creds && variables.stats_credentials) {
 #ifdef DEBUG
 				delete_credentials((char *)"stats",variables.stats_credentials);
@@ -1894,10 +1894,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"mysql_ifaces")) {
+	if (!strcasecmp(name,"mysql_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.mysql_ifaces==NULL) || strcmp(variables.mysql_ifaces,value) ) update_creds=true;
+			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
 			free(variables.mysql_ifaces);
 			variables.mysql_ifaces=strdup(value);
 			if (update_creds && variables.mysql_ifaces) {
@@ -1908,10 +1908,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"telnet_admin_ifaces")) {
+	if (!strcasecmp(name,"telnet_admin_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.telnet_admin_ifaces==NULL) || strcmp(variables.telnet_admin_ifaces,value) ) update_creds=true;
+			if ((variables.telnet_admin_ifaces==NULL) || strcasecmp(variables.telnet_admin_ifaces,value) ) update_creds=true;
 			free(variables.telnet_admin_ifaces);
 			variables.telnet_admin_ifaces=strdup(value);
 			if (update_creds && variables.telnet_admin_ifaces) {
@@ -1922,10 +1922,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"telnet_stats_ifaces")) {
+	if (!strcasecmp(name,"telnet_stats_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.telnet_stats_ifaces==NULL) || strcmp(variables.telnet_stats_ifaces,value) ) update_creds=true;
+			if ((variables.telnet_stats_ifaces==NULL) || strcasecmp(variables.telnet_stats_ifaces,value) ) update_creds=true;
 			free(variables.telnet_stats_ifaces);
 			variables.telnet_stats_ifaces=strdup(value);
 			if (update_creds && variables.telnet_stats_ifaces) {
@@ -1936,7 +1936,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"refresh_interval")) {
+	if (!strcasecmp(name,"refresh_interval")) {
 		int intv=atoi(value);
 		if (intv > 100 && intv < 100000) {
 			variables.refresh_interval=intv;
@@ -1947,7 +1947,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 		}
 	}
 #ifdef DEBUG
-	if (!strcmp(name,"debug")) {
+	if (!strcasecmp(name,"debug")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.debug=true;
 			GloVars.global.gdbg=true;
