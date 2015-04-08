@@ -343,6 +343,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 #endif /* DEBUG */
 		uint16_t server_capabilities;
 		int poll_timeout;
+		int poll_timeout_on_failure;
 	} variables;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;

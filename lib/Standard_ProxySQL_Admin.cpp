@@ -39,7 +39,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define LINESIZE	2048
 
-#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
@@ -974,9 +974,56 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			goto __run_query;
 		}
 	}
+
+	if (strncasecmp("SHOW ", query_no_space, 5)) {
+		goto __end_show_commands; // in the next block there are only SHOW commands
+	}
+
+
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW MYSQL USERS") && !strncasecmp("SHOW MYSQL USERS",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT * FROM mysql_users ORDER BY username, active DESC, username ASC");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW MYSQL SERVERS") && !strncasecmp("SHOW MYSQL SERVERS",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (
+		(query_no_space_length==strlen("SHOW GLOBAL VARIABLES") && !strncasecmp("SHOW GLOBAL VARIABLES",query_no_space, query_no_space_length))
+		||
+		(query_no_space_length==strlen("SHOW ALL VARIABLES") && !strncasecmp("SHOW ALL VARIABLES",query_no_space, query_no_space_length))
+		||
+		(query_no_space_length==strlen("SHOW VARIABLES") && !strncasecmp("SHOW VARIABLES",query_no_space, query_no_space_length))
+	) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables ORDER BY variable_name");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW ADMIN VARIABLES") && !strncasecmp("SHOW ADMIN VARIABLES",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW MYSQL VARIABLES") && !strncasecmp("SHOW MYSQL VARIABLES",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mysql-\%' ORDER BY variable_name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -1014,6 +1061,8 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
+
+__end_show_commands:
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -1730,17 +1779,17 @@ char **Standard_ProxySQL_Admin::get_variables_list() {
 char * Standard_ProxySQL_Admin::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
-	if (!strcmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
-	if (!strcmp(name,"stats_credentials")) return strdup(variables.stats_credentials);
-	if (!strcmp(name,"mysql_ifaces")) return strdup(variables.mysql_ifaces);
-	if (!strcmp(name,"telnet_admin_ifaces")) return strdup(variables.telnet_admin_ifaces);
-	if (!strcmp(name,"telnet_stats_ifaces")) return strdup(variables.telnet_stats_ifaces);
-	if (!strcmp(name,"refresh_interval")) {
+	if (!strcasecmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
+	if (!strcasecmp(name,"stats_credentials")) return strdup(variables.stats_credentials);
+	if (!strcasecmp(name,"mysql_ifaces")) return strdup(variables.mysql_ifaces);
+	if (!strcasecmp(name,"telnet_admin_ifaces")) return strdup(variables.telnet_admin_ifaces);
+	if (!strcasecmp(name,"telnet_stats_ifaces")) return strdup(variables.telnet_stats_ifaces);
+	if (!strcasecmp(name,"refresh_interval")) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
 	}
 #ifdef DEBUG
-	if (!strcmp(name,"debug")) {
+	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
 	}
 #endif /* DEBUG */
@@ -1795,10 +1844,10 @@ void Standard_ProxySQL_Admin::delete_credentials(char *credentials) {
 bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
 	size_t vallen=strlen(value);
 
-	if (!strcmp(name,"admin_credentials")) {
+	if (!strcasecmp(name,"admin_credentials")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.admin_credentials==NULL) || strcmp(variables.admin_credentials,value) ) update_creds=true;
+			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
 			if (update_creds && variables.admin_credentials) {
 #ifdef DEBUG
 				delete_credentials((char *)"admin",variables.admin_credentials);
@@ -1820,10 +1869,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"stats_credentials")) {
+	if (!strcasecmp(name,"stats_credentials")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.stats_credentials==NULL) || strcmp(variables.stats_credentials,value) ) update_creds=true;
+			if ((variables.stats_credentials==NULL) || strcasecmp(variables.stats_credentials,value) ) update_creds=true;
 			if (update_creds && variables.stats_credentials) {
 #ifdef DEBUG
 				delete_credentials((char *)"stats",variables.stats_credentials);
@@ -1845,10 +1894,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"mysql_ifaces")) {
+	if (!strcasecmp(name,"mysql_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.mysql_ifaces==NULL) || strcmp(variables.mysql_ifaces,value) ) update_creds=true;
+			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
 			free(variables.mysql_ifaces);
 			variables.mysql_ifaces=strdup(value);
 			if (update_creds && variables.mysql_ifaces) {
@@ -1859,10 +1908,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"telnet_admin_ifaces")) {
+	if (!strcasecmp(name,"telnet_admin_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.telnet_admin_ifaces==NULL) || strcmp(variables.telnet_admin_ifaces,value) ) update_creds=true;
+			if ((variables.telnet_admin_ifaces==NULL) || strcasecmp(variables.telnet_admin_ifaces,value) ) update_creds=true;
 			free(variables.telnet_admin_ifaces);
 			variables.telnet_admin_ifaces=strdup(value);
 			if (update_creds && variables.telnet_admin_ifaces) {
@@ -1873,10 +1922,10 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"telnet_stats_ifaces")) {
+	if (!strcasecmp(name,"telnet_stats_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
-			if ((variables.telnet_stats_ifaces==NULL) || strcmp(variables.telnet_stats_ifaces,value) ) update_creds=true;
+			if ((variables.telnet_stats_ifaces==NULL) || strcasecmp(variables.telnet_stats_ifaces,value) ) update_creds=true;
 			free(variables.telnet_stats_ifaces);
 			variables.telnet_stats_ifaces=strdup(value);
 			if (update_creds && variables.telnet_stats_ifaces) {
@@ -1887,7 +1936,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 			return false;
 		}
 	}
-	if (!strcmp(name,"refresh_interval")) {
+	if (!strcasecmp(name,"refresh_interval")) {
 		int intv=atoi(value);
 		if (intv > 100 && intv < 100000) {
 			variables.refresh_interval=intv;
@@ -1898,7 +1947,7 @@ bool Standard_ProxySQL_Admin::set_variable(char *name, char *value) {  // this i
 		}
 	}
 #ifdef DEBUG
-	if (!strcmp(name,"debug")) {
+	if (!strcasecmp(name,"debug")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.debug=true;
 			GloVars.global.gdbg=true;
@@ -2344,7 +2393,7 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT hostgroup_id,hostname,port,status,weight,compression FROM main.mysql_servers";
+	char *query=(char *)"SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	//MyHGH->wrlock();
@@ -2367,8 +2416,8 @@ void Standard_ProxySQL_Admin::load_mysql_servers_to_runtime() {
 					}
 				}
 			}
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "hid=%d , hostname=%s , port=%d , status=%s , weight=%d , compression=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), r->fields[3], atoi(r->fields[4]), atoi(r->fields[5]));
-			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), status, atoi(r->fields[5]));
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "hid=%d , hostname=%s , port=%d , status=%s , weight=%d , compression=%d , max_connections=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), r->fields[3], atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]));
+			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), status, atoi(r->fields[5]), atoi(r->fields[6]));
 			//MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
 		}
 	}
@@ -2486,7 +2535,7 @@ int Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, hostgroup_id, compression, weight, status) VALUES (\"%s\", %d, %d, %d, %d, \"%s\")";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, hostgroup_id, compression, weight, status, max_connections) VALUES (\"%s\", %d, %d, %d, %d, \"%s\", %d)";
 	for (i=0; i< count; i++) {
 		const Setting &server = mysql_servers[i];
 		std::string address;
@@ -2495,6 +2544,7 @@ int Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 		int hostgroup;
 		int weight=1;
 		int compression=0;
+		int max_connections=1000; // default
 		if (server.lookupValue("address", address)==false) continue;
 		if (server.lookupValue("port", port)==false) continue;
 		if (server.lookupValue("hostgroup", hostgroup)==false) continue;
@@ -2509,8 +2559,9 @@ int Standard_ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 		}
 		server.lookupValue("compression", compression);
 		server.lookupValue("weight", weight);
+		server.lookupValue("max_connections", max_connections);
 		char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+128);
-		sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str());
+		sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections);
 		fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);

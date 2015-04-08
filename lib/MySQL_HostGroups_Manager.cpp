@@ -102,12 +102,13 @@ void MySrvConnList::drop_all_connections() {
 }
 
 
-MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _status, unsigned int _compression /*, uint8_t _charset */) {
+MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _status, unsigned int _compression /*, uint8_t _charset */, unsigned int _max_connections) {
 	address=strdup(add);
 	port=p;
 	weight=_weight;
 	status=_status;
 	compression=_compression;
+	max_connections=_max_connections;
 	//charset=_charset;
 	myhgc=NULL;
 	ConnectionsUsed=new MySrvConnList(this);
@@ -220,12 +221,12 @@ void MySQL_HostGroups_Manager::wrunlock() {
 
 // add a new row in mysql_servers_incoming
 // we always assume that the calling thread has acquired a rdlock()
-bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t p, unsigned int _weight, enum MySerStatus status, unsigned int _comp /*, uint8_t _charset */) {
+bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t p, unsigned int _weight, enum MySerStatus status, unsigned int _comp /*, uint8_t _charset */, unsigned int _max_connections) {
 	bool ret;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u , status %u, %s compression and charset %d\n", add,p,hid,_weight,status, (_comp ? "with" : "without") /*, _charset */);
-	char *q=(char *)"INSERT INTO mysql_servers_incoming VALUES (%u, \"%s\", %u, %u, %u, %u)";
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u , status %u, %s compression, max_connections %d\n", add,p,hid,_weight,status, (_comp ? "with" : "without") /*, _charset */ , _max_connections);
+	char *q=(char *)"INSERT INTO mysql_servers_incoming VALUES (%u, \"%s\", %u, %u, %u, %u, %u)";
 	char *query=(char *)malloc(strlen(q)+strlen(add)+100);
-	sprintf(query,q,hid,add,p,_weight,status,_comp /*,_charset */);
+	sprintf(query,q,hid,add,p,_weight,status,_comp /*,_charset */, _max_connections);
 	ret=mydb->execute(query);
 	free(query);
 	return ret;
@@ -255,12 +256,12 @@ bool MySQL_HostGroups_Manager::commit() {
 	if (resultset) { delete resultset; resultset=NULL; }
 
 // INSERT OR IGNORE INTO mysql_servers SELECT ... FROM mysql_servers_incoming
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status, compression) SELECT hostgroup_id, hostname, port, weight, status, compression FROM mysql_servers_incoming\n");
-	mydb->execute("INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status, compression) SELECT hostgroup_id, hostname, port, weight, status, compression FROM mysql_servers_incoming");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status, compression, max_connections) SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections FROM mysql_servers_incoming\n");
+	mydb->execute("INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status, compression, max_connections) SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections FROM mysql_servers_incoming");
 
 
 	// SELECT FROM mysql_servers whatever is not identical in mysql_servers_incoming, or where mem_pointer=0 (where there is no pointer yet)
-	query=(char *)"SELECT t1.*, t2.weight, t2.status, t2.compression FROM mysql_servers t1 JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE mem_pointer=0 OR t1.weight<>t2.weight OR t1.status<>t2.status OR t1.compression<>t2.compression";
+	query=(char *)"SELECT t1.*, t2.weight, t2.status, t2.compression, t2.max_connections FROM mysql_servers t1 JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE mem_pointer=0 OR t1.weight<>t2.weight OR t1.status<>t2.status OR t1.compression<>t2.compression OR t1.max_connections<>t2.max_connections";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
@@ -268,27 +269,31 @@ bool MySQL_HostGroups_Manager::commit() {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			long long ptr=atoll(r->fields[6]);
+			long long ptr=atoll(r->fields[7]);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d , weight=%d, status=%d, mem_pointer=%llu, hostgroup=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), ptr, atoi(r->fields[0]), atoi(r->fields[5]));
 			fprintf(stderr,"%lld\n", ptr);
 			if (ptr==0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Creating new server %s:%d , weight=%d, status=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]) );
-				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]));
+				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]));
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), mysrvc, atoi(r->fields[0]));
 				add(mysrvc,atoi(r->fields[0]));
 			} else {
 				MySrvC *mysrvc=(MySrvC *)ptr;
-				if (atoi(r->fields[3])!=atoi(r->fields[7])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[3] , mysrvc->weight , atoi(r->fields[7]));
-					mysrvc->weight=atoi(r->fields[7]);
+				if (atoi(r->fields[3])!=atoi(r->fields[8])) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[3] , mysrvc->weight , atoi(r->fields[8]));
+					mysrvc->weight=atoi(r->fields[8]);
 				}
-				if (atoi(r->fields[4])!=atoi(r->fields[8])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing status for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->status , atoi(r->fields[8]));
-					mysrvc->status=(MySerStatus)atoi(r->fields[8]);
+				if (atoi(r->fields[4])!=atoi(r->fields[9])) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing status for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->status , atoi(r->fields[9]));
+					mysrvc->status=(MySerStatus)atoi(r->fields[9]);
 				}
-				if (atoi(r->fields[5])!=atoi(r->fields[9])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing compression for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->compression , atoi(r->fields[9]));
-					mysrvc->compression=atoi(r->fields[9]);
+				if (atoi(r->fields[5])!=atoi(r->fields[10])) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing compression for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->compression , atoi(r->fields[10]));
+					mysrvc->compression=atoi(r->fields[10]);
+				}
+				if (atoi(r->fields[6])!=atoi(r->fields[11])) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_connections for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->compression , atoi(r->fields[11]));
+					mysrvc->max_connections=atoi(r->fields[11]);
 				}
 			}
 		}
@@ -314,9 +319,9 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			uintptr_t ptr=(uintptr_t)mysrvc;
-			char *q=(char *)"INSERT INTO mysql_servers VALUES(%d,\"%s\",%d,%d,%d,%u,%llu)";
-			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+16+32);
-			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, ptr);
+			char *q=(char *)"INSERT INTO mysql_servers VALUES(%d,\"%s\",%d,%d,%d,%u,%u,%llu)";
+			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+8+16+32);
+			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, mysrvc->max_connections, ptr);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 			fprintf(stderr,"%s\n",query);
 			mydb->execute(query);
@@ -331,7 +336,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT hostgroup_id, hostname, port, weight, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" END, compression FROM mysql_servers";
+	char *query=(char *)"SELECT hostgroup_id, hostname, port, weight, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" END, compression, max_connections FROM mysql_servers";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
@@ -408,8 +413,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 		//int j=0;
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
-			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
-				sum+=mysrvc->weight;
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					sum+=mysrvc->weight;
+				}
 			}
 		}
 		if (sum==0) {
@@ -422,11 +429,13 @@ MySrvC *MyHGC::get_random_MySrvC() {
 
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
-			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
-				sum+=mysrvc->weight;
-				if (k<=sum) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-					return mysrvc;
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					sum+=mysrvc->weight;
+					if (k<=sum) {
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+						return mysrvc;
+					}
 				}
 			}
 		}

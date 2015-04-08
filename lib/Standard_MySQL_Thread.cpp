@@ -121,6 +121,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
 	(char *)"poll_timeout",
+	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"servers_stats",
@@ -157,6 +158,7 @@ Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
 	variables.server_version=strdup((char *)"5.1.30");
 	variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 	variables.poll_timeout=2000;
+	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
 	variables.servers_stats=true;
 #ifdef DEBUG
@@ -232,36 +234,37 @@ void Standard_MySQL_Threads_Handler::commit() {
 
 char * Standard_MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcasecmp(name,"connect_timeout_server_error")) return strdup(variables.connect_timeout_server_error);
-	if (!strcmp(name,"server_version")) return strdup(variables.server_version);
-	if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
-	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
+	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
+	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
 }
 
 uint16_t Standard_MySQL_Threads_Handler::get_variable_uint16(char *name) {
-	if (!strcmp(name,"server_capabilities")) return variables.server_capabilities;
+	if (!strcasecmp(name,"server_capabilities")) return variables.server_capabilities;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 }
 
 uint8_t Standard_MySQL_Threads_Handler::get_variable_uint8(char *name) {
-	if (!strcmp(name,"default_charset")) return variables.default_charset;
+	if (!strcasecmp(name,"default_charset")) return variables.default_charset;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 }
 
 int Standard_MySQL_Threads_Handler::get_variable_int(char *name) {
 #ifdef DEBUG
-	if (!strcmp(name,"session_debug")) return (int)variables.session_debug;
+	if (!strcasecmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
-	if (!strcmp(name,"have_compress")) return (int)variables.have_compress;
-	if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
-	if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
-	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
+	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
+	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
+	if (!strcasecmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
+	if (!strcasecmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 }
@@ -270,15 +273,15 @@ char * Standard_MySQL_Threads_Handler::get_variable(char *name) {	// this is the
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
 	if (!strcasecmp(name,"connect_timeout_server_error")) return strdup(variables.connect_timeout_server_error);
-	if (!strcmp(name,"server_version")) return strdup(variables.server_version);
-	if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
-	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
-	if (!strcmp(name,"server_capabilities")) {
+	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
+	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
+	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
 		sprintf(intbuf,"%d",variables.server_capabilities);
 		return strdup(intbuf);
 	}
-	if (!strcmp(name,"default_charset")) {
+	if (!strcasecmp(name,"default_charset")) {
 		sprintf(intbuf,"%d",variables.default_charset);
 		return strdup(intbuf);
 	}
@@ -294,27 +297,31 @@ char * Standard_MySQL_Threads_Handler::get_variable(char *name) {	// this is the
 		sprintf(intbuf,"%d",variables.ping_timeout_server);
 		return strdup(intbuf);
 	}
-	if (!strcmp(name,"poll_timeout")) {
+	if (!strcasecmp(name,"poll_timeout")) {
 		sprintf(intbuf,"%d",variables.poll_timeout);
 		return strdup(intbuf);
 	}
-	if (!strcmp(name,"threads")) {
+	if (!strcasecmp(name,"poll_timeout_on_failure")) {
+		sprintf(intbuf,"%d",variables.poll_timeout_on_failure);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"threads")) {
 		sprintf(intbuf,"%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
 		return strdup(intbuf);
 	}
-	if (!strcmp(name,"stacksize")) {
+	if (!strcasecmp(name,"stacksize")) {
 		sprintf(intbuf,"%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 		return strdup(intbuf);
 	}
 #ifdef DEBUG
-	if (!strcmp(name,"session_debug")) {
+	if (!strcasecmp(name,"session_debug")) {
 		return strdup((variables.session_debug ? "true" : "false"));
 	}
 #endif /* DEBUG */
-	if (!strcmp(name,"have_compress")) {
+	if (!strcasecmp(name,"have_compress")) {
 		return strdup((variables.have_compress ? "true" : "false"));
 	}
-	if (!strcmp(name,"servers_stats")) {
+	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
 	}
 	return NULL;
@@ -370,7 +377,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"default_schema")) {
+	if (!strcasecmp(name,"default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
 			variables.default_schema=strdup(value);
@@ -379,7 +386,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"interfaces")) {
+	if (!strcasecmp(name,"interfaces")) {
 		if (vallen && strlen(variables.interfaces)==0) {
 			free(variables.interfaces);
 			variables.interfaces=strdup(value);
@@ -388,7 +395,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"server_version")) {
+	if (!strcasecmp(name,"server_version")) {
 		if (vallen) {
 			free(variables.server_version);
 			variables.server_version=strdup(value);
@@ -397,7 +404,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"server_capabilities")) {
+	if (!strcasecmp(name,"server_capabilities")) {
 		int intv=atoi(value);
 		if (intv > 10 && intv <= 65535) {
 			variables.server_capabilities=intv;
@@ -406,7 +413,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"poll_timeout")) {
+	if (!strcasecmp(name,"poll_timeout")) {
 		int intv=atoi(value);
 		if (intv > 10 && intv < 20000) {
 			variables.poll_timeout=intv;
@@ -415,7 +422,16 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"default_charset")) {
+	if (!strcasecmp(name,"poll_timeout_on_failure")) {
+		int intv=atoi(value);
+		if (intv > 10 && intv < 20000) {
+			variables.poll_timeout_on_failure=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"default_charset")) {
 		int intv=atoi(value);
 		if (intv > 0 && intv < 256) {
 			variables.default_charset=intv;
@@ -424,7 +440,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"stacksize")) {
+	if (!strcasecmp(name,"stacksize")) {
 		int intv=atoi(value);
 		if (intv >= 256*1024 && intv <= 4*1024*1024) {
 			stacksize=intv;
@@ -433,7 +449,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 			return false;
 		}
 	}
-	if (!strcmp(name,"threads")) {
+	if (!strcasecmp(name,"threads")) {
 		unsigned int intv=atoi(value);
 		if ((num_threads==0 || num_threads==intv || mysql_threads==NULL) && intv > 0 && intv < 256) {
 			num_threads=intv;
@@ -443,7 +459,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 		}
 	}
 #ifdef DEBUG
-	if (!strcmp(name,"session_debug")) {
+	if (!strcasecmp(name,"session_debug")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.session_debug=true;
 			return true;
@@ -455,7 +471,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 		return false;
 	}
 #endif /* DEBUG */
-	if (!strcmp(name,"have_compress")) {
+	if (!strcasecmp(name,"have_compress")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.have_compress=true;
 			return true;
@@ -466,7 +482,7 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 		}
 		return false;
 	}
-	if (!strcmp(name,"servers_stats")) {
+	if (!strcasecmp(name,"servers_stats")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.servers_stats=true;
 			return true;
@@ -977,6 +993,7 @@ void Standard_MySQL_Thread::refresh_variables() {
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___default_charset=GloMTH->get_variable_uint8((char *)"default_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 #ifdef DEBUG
