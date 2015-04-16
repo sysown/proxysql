@@ -8,50 +8,6 @@ extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 
 static unsigned int __debugging_mp=0;
-/*
-MySQL_Session_userinfo::MySQL_Session_userinfo() {
-	username=NULL;
-	password=NULL;
-	schemaname=l_strdup(mysql_thread___default_schema);
-}
-
-MySQL_Session_userinfo::~MySQL_Session_userinfo() {
-	if (username) l_free_string(username);
-	if (password) l_free_string(password);
-	if (schemaname) l_free_string(schemaname);
-}
-
-void MySQL_Session_userinfo::set(char *u, char *p, char *s) {
-	if (u) {
-		if (username) l_free_string(username);
-		username=l_strdup(u);
-	}
-	if (p) {
-		if (password) l_free_string(password);
-		password=l_strdup(p);
-	}
-	if (s) {
-		if (schemaname) l_free_string(schemaname);
-		schemaname=l_strdup(s);
-	}
-}
-
-void MySQL_Session_userinfo::set(MySQL_Session_userinfo *ui) {
-	set(ui->username, ui->password, ui->schemaname);
-}
-
-
-bool MySQL_Session_userinfo::set_schemaname(char *_new, int l) {
-	if (strncmp(_new,schemaname,l)) {
-		l_free_string(schemaname);
-		schemaname=(char *)l_alloc(l+1);
-		memcpy(schemaname,_new,l);
-		schemaname[l]=0;
-		return true;
-	}
-	return false;
-}
-*/
 
 Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
