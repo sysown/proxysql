@@ -1112,32 +1112,6 @@ __run_query:
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
-/*
-	//MySQL_Protocol &myprot=sess->myprot_client;
-	sess->client_myds->DSS=STATE_QUERY_SENT;
-//	sess->myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
-	sess->myprot_client.generate_pkt_column_count(true,NULL,NULL,1,1);
-	sess->myprot_client.generate_pkt_field(true,NULL,NULL,2,(char *)"",(char *)"",(char *)"",(char *)"alias",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,true,0,(char *)"");
-	sess->client_myds->DSS=STATE_COLUMN_DEFINITION;
-	sess->myprot_client.generate_pkt_EOF(true,NULL,NULL,3,0,0);
-	char **p=(char **)malloc(sizeof(char*));
-	int *l=(int *)malloc(sizeof(int*));
-	//p[0]="column test";
-	int st=rand()%32+2;
-	p[0]=(char *)malloc(st+1);
-	for (int i=0; i<st; i++) {
-		p[0][i]='a'+rand()%25;
-	}
-	p[0][st]='\0';
-	l[0]=strlen(p[0]);
-	sess->client_myds->DSS=STATE_ROW;
-	sess->myprot_client.generate_pkt_row(true,NULL,NULL,4,1,l,p);
-	sess->myprot_client.generate_pkt_EOF(true,NULL,NULL,5,0,2);
-	sess->client_myds->DSS=STATE_SLEEP;
-	free(l);
-	free(p[0]);
-	free(p);
-*/
 }
 
 
@@ -2444,60 +2418,6 @@ void Standard_ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) 
 	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",msg);
 	myds->DSS=STATE_SLEEP;
 }
-/*
-void Standard_ProxySQL_Admin::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
-	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
-	myds->DSS=STATE_QUERY_SENT_DS;
-	int sid=1;
-	if (result) {
-//	sess->myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
-		myprot->generate_pkt_column_count(true,NULL,NULL,sid,result->columns); sid++;
-		for (int i=0; i<result->columns; i++) {
-			//myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"alias",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,true,0,(char *)"");
-			//myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",result->column_definition[i]->name,(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,true,0,(char *)"");
-			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",result->column_definition[i]->name,(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL);
-			sid++;
-		}
-		myds->DSS=STATE_COLUMN_DEFINITION;
-
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,0); sid++;
-		char **p=(char **)malloc(sizeof(char*)*result->columns);
-		int *l=(int *)malloc(sizeof(int*)*result->columns);
-		//p[0]="column test";
-		for (int r=0; r<result->rows_count; r++) {
-		for (int i=0; i<result->columns; i++) {
-			//int st=rand()%32+2;
-			//p[i]=(char *)malloc(st+1);
-			//for (int j=0; j<st; j++) {
-			//	p[i][j]='a'+rand()%25;
-			//}
-			//p[i][st]='\0';
-			//l[i]=strlen(p[i]);
-			l[i]=result->rows[r]->sizes[i];
-			p[i]=result->rows[r]->fields[i];
-		}
-		myprot->generate_pkt_row(true,NULL,NULL,sid,result->columns,l,p); sid++;
-		}
-		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,2); sid++;
-		myds->DSS=STATE_SLEEP;
-		free(l);
-		//free(p[0]);
-		free(p);
-	
-	} else { // no result set
-		if (error) {
-			// there was an error
-			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"#28000",error);
-		} else {
-			// no error, DML succeeded
-			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,0,0,NULL);
-		}
-		myds->DSS=STATE_SLEEP;
-	}
-}
-*/
 
 void Standard_ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
 	char *error=NULL;
