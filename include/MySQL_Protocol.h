@@ -31,7 +31,6 @@ class MySQL_Protocol {
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
 	int pkt_handshake_client(unsigned char *, unsigned int);
-	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);
 
 	// ----------------- //
 	// Packet generation //
