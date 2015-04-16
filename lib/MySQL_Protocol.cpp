@@ -465,7 +465,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		switch ((*myds)->DSS) {
-			case STATE_COLUMN_DEFINITION:
+			case STATE_FIELD:
 				(*myds)->DSS=STATE_EOF1;
 				break;
 			case STATE_ROW:
