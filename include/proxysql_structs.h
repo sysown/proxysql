@@ -291,30 +291,6 @@ struct mysql_protocol_events {
 	uint8_t next_state[MAX_EVENTS_PER_STATE];
 };
 
-
-/*
-// mysql backend
-struct _mysql_backend_t {
-  // attributes
-  //int fd;
-  //MSHGE *mshge;
-  //mysql_connpool *last_mysql_connpool;
-	int hostgroup_id;
-	MySQL_Data_Stream *server_myds;
-	mysql_cp_entry_t *server_mycpe;
-	bytes_stats_t server_bytes_at_cmd;
-};
-*/
-
-/*
-// mysql connection pool entry
-struct _mysql_cp_entry_t {
-	MYSQL *conn;
-	unsigned long long expire;
-	int reusable;
-};
-*/
-
 // this struct define global variable entries, and how these are configured during startup
 struct _global_variable_entry_t {
 	const char *group_name;	// [group name] in proxysql.cnf 
@@ -491,51 +467,6 @@ struct _mysql_session_t {
 //EXTERN int foreground;
 EXTERN global_variables glovars;
 
-/*
-EXTERN gchar *__cmd_proxysql_config_file;
-EXTERN gchar *__cmd_proxysql_datadir;
-EXTERN gchar *__cmd_proxysql_admin_pathdb;
-EXTERN gboolean __cmd_proxysql_print_version;
-EXTERN int __cmd_proxysql_nostart;
-EXTERN int __cmd_proxysql_foreground;
-EXTERN int __cmd_proxysql_gdbg;
-EXTERN gchar *__cmd_proxysql_admin_socket;
-*/
-//EXTERN MySQL_Authentication *GMA;
-//#ifdef __cplusplus
-//class ProxySQL_GlobalVariables;
-
-/*
-#ifndef __CLASS_PROXYSQL_GLOVARS_H
-#define __CLASS_PROXYSQL_GLOVARS_H
-class ProxySQL_GlobalVariables {
-  public:
-  ProxySQL_ConfigFile *confFile;
-  gchar *__cmd_proxysql_config_file;
-  gchar *__cmd_proxysql_datadir;
-  gchar *__cmd_proxysql_admin_pathdb;
-  gboolean __cmd_proxysql_print_version;
-  int __cmd_proxysql_nostart;
-  int __cmd_proxysql_foreground;
-  int __cmd_proxysql_gdbg;
-  gchar *__cmd_proxysql_admin_socket;
-  struct  {
-    bool gdbg=false;
-    bool nostart=false;
-    int gdb=0;
-    int backlog;
-    int stack_size;
-    char *pidfile;
-    bool restart_on_error;
-    int restart_delay;
-  } global;
-  struct mysql {
-    char *server_version;
-    int poll_timeout;
-  };
-};
-#endif
-*/
 //#endif /* __cplusplus */
 #endif /* GLOBAL_DEFINED */
 
@@ -550,64 +481,11 @@ class ProxySQL_GlobalVariables {
 #endif
 //#endif
 
-//class ProxySQL_GlobalVariables;
-
 #ifdef PROXYSQL_EXTERN
-//ProxySQL_GlobalVariables GloVars;
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
 #define GLOBAL_DEFINED_OPTS_ENTRIES
-//#include "proxysql_glovars.hpp"
-/*
-#ifndef __CLASS_PROXYSQL_GLOVARS_H
-#define __CLASS_PROXYSQL_GLOVARS_H
-class ProxySQL_GlobalVariables {
-  public:
-  ProxySQL_ConfigFile *confFile;
-  gchar *__cmd_proxysql_config_file;
-  gchar *__cmd_proxysql_datadir;
-  gchar *__cmd_proxysql_admin_pathdb;
-  gboolean __cmd_proxysql_print_version;
-  int __cmd_proxysql_nostart;
-  int __cmd_proxysql_foreground;
-  int __cmd_proxysql_gdbg;
-  gchar *__cmd_proxysql_admin_socket;
-  struct  {
-    bool gdbg=false;
-    bool nostart=false;
-    int gdb=0;
-    int backlog;
-    int stack_size;
-    char *pidfile;
-    bool restart_on_error;
-    int restart_delay;
-  } global;
-  struct mysql {
-    char *server_version;
-    int poll_timeout;
-  };
-};
-#endif
-*/
 ProxySQL_GlobalVariables GloVars;
 
-/*
-GOptionEntry cmd_option_entries[] =
-{
-//	{ "mysql-port", 0, 0, G_OPTION_ARG_INT, &__cmd_proxysql_mysql_port, "MySQL proxy port", NULL },
-//	{ "admin-socket", 'S', 0, G_OPTION_ARG_FILENAME, &__cmd_proxysql_admin_socket, "Administration Unix Socket", NULL },
-//	{ "admin-socket", 'S', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_admin_socket, "Administration Unix Socket", NULL },
-//	{ "no-start", 'n', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_nostart, "Starts only the admin service", NULL },
-//	{ "foreground", 'f', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_foreground, "Run in foreground", NULL },
-//	{ "version", 'V', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_print_version, "Print version", NULL },
-//#ifdef DEBUG
-//	{ "debug", 'd', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_gdbg, "debug", NULL },
-//#endif // DEBUG
-//	{ "datadir", 'D', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_datadir, "Datadir", NULL },
-//	{ "admin-pathdb", 'a', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_admin_pathdb, "Configuration DB path", NULL },
-//	{ "config", 'c', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_config_file, "Configuration text file", NULL },
-	{ NULL }
-};
-*/
 #endif // GLOBAL_DEFINED_OPTS_ENTRIES 
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
@@ -648,6 +526,3 @@ extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
 #endif /* PROXYSQL_EXTERN */
-
-
-

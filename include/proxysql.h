@@ -91,7 +91,6 @@
 
 #ifdef __cplusplus
 extern "C" {
-//int parse_mysql_pkt(unsigned char *, MySQL_Data_Stream *, int);
 //int pkt_handshake_client(unsigned char *, unsigned int);
 #endif /* __cplusplus */
 
