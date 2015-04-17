@@ -197,7 +197,16 @@ class iface_info {
 };
 
 
+/* Class that manages a list of interfaces to listen on with sockets.
 
+Responsibilities include:
+- maintaining the array of interfaces (create, delete)
+- calling listen_on_port to create the new socket
+
+The interface is a bit inconsistent, the shutdown of a socket is not done
+from here, but from Standard_MySQL_Threads_Handler::listener_del.
+
+*/
 class MySQL_Listeners_Manager {
 	private:
 	PtrArray *ifaces;
