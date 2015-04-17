@@ -653,6 +653,9 @@ bool Standard_MySQL_Thread::init() {
 	memset(my_idle_myds,0,sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	GloQPro->init_thread();
 	refresh_variables();
+	i=pipe(pipefd);
+	mypolls.add(POLLIN, pipefd[0], NULL, 0);
+	assert(i==0);
 	return true;
 }
 
@@ -767,7 +770,7 @@ void Standard_MySQL_Thread::run() {
 
 		for (n = 0; n < mypolls.len; n++) {
 			mypolls.fds[n].revents=0;
-			if (mypolls.myds[n]->myds_type!=MYDS_LISTENER && mypolls.myds[n]->myds_type!=MYDS_BACKEND_PAUSE_CONNECT) {
+			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER && mypolls.myds[n]->myds_type!=MYDS_BACKEND_PAUSE_CONNECT) {
 				mypolls.myds[n]->set_pollout();
 			}
 		}
@@ -831,6 +834,14 @@ void Standard_MySQL_Thread::run() {
 
 
 			MySQL_Data_Stream *myds=mypolls.myds[n];
+			if (myds==NULL) {
+				if (mypolls.fds[n].revents) {
+					char c;
+					read(mypolls.fds[n].fd, &c, 1);	// read just one byte , no need for error handling
+					fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
+				}
+			continue;
+			}
 			if (mypolls.fds[n].revents==0) {
 
 				switch(myds->myds_type) {
@@ -1206,6 +1217,16 @@ SQLite3_result * Standard_MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Sessi
 	result->add_row(pta);
 	free(pta);
 	return result;
+}
+
+void Standard_MySQL_Threads_Handler::signal_all_threads() {
+	unsigned int i;
+	char c;
+	for (i=0;i<num_threads;i++) {
+		Standard_MySQL_Thread *thr=(Standard_MySQL_Thread *)mysql_threads[i].worker;
+		int fd=thr->pipefd[1];
+		write(fd,&c,1);
+	}
 }
 
 extern "C" MySQL_Threads_Handler * create_MySQL_Threads_Handler_func() {
