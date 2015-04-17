@@ -124,18 +124,3 @@ int connect_socket(char *address, int connect_port)
 	}
 	return s;
 }
-
-/*
-gboolean write_one_pkt_to_net(mysql_data_stream_t *myds, pkt *p) {// this should be used ONLY when sure that only 1 packet is expected, for example during authentication
-	l_ptr_array_add(myds->output.pkts, p);
-	myds->array2buffer(myds);
-	queue_t *q=&myds->output.queue;
-	while (queue_data(q) && (myds->active==TRUE)) {
-		myds->write_to_net(myds);
-	}
-	if (myds->active==FALSE) {
-		return FALSE;
-	}
-	return TRUE;
-}
-*/
