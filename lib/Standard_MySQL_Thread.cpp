@@ -154,7 +154,7 @@ Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
 #else
 	if (glovars.has_debug==true) {
 #endif /* DEBUG */
-		perror("Incompatible debagging version");
+		perror("Incompatible debugging version");
 		exit(EXIT_FAILURE);
 	}
 	num_threads=0;
