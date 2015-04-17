@@ -28,6 +28,7 @@ extern "C" {
 
 #define DEFAULT_NUM_THREADS	4
 #define DEFAULT_STACK_SIZE	1024*1024
+#define DEFAULT_PROXYSQL_TIMEOUT 10000000
 
 #define SESSIONS_FOR_CONNECTIONS_HANDLER	64
 
@@ -1012,10 +1013,10 @@ void Standard_MySQL_Thread::unregister_session_connection_handler(int idx) {
 
 
 void Standard_MySQL_Thread::myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n) {
-	if (curtime>mypolls.last_recv[n]+10000000) {
+	if (curtime>mypolls.last_recv[n]+DEFAULT_PROXYSQL_TIMEOUT) {
 		proxy_error("connect() timeout . curtime: %llu , last_recv: %llu , failed after %lluus . fd: %d , myds_type: %s\n", curtime, mypolls.last_recv[n] , (curtime-mypolls.last_recv[n]) , myds->fd, (myds->myds_type==MYDS_BACKEND_PAUSE_CONNECT ? "MYDS_BACKEND_PAUSE_CONNECT" : "MYDS_BACKEND_NOT_CONNECTED" ) );
 		myds->myds_type=MYDS_BACKEND_FAILED_CONNECT;
-		myds->sess->pause=curtime+10000000;
+		myds->sess->pause=curtime+DEFAULT_PROXYSQL_TIMEOUT;
 		myds->sess->to_process=1;
 	}
 }
@@ -1023,7 +1024,7 @@ void Standard_MySQL_Thread::myds_backend_set_failed_connect(MySQL_Data_Stream *m
 void Standard_MySQL_Thread::myds_backend_pause_connect(MySQL_Data_Stream *myds) {
 	proxy_error("connect() error on fd %d . Pausing ...\n", myds->fd);
 	myds->myds_type=MYDS_BACKEND_PAUSE_CONNECT;
-	myds->sess->pause=curtime+10000000;
+	myds->sess->pause=curtime+DEFAULT_PROXYSQL_TIMEOUT;
 	myds->sess->to_process=1;
 }
 
@@ -1038,7 +1039,7 @@ void Standard_MySQL_Thread::myds_backend_first_packet_after_connect(MySQL_Data_S
 	} else {
 		fprintf(stderr,"Connect() error\n");
 		myds->myds_type=MYDS_BACKEND_PAUSE_CONNECT;
-		myds->sess->pause=curtime+10000000;
+		myds->sess->pause=curtime+DEFAULT_PROXYSQL_TIMEOUT;
 	}
 }
 
