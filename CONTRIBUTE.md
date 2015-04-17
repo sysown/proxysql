@@ -8,6 +8,7 @@
   2.4 g++
   2.5 libssl-dev
   2.6 mysql-server
+  2.7 libmysqlclient-dev (for compiling perf test)
 3. Create a fork of proxysql in your GitHub account. Example: https://github.com/aismail/proxysql-0.2
 4. Add a new git remote so that you will be able to pull code from upstream:
   git remote add sysown git@github.com:sysown/proxysql-0.2.git
