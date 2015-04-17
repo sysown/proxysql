@@ -56,11 +56,22 @@ class MySQL_Protocol {
 	// ----------------- //
 	// Packet processing //
 	// ----------------- //
+	//
+	// These routines are used to react to certain types of packets that are
+	// incoming. MySQL_Session class will call these as part of the state machine
+	//
 	bool process_pkt_OK(unsigned char *pkt, unsigned int len);
 	bool process_pkt_EOF(unsigned char *pkt, unsigned int len);
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
 	bool process_pkt_initial_handshake(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
+
+	// ----------------- //
+	// Packet asserting //
+	// ---------------- //
+	bool is_pkt_EOF(unsigned char *pkt, unsigned int len);
+	bool is_pkt_OK(unsigned char *pkt, unsigned int len);
+	bool is_pkt_ERR(unsigned char *pkt, unsigned int len);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */

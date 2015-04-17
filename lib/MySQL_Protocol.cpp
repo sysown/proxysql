@@ -1514,3 +1514,49 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 //uint16_t get_status(unsigned char *pkt, unsigned int len) {
 //}
+bool MySQL_Protocol::is_pkt_EOF(unsigned char *pkt, unsigned int len) {
+	/* Because CLIENT_PROTOCOL_41 is returned by default as a server-side
+	capability of this proxy, the packet will be 9 bytes long. See here for a
+	complete description:
+	http://dev.mysql.com/doc/internals/en/packet-EOF_Packet.html */
+
+	if (len != 9) {
+		return false;
+	}
+
+	// Double-check that the length encoded in the header says 5 bytes of content.
+	if (pkt[0] != 0x05 || pkt[1] != 0 || pkt[2] != 0) {
+		return false;
+	}
+
+	if (pkt[4] != 0xFE) {
+		return false;
+	}
+
+	return true;
+}
+
+bool MySQL_Protocol::is_pkt_OK(unsigned char *pkt, unsigned int len) {
+  /* CLIENT_TRANSACTIONS and CLIENT_PROTOCOL_41 are enabled for ProxySQL.
+
+  See http://dev.mysql.com/doc/internals/en/packet-OK_Packet.html
+  */
+
+  // 00 is the marker for "OK"
+  if (pkt[4] != 0x00) {
+    return false;
+  }
+
+  return true;
+}
+
+bool MySQL_Protocol::is_pkt_ERR(unsigned char *pkt, unsigned int len) {
+  /* See
+  http://dev.mysql.com/doc/internals/en/packet-ERR_Packet.html
+  */
+  if (pkt[4] != 0xFF) {
+    return false;
+  }
+
+  return true;
+}
