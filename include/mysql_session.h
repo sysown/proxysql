@@ -20,6 +20,7 @@ class Query_Info {
 	unsigned long long query_parser_update_counters();
 };
 
+// A conversation between a client data stream and a server data stream.
 class MySQL_Session
 {
 	private:
