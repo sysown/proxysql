@@ -1054,6 +1054,7 @@ void Standard_MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *my
 		mypolls.fds[n].revents=0;
 		MySQL_Session *sess=create_new_session_and_client_data_stream(c);
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL);
+		// FIXME: replace with O_NONBLOCK -http://stackoverflow.com/questions/1150635/unix-nonblocking-i-o-o-nonblock-vs-fionbio
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
