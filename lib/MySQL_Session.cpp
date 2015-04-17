@@ -234,8 +234,8 @@ int MySQL_Session::handler() {
 		goto __exit_DSS__STATE_NOT_INITIALIZED;
 	}
 
-	for (j=0; j<client_myds->PSarrayIN->len;) {
-		client_myds->PSarrayIN->remove_index(0,&pkt);
+	for (j=0; j<client_myds->incoming_fragments->len;) {
+		client_myds->incoming_fragments->remove_index(0,&pkt);
 
 		switch (status) {
 			case CONNECTING_CLIENT:
@@ -289,7 +289,7 @@ int MySQL_Session::handler() {
 										if (rc_break==true) { break; }
 									}
 									mybe=find_or_create_backend(current_hostgroup);
-									mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+									mybe->server_myds->outgoing_fragments->add(pkt.ptr, pkt.size);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
 									// this is processed by the admin module
@@ -307,7 +307,7 @@ int MySQL_Session::handler() {
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(&pkt);
 								break;
 							case _MYSQL_COM_STMT_CLOSE:
-								mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+								mybe->server_myds->outgoing_fragments->add(pkt.ptr, pkt.size);
 								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
@@ -424,8 +424,8 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 //	}
 
 	if (mybe && mybe->server_myds) {
-		for (j=0; j<mybe->server_myds->PSarrayIN->len;) {
-			mybe->server_myds->PSarrayIN->remove_index(0,&pkt);
+		for (j=0; j<mybe->server_myds->incoming_fragments->len;) {
+			mybe->server_myds->incoming_fragments->remove_index(0,&pkt);
 
 		switch (status) {
 			case CONNECTING_SERVER:
@@ -506,9 +506,9 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		&&
 		mybe->server_myds->DSS==STATE_QUERY_SENT_DS
 		&&
-		mybe->server_myds->PSarrayOUT->len==0
+		mybe->server_myds->outgoing_fragments->len==0
 		&&
-		mybe->server_myds->PSarrayOUTpending->len==0
+		mybe->server_myds->outgoing_pending_fragments->len==0
 		&&
 		mybe->server_myds->net_failure==false
 		&&
@@ -573,9 +573,9 @@ bool MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
 		status=WAITING_SERVER_DATA;
 		unsigned int k;
 		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+		for (k=0; k<mybe->server_myds->outgoing_pending_fragments->len;) {
+			mybe->server_myds->outgoing_pending_fragments->remove_index(0,&pkt2);
+			mybe->server_myds->outgoing_fragments->add(pkt2.ptr, pkt2.size);
 			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 		}
 		// set prepared statement processing
@@ -600,9 +600,9 @@ bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 		status=WAITING_SERVER_DATA;
 		unsigned int k;
 		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+		for (k=0; k<mybe->server_myds->outgoing_pending_fragments->len;) {
+			mybe->server_myds->outgoing_pending_fragments->remove_index(0,&pkt2);
+			mybe->server_myds->outgoing_fragments->add(pkt2.ptr, pkt2.size);
 			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 		}
 		// set prepared statement processing
@@ -627,9 +627,9 @@ bool MySQL_Session::handler___status_CHANGING_CHARSET(PtrSize_t *pkt) {
 		status=WAITING_SERVER_DATA;
 		unsigned int k;
 		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+		for (k=0; k<mybe->server_myds->outgoing_pending_fragments->len;) {
+			mybe->server_myds->outgoing_pending_fragments->remove_index(0,&pkt2);
+			mybe->server_myds->outgoing_fragments->add(pkt2.ptr, pkt2.size);
 			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 		}
 		// set prepared statement processing
@@ -694,7 +694,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 		/* multi-plexing attempt */	
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
-		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+		client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 		CurrentQuery.end_time=thread->curtime;
 		CurrentQuery.query_parser_update_counters();
 	} else {
@@ -703,7 +703,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 			mybe->server_myds->resultset->add(pkt->ptr, pkt->size);
 			mybe->server_myds->resultset_length+=pkt->size;
 		} else {
-			client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+			client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 		}
 		mybe->server_myds->DSS=STATE_ROW;	// FIXME: this is catch all for now
 	}
@@ -718,7 +718,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 					client_myds->myconn->processing_prepared_statement_prepare=false;
 					status=WAITING_CLIENT_DATA;
 					client_myds->DSS=STATE_SLEEP;
-					client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+					client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 					break;
 				case 0x00:
 					if (mybe->server_myds->myprot.current_PreStmt) delete mybe->server_myds->myprot.current_PreStmt;
@@ -732,7 +732,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_SLEEP;
 					}
-					client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+					client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 					break;
 				default:
 					assert(0);
@@ -758,7 +758,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 					break;
 			}
 			// always send to client
-			client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+			client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 		}
 	}
 }
@@ -787,7 +787,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STM
 			}
 		}
 	}
-	client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+	client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 }
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *pkt) {
@@ -800,7 +800,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *
 		mybe->server_myds->resultset->add(pkt->ptr, pkt->size);
 		mybe->server_myds->resultset_length+=pkt->size;
 	} else {
-		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+		client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 	}
 }
 
@@ -814,7 +814,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 		mybe->server_myds->resultset->add(pkt->ptr, pkt->size);
 		mybe->server_myds->resultset_length+=pkt->size;
 	} else {
-		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+		client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 	}
 	if ((c==0xfe && pkt->size < 13) || c==0xff) {
 		mybe->server_myds->DSS=STATE_READY;
@@ -840,7 +840,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 
 		if (qpo) {
 			if (qpo->cache_ttl>0) { // Fixed bug #145
-				client_myds->PSarrayOUT->copy_add(mybe->server_myds->resultset,0,mybe->server_myds->resultset->len);
+				client_myds->outgoing_fragments->copy_add(mybe->server_myds->resultset,0,mybe->server_myds->resultset->len);
 				unsigned char *aa=mybe->server_myds->resultset2buffer(false);
 				while (mybe->server_myds->resultset->len) mybe->server_myds->resultset->remove_index(mybe->server_myds->resultset->len-1,NULL);	
 				GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,mybe->server_myds->resultset_length,30);
@@ -875,7 +875,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;
 		}
-		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+		client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 	} else {
 		if ((c==0xfe && pkt->size < 13) || c==0xff) {
 			mybe->server_myds->myconn->processing_prepared_statement_execute=false;
@@ -884,7 +884,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;
 		}
-		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+		client_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 	}
 }
 }
@@ -922,9 +922,9 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(
 		status=WAITING_SERVER_DATA;
 		unsigned int k;
 		PtrSize_t pkt2;
-		for (k=0; k<myds->PSarrayOUTpending->len;) {
-			myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+		for (k=0; k<myds->outgoing_pending_fragments->len;) {
+			myds->outgoing_pending_fragments->remove_index(0,&pkt2);
+			myds->outgoing_fragments->add(pkt2.ptr, pkt2.size);
 			myds->DSS=STATE_QUERY_SENT_DS;
 		}
 		MySQL_Connection *myconn=myds->myconn;
@@ -1086,7 +1086,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		client_myds->myconn->has_prepared_statement=true;
 		client_myds->myconn->processing_prepared_statement_prepare=true;
 		mybe=find_or_create_backend(default_hostgroup);
-		mybe->server_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+		mybe->server_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 	} else {
 		l_free(pkt->size,pkt->ptr);
@@ -1101,7 +1101,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		//client_myds->myconn->has_prepared_statement_execute=true;
 		client_myds->myconn->processing_prepared_statement_execute=true;
 		mybe=find_or_create_backend(default_hostgroup);
-		mybe->server_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
+		mybe->server_myds->outgoing_fragments->add(pkt->ptr, pkt->size);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 	} else {
 		l_free(pkt->size,pkt->ptr);
@@ -1190,7 +1190,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
 			client_myds->buffer2resultset(aa,resbuf);
 			free(aa);
-			client_myds->PSarrayOUT->copy_add(client_myds->resultset,0,client_myds->resultset->len);
+			client_myds->outgoing_fragments->copy_add(client_myds->resultset,0,client_myds->resultset->len);
 			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;

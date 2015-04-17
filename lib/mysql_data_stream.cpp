@@ -46,10 +46,10 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 // switches between userspace and kernel and thus bringing a lower
 // throughput.
 #define queue_init(_q,_s) { \
-  _q.size=_s; \
-  _q.buffer=malloc(_q.size); \
-  _q.head=0; \
-  _q.tail=0; \
+	_q.size=_s; \
+	_q.buffer=malloc(_q.size); \
+	_q.head=0; \
+	_q.tail=0; \
 	_q.partial=0; \
 	_q.pkt.ptr=NULL; \
 	_q.pkt.size=0; \
@@ -57,16 +57,16 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 
 // Destroy a given queue
 #define queue_destroy(_q) { \
-  free(_q.buffer); \
+	free(_q.buffer); \
 }
 
 // Defragment a given queue -- move the remaining unprocessed content to
 // the beginning in order to make room for more content to be read/written
 // in the remaining space at the end that has been freed up.
 #define queue_defrag(_q) { \
-  memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
-  _q.head-=_q.tail; \
-  _q.tail=0; \
+	memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
+	_q.head-=_q.tail; \
+	_q.tail=0; \
 }
 
 // The size of the remaining space
@@ -115,9 +115,10 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	resultset_length=0;
 	query_SQL=NULL;
 
-	PSarrayIN=NULL;
-	PSarrayOUT=NULL;
-	PSarrayOUTpending=NULL;
+	incoming_fragments=NULL;
+	outgoing_fragments=NULL;
+	outgoing_pending_fragments=NULL;
+
 	resultset=NULL;
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
@@ -135,7 +136,6 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 //	ssl_ctx=NULL;
 }
 
-
 // Destructor
 MySQL_Data_Stream::~MySQL_Data_Stream() {
 
@@ -144,26 +144,26 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
-	if (PSarrayIN) {
-		while (PSarrayIN->len) {
-			PSarrayIN->remove_index_fast(0,&pkt);
+	if (incoming_fragments) {
+		while (incoming_fragments->len) {
+			incoming_fragments->remove_index_fast(0,&pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
-		delete PSarrayIN;
+		delete incoming_fragments;
 	}
-	if (PSarrayOUT) {
-		while (PSarrayOUT->len) {
-			PSarrayOUT->remove_index_fast(0,&pkt);
+	if (outgoing_fragments) {
+		while (outgoing_fragments->len) {
+			outgoing_fragments->remove_index_fast(0,&pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
-		delete PSarrayOUT;
+		delete outgoing_fragments;
 	}
-	if (PSarrayOUTpending) {
-		while (PSarrayOUTpending->len) {
-			PSarrayOUTpending->remove_index_fast(0,&pkt);
+	if (outgoing_pending_fragments) {
+		while (outgoing_pending_fragments->len) {
+			outgoing_pending_fragments->remove_index_fast(0,&pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
-		delete PSarrayOUTpending;
+		delete outgoing_pending_fragments;
 	}
 	if (resultset) {
 		while (resultset->len) {
@@ -194,9 +194,9 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 void MySQL_Data_Stream::init() {
 	if (myds_type!=MYDS_LISTENER) {
 		proxy_debug(PROXY_DEBUG_NET,1, "Init Data Stream. Session=%p, DataStream=%p -- type %d\n" , sess, this, myds_type);
-		if (PSarrayIN==NULL) PSarrayIN = new PtrSizeArray();
-		if (PSarrayOUT==NULL) PSarrayOUT= new PtrSizeArray();
-		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
+		if (incoming_fragments==NULL) incoming_fragments = new PtrSizeArray();
+		if (outgoing_fragments==NULL) outgoing_fragments= new PtrSizeArray();
+		if (outgoing_pending_fragments==NULL) outgoing_pending_fragments= new PtrSizeArray();
 		if (resultset==NULL) resultset = new PtrSizeArray();
 	}
 }
@@ -236,9 +236,9 @@ void MySQL_Data_Stream::shut_hard() {
 
 
 void MySQL_Data_Stream::check_data_flow() {
-	if ( (PSarrayIN->len || queue_data(queueIN) ) && ( PSarrayOUT->len || queue_data(queueOUT) ) ){
+	if ( (incoming_fragments->len || queue_data(queueIN) ) && ( outgoing_fragments->len || queue_data(queueOUT) ) ){
 		// there is data at both sides of the data stream: this is considered a fatal error
-		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len , queue_data(queueIN) , PSarrayOUT->len , queue_data(queueOUT));
+		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, incoming_fragments->len , queue_data(queueIN) , outgoing_fragments->len , queue_data(queueOUT));
 		shut_soft();
 	}
 	//if ((myds_type==MYDS_BACKEND) && (myconn->myconn.net.fd==0) && (revents & POLLOUT)) {
@@ -322,7 +322,7 @@ int MySQL_Data_Stream::write_to_net() {
 
 bool MySQL_Data_Stream::available_data_out() {
 	int buflen=queue_data(queueOUT);
-	if (buflen || PSarrayOUT->len) {
+	if (buflen || outgoing_fragments->len) {
 		return true;
 	}
 	return false;
@@ -381,7 +381,7 @@ int MySQL_Data_Stream::buffer2array() {
 	int fast_mode=0;
 	if (queue_data(queueIN)==0) return ret;
 	if ((queueIN.pkt.size==0) && queue_data(queueIN)<sizeof(mysql_hdr)) {
-		queue_zero(queueIN);
+		queue_defrag(queueIN);
 	}
 
 	if (fast_mode) {
@@ -472,7 +472,7 @@ int MySQL_Data_Stream::buffer2array() {
 				unsigned char *ptrP=(unsigned char *)l_alloc(size);
 				memcpy(ptrP,_ptr+progress,size);
 				progress+=size;
-				PSarrayIN->add(ptrP,size);
+				incoming_fragments->add(ptrP,size);
 			}
 			if (payload_length) {
 				l_free(destLen,dest);
@@ -482,7 +482,7 @@ int MySQL_Data_Stream::buffer2array() {
 			queueIN.pkt.size=0;
 			queueIN.pkt.ptr=NULL;
 		} else {
-			PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+			incoming_fragments->add(queueIN.pkt.ptr,queueIN.pkt.size);
 			pkts_recv++;
 			queueIN.pkt.size=0;
 			queueIN.pkt.ptr=NULL;
@@ -497,8 +497,8 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	unsigned int total_size=0;
 	unsigned int i=0;
 	PtrSize_t *p=NULL;
-	while (i<PSarrayOUT->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
-		p=PSarrayOUT->index(i);
+	while (i<outgoing_fragments->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
+		p=outgoing_fragments->index(i);
 		total_size+=p->size;
 		if (i==0) {
 			mysql_hdr hdr;
@@ -525,7 +525,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	while (total_size<sourceLen) {
 		//p=PSarrayOUT->index(i);
 		PtrSize_t p2;
-		PSarrayOUT->remove_index(0,&p2);
+		outgoing_fragments->remove_index(0,&p2);
 		memcpy(source+total_size,p2.ptr,p2.size);
 		//i++;
 		total_size+=p2.size;
@@ -556,8 +556,7 @@ int MySQL_Data_Stream::array2buffer() {
 	while (cont) {
 		if (queue_available(queueOUT)==0) return ret;
 		if (queueOUT.partial==0) { // read a new packet
-			//if (PSarrayOUT->len-idx) {
-			if (PSarrayOUT->len) {
+			if (outgoing_fragments->len) {
 				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
 				if (queueOUT.pkt.ptr) {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
@@ -567,7 +566,7 @@ int MySQL_Data_Stream::array2buffer() {
 					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
-					PSarrayOUT->remove_index(0,&queueOUT.pkt);
+					outgoing_fragments->remove_index(0,&queueOUT.pkt);
 					// this is a special case, needed because compression is enabled *after* the first OK
 					if (DSS==STATE_CLIENT_AUTH_OK) {
 						DSS=STATE_SLEEP;
@@ -733,9 +732,9 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 	unsigned int k;
 	PtrSize_t pkt2;
-	for (k=0; k<PSarrayOUT->len;) {
-		PSarrayOUT->remove_index(0,&pkt2);
-		PSarrayOUTpending->add(pkt2.ptr, pkt2.size);
+	for (k=0; k<outgoing_fragments->len;) {
+	outgoing_fragments->remove_index(0,&pkt2);
+	outgoing_pending_fragments->add(pkt2.ptr, pkt2.size);
 	}
 }
 
