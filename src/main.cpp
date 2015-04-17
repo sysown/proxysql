@@ -336,6 +336,7 @@ __start_label:
 
 	GloMTH->init();
 
+	load_ = GloMTH->num_threads + 1;
 	for (i=0; i<GloMTH->num_threads; i++) {
 		GloMTH->create_thread(i,mysql_worker_thread_func);
 	}
