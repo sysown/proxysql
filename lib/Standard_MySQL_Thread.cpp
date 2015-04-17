@@ -218,6 +218,9 @@ int Standard_MySQL_Threads_Handler::listener_del(const char *iface) {
 			while(!__sync_fetch_and_add(&thr->mypolls.pending_listener_del,0));
 		}
 		MLM->del(idx);
+
+		// FIXME: why isn't this included in MLM->del(idx) if
+		// MLM->add() performs listen_on_port()?
 		shutdown(fd,SHUT_RDWR);
 		close(fd);
 	}
