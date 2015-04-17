@@ -4,19 +4,6 @@
 #include "cpp.h"
 #include "proxysql_atomic.h"
 
-/*
-typedef struct _mysql_conns_array_t MCA_t;
-struct _mysql_conns_array_t {
-    char *hostname;
-    char *username;
-    char *password;
-    char *db;
-    unsigned int port;
-	//GPtrArray *free_conns;
-	PtrArray *free_conns;
-};
-*/
-
 class MyConnArray {
 	private:
 	char *hostname;

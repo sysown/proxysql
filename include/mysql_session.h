@@ -2,19 +2,6 @@
 #define __CLASS_MYSQL_SESSION_H
 #include "proxysql.h"
 #include "cpp.h"
-/*
-class MySQL_Session_userinfo {
-	public:
-  char *username;
-  char *password;
-  char *schemaname;
-	MySQL_Session_userinfo();
-	~MySQL_Session_userinfo();
-	void set(char *, char *, char *);
-	void set(MySQL_Session_userinfo *);
-	bool set_schemaname(char *, int);
-};
-*/
 class Query_Info {
 	public:
 	unsigned long long start_time;
@@ -75,7 +62,6 @@ class MySQL_Session
 	void operator delete(void *);
 	MySQL_Thread *thread;
 	MySQL_Connection_Pool *MyConnPool;
-//	enum session_states sess_states;
 	QP_out_t *qpo;
 	StatCounters *command_counters;
 	int healthy;
@@ -83,8 +69,6 @@ class MySQL_Session
 	bool connections_handler;
 	bool stats;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
-//	int client_fd;
-//	int server_fd;
 	enum session_status status;
 	int current_hostgroup;
 	int default_hostgroup;
@@ -93,32 +77,17 @@ class MySQL_Session
 	int to_process;
 	int pending_connect;
 	Query_Info CurrentQuery;
-	//void *query_parser_args;
 	unsigned long long pause;
 	unsigned long long pause_until;
-	//MySQL_Session_userinfo userinfo_client;
-	//MySQL_Session_userinfo userinfo_server;
-//	char *username;
-//	char *password;
-//	char *schema_name;
-//	char *schema_cur;
-//	char *schema_new;
-	//int net_failure;
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
-
-	//GPtrArray *mybes;
 	MySQL_Backend *mybe;
 	PtrArray *mybes;
 
 	MySQL_Session();
-//	MySQL_Session(int);
 	~MySQL_Session();
 
 	void set_unhealthy();
-
-	//MySQL_Protocol myprot_client;
-	//MySQL_Protocol myprot_server;
 	int handler();
 
 	MySQL_Backend * find_backend(int);

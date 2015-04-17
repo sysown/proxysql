@@ -36,7 +36,6 @@ typedef struct _mysql_data_buffer_t {
 class MySQL_Data_Stream
 {
 	private:
-	//mysql_data_buffer_t bufferOUT;
 	int array2buffer();
 	int buffer2array();
 	void generate_compressed_packet();
@@ -46,7 +45,6 @@ class MySQL_Data_Stream
 	unsigned int connect_tries;
 	ProxySQL_Poll *mypolls;
 	int array2buffer_full();
-	//int listener;
 	MySQL_Connection *myconn;
 	MySQL_Protocol myprot;
 	enum mysql_data_stream_status DSS;
@@ -67,10 +65,6 @@ class MySQL_Data_Stream
 
 	queue_t queueIN;	
 	queue_t queueOUT;	
-	//struct evbuffer *evbIN;
-	//struct evbuffer *evbOUT;
-	//GPtrArray *QarrayIN;
-	//GPtrArray *QarrayOUT;
 	PtrSizeArray *PSarrayIN;
 	PtrSizeArray *PSarrayOUT;
 	PtrSizeArray *PSarrayOUTpending;
@@ -108,7 +102,6 @@ class MySQL_Data_Stream
 
 	void unplug_backend();
 
-	//int assign_mshge(unsigned int);
 	int myds_connect(char *, int, int *); // the data stream MUST be initialized
 
 	void check_data_flow();
