@@ -5,6 +5,8 @@
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
 
+using namespace std;
+
 // MariaDB client library redefines dlerror(), see https://mariadb.atlassian.net/browse/CONC-101
 #ifdef dlerror
 #undef dlerror
@@ -35,7 +37,6 @@ create_MySQL_Authentication_t * create_MySQL_Authentication = NULL;
 create_Query_Processor_t * create_Query_Processor = NULL;
 create_ProxySQL_Admin_t * create_ProxySQL_Admin = NULL;
 
-using namespace std;
 #define MAX_EVENTS 100
 
 static volatile int load_;
