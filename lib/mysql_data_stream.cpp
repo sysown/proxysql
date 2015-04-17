@@ -3,11 +3,7 @@
 #include <zlib.h>
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX    108
-#endif 
-//static void cleanup(const void *data, size_t len, void *arg) {
-//	free(arg);
-//}
-
+#endif
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -280,9 +276,6 @@ int MySQL_Data_Stream::read_from_net() {
 		queue_w(queueIN,r);
 		bytes_info.bytes_recv+=r;
 		if (mypolls) mypolls->last_recv[poll_fds_idx]=sess->thread->curtime;
-		if (mybe) {
-            //__sync_fetch_and_add(&myds->mybe->mshge->server_bytes.bytes_recv,r);
-		}
 	}
 	return r;
 }
@@ -329,12 +322,8 @@ bool MySQL_Data_Stream::available_data_out() {
 }
 
 void MySQL_Data_Stream::set_pollout() {
-	//int buflen=queue_data(queueOUT);
 	struct pollfd *_pollfd;
 	_pollfd=&mypolls->fds[poll_fds_idx];
-	//_pollfd=&sess->thread->mypolls.fds[poll_fds_idx];
-	//_pollfd=sess->thread->get_pollfd(poll_fds_idx);
-	//if (buflen || PSarrayOUT->len) {
 	if (available_data_out() || queueOUT.partial) {
 		_pollfd->events = POLLIN | POLLOUT;
 	} else {
@@ -378,22 +367,11 @@ int MySQL_Data_Stream::read_pkts() {
 
 int MySQL_Data_Stream::buffer2array() {
 	int ret=0;
-	int fast_mode=0;
 	if (queue_data(queueIN)==0) return ret;
 	if ((queueIN.pkt.size==0) && queue_data(queueIN)<sizeof(mysql_hdr)) {
 		queue_defrag(queueIN);
 	}
 
-	if (fast_mode) {
-		queueIN.pkt.size=queue_data(queueIN);
-		ret=queueIN.pkt.size;
-		queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
-		memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
-		queue_r(queueIN, queueIN.pkt.size);
-		PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
-		queueIN.pkt.size=0;
-		return ret;
-	}
 /**/
 	if (myconn->get_status_compression()==true) {
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=7) {
@@ -422,11 +400,6 @@ int MySQL_Data_Stream::buffer2array() {
 			memcpy(queueIN.pkt.ptr, &queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
 			queueIN.partial=sizeof(mysql_hdr);
 			ret+=sizeof(mysql_hdr);
-//			if (myconn->get_status_compression()==true) {
-//				mysql_hdr *_hdr;
-//				_hdr=(mysql_hdr *)queueIN.pkt.ptr;
-//				myconn->compression_pkt_id=_hdr->pkt_id;
-//			}
 		}
 	}
 	if ((queueIN.pkt.size>0) && queue_data(queueIN)) {
@@ -523,7 +496,6 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	i=0;
 	total_size=0;
 	while (total_size<sourceLen) {
-		//p=PSarrayOUT->index(i);
 		PtrSize_t p2;
 		outgoing_fragments->remove_index(0,&p2);
 		memcpy(source+total_size,p2.ptr,p2.size);
@@ -531,7 +503,6 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		total_size+=p2.size;
 		l_free(p2.size,p2.ptr);
 	}
-	//PSarrayOUT->remove_index_range(0,i);
 	int rc=compress(dest, &destLen, source, sourceLen);
 	assert(rc==Z_OK);
 	l_free(total_size, source);
@@ -582,14 +553,9 @@ int MySQL_Data_Stream::array2buffer() {
 						}
 					}
 				}
-				//memcpy(&queueOUT.pkt,PSarrayOUT->index(idx),sizeof(PtrSize_t));
 #ifdef DEBUG
 				{ __dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size); }
 #endif
-//			PtrSize_t *pts=PSarrayOUT->index(idx);
-//			queueOUT.pkt.ptr=pts->ptr;
-//			queueOUT.pkt.size=pts->size;
-				//idx++;
 			} else {
 				cont=false;
 				continue;
@@ -611,8 +577,6 @@ int MySQL_Data_Stream::array2buffer() {
 			pkts_sent+=1;
 		}
 	}
-	//for (int i=0; i<idx; i++) { PSarrayOUT->remove_index(0,NULL); }
-	//if (idx) PSarrayOUT->remove_index_range(0,idx);
 	return ret;
 }
 
