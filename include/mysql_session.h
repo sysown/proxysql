@@ -2,6 +2,8 @@
 #define __CLASS_MYSQL_SESSION_H
 #include "proxysql.h"
 #include "cpp.h"
+
+// Parsed MySQL query along with meta-data
 class Query_Info {
 	public:
 	unsigned long long start_time;
