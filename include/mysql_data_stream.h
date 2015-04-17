@@ -7,31 +7,24 @@
 
 #define QUEUE_T_DEFAULT_SIZE	8192
 
-typedef struct _queue_t {
-    void *buffer;
-    unsigned int size;
-    unsigned int head;
-    unsigned int tail;
-	unsigned int partial;
-	//unsigned char *pkt;
-	PtrSize_t pkt;
-	mysql_hdr hdr;
-} queue_t;
-
-
-/*
-typedef struct _mysql_data_buffer_t {
-  unsigned char *buffer;
+typedef struct _raw_bytes_queue_t {
+  // The buffer containing the raw bytes
+  void *buffer;
+  // The total size of the buffer
   unsigned int size;
-  unsigned int head;
+  // All data from the queue has been processed up to the index "tail"
   unsigned int tail;
-	mysql_hdr hdr;
+  // We are currently processing data between "tail" and "head" (head > tail)
+  unsigned int head;
+
+  // The current packet that is being built from the raw bytes data or
+  // that is being written to the raw bytes data.
+  PtrSize_t pkt;
+  // How much of the packet has been processed yet (0 <= partial <= pkt.size)
 	unsigned int partial;
-	unsigned char *pkt;
-} mysql_data_buffer_t;
-*/
-
-
+  // The header of the packet, when it is first extracted separately
+	mysql_hdr hdr;
+} raw_bytes_queue_t;
 
 class MySQL_Data_Stream
 {
@@ -63,11 +56,33 @@ class MySQL_Data_Stream
 	bool encrypted;
 	SSL *ssl;
 
-	queue_t queueIN;	
-	queue_t queueOUT;	
+  // Data read from the raw socket, organized as a buffer which contains
+  // concatenated pieces of packets. It might contain several different
+  // packets or just a piece of a bigger one.
+	raw_bytes_queue_t queueIN;
+
+  // Data to be written to the raw socket, organized as a buffer which
+  // contains concatenated pieces of packets. It might contain several
+  // different packets or just a piece of a bigger one.
+	raw_bytes_queue_t queueOUT;
+
+  // Full packets that have been read from the socket, ready to be
+  // processed by MySQL_Session. The routine that converts the raw
+  // bytes to these packets is buffer2array().
 	PtrSizeArray *PSarrayIN;
+
+  // Full packets that have been written by MySQL_Session, that will
+  // end up being converted to buffers and written to the socket.
+  // The routine that does the conversion is array2buffer().
 	PtrSizeArray *PSarrayOUT;
+
+  // Sometimes, packets need to be put on hold as we are trying to
+  // send packets to a backend to which we're not connected to yet.
+  // Then, the packets to be sent are moved in here, and then the
+  // handshake packets are put into PSarrayOUT in order to make sure
+  // that an application-level connection is established first.
 	PtrSizeArray *PSarrayOUTpending;
+
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
 	unsigned char * query_SQL;	
