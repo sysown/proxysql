@@ -67,6 +67,8 @@ MySQL_Session::MySQL_Session() {
 	admin=false;
 	connections_handler=false;
 	stats=false;
+	default_schema=NULL;
+	schema_locked=false;
 	session_fast_forward=false;
 	admin_func=NULL;
 	//client_fd=0;
@@ -92,6 +94,10 @@ MySQL_Session::~MySQL_Session() {
 	//}
 	reset_all_backends();
 	delete mybes;
+	if (default_schema) {
+		int s=strlen(default_schema);
+		l_free(s+1,default_schema);
+	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
 }

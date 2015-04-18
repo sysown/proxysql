@@ -491,7 +491,7 @@ int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
+	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL);
 	if (password==NULL) {
 		ret=PKT_ERROR;
 	} else {
@@ -1582,7 +1582,8 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	memcpy(pass, pkt, 20);
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
+	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL);
+	// FIXME: add support for default schema and fast forward , issues #255 and #256
 	if (password==NULL) {
 		ret=false;
 	} else {
@@ -1628,7 +1629,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL);
+	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
 	if (password==NULL) {
@@ -1735,11 +1737,17 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
 	int default_hostgroup=-1;
+	char *default_schema=NULL;
+	bool schema_locked;
 	bool transaction_persistent;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent);
+	bool fast_forward;
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward);
 	//assert(default_hostgroup>=0);
 	(*myds)->sess->default_hostgroup=default_hostgroup;
+	(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+	(*myds)->sess->schema_locked=schema_locked;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
+	(*myds)->sess->session_fast_forward=fast_forward;
 	if (password==NULL) {
 		ret=false;
 	} else {
