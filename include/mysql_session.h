@@ -24,6 +24,7 @@ class Query_Info {
 	unsigned char *QueryPointer;
 	int QueryLength;
 	Query_Info();
+	~Query_Info();
 	void init(unsigned char *_p, int len, bool mysql_header=false);
 	void query_parser_init(); 
 	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
