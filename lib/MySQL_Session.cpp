@@ -1215,6 +1215,21 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt) {
+	if (qpo->new_query) {
+		// the query was rewritten
+		l_free(pkt->size,pkt->ptr);	// free old pkt
+		// allocate new pkt
+		pkt->size=sizeof(mysql_hdr)+1+qpo->new_query->length();
+		pkt->ptr=l_alloc(pkt->size);
+		mysql_hdr hdr;
+		hdr.pkt_id=0;
+		hdr.pkt_length=pkt->size-sizeof(mysql_hdr);
+		memcpy((unsigned char *)pkt->ptr, &hdr, sizeof(mysql_hdr)); // copy header
+		unsigned char *c=(unsigned char *)pkt->ptr+sizeof(mysql_hdr);
+		*c=(unsigned char)_MYSQL_COM_QUERY; // set command type
+		memcpy((unsigned char *)pkt->ptr+sizeof(mysql_hdr)+1,qpo->new_query->data(),qpo->new_query->length()); // copy query
+		delete qpo->new_query;
+	}
 	if (qpo->cache_ttl>0) {
 		client_myds->query_SQL=(unsigned char *)l_alloc(pkt->size-sizeof(mysql_hdr));
 		memcpy(client_myds->query_SQL,(unsigned char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
