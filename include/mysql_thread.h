@@ -177,12 +177,14 @@ class ProxySQL_Poll {
     if (len==size) {
       expand(1);
     }
-		_myds->mypolls=this;
     myds[len]=_myds;
     fds[len].fd=_fd;
     fds[len].events=_events;
     fds[len].revents=0;
-		_myds->poll_fds_idx=len;  // fix a serious bug
+		if (_myds) {
+			_myds->mypolls=this;
+			_myds->poll_fds_idx=len;  // fix a serious bug
+		}
     last_recv[len]=monotonic_time();
     last_sent[len]=sent_time;
     len++;
@@ -230,6 +232,7 @@ class MySQL_Thread
 	
 	public:
 
+	int pipefd[2];
 	unsigned long long curtime;
 
 	ProxySQL_Poll mypolls;
@@ -318,6 +321,7 @@ class MySQL_Threads_Handler
 	virtual int listener_del(const char *iface) {return -1;}
 	virtual int listener_del(const char *address, int port) {return -1;}
 	virtual void start_listeners() {};
+	virtual void signal_all_threads() {};
 };
 
 class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
@@ -371,6 +375,7 @@ class Standard_MySQL_Threads_Handler: public MySQL_Threads_Handler
 	virtual int listener_add(const char *address, int port);
 	virtual int listener_del(const char *iface);
 	virtual void start_listeners();
+	virtual void signal_all_threads();
 //	virtual int listener_del(const char *address, int port);
 //	pthread_t connection_manager_thread_id;
 //	void connection_manager_thread();

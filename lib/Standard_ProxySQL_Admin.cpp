@@ -40,7 +40,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define LINESIZE	2048
 
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , PRIMARY KEY (hostgroup_id, hostname, port) )"
-#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
+#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, default_schema VARCHAR, schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
 
@@ -975,6 +975,18 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		}
 	}
 
+	// FIXME: this should be removed, it is just a POC for issue #253 . What is important is the call to GloMTH->signal_all_threads();
+	if (!strncasecmp("SIGNAL MYSQL THREADS", query_no_space, strlen("SIGNAL MYSQL THREADS"))) {
+		GloMTH->signal_all_threads();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+		Standard_ProxySQL_Admin *SPA=(Standard_ProxySQL_Admin *)pa;
+		SPA->save_admin_variables_from_runtime();
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Sent signal to all mysql threads\n");
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
@@ -1811,7 +1823,7 @@ void Standard_ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_i
 		c_split_2(token, ":", &user, &pass);
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
 		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,0);
+			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0); // FIXME: seems to work, but it needs extra care. See issue #255 and #256. This is just for admin module
 		}
 		free(user);
 		free(pass);
@@ -2347,7 +2359,7 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,transaction_persistent FROM main.mysql_users WHERE %s=1 AND active=1";
+	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward FROM main.mysql_users WHERE %s=1 AND active=1";
 	char *query=(char *)malloc(strlen(str)+15);
 	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -2356,7 +2368,17 @@ void Standard_ProxySQL_Admin::__add_active_users(enum cred_username_type usertyp
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
-			GloMyAuth->add(r->fields[0], (r->fields[1]==NULL ? (char *)"" : r->fields[1]), usertype, (strcmp(r->fields[2],"1")==0 ? true : false) , atoi(r->fields[3]), (strcmp(r->fields[4],"1")==0 ? true : false));
+			GloMyAuth->add(
+				r->fields[0], // username
+				(r->fields[1]==NULL ? (char *)"" : r->fields[1]), //password
+				usertype, // backend/frontend
+				(strcmp(r->fields[2],"1")==0 ? true : false) , // use_ssl
+				atoi(r->fields[3]), // default_hostgroup
+				(r->fields[4]==NULL ? (char *)mysql_thread___default_schema : r->fields[4]), //default_schema
+				(strcmp(r->fields[5],"1")==0 ? true : false) , // schema_locked
+				(strcmp(r->fields[6],"1")==0 ? true : false) , // transaction_persistent
+				(strcmp(r->fields[7],"1")==0 ? true : false) // fast_forward
+			);
 		}
 	}
 //	if (error) free(error);
@@ -2504,19 +2526,27 @@ int Standard_ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup) VALUES (\"%s\", \"%s\", %d, %d)";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward) VALUES (\"%s\", \"%s\", %d, %d, \"%s\", %d, %d, %d)";
 	for (i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
 		std::string password="";
 		int active=1;
 		int default_hostgroup=0;
+		std::string default_schema;
+		int schema_locked=0;
+		int transaction_persistent=0;
+		int fast_forward=0;
 		if (user.lookupValue("username", username)==false) continue;
 		user.lookupValue("password", password);
 		user.lookupValue("hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
+		//if (user.lookupValue("default_schema", default_schema)==false) default_schema=mysql_thread___default_schema;
+		user.lookupValue("schema_locked", schema_locked);
+		user.lookupValue("transaction_persistent", transaction_persistent);
+		user.lookupValue("fast_forward", fast_forward);
 		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup);
+		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, "information_schema", schema_locked, transaction_persistent, fast_forward);
 		fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);

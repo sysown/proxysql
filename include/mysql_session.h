@@ -81,7 +81,6 @@ class MySQL_Session
 	bool admin;
 	bool connections_handler;
 	bool stats;
-	bool session_fast_forward;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
 //	int client_fd;
 //	int server_fd;
@@ -89,7 +88,10 @@ class MySQL_Session
 	int current_hostgroup;
 	int default_hostgroup;
 	int active_transactions;
+	char * default_schema;
+	bool schema_locked;
 	bool transaction_persistent;
+	bool session_fast_forward;
 	int to_process;
 	int pending_connect;
 	Query_Info CurrentQuery;
