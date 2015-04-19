@@ -12,6 +12,16 @@ Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
+	QueryParserArgs=NULL;
+}
+
+Query_Info::~Query_Info() {
+	if (QueryParserArgs) {
+		GloQPro->query_parser_free(QueryParserArgs);
+	}
+	if (QueryPointer) {
+		l_free(QueryLength+1,QueryPointer);
+	}
 }
 
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
@@ -35,6 +45,7 @@ enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
 
 void Query_Info::query_parser_free() {
 	GloQPro->query_parser_free(QueryParserArgs);
+	QueryParserArgs=NULL;
 }
 
 unsigned long long Query_Info::query_parser_update_counters() {
@@ -246,26 +257,32 @@ int MySQL_Session::handler() {
 #ifdef DEBUG
 								if (mysql_thread___session_debug) {
 									if ((pkt.size>9) && strncasecmp("dbg ",(const char *)pkt.ptr+sizeof(mysql_hdr)+1,4)==0) {
-										CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
-										CurrentQuery.start_time=thread->curtime;
-										CurrentQuery.query_parser_init();
-										CurrentQuery.query_parser_command_type();
-										CurrentQuery.query_parser_free();
+										if (mysql_thread___commands_stats==true) {
+											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
+											CurrentQuery.start_time=thread->curtime;
+											CurrentQuery.query_parser_init();
+											CurrentQuery.query_parser_command_type();
+											CurrentQuery.query_parser_free();
+										}
 										handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_debug(&pkt);
-										CurrentQuery.end_time=thread->curtime;
-										CurrentQuery.query_parser_update_counters();
+										if (mysql_thread___commands_stats==true) {
+											CurrentQuery.end_time=thread->curtime;
+											CurrentQuery.query_parser_update_counters();
+										}
 										break;
 									}
 								}
 #endif /* DEBUG */							
 								if (admin==false) {
 									if (session_fast_forward==false) {
-									CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
-									CurrentQuery.start_time=thread->curtime;
-									CurrentQuery.query_parser_init();
-									CurrentQuery.query_parser_command_type();
-									CurrentQuery.query_parser_free();
-									client_myds->myprot.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
+										if (mysql_thread___commands_stats==true) {
+											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
+											CurrentQuery.start_time=thread->curtime;
+											CurrentQuery.query_parser_init();
+											CurrentQuery.query_parser_command_type();
+											CurrentQuery.query_parser_free();
+											//client_myds->myprot.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
+										}
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,false);
 									if (qpo) {
@@ -715,8 +732,10 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
-		CurrentQuery.end_time=thread->curtime;
-		CurrentQuery.query_parser_update_counters();
+		if (mysql_thread___commands_stats==true) {
+			CurrentQuery.end_time=thread->curtime;
+			CurrentQuery.query_parser_update_counters();
+		}
 	} else {
 		// this should be a result set
 		if (qpo && qpo->cache_ttl>0) {
@@ -868,8 +887,10 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 			GloQPro->delete_QP_out(qpo);
 			qpo=NULL;
 		}
-		CurrentQuery.end_time=thread->curtime;
-		CurrentQuery.query_parser_update_counters();
+		if (mysql_thread___commands_stats==true) {
+			CurrentQuery.end_time=thread->curtime;
+			CurrentQuery.query_parser_update_counters();
+		}
 	}
 } else {
 	if (mybe->server_myds->myconn->processing_prepared_statement_prepare==true) {
@@ -1245,8 +1266,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;
-			CurrentQuery.end_time=thread->curtime;
-			CurrentQuery.query_parser_update_counters();
+			if (mysql_thread___commands_stats==true) {
+				CurrentQuery.end_time=thread->curtime;
+				CurrentQuery.query_parser_update_counters();
+			}
 			GloQPro->delete_QP_out(qpo);
 			qpo=NULL;
 			return true;
@@ -1455,8 +1478,10 @@ SQLite3_result * MySQL_Session::SQL3_Session_status() {
 		MySQL_Connection_userinfo *ui=s->client_myds->myconn->userinfo;
 		sprintf(buf, "session[%d] = %p :\n\tuserinfo={%s,%s} , status=%d , myds={%p,%p} , HG={d:%d,c:%d}\n\tLast query= ", i, s, ui->username, ui->schemaname, s->status, s->client_myds, s->mybe->server_myds, s->default_hostgroup, s->current_hostgroup);
 		status_str.append(buf);
-		if (s->CurrentQuery.QueryLength && s->CurrentQuery.MyComQueryCmd!=MYSQL_COM_QUERY___NONE) {
-			status_str.append((char *)s->CurrentQuery.QueryPointer);
+		if (mysql_thread___commands_stats==true) {
+			if (s->CurrentQuery.QueryLength && s->CurrentQuery.MyComQueryCmd!=MYSQL_COM_QUERY___NONE) {
+				status_str.append((char *)s->CurrentQuery.QueryPointer);
+			}
 		}
 		status_str+= "\n";
 	}

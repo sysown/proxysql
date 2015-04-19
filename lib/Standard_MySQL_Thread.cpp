@@ -124,6 +124,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+	(char *)"commands_stats",
 	(char *)"servers_stats",
 	(char *)"session_debug",
 	(char *)"stacksize",
@@ -160,6 +161,7 @@ Standard_MySQL_Threads_Handler::Standard_MySQL_Threads_Handler() {
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
+	variables.commands_stats=false;
 	variables.servers_stats=true;
 #ifdef DEBUG
 	variables.session_debug=true;
@@ -261,6 +263,7 @@ int Standard_MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
+	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
 	if (!strcasecmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
@@ -320,6 +323,9 @@ char * Standard_MySQL_Threads_Handler::get_variable(char *name) {	// this is the
 #endif /* DEBUG */
 	if (!strcasecmp(name,"have_compress")) {
 		return strdup((variables.have_compress ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"commands_stats")) {
+		return strdup((variables.commands_stats ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
@@ -478,6 +484,17 @@ bool Standard_MySQL_Threads_Handler::set_variable(char *name, char *value) {	// 
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.have_compress=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"commands_stats")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.commands_stats=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.commands_stats=false;
 			return true;
 		}
 		return false;
@@ -1006,6 +1023,7 @@ void Standard_MySQL_Thread::refresh_variables() {
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
+	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");

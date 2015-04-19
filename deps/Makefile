@@ -69,7 +69,6 @@ re2: re2/re2/obj/libre2.a
 
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
-	cd memcached && rm -rf memcached-1.4.20
 	cd jemalloc && rm -rf jemalloc-3.6.0
 	cd mariadb-client-library && rm -rf mariadb_client-2.0.0-src
 	cd libconfig && rm -rf libconfig-1.4.9
