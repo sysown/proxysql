@@ -8,36 +8,7 @@ extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 
-FILE *debug_f = fopen("/tmp/queries.txt", "wt");
-
 static unsigned int __debugging_mp=0;
-
-#ifdef DEBUG
-static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
-	if (GloVars.global.gdbg==0) return;
-	if (GloVars.global.gdbg_lvl[PROXY_DEBUG_PKT_ARRAY].verbosity < 8 ) return;
-	unsigned int i;
-	fprintf(debug_f,"DUMP %d bytes FROM %s\n", len, func);
-	for(i = 0; i < len; i++) {
-		if(isprint(_ptr[i])) fprintf(debug_f,"%c", _ptr[i]); else fprintf(debug_f,".");
-		if (i>0 && (i%16==15 || i==len-1)) {
-			unsigned int j;
-			if (i%16!=15) {
-				j=15-i%16;
-				while (j--) fprintf(stderr," ");
-			}
-			fprintf(debug_f," --- ");
-			for (j=(i==len-1 ? ((int)(i/16))*16 : i-15 ) ; j<=i; j++) {
-				fprintf(debug_f,"%02x ", _ptr[j]);
-			}
-			fprintf(debug_f,"\n");
-		}
-   }
-	fprintf(debug_f,"\n\n");
-	fflush(debug_f);
-
-}
-#endif
 
 Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
@@ -266,9 +237,6 @@ int MySQL_Session::handler() {
 	for (j=0; j<client_myds->incoming_fragments->len;) {
 		client_myds->incoming_fragments->remove_index(0,&pkt);
 
-		#ifdef DEBUG
-		__dump_pkt("proxy_package_in", (unsigned char*)pkt.ptr, pkt.size);
-		#endif
 
 		switch (status) {
 			case CONNECTING_CLIENT:
@@ -459,9 +427,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	if (mybe && mybe->server_myds) {
 		for (j=0; j<mybe->server_myds->incoming_fragments->len;) {
 			mybe->server_myds->incoming_fragments->remove_index(0,&pkt);
-			#ifdef DEBUG
-			__dump_pkt("proxy_package_out", (unsigned char*)pkt.ptr, pkt.size);
-			#endif
 
 		switch (status) {
 			case CONNECTING_SERVER:
@@ -950,9 +915,6 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(
 		PtrSize_t pkt2;
 		for (k=0; k<myds->outgoing_pending_fragments->len;) {
 			myds->outgoing_pending_fragments->remove_index(0,&pkt2);
-			#ifdef DEBUG
-			__dump_pkt("proxy_package_in", (unsigned char*)pkt2.ptr, pkt2.size);
-			#endif
 			myds->outgoing_fragments->add(pkt2.ptr, pkt2.size);
 			myds->DSS=STATE_QUERY_SENT_DS;
 		}
