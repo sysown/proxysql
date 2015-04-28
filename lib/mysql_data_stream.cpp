@@ -111,9 +111,11 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	resultset_length=0;
 	query_SQL=NULL;
 
-	incoming_fragments=NULL;
-	outgoing_fragments=NULL;
-	outgoing_pending_fragments=NULL;
+	current_incoming_packet.ptr=NULL;
+	current_incoming_packet.size=0;
+	incoming_packets=NULL;
+	outgoing_packets=NULL;
+	outgoing_pending_packets=NULL;
 
 	resultset=NULL;
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
@@ -140,26 +142,26 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
-	if (incoming_fragments) {
-		while (incoming_fragments->len) {
-			incoming_fragments->remove_index_fast(0,&pkt);
+	if (incoming_packets) {
+		while (incoming_packets->len) {
+			incoming_packets->remove_index_fast(0,&pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
-		delete incoming_fragments;
+		delete incoming_packets;
 	}
-	if (outgoing_fragments) {
-		while (outgoing_fragments->len) {
-			outgoing_fragments->remove_index_fast(0,&pkt);
+	if (outgoing_packets) {
+		while (outgoing_packets->len) {
+			outgoing_packets->remove_index_fast(0,&pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
-		delete outgoing_fragments;
+		delete outgoing_packets;
 	}
-	if (outgoing_pending_fragments) {
-		while (outgoing_pending_fragments->len) {
-			outgoing_pending_fragments->remove_index_fast(0,&pkt);
+	if (outgoing_pending_packets) {
+		while (outgoing_pending_packets->len) {
+			outgoing_pending_packets->remove_index_fast(0,&pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
-		delete outgoing_pending_fragments;
+		delete outgoing_pending_packets;
 	}
 	if (resultset) {
 		while (resultset->len) {
@@ -184,15 +186,13 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	}
 }
 
-
-
 // this function initializes a MySQL_Data_Stream 
 void MySQL_Data_Stream::init() {
 	if (myds_type!=MYDS_LISTENER) {
 		proxy_debug(PROXY_DEBUG_NET,1, "Init Data Stream. Session=%p, DataStream=%p -- type %d\n" , sess, this, myds_type);
-		if (incoming_fragments==NULL) incoming_fragments = new PtrSizeArray();
-		if (outgoing_fragments==NULL) outgoing_fragments= new PtrSizeArray();
-		if (outgoing_pending_fragments==NULL) outgoing_pending_fragments= new PtrSizeArray();
+		if (incoming_packets==NULL) incoming_packets = new PtrSizeArray();
+		if (outgoing_packets==NULL) outgoing_packets= new PtrSizeArray();
+		if (outgoing_pending_packets==NULL) outgoing_pending_packets= new PtrSizeArray();
 		if (resultset==NULL) resultset = new PtrSizeArray();
 	}
 }
@@ -229,12 +229,10 @@ void MySQL_Data_Stream::shut_hard() {
 	}
 }
 
-
-
 void MySQL_Data_Stream::check_data_flow() {
-	if ( (incoming_fragments->len || queue_data(queueIN) ) && ( outgoing_fragments->len || queue_data(queueOUT) ) ){
+	if ( (incoming_packets->len || queue_data(queueIN) ) && ( outgoing_packets->len || queue_data(queueOUT) ) ){
 		// there is data at both sides of the data stream: this is considered a fatal error
-		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, incoming_fragments->len , queue_data(queueIN) , outgoing_fragments->len , queue_data(queueOUT));
+		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, incoming_packets->len , queue_data(queueIN) , outgoing_packets->len , queue_data(queueOUT));
 		shut_soft();
 	}
 	//if ((myds_type==MYDS_BACKEND) && (myconn->myconn.net.fd==0) && (revents & POLLOUT)) {
@@ -315,7 +313,7 @@ int MySQL_Data_Stream::write_to_net() {
 
 bool MySQL_Data_Stream::available_data_out() {
 	int buflen=queue_data(queueOUT);
-	if (buflen || outgoing_fragments->len) {
+	if (buflen || outgoing_packets->len) {
 		return true;
 	}
 	return false;
@@ -358,14 +356,13 @@ int MySQL_Data_Stream::read_pkts() {
 	{
 		int rc=0;
     	int r=0;
-    	while((r=buffer2array())) rc+=r;
+    	while((r=buffer_to_packets())) rc+=r;
 	    return rc;
-
 	}
 }
 
 
-int MySQL_Data_Stream::buffer2array() {
+int MySQL_Data_Stream::buffer_to_packets() {
 	int ret=0;
 	if (queue_data(queueIN)==0) return ret;
 	if ((queueIN.pkt.size==0) && queue_data(queueIN)<sizeof(mysql_hdr)) {
@@ -445,7 +442,7 @@ int MySQL_Data_Stream::buffer2array() {
 				unsigned char *ptrP=(unsigned char *)l_alloc(size);
 				memcpy(ptrP,_ptr+progress,size);
 				progress+=size;
-				incoming_fragments->add(ptrP,size);
+				receive_incoming_packet(ptrP, size);
 			}
 			if (payload_length) {
 				l_free(destLen,dest);
@@ -455,7 +452,7 @@ int MySQL_Data_Stream::buffer2array() {
 			queueIN.pkt.size=0;
 			queueIN.pkt.ptr=NULL;
 		} else {
-			incoming_fragments->add(queueIN.pkt.ptr,queueIN.pkt.size);
+			receive_incoming_packet(queueIN.pkt.ptr, queueIN.pkt.size);
 			pkts_recv++;
 			queueIN.pkt.size=0;
 			queueIN.pkt.ptr=NULL;
@@ -470,8 +467,8 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	unsigned int total_size=0;
 	unsigned int i=0;
 	PtrSize_t *p=NULL;
-	while (i<outgoing_fragments->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
-		p=outgoing_fragments->index(i);
+	while (i<outgoing_packets->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
+		p=outgoing_packets->index(i);
 		total_size+=p->size;
 		if (i==0) {
 			mysql_hdr hdr;
@@ -497,7 +494,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	total_size=0;
 	while (total_size<sourceLen) {
 		PtrSize_t p2;
-		outgoing_fragments->remove_index(0,&p2);
+		outgoing_packets->remove_index(0,&p2);
 		memcpy(source+total_size,p2.ptr,p2.size);
 		//i++;
 		total_size+=p2.size;
@@ -520,14 +517,28 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 }
 
 
-int MySQL_Data_Stream::array2buffer() {
+int MySQL_Data_Stream::packets_to_buffer() {
+	/*
+	 * Fills the output buffer with as many packets as possible (by dequeueing them
+	 * from outgoing_packets, and writing them to the queueOUT buffer).
+	 *
+	 * Returns the total number of bytes written in the buffer.
+	 *
+	 * It stops writing to the buffer when the outgoing queue of packets is empty OR
+	 * when the buffer is full.
+	 */
 	int ret=0;
-	//unsigned int idx=0;
+	
 	bool cont=true;
 	while (cont) {
+		// If there's no more space left in the buffer, it's time to return.
 		if (queue_available(queueOUT)==0) return ret;
-		if (queueOUT.partial==0) { // read a new packet
-			if (outgoing_fragments->len) {
+
+		// If the output buffer has no current packet attached to it (that is being written
+		// to it), then we will dequeue a new packet and proceed to write it to the buffer.
+		if (queueOUT.partial==0) {
+			// If there are still outgoing packets to dequeue
+			if (outgoing_packets->len) {
 				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
 				if (queueOUT.pkt.ptr) {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
@@ -537,7 +548,7 @@ int MySQL_Data_Stream::array2buffer() {
 					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
-					outgoing_fragments->remove_index(0,&queueOUT.pkt);
+					outgoing_packets->remove_index(0,&queueOUT.pkt);
 					// this is a special case, needed because compression is enabled *after* the first OK
 					if (DSS==STATE_CLIENT_AUTH_OK) {
 						DSS=STATE_SLEEP;
@@ -556,11 +567,18 @@ int MySQL_Data_Stream::array2buffer() {
 #ifdef DEBUG
 				{ __dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size); }
 #endif
+			// Else, if there are no more packets to dequeue, our mission is done
+			// and it's time to return.
 			} else {
 				cont=false;
 				continue;
 			}
 		}
+
+		// b is the number of bytes to be written to the buffer.
+		//
+		// It's either the remainder of the packet being currently processed (queueOUT.pkt)
+		// or the remainder of the buffer (if the remainder of queueOUT.pkt is bigger).
 		int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
 		memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
 		queue_w(queueOUT,b);
@@ -610,13 +628,6 @@ void MySQL_Data_Stream::buffer2resultset(unsigned char *ptr, unsigned int size) 
 		__ptr+=l;
 	}
 };
-
-int MySQL_Data_Stream::array2buffer_full() {
-	int rc=0;
-	int r=0;
-	while((r=array2buffer())) rc+=r;
-	return rc; 
-}
 
 int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pending_connect) {
 	//assert(myconn==NULL);
@@ -696,9 +707,9 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 	unsigned int k;
 	PtrSize_t pkt2;
-	for (k=0; k<outgoing_fragments->len;) {
-	outgoing_fragments->remove_index(0,&pkt2);
-	outgoing_pending_fragments->add(pkt2.ptr, pkt2.size);
+	for (k=0; k<outgoing_packets->len;) {
+	outgoing_packets->remove_index(0,&pkt2);
+	outgoing_pending_packets->add(pkt2.ptr, pkt2.size);
 	}
 }
 
@@ -745,4 +756,109 @@ void MySQL_Data_Stream::set_net_failure() {
 void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p\n", this->sess, this);
 	DSS=STATE_QUERY_SENT_NET;
+}
+
+bool MySQL_Data_Stream::has_incoming_packets() {
+	return incoming_packets->len > 0;
+}
+
+void MySQL_Data_Stream::dequeue_incoming_packet(PtrSize_t *pkt) {
+	incoming_packets->remove_index(0, pkt);
+}
+
+void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size) {
+	__dump_pkt_to_file(__func__, (unsigned char*)packet, size);
+
+	unsigned int payload_size=size-sizeof(mysql_hdr);
+	// If we're already building a concatenated packet in-memory, it means that this
+	// packet should be part of it. When concatenating the packets, we must pay attention
+	// to not include the header of subsequent packets (only the header of the first packet).
+	// One immediate consequence is that code that operates on the packet should NEVER read
+	// the length from the packet, but from the associated size field.
+	//
+	// FIXME: stop storing packet header together with payload, and this hack will no longer be
+	// needed
+	if (current_incoming_packet.ptr != NULL) {
+		// Allocate a new buffer to hold the current packet, and the new piece that
+		// has just came in. Concatenate both packets in the new buffer
+		unsigned int new_size=current_incoming_packet.size + payload_size;
+		unsigned char* new_buffer = (unsigned char*) l_alloc(new_size);
+		memcpy(new_buffer, current_incoming_packet.ptr, current_incoming_packet.size);
+		memcpy(new_buffer + current_incoming_packet.size, (unsigned char*)packet + sizeof(mysql_hdr), payload_size);
+		l_free(current_incoming_packet.size, current_incoming_packet.ptr);
+		current_incoming_packet.ptr=new_buffer;
+		current_incoming_packet.size=new_size;
+
+		// If the packet is less than 16MB-1 in size, it means that we are done
+		// receiving chunks of the current packet, and we can safely move it into
+		// incoming_packets.
+		// https://dev.mysql.com/doc/internals/en/sending-more-than-16mbyte.html
+		if (payload_size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
+			incoming_packets->add(current_incoming_packet.ptr, current_incoming_packet.size);
+			current_incoming_packet.ptr=NULL;
+			current_incoming_packet.size=0;
+		}
+	// If there is no current packet being built, let's check if we should start building
+	// one or we just forward the package to incoming_packets if it is not the first
+	// chunk of a large packet.
+	} else {
+		if (payload_size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
+			incoming_packets->add(packet, size);
+		} else {
+			current_incoming_packet.ptr=packet;
+			current_incoming_packet.size=size;
+		}
+	}
+}
+
+void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size) {
+	__dump_pkt_to_file(__func__, (unsigned char*)packet, size);
+
+	// Most frequent case: we're dealing with a small packet -- just let it flow through to outgoing_packets
+	if (size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
+		outgoing_packets->add(packet, size);
+		return;
+	}
+
+	// If we've reached this point, it means that we're dealing with a large packet that has been
+	// merged into memory (another possibility is that it was a small packet, but it was turned into a
+	// large packet by the rewrite of the query). We will proceed by splitting the packet into smaller
+	// chunks and sending those smaller chunks instead.
+
+	mysql_hdr hdr;
+	memcpy(&hdr, packet, sizeof(hdr));
+	
+	// Determine into how many chunks will the bigger packet be split.
+	// Note: we need to pay attention to not include the header size into the computation, because
+	// the MySQL protocol actually defines the maximal size of the payload (so, what comes after the header).
+	unsigned int payload_size=size-sizeof(hdr);
+	unsigned int num_chunks;
+	if (payload_size % MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE == 0) {
+		num_chunks = payload_size / MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE;
+	} else {
+		num_chunks = payload_size / MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE + 1;
+	}
+
+	// Proceed to enqueue the smaller chunks
+	unsigned int bytes_split=0;
+	for (unsigned i = 0; i < num_chunks; i++) {
+		// Determine the size of the current chunk.
+		unsigned int remaining_bytes_to_split = payload_size - bytes_split, chunk_payload_size;
+		if (remaining_bytes_to_split > MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
+			chunk_payload_size = MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE;
+		} else {
+			chunk_payload_size = remaining_bytes_to_split;
+		}
+
+		// Allocate memory for the current chunk, and copy the header and the current chunk of the big payload
+		// We must pay attention to setting the correct length in the header before copying it.
+		unsigned int chunk_size=chunk_payload_size + sizeof(hdr);
+		unsigned char *chunk = (unsigned char*)l_alloc(chunk_size);
+		hdr.pkt_length = chunk_size;
+		memcpy(chunk, &hdr, sizeof(hdr));
+		memcpy(chunk+sizeof(hdr), (unsigned char*)packet+bytes_split, chunk_payload_size);
+
+		outgoing_packets->add(chunk, chunk_size);
+		bytes_split+=chunk_payload_size;
+	}
 }

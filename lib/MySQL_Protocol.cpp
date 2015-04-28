@@ -433,7 +433,7 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
 	//_ptr[l++]=statslen;
 	memcpy(_ptr+l,stats,statslen);	
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -457,7 +457,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	memcpy(_ptr+l, &status, sizeof(uint16_t));
 	
 	if (send==true) {
-		(*myds)->outgoing_fragments->add((void *)_ptr,size);
+		(*myds)->enqueue_outgoing_packet((void *)_ptr,size);
 		switch ((*myds)->DSS) {
 			case STATE_FIELD:
 				(*myds)->DSS=STATE_EOF1;
@@ -495,7 +495,7 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 	if (sql_message) memcpy(_ptr+l, sql_message, sql_message_len);
 	
 	if (send==true) {
-		(*myds)->outgoing_fragments->add((void *)_ptr,size);
+		(*myds)->enqueue_outgoing_packet((void *)_ptr,size);
 		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
 			case STATE_QUERY_SENT_DS:
@@ -550,7 +550,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	if (msg) memcpy(_ptr+l, msg, msg_len);
 	
 	if (send==true) {
-		(*myds)->outgoing_fragments->add((void *)_ptr,size);
+		(*myds)->enqueue_outgoing_packet((void *)_ptr,size);
 		switch ((*myds)->DSS) {
 			case STATE_CLIENT_HANDSHAKE:
 			case STATE_QUERY_SENT_DS:
@@ -582,7 +582,7 @@ bool MySQL_Protocol::generate_COM_QUIT(bool send, void **ptr, unsigned int *len)
 	_ptr[l]=0x01; l++;
 	
 	if (send==true) {
-		(*myds)->outgoing_fragments->add((void *)_ptr,size);
+		(*myds)->enqueue_outgoing_packet((void *)_ptr,size);
 	}
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
@@ -603,7 +603,7 @@ bool MySQL_Protocol::generate_COM_INIT_DB(bool send, void **ptr, unsigned int *l
 	_ptr[l]=0x02; l++;
 	memcpy(_ptr+l, schema, schema_len);
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -625,7 +625,7 @@ bool MySQL_Protocol::generate_COM_QUERY(bool send, void **ptr, unsigned int *len
 	_ptr[l]=0x03; l++;
 	memcpy(_ptr+l, query, query_len);
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -646,7 +646,7 @@ bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len)
   int l=sizeof(mysql_hdr);
 	_ptr[l]=0x0e; l++;
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -667,7 +667,7 @@ bool MySQL_Protocol::generate_COM_RESET_CONNECTION(bool send, void **ptr, unsign
   int l=sizeof(mysql_hdr);
 	_ptr[l]=0x1f; l++;
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -701,7 +701,7 @@ bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned i
 
 	l+=write_encoded_length(_ptr+l, count, count_len, count_prefix);
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -786,7 +786,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 	} 
 	//else _ptr[l]=0x00;
 	//else fprintf(stderr,"current deflen=%d, defstrlen=%d, namelen=%d, namestrlen=%d, l=%d\n", def_len, def_strlen, name_len, name_strlen, l);
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -820,7 +820,7 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 			l++;
 		}
 	}
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -915,7 +915,7 @@ bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsi
 	l+=_tmp+1;
 	memcpy(_ptr+l,(char *)"mysql_native_password",strlen((char *)"mysql_native_password")+1);
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -959,7 +959,7 @@ bool MySQL_Protocol::generate_COM_CHANGE_USER(bool send, void **ptr, unsigned in
 	_tmp=strlen(userinfo->schemaname);
 	memcpy(_ptr+l,userinfo->schemaname,_tmp+1);
 
-	if (send==true) { (*myds)->outgoing_fragments->add((void *)_ptr,size); }
+	if (send==true) { (*myds)->enqueue_outgoing_packet((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -990,7 +990,7 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 20); l+=20;
   _ptr[l]=0x00; //l+=1; //0x00
 	if (send==true) {
-		(*myds)->outgoing_fragments->add((void *)_ptr,size);
+		(*myds)->enqueue_outgoing_packet((void *)_ptr,size);
 		(*myds)->DSS=STATE_SERVER_HANDSHAKE;
 		(*myds)->sess->status=CONNECTING_CLIENT;
 	}
@@ -1069,7 +1069,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
 
 	if (send==true) {
-		(*myds)->outgoing_fragments->add((void *)_ptr,size);
+		(*myds)->enqueue_outgoing_packet((void *)_ptr,size);
 		(*myds)->DSS=STATE_SERVER_HANDSHAKE;
 		(*myds)->sess->status=CONNECTING_CLIENT;
 	}

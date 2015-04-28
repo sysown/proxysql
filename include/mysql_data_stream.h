@@ -31,15 +31,15 @@ typedef struct _raw_bytes_queue_t {
 class MySQL_Data_Stream
 {
 	private:
-	int array2buffer();
-	int buffer2array();
+	int buffer_to_packets();
 	void generate_compressed_packet();
+	void receive_incoming_packet(void *packet, unsigned int size);
+
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
 	unsigned int connect_tries;
 	ProxySQL_Poll *mypolls;
-	int array2buffer_full();
 	MySQL_Connection *myconn;
 	MySQL_Protocol myprot;
 	enum mysql_data_stream_status DSS;
@@ -68,25 +68,33 @@ class MySQL_Data_Stream
 	// different packets or just a piece of a bigger one.
 	raw_bytes_queue_t queueOUT;
 
-	PtrSizeArray *incoming_packets;
-	PtrSizeArray *outgoing_packets;
+	// The current packet that is processed as incoming.
+	//
+	// We need this as an intermediate step because the MySQL protocol
+	// limits packets to 16MB (because of 3 bytes being allocated to size
+	// in the header). Clients are expected to split big packets (such as
+	// a big insert, for example) into smaller ones, but ProxySQL needs to
+	// analyze such queries for rewrite. Thus, we need to merge the packets
+	// in-memory before actually forwarding them.
+	// whether a query rewrite is necessary, we
+	PtrSize_t current_incoming_packet;
 
 	// Full packets that have been read from the socket, ready to be
 	// processed by MySQL_Session. The routine that converts the raw
-	// bytes to these packets is buffer2array().
-	PtrSizeArray *incoming_fragments;
+	// bytes to these packets is buffer_to_packets().
+	PtrSizeArray *incoming_packets;
 
 	// Full packets that have been written by MySQL_Session, that will
 	// end up being converted to buffers and written to the socket.
-	// The routine that does the conversion is array2buffer().
-	PtrSizeArray *outgoing_fragments;
+	// The routine that does the conversion is packets_to_buffer().
+	PtrSizeArray *outgoing_packets;
 
 	// Sometimes, packets need to be put on hold as we are trying to
 	// send packets to a backend to which we're not connected to yet.
 	// Then, the packets to be sent are moved in here, and then the
-	// handshake packets are put into outgoing_fragments in order to make
+	// handshake packets are put into outgoing_packets in order to make
 	// sure that an application-level connection is established first.
-	PtrSizeArray *outgoing_pending_fragments;
+	PtrSizeArray *outgoing_pending_packets;
 
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
@@ -101,7 +109,6 @@ class MySQL_Data_Stream
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
 
-
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
 	void shut_soft();
@@ -109,7 +116,8 @@ class MySQL_Data_Stream
 	int read_from_net();
 	int write_to_net();
 	int write_to_net_poll();
-	bool available_data_out();	
+	bool available_data_out();
+	int packets_to_buffer();
 	void set_pollout();	
 	void mysql_free();
 
@@ -130,5 +138,9 @@ class MySQL_Data_Stream
 	void move_from_OUT_to_OUTpending();
 	unsigned char * resultset2buffer(bool);
 	void buffer2resultset(unsigned char *, unsigned int);
+
+	bool has_incoming_packets();
+	void dequeue_incoming_packet(PtrSize_t *pkt);
+	void enqueue_outgoing_packet(void *packet, unsigned int size);
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

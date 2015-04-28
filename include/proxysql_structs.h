@@ -2,7 +2,7 @@
 
 #define PKT_PARSED 0
 #define PKT_ERROR 1
-
+#define MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE (16 * 1024 * 1024 - 1)
 
 
 

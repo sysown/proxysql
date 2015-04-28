@@ -724,7 +724,7 @@ void Standard_MySQL_Thread::run() {
 			mc->last_time_used=curtime;
 			myds->myprot.init(&myds, myds->myconn->userinfo, NULL);
 			myds->myprot.generate_COM_PING(true,NULL,NULL);
-			myds->array2buffer_full();
+			myds->packets_to_buffer();
 			myds->DSS=STATE_QUERY_SENT_DS;
 			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, curtime);
 			processing_idles=true;
