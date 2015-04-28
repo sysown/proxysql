@@ -73,5 +73,11 @@ class MySQL_Protocol {
 	bool is_pkt_EOF(unsigned char *pkt, unsigned int len);
 	bool is_pkt_OK(unsigned char *pkt, unsigned int len);
 	bool is_pkt_ERR(unsigned char *pkt, unsigned int len);
+
+	bool is_query_pkt_over_16MB(unsigned char *pkt, unsigned int len);
+
+	// -------------------------------------- //
+	// Packet to fragment conversion and back //
+	// -------------------------------------- //
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */
