@@ -79,16 +79,10 @@ opt.add(
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
 //	opt->add((const char *)"",0,1,0,(const char *)"Configuration DB path",(const char *)"-a",(const char *)"--admin-pathdb");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
-//	opt.add("",0,0,0,"","-d","--debug");
-//	opt.add("",0,0,0,"","-d","--debug");
-
 	opt->add((const char *)"/tmp/proxysql_packets.txt",0,1,0,(const char *)"Dump MySQL packets to a file (for protocol debugging purposes)",(const char *)"--dump-packets");
 	opt->add((const char *)"1677219",0,1,0,(const char *)"Truncate dumped packets to this size (default: 16MB, the maximal size allowed by the MySQL protocol)",(const char *)"--dump-packets-truncate");
 	confFile=new ProxySQL_ConfigFile();
 	signal(SIGTERM, term_handler);
-
-	//MyHostGroups=new MySQL_HostGroups();
-
 };
 
 
