@@ -82,6 +82,8 @@ opt.add(
 //	opt.add("",0,0,0,"","-d","--debug");
 //	opt.add("",0,0,0,"","-d","--debug");
 
+	opt->add((const char *)"/tmp/proxysql_packets.txt",0,1,0,(const char *)"Dump MySQL packets to a file (for protocol debugging purposes)",(const char *)"--dump-packets");
+	opt->add((const char *)"1677219",0,1,0,(const char *)"Truncate dumped packets to this size (default: 16MB, the maximal size allowed by the MySQL protocol)",(const char *)"--dump-packets-truncate");
 	confFile=new ProxySQL_ConfigFile();
 	signal(SIGTERM, term_handler);
 
@@ -147,6 +149,18 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		//if (!g_file_test(config_file,(GFileTest)(G_FILE_TEST_EXISTS|G_FILE_TEST_IS_REGULAR))) {
 		if (Proxy_file_regular(config_file)==false) {
 			config_file=(char *)"/etc/proxysql.cnf";
+		}
+	}
+
+	if (opt->isSet("--dump-packets")) {
+		std::string dumpPacketsFile;
+		opt->get("--dump-packets")->getString(dumpPacketsFile);
+		global.dump_packets_file = strdup(dumpPacketsFile.c_str());
+		global.dump_packets_fd = fopen(global.dump_packets_file, "wt");
+
+		// Only take into account --dump-packets-truncate if --dump-packets is set.
+		if (opt->isSet("--dump-packets-truncate")) {
+			opt->get("--dump-packets-truncate")->getInt(global.dump_packets_truncate);
 		}
 	}
 #ifdef DEBUG

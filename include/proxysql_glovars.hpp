@@ -44,7 +44,10 @@ class ProxySQL_GlobalVariables {
 		char *pidfile;
 		bool restart_on_error;
 		int restart_delay;
-		SSL_CTX *ssl_ctx;	
+		SSL_CTX *ssl_ctx;
+		char *dump_packets_file;
+		int dump_packets_truncate=-1;
+		FILE *dump_packets_fd;
 	} global;
 	struct mysql {
 		char *server_version;
