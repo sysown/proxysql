@@ -34,6 +34,8 @@ class MySQL_Data_Stream
 	int buffer_to_packets();
 	void generate_compressed_packet();
 	void receive_incoming_packet(void *packet, unsigned int size);
+	void __incoming_packet(void *packet, unsigned int size);
+	void __outgoing_packet(void *packet, unsigned int size);
 
 	public:
 	void * operator new(size_t);
@@ -136,6 +138,7 @@ class MySQL_Data_Stream
 	int assign_fd_from_mysql_conn();
 
 	void move_from_OUT_to_OUTpending();
+	void move_from_OUTpending_to_OUT();
 	unsigned char * resultset2buffer(bool);
 	void buffer2resultset(unsigned char *, unsigned int);
 

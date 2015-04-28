@@ -752,7 +752,7 @@ void MySQL_Data_Stream::move_from_OUTpending_to_OUT() {
 	PtrSize_t pkt2;
 	for (k = 0; k < outgoing_pending_packets->len;) {
 		outgoing_pending_packets->remove_index(0, &pkt2);
-		outgoing_packets->add(pkt2.ptr, pkt2.size);
+		__outgoing_packet(pkt2.ptr, pkt2.size);
 	}
 }
 
@@ -809,8 +809,32 @@ void MySQL_Data_Stream::dequeue_incoming_packet(PtrSize_t *pkt) {
 	incoming_packets->remove_index(0, pkt);
 }
 
+void MySQL_Data_Stream::__incoming_packet(void *packet, unsigned int size) {
+	if (myds_type == MYDS_FRONTEND) {
+		__dump_pkt_to_file("CLIENT_TO_PROXY___incoming_packet", (unsigned char*)packet, size);
+	} else if (myds_type != MYDS_LISTENER) {
+		__dump_pkt_to_file("SERVER_TO_PROXY___incoming_packet", (unsigned char*)packet, size);
+	}
+
+	incoming_packets->add(packet, size);
+}
+
+void MySQL_Data_Stream::__outgoing_packet(void *packet, unsigned int size) {
+	if (myds_type == MYDS_FRONTEND) {
+		__dump_pkt_to_file("PROXY_TO_CLIENT___outgoing_packet", (unsigned char*)packet, size);
+	} else if (myds_type != MYDS_LISTENER) {
+		__dump_pkt_to_file("PROXY_TO_SERVER___outgoing_packet", (unsigned char*)packet, size);
+	}
+
+	outgoing_packets->add(packet, size);
+}
+
 void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size) {
-	__dump_pkt_to_file(__func__, (unsigned char*)packet, size);
+	if (myds_type == MYDS_FRONTEND) {
+		__dump_pkt_to_file("CLIENT_TO_PROXY_receive_incoming_packet", (unsigned char*)packet, size);
+	} else if (myds_type != MYDS_LISTENER) {
+		__dump_pkt_to_file("SERVER_TO_PROXY_receive_incoming_packet", (unsigned char*)packet, size);
+	}
 
 	unsigned int payload_size=size-sizeof(mysql_hdr);
 	// If we're already building a concatenated packet in-memory, it means that this
@@ -837,7 +861,7 @@ void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size)
 		// incoming_packets.
 		// https://dev.mysql.com/doc/internals/en/sending-more-than-16mbyte.html
 		if (payload_size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
-			incoming_packets->add(current_incoming_packet.ptr, current_incoming_packet.size);
+			__incoming_packet(current_incoming_packet.ptr, current_incoming_packet.size);
 			current_incoming_packet.ptr=NULL;
 			current_incoming_packet.size=0;
 		}
@@ -846,7 +870,7 @@ void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size)
 	// chunk of a large packet.
 	} else {
 		if (payload_size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
-			incoming_packets->add(packet, size);
+			__incoming_packet(packet, size);
 		} else {
 			current_incoming_packet.ptr=packet;
 			current_incoming_packet.size=size;
@@ -855,11 +879,16 @@ void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size)
 }
 
 void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size) {
-	__dump_pkt_to_file(__func__, (unsigned char*)packet, size);
+
+	if (myds_type == MYDS_FRONTEND) {
+		__dump_pkt_to_file("PROXY_TO_CLIENT_enqueue_outgoing_packet", (unsigned char*)packet, size);
+	} else if (myds_type != MYDS_LISTENER) {
+		__dump_pkt_to_file("PROXY_TO_SERVER_enqueue_outgoing_packet", (unsigned char*)packet, size);
+	}
 
 	// Most frequent case: we're dealing with a small packet -- just let it flow through to outgoing_packets
 	if (size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
-		outgoing_packets->add(packet, size);
+		__outgoing_packet(packet, size);
 		return;
 	}
 
@@ -882,11 +911,12 @@ void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size)
 		num_chunks = payload_size / MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE + 1;
 	}
 
-	// Proceed to enqueue the smaller chunks
-	unsigned int bytes_split=0;
+	// Proceed to enqueue the smaller chunks. Make sure to split the header of the big packet
+	// from splitting the payload.
+	unsigned int bytes_split=sizeof(hdr);
 	for (unsigned i = 0; i < num_chunks; i++) {
 		// Determine the size of the current chunk.
-		unsigned int remaining_bytes_to_split = payload_size - bytes_split, chunk_payload_size;
+		unsigned int remaining_bytes_to_split = size - bytes_split, chunk_payload_size;
 		if (remaining_bytes_to_split > MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
 			chunk_payload_size = MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE;
 		} else {
@@ -897,11 +927,16 @@ void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size)
 		// We must pay attention to setting the correct length in the header before copying it.
 		unsigned int chunk_size=chunk_payload_size + sizeof(hdr);
 		unsigned char *chunk = (unsigned char*)l_alloc(chunk_size);
-		hdr.pkt_length = chunk_size;
+		hdr.pkt_length = chunk_payload_size;
 		memcpy(chunk, &hdr, sizeof(hdr));
 		memcpy(chunk+sizeof(hdr), (unsigned char*)packet+bytes_split, chunk_payload_size);
 
-		outgoing_packets->add(chunk, chunk_size);
+		__outgoing_packet(chunk, chunk_size);
 		bytes_split+=chunk_payload_size;
+		// Make sure to increment the packet id. When MySQL client splits a big query into
+		// multiple smaller packets, the packets have consecutive packet ids. If the proxy
+		// does not ensure that still holds, we will receive a "Got packets out of order" error
+		// from the MySQL server.
+		hdr.pkt_id++;
 	}
 }
