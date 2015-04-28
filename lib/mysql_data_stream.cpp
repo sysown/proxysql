@@ -39,12 +39,13 @@ static void __dump_pkt_to_file(const char *func, unsigned char *_ptr, unsigned i
 		return;
 	}
 
+	fprintf(GloVars.global.dump_packets_fd, "DUMP %d bytes FROM %s\n", len, func);
+
 	if (GloVars.global.dump_packets_truncate != -1 && len > GloVars.global.dump_packets_truncate) {
 		len = GloVars.global.dump_packets_truncate;
 	}
 
 	unsigned int i;
-	fprintf(GloVars.global.dump_packets_fd, "DUMP %d bytes FROM %s\n", len, func);
 
 	for(i = 0; i < len; i++) {
 		if(isprint(_ptr[i])) fprintf(GloVars.global.dump_packets_fd,"%c", _ptr[i]); else fprintf(GloVars.global.dump_packets_fd,".");
