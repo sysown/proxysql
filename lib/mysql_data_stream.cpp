@@ -742,8 +742,17 @@ void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 	unsigned int k;
 	PtrSize_t pkt2;
 	for (k=0; k<outgoing_packets->len;) {
-	outgoing_packets->remove_index(0,&pkt2);
-	outgoing_pending_packets->add(pkt2.ptr, pkt2.size);
+		outgoing_packets->remove_index(0,&pkt2);
+		outgoing_pending_packets->add(pkt2.ptr, pkt2.size);
+	}
+}
+
+void MySQL_Data_Stream::move_from_OUTpending_to_OUT() {
+	unsigned int k;
+	PtrSize_t pkt2;
+	for (k = 0; k < outgoing_pending_packets->len;) {
+		outgoing_pending_packets->remove_index(0, &pkt2);
+		outgoing_packets->add(pkt2.ptr, pkt2.size);
 	}
 }
 

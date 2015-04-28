@@ -559,13 +559,8 @@ bool MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		mybe->server_myds->DSS=STATE_READY;
 		status=WAITING_SERVER_DATA;
-		unsigned int k;
-		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->outgoing_pending_packets->len;) {
-			mybe->server_myds->outgoing_pending_packets->remove_index(0,&pkt2);
-			mybe->server_myds->enqueue_outgoing_packet(pkt2.ptr, pkt2.size);
-			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-		}
+		mybe->server_myds->move_from_OUTpending_to_OUT();
+		mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 		// set prepared statement processing
 		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
 		return true;
@@ -586,13 +581,8 @@ bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		mybe->server_myds->DSS=STATE_READY;
 		status=WAITING_SERVER_DATA;
-		unsigned int k;
-		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->outgoing_pending_packets->len;) {
-			mybe->server_myds->outgoing_pending_packets->remove_index(0,&pkt2);
-			mybe->server_myds->enqueue_outgoing_packet(pkt2.ptr, pkt2.size);
-			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-		}
+		mybe->server_myds->move_from_OUTpending_to_OUT();
+		mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 		// set prepared statement processing
 		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
 		return true;
@@ -613,13 +603,8 @@ bool MySQL_Session::handler___status_CHANGING_CHARSET(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		mybe->server_myds->DSS=STATE_READY;
 		status=WAITING_SERVER_DATA;
-		unsigned int k;
-		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->outgoing_pending_packets->len;) {
-			mybe->server_myds->outgoing_pending_packets->remove_index(0,&pkt2);
-			mybe->server_myds->enqueue_outgoing_packet(pkt2.ptr, pkt2.size);
-			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-		}
+		mybe->server_myds->move_from_OUTpending_to_OUT();
+		mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 		// set prepared statement processing
 		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
 		return true;
@@ -909,13 +894,8 @@ void MySQL_Session::handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(
 		myds->DSS=STATE_READY;
 		//mybe->myconn=server_myds->myconn;
 		status=WAITING_SERVER_DATA;
-		unsigned int k;
-		PtrSize_t pkt2;
-		for (k=0; k<myds->outgoing_pending_packets->len;) {
-			myds->outgoing_pending_packets->remove_index(0,&pkt2);
-			myds->enqueue_outgoing_packet(pkt2.ptr, pkt2.size);
-			myds->DSS=STATE_QUERY_SENT_DS;
-		}
+		myds->move_from_OUTpending_to_OUT();
+		myds->DSS=STATE_QUERY_SENT_DS;
 		MySQL_Connection *myconn=myds->myconn;
 		// enable compression
 		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
