@@ -5,6 +5,8 @@
 #define UNIX_PATH_MAX    108
 #endif
 
+#include <stdio.h>
+
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
 
@@ -30,6 +32,37 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 	fprintf(stderr,"\n\n");
 	
 
+}
+
+static void __dump_pkt_to_file(const char *func, unsigned char *_ptr, unsigned int len) {
+	if (GloVars.global.dump_packets_file == NULL) {
+		return;
+	}
+
+	if (GloVars.global.dump_packets_truncate != -1 && len > GloVars.global.dump_packets_truncate) {
+		len = GloVars.global.dump_packets_truncate;
+	}
+
+	unsigned int i;
+	fprintf(GloVars.global.dump_packets_fd, "DUMP %d bytes FROM %s\n", len, func);
+
+	for(i = 0; i < len; i++) {
+		if(isprint(_ptr[i])) fprintf(GloVars.global.dump_packets_fd,"%c", _ptr[i]); else fprintf(GloVars.global.dump_packets_fd,".");
+		if (i>0 && (i%16==15 || i==len-1)) {
+			unsigned int j;
+			if (i%16!=15) {
+				j=15-i%16;
+				while (j--) fprintf(GloVars.global.dump_packets_fd," ");
+			}
+			fprintf(GloVars.global.dump_packets_fd," --- ");
+			for (j=(i==len-1 ? ((int)(i/16))*16 : i-15 ) ; j<=i; j++) {
+				fprintf(GloVars.global.dump_packets_fd,"%02x ", _ptr[j]);
+			}
+			fprintf(GloVars.global.dump_packets_fd,"\n");
+		}
+	}
+	fprintf(GloVars.global.dump_packets_fd,"\n\n");
+	fflush(GloVars.global.dump_packets_fd);
 }
 #endif
 
