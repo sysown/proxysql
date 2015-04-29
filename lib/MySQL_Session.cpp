@@ -790,16 +790,18 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 	} else {
 		client_myds->enqueue_outgoing_packet(pkt->ptr, pkt->size);
 	}
-	if ((c==0xfe && pkt->size < 13) || c==0xff) {
+
+	if (mybe->server_myds->myprot.is_pkt_EOF((unsigned char*)pkt->ptr, pkt->size) ||
+		mybe->server_myds->myprot.is_pkt_ERR((unsigned char*)pkt->ptr, pkt->size)) {
+
 		mybe->server_myds->DSS=STATE_READY;
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 
-
 		/* multi-plexing attempt */
-		if (c==0xfe) {
+		if (mybe->server_myds->myprot.is_pkt_EOF((unsigned char*)pkt->ptr, pkt->size)) {
 			mybe->server_myds->myprot.process_pkt_EOF((unsigned char *)pkt->ptr,pkt->size);
-			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, server_myds->myprot.prot_status);
+			
 			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				mybe->server_myds->myconn->last_time_used=thread->curtime;
 				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);
