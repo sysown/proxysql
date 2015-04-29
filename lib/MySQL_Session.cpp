@@ -1355,6 +1355,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->assign_fd_from_mysql_conn();
 		mybe->server_myds->myds_type=MYDS_BACKEND;
 		mybe->server_myds->DSS=STATE_READY;
+		if (session_fast_forward==true) {
+			status=FAST_FORWARD;
+		}
 	}
 }
 
