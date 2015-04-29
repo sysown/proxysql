@@ -810,31 +810,40 @@ void MySQL_Data_Stream::dequeue_incoming_packet(PtrSize_t *pkt) {
 }
 
 void MySQL_Data_Stream::__incoming_packet(void *packet, unsigned int size) {
+
+#ifdef DEBUG
 	if (myds_type == MYDS_FRONTEND) {
 		__dump_pkt_to_file("CLIENT_TO_PROXY___incoming_packet", (unsigned char*)packet, size);
 	} else if (myds_type != MYDS_LISTENER) {
 		__dump_pkt_to_file("SERVER_TO_PROXY___incoming_packet", (unsigned char*)packet, size);
 	}
+#endif
 
 	incoming_packets->add(packet, size);
 }
 
 void MySQL_Data_Stream::__outgoing_packet(void *packet, unsigned int size) {
+
+#ifdef DEBUG
 	if (myds_type == MYDS_FRONTEND) {
 		__dump_pkt_to_file("PROXY_TO_CLIENT___outgoing_packet", (unsigned char*)packet, size);
 	} else if (myds_type != MYDS_LISTENER) {
 		__dump_pkt_to_file("PROXY_TO_SERVER___outgoing_packet", (unsigned char*)packet, size);
 	}
+#endif
 
 	outgoing_packets->add(packet, size);
 }
 
 void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size) {
+
+#ifdef DEBUG
 	if (myds_type == MYDS_FRONTEND) {
 		__dump_pkt_to_file("CLIENT_TO_PROXY_receive_incoming_packet", (unsigned char*)packet, size);
 	} else if (myds_type != MYDS_LISTENER) {
 		__dump_pkt_to_file("SERVER_TO_PROXY_receive_incoming_packet", (unsigned char*)packet, size);
 	}
+#endif
 
 	unsigned int payload_size=size-sizeof(mysql_hdr);
 	// If we're already building a concatenated packet in-memory, it means that this
@@ -880,11 +889,13 @@ void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size)
 
 void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size) {
 
+#ifdef DEBUG
 	if (myds_type == MYDS_FRONTEND) {
 		__dump_pkt_to_file("PROXY_TO_CLIENT_enqueue_outgoing_packet", (unsigned char*)packet, size);
 	} else if (myds_type != MYDS_LISTENER) {
 		__dump_pkt_to_file("PROXY_TO_SERVER_enqueue_outgoing_packet", (unsigned char*)packet, size);
 	}
+#endif
 
 	// Most frequent case: we're dealing with a small packet -- just let it flow through to outgoing_packets
 	if (size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
