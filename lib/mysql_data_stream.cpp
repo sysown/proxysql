@@ -809,7 +809,7 @@ void MySQL_Data_Stream::dequeue_incoming_packet(PtrSize_t *pkt) {
 	incoming_packets->remove_index(0, pkt);
 }
 
-void MySQL_Data_Stream::__incoming_packet(void *packet, unsigned int size) {
+inline void MySQL_Data_Stream::__incoming_packet(void *packet, unsigned int size) {
 
 #ifdef DEBUG
 	if (myds_type == MYDS_FRONTEND) {
@@ -822,7 +822,7 @@ void MySQL_Data_Stream::__incoming_packet(void *packet, unsigned int size) {
 	incoming_packets->add(packet, size);
 }
 
-void MySQL_Data_Stream::__outgoing_packet(void *packet, unsigned int size) {
+inline void MySQL_Data_Stream::__outgoing_packet(void *packet, unsigned int size) {
 
 #ifdef DEBUG
 	if (myds_type == MYDS_FRONTEND) {
