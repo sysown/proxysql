@@ -634,37 +634,6 @@ int MySQL_Data_Stream::packets_to_buffer() {
 	return ret;
 }
 
-unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
-	unsigned int i;
-	unsigned int l=0;
-	unsigned char *mybuff=(unsigned char *)l_alloc(resultset_length);
-	PtrSize_t *ps;
-	for (i=0;i<resultset->len;i++) {
-		ps=resultset->index(i);
-		memcpy(mybuff+l,ps->ptr,ps->size);
-		if (del) l_free(ps->size,ps->ptr);
-		l+=ps->size;
-	}
-	//while (resultset->len) resultset->remove_index(resultset->len-1,NULL);
-	return mybuff;
-};
-
-void MySQL_Data_Stream::buffer2resultset(unsigned char *ptr, unsigned int size) {
-	unsigned char *__ptr=ptr;
-	mysql_hdr hdr;
-	unsigned int l;
-	void *pkt;
-	while (__ptr<ptr+size) {
-		memcpy(&hdr,__ptr,sizeof(mysql_hdr));
-		//Copy4B(&hdr,__ptr);
-		l=hdr.pkt_length+sizeof(mysql_hdr);
-		pkt=l_alloc(l);
-		memcpy(pkt,__ptr,l);
-		resultset->add(pkt,l);
-		__ptr+=l;
-	}
-};
-
 int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pending_connect) {
 	//assert(myconn==NULL);
 

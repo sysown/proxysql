@@ -148,5 +148,8 @@ class MySQL_Data_Stream
 	bool has_incoming_packets();
 	void dequeue_incoming_packet(PtrSize_t *pkt);
 	void enqueue_outgoing_packet(void *packet, unsigned int size);
+	void enqueue_outgoing_packets_from_resultset(PtrSizeArray *);
+	void enqueue_outgoing_packets_from_serialized_resultset(unsigned char *, unsigned int);
+	void cache_resultset(unsigned char*, unsigned int, unsigned int);
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

@@ -677,7 +677,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 		if (qpo && qpo->cache_ttl>0) {
 			mybe->server_myds->resultset->add(pkt->ptr, pkt->size);
 			mybe->server_myds->resultset_length+=pkt->size;
-		} else {
+		} else {		
 			client_myds->enqueue_outgoing_packet(pkt->ptr, pkt->size);
 		}
 		mybe->server_myds->DSS=STATE_ROW;	// FIXME: this is catch all for now
@@ -801,7 +801,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 		/* multi-plexing attempt */
 		if (mybe->server_myds->myprot.is_pkt_EOF((unsigned char*)pkt->ptr, pkt->size)) {
 			mybe->server_myds->myprot.process_pkt_EOF((unsigned char *)pkt->ptr,pkt->size);
-			
+
 			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				mybe->server_myds->myconn->last_time_used=thread->curtime;
 				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);

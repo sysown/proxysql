@@ -103,7 +103,6 @@ class PtrSizeArray {
 	};
 
 	void remove_index_fast(unsigned int, PtrSize_t *);
-	void copy_add(PtrSizeArray *, unsigned int, unsigned int);
 
 	PtrSize_t * index(unsigned int i) {
 		return &pdata[i];

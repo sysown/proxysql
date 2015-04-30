@@ -273,20 +273,6 @@ void PtrSizeArray::remove_index_fast(unsigned int i, PtrSize_t *ps) {
     len--;
 }
 
-
-//PtrSize_t * PtrSizeArray::index(unsigned int i) {
-//	return &pdata[i];
-//}
-
-void PtrSizeArray::copy_add(PtrSizeArray *psa, unsigned int from, unsigned int cnt) {
-	unsigned int i;
-	PtrSize_t *psp;
-	for (i=from;i<from+cnt;i++) {
-		psp=psa->index(i);
-		add(psp->ptr,psp->size);
-	}
-}
-
 bool Proxy_file_exists(const char *path) {
 	struct stat sb;
 	int rc=stat(path, &sb);
