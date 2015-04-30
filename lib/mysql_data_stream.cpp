@@ -968,6 +968,31 @@ void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size)
 		hdr.pkt_id++;
 	}
 }
+
+void MySQL_Data_Stream::enqueue_outgoing_packets_from_serialized_resultset(unsigned char *buffer, unsigned int size) {
+	/*
+	 * Given a buffer containing a serialized list of MySQL packets (representing a resultset),
+	 * deserialize them and add them to the outgoing packets list.
+	 *
+	 * One example use-case is when we cache a query's results, and we have to keep the serialized
+	 * list of packets together. In order to deliver those query results to the MySQL client, we
+	 * will use this routine.
+	 */
+	unsigned char *ptr = buffer;
+	void *packet;
+	unsigned int len;
+	mysql_hdr hdr;
+
+	while (ptr < buffer + size) {
+		memcpy(&hdr, ptr, sizeof(mysql_hdr));
+		len = hdr.pkt_length + sizeof(mysql_hdr);
+		packet = l_alloc(len);
+		memcpy(packet, ptr, len);
+		enqueue_outgoing_packet(packet, len);
+		ptr += len;
+	}
+}
+
 void MySQL_Data_Stream::enqueue_outgoing_packets_from_resultset(PtrSizeArray *other_resultset) {
 	unsigned int i;
 

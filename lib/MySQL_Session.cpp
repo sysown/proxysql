@@ -1160,10 +1160,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (aa) {
 			l_free(pkt->size,pkt->ptr);
 			l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
-			client_myds->buffer2resultset(aa,resbuf);
-			free(aa);
-			client_myds->outgoing_packets->copy_add(client_myds->resultset,0,client_myds->resultset->len);
-			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
+			client_myds->enqueue_outgoing_packets_from_serialized_resultset(aa, resbuf);
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;
 			CurrentQuery.end_time=thread->curtime;
