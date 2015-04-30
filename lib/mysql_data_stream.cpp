@@ -831,6 +831,11 @@ void MySQL_Data_Stream::receive_incoming_packet(void *packet, unsigned int size)
 	}
 #endif
 
+	if (is_backend()) {
+		__incoming_packet(packet, size);
+		return;
+	}
+
 	unsigned int payload_size=size-sizeof(mysql_hdr);
 	// If we're already building a concatenated packet in-memory, it means that this
 	// packet should be part of it. When concatenating the packets, we must pay attention
@@ -882,6 +887,11 @@ void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size)
 		__dump_pkt_to_file("PROXY_TO_SERVER_enqueue_outgoing_packet", (unsigned char*)packet, size);
 	}
 #endif
+
+	if (is_backend()) {
+		__outgoing_packet(packet, size);
+		return;
+	}
 
 	// Most frequent case: we're dealing with a small packet -- just let it flow through to outgoing_packets
 	if (size < MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE) {
