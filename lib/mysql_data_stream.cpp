@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 
+extern Query_Cache *GloQC;
+
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
 
@@ -965,4 +967,43 @@ void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size)
 		// from the MySQL server.
 		hdr.pkt_id++;
 	}
+}
+void MySQL_Data_Stream::enqueue_outgoing_packets_from_resultset(PtrSizeArray *other_resultset) {
+	unsigned int i;
+
+	for (i = 0; i < other_resultset->len; i++) {
+		PtrSize_t *pkt = other_resultset->index(i);
+		enqueue_outgoing_packet(pkt->ptr, pkt->size);
+	}
+}
+
+void MySQL_Data_Stream::cache_resultset(unsigned char* key,
+										unsigned int key_len,
+										unsigned int ttl) {
+	/*
+	 * Given a resultset stored in the current conversation (MySQL_Data_Stream), 
+	 * cache it in the global cache by serializing it first.
+     *
+     * TODO(andrei): is it really necessary to perform l_free(mybuff) instead of just
+     * copying the reference?
+	 */
+
+	unsigned int i;
+	unsigned int l=0;
+	unsigned char *mybuff = (unsigned char *)l_alloc(resultset_length);
+	PtrSize_t *ps;
+
+	for (i = 0; i < resultset->len; i++) {
+		ps = resultset->index(i);
+		memcpy(mybuff + l, ps->ptr, ps->size);
+		l += ps->size;
+	}
+
+	while (resultset->len) {
+		resultset->remove_index(resultset->len-1, NULL);
+	}
+
+	GloQC->set(key, key_len, mybuff, resultset_length, ttl);
+	l_free(resultset_length, mybuff);
+	resultset_length=0;
 }

@@ -816,13 +816,14 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 
 		if (qpo) {
 			if (qpo->cache_ttl>0) { // Fixed bug #145
-				client_myds->outgoing_packets->copy_add(mybe->server_myds->resultset,0,mybe->server_myds->resultset->len);
-				unsigned char *aa=mybe->server_myds->resultset2buffer(false);
-				while (mybe->server_myds->resultset->len) mybe->server_myds->resultset->remove_index(mybe->server_myds->resultset->len-1,NULL);
-				GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,mybe->server_myds->resultset_length,30);
-				l_free(mybe->server_myds->resultset_length,aa);
-				mybe->server_myds->resultset_length=0;
-				l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
+				unsigned int query_len = strlen((char *)client_myds->query_SQL) + 1; // TODO(andrei): why +1 here?
+				client_myds->enqueue_outgoing_packets_from_resultset(mybe->server_myds->resultset);
+				mybe->server_myds->cache_resultset(
+					(unsigned char*) client_myds->query_SQL,
+					query_len,
+					qpo->cache_ttl
+				);
+				l_free(query_len, client_myds->query_SQL);
 			}
 			GloQPro->delete_QP_out(qpo);
 			qpo=NULL;
