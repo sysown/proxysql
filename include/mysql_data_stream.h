@@ -142,6 +142,9 @@ class MySQL_Data_Stream
 	unsigned char * resultset2buffer(bool);
 	void buffer2resultset(unsigned char *, unsigned int);
 
+	bool is_frontend();
+	bool is_backend();
+	bool is_listener();
 	bool has_incoming_packets();
 	void dequeue_incoming_packet(PtrSize_t *pkt);
 	void enqueue_outgoing_packet(void *packet, unsigned int size);

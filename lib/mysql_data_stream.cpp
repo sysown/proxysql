@@ -805,6 +805,21 @@ bool MySQL_Data_Stream::has_incoming_packets() {
 	return incoming_packets->len > 0;
 }
 
+inline bool MySQL_Data_Stream::is_frontend() {
+	return myds_type == MYDS_FRONTEND;
+}
+
+inline bool MySQL_Data_Stream::is_backend() {
+	return (myds_type == MYDS_BACKEND) ||
+	       (myds_type == MYDS_BACKEND_NOT_CONNECTED) ||
+	       (myds_type == MYDS_BACKEND_PAUSE_CONNECT) ||
+	       (myds_type == MYDS_BACKEND_FAILED_CONNECT);
+}
+
+inline bool MySQL_Data_Stream::is_listener() {
+	return myds_type == MYDS_LISTENER;
+}
+
 void MySQL_Data_Stream::dequeue_incoming_packet(PtrSize_t *pkt) {
 	incoming_packets->remove_index(0, pkt);
 }
