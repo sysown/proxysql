@@ -3,30 +3,10 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "Raw_Bytes_Queue.h"
 
 
 #define QUEUE_T_DEFAULT_SIZE	8192
-
-typedef struct _raw_bytes_queue_t {
-	// The buffer containing the raw bytes
-	void *buffer;
-
-	// The total size of the buffer
-	unsigned int size;
-	// All data from the queue has been processed up to the index "tail"
-	unsigned int tail;
-	// We are currently processing data between "tail" and "head" (head > tail)
-	unsigned int head;
-
-	// The current packet that is being built from the raw bytes data or
-	// that is being written to the raw bytes data.
-	PtrSize_t pkt;
-	// How much of the packet has been processed yet (0 <= partial <= pkt.size)
-	unsigned int partial;
-
-	// The header of the packet, when it is first extracted separately
-	mysql_hdr hdr;
-} raw_bytes_queue_t;
 
 class MySQL_Data_Stream
 {
