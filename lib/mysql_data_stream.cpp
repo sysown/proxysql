@@ -67,6 +67,128 @@ static void __dump_pkt_to_file(const char *func, unsigned char *_ptr, unsigned i
 }
 #endif
 
+MySQL_Compression_Chunks_to_Packets_Converter::MySQL_Compression_Chunks_to_Packets_Converter() {
+	packet_queue = new PtrSizeArray();
+	bytes_so_far = 0;
+}
+
+MySQL_Compression_Chunks_to_Packets_Converter::~MySQL_Compression_Chunks_to_Packets_Converter() {
+	while (packet_queue->len > 0) {
+		PtrSize_t packet;
+		packet_queue->remove_index(0, &packet);
+		l_free(packet.size, packet.ptr);
+	}
+	delete packet_queue;
+}
+
+void MySQL_Compression_Chunks_to_Packets_Converter::init_packet(mysql_hdr *header) {
+	packet.size = header->pkt_length + sizeof(mysql_hdr);
+	packet.ptr = l_alloc(packet.size);
+	memcpy(packet.ptr, header, sizeof(mysql_hdr));
+	bytes_so_far = sizeof(mysql_hdr);
+}
+
+void MySQL_Compression_Chunks_to_Packets_Converter::add_bytes_to_packet(unsigned int size,
+																		void *bytes) {
+	memcpy((unsigned char*)packet.ptr + bytes_so_far, bytes, size);
+	bytes_so_far += size;
+	if (bytes_so_far == packet.size) {
+		packet_queue->add(packet.ptr, packet.size);
+		packet.ptr = NULL;
+		packet.size = 0;
+		bytes_so_far = 0;
+	}
+}
+
+PtrSize_t MySQL_Compression_Chunks_to_Packets_Converter::get_packet() {
+	PtrSize_t result;
+	packet_queue->remove_index(0, &result);
+	// Note that it's okay to return "result", because it will be copied when
+	// returned, and not returned as a reference.
+	return result;
+}
+
+bool MySQL_Compression_Chunks_to_Packets_Converter::has_packets() {
+	return packet_queue->len > 0;
+}
+
+void MySQL_Compression_Chunks_to_Packets_Converter::ingest_chunk(
+										unsigned int size, void *raw_chunk) {
+	mysql_hdr header;
+	unsigned char* chunk = (unsigned char*) raw_chunk;
+	unsigned char* uncompressed_chunk;
+	// Sorry for using this weird data-type, but we need to be compatible with
+	// zLib :-)
+	uLongf uncompressed_chunk_size = 0, chunk_bytes_processed = 0;
+	bool was_compressed = false;
+
+	// Part 1 of the processing: uncompress the content in the compressed packet
+	// which is in fact a chunk. There are 2 main cases.
+	// 
+	// First case: the length of the uncompressed payload is 0 (which means that
+	// the data is not compressed at all). This is especially true for small
+	// packets, where it doesn't pay off to compress things.
+	//
+	// Second case: the length of the uncompressed payload is non-0, which is
+	// when data is compressed using zlib.
+	uncompressed_chunk_size = chunk[6];
+	uncompressed_chunk_size *= 256;
+	uncompressed_chunk_size += chunk[5];
+	uncompressed_chunk_size *= 256;
+	uncompressed_chunk_size += chunk[4];
+
+	// 0 means that the data is not compressed at all
+	if (uncompressed_chunk_size != 0) {
+		uncompressed_chunk = (unsigned char*)l_alloc(uncompressed_chunk_size);
+		int rc=uncompress((Bytef*)uncompressed_chunk,
+						  (uLongf*)&uncompressed_chunk_size,
+						  chunk+7,
+						  size-7);
+		assert(rc==Z_OK);
+		was_compressed = true;
+	} else {
+		uncompressed_chunk_size = size - 7;
+		uncompressed_chunk = chunk + 7;
+	}
+
+	// Part 2 of the processing begins here: once we have the uncompressed
+	// content, see how that contributes to the current packet we were building.
+	// Theoretically, we can have both full packets compressed in the payload
+	// (and even more than one packet, in the case of a resultset), and also
+	// incomplete pieces of a packet.
+	while (chunk_bytes_processed < uncompressed_chunk_size) {
+		// If the current packet was not started at all, we should expect to
+		// read a MySQL packet header from the buffer, which will jumpstart
+		// with reading the entire packet in one or more steps.
+		if (bytes_so_far == 0) {
+			// TODO(andrei): sanity check that there is at least room for a
+			// MySQL header to be read in here
+			memcpy(&header,
+				   uncompressed_chunk + chunk_bytes_processed,
+				   sizeof(mysql_hdr));
+			init_packet(&header);
+			chunk_bytes_processed += sizeof(mysql_hdr);
+		// If the current packet is already started, it means that we will
+		// find the remainder of the packet (or part of it) in the current
+		// chunk. So we should start reading payload bytes directly.
+		} else if (bytes_so_far < packet.size) {
+			// First, we have to figure out how many bytes to read: we cannot
+			// exceed the current packet, nor the uncompressed chunk.
+			unsigned int remaining_chunk, remaining_packet, bytes_to_copy;
+			remaining_chunk = uncompressed_chunk_size - chunk_bytes_processed;
+			remaining_packet = packet.size - bytes_so_far;
+			bytes_to_copy = MIN(remaining_chunk, remaining_packet);
+			add_bytes_to_packet(bytes_to_copy,
+								uncompressed_chunk + chunk_bytes_processed);
+			chunk_bytes_processed += bytes_to_copy;
+		}
+	}
+
+	if (was_compressed) {
+		l_free(uncompressed_chunk_size, uncompressed_chunk);
+	}
+
+}
 
 void * MySQL_Data_Stream::operator new(size_t size) {
   return l_alloc(size);
@@ -75,7 +197,6 @@ void * MySQL_Data_Stream::operator new(size_t size) {
 void MySQL_Data_Stream::operator delete(void *ptr) {
   l_free(sizeof(MySQL_Data_Stream),ptr);
 }
-
 
 // Constructor
 MySQL_Data_Stream::MySQL_Data_Stream() {
@@ -112,6 +233,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl=NULL;
 	net_failure=false;
 //	ssl_ctx=NULL;
+	compressed_converter = new MySQL_Compression_Chunks_to_Packets_Converter();
 }
 
 // Destructor
@@ -163,6 +285,10 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (encrypted) {
 		if (ssl) SSL_free(ssl);
 //		if (ssl_ctx) SSL_CTX_free(ssl_ctx);
+	}
+
+	if (compressed_converter) {
+		delete compressed_converter;
 	}
 }
 
@@ -389,46 +515,25 @@ int MySQL_Data_Stream::buffer_to_packets() {
 	}
 	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
 		if (myconn->get_status_compression()==true) {
-			Bytef *dest;
-			uLongf destLen;
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied the whole compressed packet\n");
-			unsigned int progress=0;
-			unsigned int datalength;
-			unsigned int payload_length=0;
-			unsigned char *u;
-			u=(unsigned char *)queueIN.pkt.ptr;
-			payload_length=*(u+6);
-			payload_length=payload_length*256+*(u+5);
-			payload_length=payload_length*256+*(u+4);
-			unsigned char *_ptr=(unsigned char *)queueIN.pkt.ptr+7;
+
+#ifdef DEBUG
+			if (is_frontend()) {
+				__dump_pkt_to_file("CLIENT_TO_PROXY_receive_incoming_packet__COMPRESSED", (unsigned char*)queueIN.pkt.ptr, queueIN.pkt.size);
+			} else if (is_backend()) {
+				__dump_pkt_to_file("SERVER_TO_PROXY_receive_incoming_packet__COMPRESSED", (unsigned char*)queueIN.pkt.ptr, queueIN.pkt.size);
+			}
+#endif
+
+			compressed_converter->ingest_chunk(queueIN.pkt.size,
+											   queueIN.pkt.ptr);
+			while (compressed_converter->has_packets()) {
+				PtrSize_t packet = compressed_converter->get_packet();
+				receive_incoming_packet(packet.ptr, packet.size);
+			}
 			
-			if (payload_length) {
-				// the payload is compressed
-				destLen=payload_length;
-				dest=(Bytef *)l_alloc(destLen);
-				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-				assert(rc==Z_OK); 
-				datalength=payload_length;
-				// change _ptr to the new buffer
-				_ptr=dest;
-			} else {
-				// the payload is not compressed
-				datalength=queueIN.pkt.size-7;
-			}
-			while (progress<datalength) {
-				mysql_hdr _a;
-				memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
-				unsigned int size=_a.pkt_length+sizeof(mysql_hdr);
-				unsigned char *ptrP=(unsigned char *)l_alloc(size);
-				memcpy(ptrP,_ptr+progress,size);
-				progress+=size;
-				receive_incoming_packet(ptrP, size);
-			}
-			if (payload_length) {
-				l_free(destLen,dest);
-			}
-			l_free(queueIN.pkt.size,queueIN.pkt.ptr);
 			pkts_recv++;
+			l_free(queueIN.pkt.size,queueIN.pkt.ptr);
 			queueIN.pkt.size=0;
 			queueIN.pkt.ptr=NULL;
 		} else {
@@ -494,6 +599,14 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);
 	memcpy((unsigned char *)queueOUT.pkt.ptr+7,dest,destLen);
 	free(dest);
+
+#ifdef DEBUG
+	if (is_frontend()) {
+		__dump_pkt_to_file("PROXY_TO_CLIENT_enqueue_outgoing_packet__COMPRESSED", (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size);
+	} else if (is_backend()) {
+		__dump_pkt_to_file("PROXY_TO_SERVER_enqueue_outgoing_packet__COMPRESSED", (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size);
+	}
+#endif	
 }
 
 
