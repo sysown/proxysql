@@ -423,7 +423,7 @@ __get_a_backend:
 					handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
 				}
 			} else {
-				if (client_myds->myconn->options.charset!=mybe->server_myds->myconn->options.charset || rand()%3==0) {
+				if (client_myds->myconn->options.charset!=mybe->server_myds->myconn->options.charset /* FIXME: this was for debugging only */ /*|| rand()%3==0 */) {
 					handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();
 				} else {
 					//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
