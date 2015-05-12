@@ -30,11 +30,6 @@ void * __mysql_auth;
 void * __proxysql_admin; 
 
 
-create_MySQL_Thread_t * create_MySQL_Thread = NULL;
-destroy_MySQL_Thread_t * destroy_MySQL_Thread = NULL;
-create_MySQL_Threads_Handler_t * create_MySQL_Threads_Handler = NULL;
-destroy_MySQL_Threads_Handler_t * destroy_MySQL_Threads_Handler = NULL;
-create_MySQL_Authentication_t * create_MySQL_Authentication = NULL;
 create_Query_Processor_t * create_Query_Processor = NULL;
 create_ProxySQL_Admin_t * create_ProxySQL_Admin = NULL;
 
@@ -159,7 +154,7 @@ void * mysql_worker_thread_func(void *arg) {
 	__thr_sfp=l_mem_init();
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	//MySQL_Thread *worker = new MySQL_Thread;
-	MySQL_Thread *worker = create_MySQL_Thread();
+	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
@@ -172,7 +167,7 @@ void * mysql_worker_thread_func(void *arg) {
 
 	worker->run();
 	//delete worker;
-	destroy_MySQL_Thread(worker);
+	delete worker;
 	l_mem_destroy(__thr_sfp);
 	return NULL;
 }
@@ -346,6 +341,7 @@ int main(int argc, const char * argv[]) {
 //	}
 }
 
+/*
 {
 	dlerror();
 	dlsym_error=NULL;
@@ -388,7 +384,7 @@ int main(int argc, const char * argv[]) {
 //		create_MySQL_Thread=&create_MySQL_Thread_func;
 //	}
 }
-
+*/
 {
 	dlerror();
 	dlsym_error=NULL;
@@ -411,6 +407,7 @@ int main(int argc, const char * argv[]) {
 //	}
 }
 
+/*
 {
 	dlerror();
 	dlsym_error=NULL;
@@ -431,6 +428,8 @@ int main(int argc, const char * argv[]) {
 		create_MySQL_Authentication=&create_MySQL_Authentication_func;
 	}
 }
+*/
+
 
 {
 	dlerror();
@@ -458,7 +457,7 @@ __start_label:
 //	MyHGH=new MySQL_HostGroups_Handler();
 	MyHGM=new MySQL_HostGroups_Manager();
 
-	GloMTH=create_MySQL_Threads_Handler();
+	GloMTH=new MySQL_Threads_Handler();
 	GloMTH->print_version();
 
 {
@@ -471,7 +470,7 @@ __start_label:
 		GloVars.confFile->CloseFile();
 	}
 
-	GloMyAuth = create_MySQL_Authentication();
+	GloMyAuth = new MySQL_Authentication();
 	GloMyAuth->print_version();
 
 	GloAdmin->init_users();
@@ -659,7 +658,7 @@ __shutdown:
 		GloQPro=NULL;
 	}
 	if (GloMyAuth) {
-	delete GloMyAuth;
+		delete GloMyAuth;
 		GloMyAuth=NULL;
 	}
 	if (GloMTH) {

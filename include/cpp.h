@@ -1,8 +1,8 @@
 //#ifdef __cplusplus
-#include "mysql_thread.h"
-#include "mysql_session.h"
+#include "MySQL_Thread.h"
+#include "MySQL_Session.h"
 #include "mysql_backend.h"
-#include "mysql_data_stream.h"
+#include "MySQL_Data_Stream.h"
 #include "query_cache.hpp"
 #include "mysql_connection.h"
 #include "sqlite3db.h"

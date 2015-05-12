@@ -1,6 +1,5 @@
 #include "proxysql.h"
 #include "cpp.h"
-#include "Standard_MySQL_Thread.h"
 
 extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
