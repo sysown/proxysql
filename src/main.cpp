@@ -14,11 +14,6 @@
 
 
 extern "C" Query_Cache* create_QC_func();
-extern "C" MySQL_Thread * create_MySQL_Thread_func();
-extern "C" void destroy_MySQL_Thread_func();
-extern "C" MySQL_Threads_Handler * create_MySQL_Threads_Handler_func();
-extern "C" MySQL_Authentication * create_MySQL_Authentication_func();
-extern "C" Query_Processor * create_Query_Processor_func();
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func();
 
 
@@ -385,6 +380,7 @@ int main(int argc, const char * argv[]) {
 //	}
 }
 */
+/*
 {
 	dlerror();
 	dlsym_error=NULL;
@@ -406,7 +402,7 @@ int main(int argc, const char * argv[]) {
 //		create_MySQL_Thread=&create_MySQL_Thread_func;
 //	}
 }
-
+*/
 /*
 {
 	dlerror();
@@ -491,7 +487,7 @@ __start_label:
 
 
 {
-	GloQPro = create_Query_Processor();
+	GloQPro = new Query_Processor();
   GloQPro->print_version();
 }
 	GloAdmin->init_mysql_query_rules();

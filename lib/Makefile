@@ -60,7 +60,7 @@ OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 #_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo proxysql_global.oo configfile.oo Standard_Query_Cache.oo SpookyV2.oo Standard_MySQL_Thread.oo Standard_MySQL_Authentication.oo gen_utils.oo mysql_connection_pool.oo simple_kv.oo advanced_kv.oo sqlite3db.oo mysql_connection.oo global_variables.oo proxysql_mem.oo MySQL_Protocol.oo mysql_data_stream.oo mysql_session.oo mysql_backend.oo
 #_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo proxysql_global.oo configfile.oo Standard_Query_Cache.oo SpookyV2.oo Standard_MySQL_Authentication.oo gen_utils.oo mysql_connection_pool.oo simple_kv.oo advanced_kv.oo sqlite3db.oo mysql_connection.oo global_variables.oo proxysql_mem.oo MySQL_Protocol.oo mysql_data_stream.oo mysql_session.oo mysql_backend.oo
 #_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Standard_Query_Cache.oo SpookyV2.oo Standard_MySQL_Authentication.oo gen_utils.oo mysql_connection_pool.oo simple_kv.oo advanced_kv.oo sqlite3db.oo mysql_connection.oo global_variables.oo proxysql_mem.oo MySQL_Protocol.oo mysql_data_stream.oo MySQL_Session.oo mysql_backend.oo MySQL_HostGroups_Manager.oo
-_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Standard_Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo proxysql_mem.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo
+_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Standard_Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo proxysql_mem.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo
 OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
 
 #_SHARED_OBJ= Standard_Query_Cache.ko Standard_MySQL_Thread.ko
@@ -75,21 +75,21 @@ Standard_ProxySQL_Admin.so: Standard_ProxySQL_Admin.cpp libproxysql.a
 #Standard_ProxySQL_Admin.so: Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.ko libproxysql.a
 #	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_ProxySQL_Admin.ko Standard_MySQL_Thread.ko libproxysql.a -lcrypto $(LIBS)
 
-Standard_Query_Processor.so: Standard_Query_Processor.ko libproxysql.a
-	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_Query_Processor.ko libproxysql.a -lcrypto $(LIBS) -linjection
+#Standard_Query_Processor.so: Standard_Query_Processor.ko libproxysql.a
+#	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_Query_Processor.ko libproxysql.a -lcrypto $(LIBS) -linjection
 
 #Standard_MySQL_Authentication.so: Standard_MySQL_Authentication.ko libproxysql.a
 #	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_MySQL_Authentication.ko libproxysql.a -lcrypto $(LIBS)
 
 Standard_Query_Cache.so: Standard_Query_Cache.ko libproxysql.a
-	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_Query_Cache.ko libproxysql.a -lcrypto $(LIBS)
+	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_Query_Cache.ko libproxysql.a -lcrypto -linjection $(LIBS)
 #	$(CC) -shared -fPIC -o $@ $(CPPFLAGS) $(ODIR)/Standard_Query_Cache.oo $(ODIR)/SpookyV2.oo $(ODIR)/gen_utils.oo
 
 #Standard_MySQL_Thread.so: Standard_MySQL_Thread.ko libproxysql.a
 #	$(CPP) -shared -fPIC -o $@ $(CPPFLAGS) Standard_MySQL_Thread.ko libproxysql.a -lcrypto $(LIBS)
 #	$(CC) -shared -fPIC -o $@ $(CPPFLAGS) $(ODIR)/Standard_MySQL_Thread.oo $(ODIR)/mysql_session.oo
 
-LOADABLE_LIB = Standard_ProxySQL_Admin.so Standard_Query_Processor.so Standard_Query_Cache.so
+LOADABLE_LIB = Standard_ProxySQL_Admin.so Standard_Query_Cache.so
 
 DYN_LIB: $(LOADABLE_LIB)
 .PHONY: DYN_LIB
@@ -107,8 +107,8 @@ $(ODIR)/%.oo: %.cpp
 #	g++ -c -o mysql_data_stream.oo mysql_data_stream.cpp $(CFLAGS) -Wall
 	
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP)
-	ar rcs $@ $(OBJ) $(OBJ_CPP)
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a
+	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a
 
 libproxysql.so: $(ODIR) $(OBJ) $(OBJ_CPP)
 	$(CPP) -shared -fPIC -o $@ $(OBJ) $(OBJ_CPP)
