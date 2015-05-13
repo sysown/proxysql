@@ -364,6 +364,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	net_failure=false;
 //	ssl_ctx=NULL;
 	compress_chunks_to_packets = new MySQL_Compression_Chunks_to_Packets_Converter();
+	compress_packets_to_chunks = new MySQL_Compression_Packets_to_Chunks_Converter();
 }
 
 // Destructor
@@ -420,6 +421,9 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (compress_chunks_to_packets) {
 		delete compress_chunks_to_packets;
 	}
+
+	if (compress_packets_to_chunks) {
+		delete compress_packets_to_chunks;
 	}
 }
 
@@ -606,7 +610,8 @@ int MySQL_Data_Stream::buffer_to_packets() {
 		queue_defrag(queueIN);
 	}
 
-/**/
+	// If no packet is being built, try to read the header of a new packet.
+	// We have two cases in here: it's either a compressed packet or an uncompressed one.
 	if (myconn->get_status_compression()==true) {
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=7) {
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new compressed packet\n");
@@ -624,7 +629,6 @@ int MySQL_Data_Stream::buffer_to_packets() {
 			ret+=7;
 		}
 	} else {
-/**/
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
 			memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
@@ -636,6 +640,10 @@ int MySQL_Data_Stream::buffer_to_packets() {
 			ret+=sizeof(mysql_hdr);
 		}
 	}
+
+	// If there's a packet being built, and there is incoming raw data in queueIN, try to read
+	// as much of the packet as possible. Ideally, this means that we read the whole packet,
+	// but it all depends on how much was read from the network.
 	if ((queueIN.pkt.size>0) && queue_data(queueIN)) {
 		int b= ( queue_data(queueIN) > (queueIN.pkt.size - queueIN.partial) ? (queueIN.pkt.size - queueIN.partial) : queue_data(queueIN) );
 		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied %d bytes into packet\n", b);
@@ -644,7 +652,10 @@ int MySQL_Data_Stream::buffer_to_packets() {
 		queueIN.partial+=b;
 		ret+=b;
 	}
+
+	// If we have completely read a packet
 	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
+		// If it's a compressed packet, we have to unpack it
 		if (myconn->get_status_compression()==true) {
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied the whole compressed packet\n");
 
@@ -667,6 +678,7 @@ int MySQL_Data_Stream::buffer_to_packets() {
 			l_free(queueIN.pkt.size,queueIN.pkt.ptr);
 			queueIN.pkt.size=0;
 			queueIN.pkt.ptr=NULL;
+		// Otherwise, just send it to the queue of packets being received
 		} else {
 			receive_incoming_packet(queueIN.pkt.ptr, queueIN.pkt.size);
 			pkts_recv++;
@@ -677,69 +689,70 @@ int MySQL_Data_Stream::buffer_to_packets() {
 	return ret;
 }
 
+bool MySQL_Data_Stream::outgoing_data_available() {
 
-void MySQL_Data_Stream::generate_compressed_packet() {
-#define MAX_COMPRESSED_PACKET_SIZE	10*1024*1024
-	unsigned int total_size=0;
-	unsigned int i=0;
-	PtrSize_t *p=NULL;
-	while (i<outgoing_packets->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
-		p=outgoing_packets->index(i);
-		total_size+=p->size;
-		if (i==0) {
-			mysql_hdr hdr;
-			memcpy(&hdr,p->ptr,sizeof(mysql_hdr));
-			if (hdr.pkt_id==0) {
-				myconn->compression_pkt_id=-1;
-			}
-		}
-		i++;
+	// If there is a packet that is being transformed to a bytes buffer,
+	// and it hasn't been transformed completely, it means that there is
+	// outgoing data available;
+	if (queueOUT.partial > 0 && queueOUT.partial < queueOUT.pkt.size) {
+		return true;
 	}
-	if (i>=2) {
-		// we successfully read at least 2 packets
-		if (total_size>MAX_COMPRESSED_PACKET_SIZE) {
-			// total_size is too big, we remove the last packet read
-			total_size-=p->size;
+
+	// If there is no packet being transformed, it means that we have to check
+	// for a new packet to be transformed. Depending on whether compression is
+	// enabled or not, the check for the new packet should be done either in
+	// outgoing_packets, or in compress_packets_to_chunks.
+	if (queueOUT.partial == 0) {
+		if (myconn->get_status_compression() == true) {
+			return compress_packets_to_chunks->has_chunks();
+		} else {
+			return outgoing_packets->len > 0;
 		}
 	}
-	uLong sourceLen=total_size;
-	Bytef *source=(Bytef *)l_alloc(total_size);
-	uLongf destLen=total_size*120/100+12;
-	Bytef *dest=(Bytef *)malloc(destLen);
-	i=0;
-	total_size=0;
-	while (total_size<sourceLen) {
-		PtrSize_t p2;
-		outgoing_packets->remove_index(0,&p2);
-		memcpy(source+total_size,p2.ptr,p2.size);
-		//i++;
-		total_size+=p2.size;
-		l_free(p2.size,p2.ptr);
-	}
-	int rc=compress(dest, &destLen, source, sourceLen);
-	assert(rc==Z_OK);
-	l_free(total_size, source);
-	queueOUT.pkt.size=destLen+7;
-	queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
-	mysql_hdr hdr;
-	hdr.pkt_length=destLen;
-	hdr.pkt_id=++myconn->compression_pkt_id;
-	//hdr.pkt_id=1;
-	memcpy((unsigned char *)queueOUT.pkt.ptr,&hdr,sizeof(mysql_hdr));
-	hdr.pkt_length=total_size;
-	memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);
-	memcpy((unsigned char *)queueOUT.pkt.ptr+7,dest,destLen);
-	free(dest);
 
-#ifdef DEBUG
-	if (is_frontend()) {
-		__dump_pkt_to_file("PROXY_TO_CLIENT_enqueue_outgoing_packet__COMPRESSED", (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size);
-	} else if (is_backend()) {
-		__dump_pkt_to_file("PROXY_TO_SERVER_enqueue_outgoing_packet__COMPRESSED", (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size);
-	}
-#endif	
+	// Should never reach this point
+	return false;
 }
 
+unsigned int MySQL_Data_Stream::move_data_from_packet_to_buffer() {
+	// b is the number of bytes to be written to the buffer.
+	//
+	// It's either the remainder of the packet being currently processed (queueOUT.pkt)
+	// or the remainder of the buffer (if the remainder of queueOUT.pkt is bigger).
+	int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
+	memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
+	queue_w(queueOUT,b);
+	proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
+	queueOUT.partial+=b;
+	if (queueOUT.partial==queueOUT.pkt.size) {
+		if (queueOUT.pkt.ptr) {
+			l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
+			queueOUT.pkt.ptr=NULL;
+		}
+		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Packet completely written into send buffer\n", this);
+		queueOUT.partial=0;
+		pkts_sent+=1;
+	}
+
+	return b;
+}
+
+void MySQL_Data_Stream::enable_connection_compression_if_needed() {
+	// this is a special case, needed because compression is enabled *after* the first OK
+	if (DSS==STATE_CLIENT_AUTH_OK) {
+		DSS=STATE_SLEEP;
+		// enable compression
+		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+			if (myconn->options.compression_min_length) {
+				myconn->set_status_compression(true);
+			}
+		} else {
+			//explicitly disable compression
+			myconn->options.compression_min_length=0;
+			myconn->set_status_compression(false);
+		}
+	}
+}
 
 int MySQL_Data_Stream::packets_to_buffer() {
 	/*
@@ -752,63 +765,71 @@ int MySQL_Data_Stream::packets_to_buffer() {
 	 * when the buffer is full.
 	 */
 	int ret=0;
-	
-	bool cont=true;
-	while (cont) {
-		// If there's no more space left in the buffer, it's time to return.
-		if (queue_available(queueOUT)==0) return ret;
 
-		// If the output buffer has no current packet attached to it (that is being written
-		// to it), then we will dequeue a new packet and proceed to write it to the buffer.
-		if (queueOUT.partial==0) {
-			// If there are still outgoing packets to dequeue
-			if (outgoing_packets->len) {
-				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
-				if (queueOUT.pkt.ptr) {
-					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
-					queueOUT.pkt.ptr=NULL;
-				}
-				if (myconn->get_status_compression()==true) {
-					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
-					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
-				} else {
-					outgoing_packets->remove_index(0,&queueOUT.pkt);
-					// this is a special case, needed because compression is enabled *after* the first OK
-					if (DSS==STATE_CLIENT_AUTH_OK) {
-						DSS=STATE_SLEEP;
-						// enable compression
-						if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
-							if (myconn->options.compression_min_length) {
-								myconn->set_status_compression(true);
-							}
-						} else {
-							//explicitly disable compression
-							myconn->options.compression_min_length=0;
-							myconn->set_status_compression(false);
-						}
-					}
-				}
-#ifdef DEBUG
-				{ __dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size); }
-#endif
-			// Else, if there are no more packets to dequeue, our mission is done
-			// and it's time to return.
+	// If compression is enabled, first make sure that all outgoing packets are
+	// transformed to chunks before being wired out to the destination. This
+	// means that we take the packets, concatenate them and try to break this
+	// big super-packet into smaller chunks. One chunk might also contain
+	// incomplete parts of a packet, and that happens especially with large
+	// packets. 
+	if (myconn->get_status_compression() == true) {
+		while (outgoing_packets->len > 0) {
+			PtrSize_t packet;
+			outgoing_packets->remove_index(0, &packet);
+			compress_packets_to_chunks->ingest_packet(packet.size,
+													  packet.ptr);
+		}
+		compress_packets_to_chunks->flush();
+	}
+
+	// We keep writing data until the buffer is full or until there is no more
+	// data available to write.
+	while (queue_available(queueOUT) > 0 && outgoing_data_available()) {
+		// If there is no more data to be moved into the buffer, dequeue a new
+		// outgoing packet and prepare to start transforming it into a bytes
+		// buffer.
+		if (queueOUT.partial == 0) {
+			// Main branch: when compression is not enabled, we just take the
+			// next available packet and put it in queueOUT.pkt, from where
+			// we'll keep writing pieces of it to the buffer until it's sent
+			// completely.
+			if (myconn->get_status_compression() == false) {
+				outgoing_packets->remove_index(0, &queueOUT.pkt);
+				enable_connection_compression_if_needed();
+				#ifdef DEBUG
+				__dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size);
+				#endif
+
+			// Secondary branch: compression is enabled. In this case, since we
+			// already ingested the outgoing_packets with compress_packets_to_chunks,
+			// we'll use it to retrieve one chunk at a time, and proceed to
+			// write the chunk to the socket just 
 			} else {
-				cont=false;
-				continue;
+				queueOUT.pkt = compress_packets_to_chunks->get_chunk();
+				// Fix the MySQL header by putting the compressed packet id
+				// here. The reason we fix the packet here is because in the
+				// compress_packets_to_chunks object we do not have access to
+				// the connection, and I want to keep it that way. If we don't
+				// put this packet id correctly, MySQL server will start
+				// throwing out errors.
+				mysql_hdr *hdr = (mysql_hdr*)queueOUT.pkt.ptr;
+				hdr->pkt_id=++myconn->compression_pkt_id;
+				
+				#ifdef DEBUG
+				if (is_frontend()) {
+					__dump_pkt_to_file("PROXY_TO_CLIENT_enqueue_outgoing_packet__COMPRESSED", (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size);
+				} else if (is_backend()) {
+					__dump_pkt_to_file("PROXY_TO_SERVER_enqueue_outgoing_packet__COMPRESSED", (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size);
+				}
+				#endif
 			}
 		}
+		
+		ret += move_data_from_packet_to_buffer();
 
-		// b is the number of bytes to be written to the buffer.
-		//
-		// It's either the remainder of the packet being currently processed (queueOUT.pkt)
-		// or the remainder of the buffer (if the remainder of queueOUT.pkt is bigger).
-		int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
-		memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
-		queue_w(queueOUT,b);
-		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
-		queueOUT.partial+=b;
-		ret=b;
+		// If we finished writing the current packet to the buffer,
+		// free the current packet and log this event. The dequeuing of the
+		// next one will be done in the next loop iteration.
 		if (queueOUT.partial==queueOUT.pkt.size) {
 			if (queueOUT.pkt.ptr) {
 				l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
@@ -819,6 +840,7 @@ int MySQL_Data_Stream::packets_to_buffer() {
 			pkts_sent+=1;
 		}
 	}
+
 	return ret;
 }
 

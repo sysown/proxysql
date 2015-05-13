@@ -64,7 +64,6 @@ class MySQL_Data_Stream
 {
 	private:
 	int buffer_to_packets();
-	void generate_compressed_packet();
 	void receive_incoming_packet(void *packet, unsigned int size);
 	void __incoming_packet(void *packet, unsigned int size);
 	void __outgoing_packet(void *packet, unsigned int size);
@@ -92,6 +91,8 @@ class MySQL_Data_Stream
 	bool encrypted;
 	SSL *ssl;
 	MySQL_Compression_Chunks_to_Packets_Converter *compress_chunks_to_packets;
+	MySQL_Compression_Packets_to_Chunks_Converter *compress_packets_to_chunks;
+
 
 	// Data read from the raw socket, organized as a buffer which contains
 	// concatenated pieces of packets. It might contain several different
@@ -184,5 +185,8 @@ class MySQL_Data_Stream
 	void enqueue_outgoing_packets_from_resultset(PtrSizeArray *);
 	void enqueue_outgoing_packets_from_serialized_resultset(unsigned char *, unsigned int);
 	void cache_resultset(unsigned char*, unsigned int, unsigned int);
+	bool outgoing_data_available();
+	unsigned int move_data_from_packet_to_buffer();
+	void enable_connection_compression_if_needed();
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */
