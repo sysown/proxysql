@@ -945,7 +945,7 @@ void MySQL_Data_Stream::enqueue_outgoing_packet(void *packet, unsigned int size)
 	}
 #endif
 
-	if (is_backend()) {
+	if (is_frontend()) {
 		__outgoing_packet(packet, size);
 		return;
 	}
