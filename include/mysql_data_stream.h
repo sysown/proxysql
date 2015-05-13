@@ -91,7 +91,7 @@ class MySQL_Data_Stream
 
 	bool encrypted;
 	SSL *ssl;
-	MySQL_Compression_Chunks_to_Packets_Converter *compressed_converter;
+	MySQL_Compression_Chunks_to_Packets_Converter *compress_chunks_to_packets;
 
 	// Data read from the raw socket, organized as a buffer which contains
 	// concatenated pieces of packets. It might contain several different

@@ -363,7 +363,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl=NULL;
 	net_failure=false;
 //	ssl_ctx=NULL;
-	compressed_converter = new MySQL_Compression_Chunks_to_Packets_Converter();
+	compress_chunks_to_packets = new MySQL_Compression_Chunks_to_Packets_Converter();
 }
 
 // Destructor
@@ -417,8 +417,9 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 //		if (ssl_ctx) SSL_CTX_free(ssl_ctx);
 	}
 
-	if (compressed_converter) {
-		delete compressed_converter;
+	if (compress_chunks_to_packets) {
+		delete compress_chunks_to_packets;
+	}
 	}
 }
 
@@ -655,10 +656,10 @@ int MySQL_Data_Stream::buffer_to_packets() {
 			}
 #endif
 
-			compressed_converter->ingest_chunk(queueIN.pkt.size,
-											   queueIN.pkt.ptr);
-			while (compressed_converter->has_packets()) {
-				PtrSize_t packet = compressed_converter->get_packet();
+			compress_chunks_to_packets->ingest_chunk(queueIN.pkt.size,
+													 queueIN.pkt.ptr);
+			while (compress_chunks_to_packets->has_packets()) {
+				PtrSize_t packet = compress_chunks_to_packets->get_packet();
 				receive_incoming_packet(packet.ptr, packet.size);
 			}
 			
