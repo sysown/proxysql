@@ -190,6 +190,136 @@ void MySQL_Compression_Chunks_to_Packets_Converter::ingest_chunk(
 
 }
 
+MySQL_Compression_Packets_to_Chunks_Converter::MySQL_Compression_Packets_to_Chunks_Converter() {
+	chunk_queue = new PtrSizeArray();
+	bytes_so_far = 0;
+	packets_in_chunk = 0;
+}
+
+MySQL_Compression_Packets_to_Chunks_Converter::~MySQL_Compression_Packets_to_Chunks_Converter() {
+	while (chunk_queue->len > 0) {
+		PtrSize_t chunk;
+		chunk_queue->remove_index(0, &chunk);
+		l_free(chunk.size, chunk.ptr);
+	}
+	delete chunk_queue;
+}
+
+void MySQL_Compression_Packets_to_Chunks_Converter::init_chunk() {
+	// We initialize the buffer and we skip the first 4 bytes, which represent
+	// the header. We will copy the header at the end, before moving the current
+	// chunk to chunk_queue, because we do not know yet what the dimension of
+	// the chunk will be. 
+	chunk.size = MYSQL_PROTOCOL_MAX_COMPRESSED_CHUNK_SIZE;
+	chunk.ptr = l_alloc(chunk.size);
+	bytes_so_far = sizeof(mysql_hdr);
+}
+
+void MySQL_Compression_Packets_to_Chunks_Converter::add_bytes_to_chunk(
+										unsigned int size, void *bytes) {
+	memcpy((unsigned char*)chunk.ptr + bytes_so_far, bytes, size);
+	bytes_so_far += size;
+	if (bytes_so_far == chunk.size) {
+		flush();
+	}
+}
+
+void MySQL_Compression_Packets_to_Chunks_Converter::flush() {
+	if (bytes_so_far == 0) {
+		return;
+	}
+
+	mysql_hdr header;
+	uLongf destLen = bytes_so_far + bytes_so_far / 5 + 12;
+	Bytef *dest = (Bytef*) malloc(destLen);
+	unsigned int size;
+	unsigned char *compressed_packet;
+
+	// Finally copy the header to the chunk before compressing it, now
+	// that we know how many bytes it will contain. The packet ID will be 0.
+	header.pkt_length = bytes_so_far;
+	memcpy(chunk.ptr, &header, sizeof(mysql_hdr));
+	int rc = compress(dest, &destLen, (Bytef*)chunk.ptr + sizeof(mysql_hdr), bytes_so_far - sizeof(mysql_hdr));
+	assert(rc == Z_OK);
+
+	size = destLen + sizeof(mysql_hdr) + sizeof(mysql_hdr) - 1;
+	compressed_packet = (unsigned char*) l_alloc(size);
+	/// header.pkt_length = bytes_so_far - 4;
+	header.pkt_length = destLen;
+	// This is fixed before actually writing the packet to the socket
+	header.pkt_id = 0; 
+
+	// Build the compressed packet header
+	// First, the 4 bytes comprised of:
+	// - 3 bytes compressed payload length
+	// - 1 byte compressed packet id (incremented in similar fashion to
+	//   normal packet id)
+	memcpy(compressed_packet, &header, sizeof(mysql_hdr));
+	// Then, bytes 5-7 which are the uncompressed length of the payload
+	// (useful in order to know how much memory to allocate when decompressing
+	// the buffer).
+	/// header.pkt_length = 0;
+	header.pkt_length = bytes_so_far;
+	memcpy(compressed_packet + sizeof(mysql_hdr), &header, 3);
+
+	// Now, we can finally copy the compressed content
+	// Note that this is one extra copy of the compressed data, from the 
+	// "dest" buffer to here. The rationale is that packets' memory is
+	// managed using l_alloc/l_free, while the temporary buffer "dest" is
+	// managed using the normal malloc/free (in order to make sure that
+	// zlib doesn't do anything strange with it).
+	/// memcpy(compressed_packet + 7, (unsigned char*)chunk.ptr + 4, bytes_so_far - 4);
+	memcpy(compressed_packet + 7, dest, destLen);
+
+	chunk_queue->add(compressed_packet, size);
+
+	// Free the buffer where the compression result was stored
+	free(dest);
+	// Free the current chunk's memory
+	l_free(chunk.size, chunk.ptr);
+
+	// Mark the chunk as pristine
+	chunk.size = 0;
+	chunk.ptr = NULL;
+
+	// Mark the fact that there has been no byte added to the chunk so far
+	bytes_so_far = 0;
+	packets_in_chunk = 0;
+}
+
+void MySQL_Compression_Packets_to_Chunks_Converter::ingest_packet(
+										unsigned int size, void *raw_packet) {
+	unsigned char *packet = (unsigned char*) raw_packet;
+	unsigned int packet_bytes_processed = 0;
+
+	__dump_pkt_to_file("INGEST", (unsigned char*)raw_packet, size);
+
+	while (packet_bytes_processed < size) {
+		if (bytes_so_far == 0) {
+			init_chunk();
+		} else {
+			unsigned int remaining_chunk, remaining_packet, bytes_to_copy;
+			remaining_chunk = chunk.size - bytes_so_far;
+			remaining_packet = size - packet_bytes_processed;
+			bytes_to_copy = MIN(remaining_chunk, remaining_packet);
+			add_bytes_to_chunk(bytes_to_copy, packet + packet_bytes_processed);
+			packet_bytes_processed += bytes_to_copy;
+		}
+	}
+
+	packets_in_chunk++;
+}
+
+PtrSize_t MySQL_Compression_Packets_to_Chunks_Converter::get_chunk() {
+	PtrSize_t result;
+	chunk_queue->remove_index(0, &result);
+	return result;
+}
+
+bool MySQL_Compression_Packets_to_Chunks_Converter::has_chunks() {
+	return chunk_queue->len > 0;
+}
+
 void * MySQL_Data_Stream::operator new(size_t size) {
   return l_alloc(size);
 }

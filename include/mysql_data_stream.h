@@ -5,7 +5,6 @@
 #include "cpp.h"
 #include "Raw_Bytes_Queue.h"
 
-
 #define QUEUE_T_DEFAULT_SIZE	8192
 
 /*
@@ -33,6 +32,32 @@ public:
 	void ingest_chunk(unsigned int, void*);
 	PtrSize_t get_packet();
 	bool has_packets();
+};
+
+/*
+ * This class encodes a series of packets into compressed chunks.
+ * 
+ * See the explanation for MySQL_Compression_Chunks_to_Packets_Converter for
+ * more details.
+ */
+class MySQL_Compression_Packets_to_Chunks_Converter {
+
+private:
+	PtrSize_t chunk;
+	unsigned int bytes_so_far, packets_in_chunk;
+	PtrSizeArray *chunk_queue;
+
+	void init_chunk();
+	void add_bytes_to_chunk(unsigned int, void *);
+
+public:
+	MySQL_Compression_Packets_to_Chunks_Converter();
+	~MySQL_Compression_Packets_to_Chunks_Converter();
+
+	void ingest_packet(unsigned int, void *);
+	void flush();
+	PtrSize_t get_chunk();
+	bool has_chunks();
 };
 
 class MySQL_Data_Stream
