@@ -4,6 +4,15 @@
 #define PKT_ERROR 1
 #define MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE (16 * 1024 * 1024 - 1)
 
+// It is widely known that compressing a buffer sometimes gives a larger
+// result than at the beginning. We assume that for ZLIB, the maximal
+// compression overhead is this constant, thus the "compressed version"
+// will be at most (1 + ZLIB_COMPRESSION_MAX_OVERHEAD) * size in length,
+// where size is the length of the initial buffer.
+#define ZLIB_COMPRESSION_MAX_OVERHEAD 0.2
+
+#define MYSQL_PROTOCOL_MAX_COMPRESSED_CHUNK_SIZE (int(MYSQL_PROTOCOL_MAX_PAYLOAD_SIZE / (1 + ZLIB_COMPRESSION_MAX_OVERHEAD)))
+
 
 
 #ifndef PROXYSQL_ENUMS
