@@ -4,107 +4,77 @@
 #include "cpp.h"
 
 
-/*
-#define EXPIRE_DROPIT	0
-#define SHARED_QUERY_CACHE_HASH_TABLES	16
-#define HASH_EXPIRE_MAX	3600*24*365*10
-#define DEFAULT_purge_loop_time 400000
+#define EXPIRE_DROPIT   0
+#define SHARED_QUERY_CACHE_HASH_TABLES  32
+#define HASH_EXPIRE_MAX 3600*24*365*10
+#define DEFAULT_purge_loop_time 500000
 #define DEFAULT_purge_total_time 10000000
-#define DEFAULT_purge_threshold_pct_min	50
-#define DEFAULT_purge_threshold_pct_max	90
-
-*/
-//#define SHARED_QUERY_CACHE_HASH_TABLES  16
-//#define DEFAULT_SQC_size  64*1024*1024
-/*
-typedef struct __fdb_hash_t fdb_hash_t;
-typedef struct __fdb_hash_entry fdb_hash_entry;
-*/
-/*
-struct __fdb_hash_t {
-		pthread_rwlock_t lock;
-		GHashTable *hash;
-		GPtrArray *ptrArray;
-		uint64_t dataSize;
-		uint64_t purgeChunkSize;
-		uint64_t purgeIdx;
-};
+#define DEFAULT_purge_threshold_pct_min 3
+#define DEFAULT_purge_threshold_pct_max 90
 
 
+class KV_BtreeArray;
 
+typedef struct __QC_entry_t QC_entry_t;
 
-struct __fdb_hash_entry {
-	unsigned char *key;
-	unsigned char *value;
-	fdb_hash_t *hash;
-	struct __fdb_hash_entry *self;
+struct __QC_entry_t {
+	uint64_t key;
+	char *value;
+	KV_BtreeArray *kv;
+	QC_entry_t *self;
 	uint32_t klen;
 	uint32_t length;
 	time_t expire;
 	time_t access;
 	uint32_t ref_count;
 };
-*/
+
+typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
 
 
+class KV_BtreeArray {
+  private:
+  rwlock_t lock;
+  BtMap_cache bt_map;
+  PtrArray *ptrArray;
+  uint64_t purgeChunkSize;
+  uint64_t purgeIdx;
+  bool __insert(uint64_t, void *);
+  uint64_t freeable_memory;
+  public:
+  uint64_t tottopurge;
+  KV_BtreeArray();
+  ~KV_BtreeArray();
+	uint64_t get_data_size();
+	void purge_some(time_t QCnow);
+	int cnt();
+	bool replace(uint64_t key, QC_entry_t *entry);
+	QC_entry_t *lookup(uint64_t key);
+	void empty();
+};
 
 class Query_Cache {
-//	protected:
-//	int test;
-//	int whatever;
+	private:
+	KV_BtreeArray KVs[SHARED_QUERY_CACHE_HASH_TABLES];
+	uint64_t get_data_size_total();
+	unsigned int current_used_memory_pct();
 	public:
-	virtual void * purgeHash_thread(void *) { return NULL; } ;
+	void * purgeHash_thread(void *);
 	int size;
 	int shutdown;
 	time_t QCnow;
 	pthread_t purge_thread_id;
-	//fdb_hash_t fdb_hashes[SHARED_QUERY_CACHE_HASH_TABLES];
-	//fdb_hash_t fdb_hashes[];
 	unsigned int purge_loop_time;
 	unsigned int purge_total_time;
 	unsigned int purge_threshold_pct_min;
 	unsigned int purge_threshold_pct_max;
-//	unsigned int hash_expire_default;
 	uint64_t max_memory_size;
-	//uint64_t cntDel;
-	//uint64_t cntGet;
-	//uint64_t cntGetOK;
-	//uint64_t cntSet;
-
-//	uint64_t cntSetERR;
-//	uint64_t cntPurge;
-//	uint64_t size_keys;
-//	uint64_t size_values;
-//	uint64_t size_metas;
-//	uint64_t dataIN;
-//	uint64_t dataOUT;
-	//Shared_Query_Cache() {}
-	//Query_Cache(uint64_t _max_memory_size=DEFAULT_SQC_size);
-	//Query_Cache() {max_memory_size=0;}
-	//Query_Cache() { whatever=0; }
-	Query_Cache() {};
-	virtual ~Query_Cache() {};
-	virtual const char *version() {return NULL;};
-	virtual void print_version() {};
-	virtual bool set(unsigned char *, uint32_t, unsigned char *, uint32_t, time_t) { return true;};
-	virtual unsigned char * get(const unsigned char *, uint32_t *) { return 0;};
-	virtual uint64_t flush() {return 0;};
-	virtual uint64_t empty() {return 0;};
-//	virtual uint64_t current_free_memory() {return 0;};
-//	virtual unsigned int current_used_memory_pct() {return 0;}
-//	void set_side_length(double side_length) {
-//        test = side_length;
-//    }
-//	virtual double area() {return 0;};
-//	int aa;
-//	void register_LQC(Local_Query_Cache *);
-//	void unregister_LQC(Local_Query_Cache *);
+	Query_Cache();
+	~Query_Cache();
+	void print_version();
+	bool set(unsigned char *, uint32_t, unsigned char *, uint32_t, time_t);
+	unsigned char * get(const unsigned char *, uint32_t *);
+	uint64_t flush();
 };
-
-
-// the types of the class factories
-typedef Query_Cache* create_QC_t();
-typedef void destroy_QC_t(Query_Cache*);
-
 #endif /* __CLASS_QUERY_CACHE_H */
 

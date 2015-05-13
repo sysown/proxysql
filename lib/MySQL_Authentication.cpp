@@ -52,6 +52,8 @@ MySQL_Authentication::MySQL_Authentication() {
 
 MySQL_Authentication::~MySQL_Authentication() {
 	reset();
+	delete creds_backends.cred_array;
+	delete creds_frontends.cred_array;
 };
 
 void MySQL_Authentication::print_version() {

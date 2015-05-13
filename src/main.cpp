@@ -293,7 +293,7 @@ int main(int argc, const char * argv[]) {
 
 	//bool rc;
 
-	dlerror();
+//	dlerror();
 	char* dlsym_error = NULL;
 
 /*
@@ -315,6 +315,7 @@ int main(int argc, const char * argv[]) {
 }
 */
 
+/*
 	create_QC_t* create_QC = NULL;
 
 {
@@ -335,7 +336,7 @@ int main(int argc, const char * argv[]) {
 //		create_QC=&create_QC_func;
 //	}
 }
-
+*/
 /*
 {
 	dlerror();
@@ -564,7 +565,7 @@ __start_label:
 
 	
 	//SQC = new Shared_Query_Cache(DEFAULT_SQC_size);
-	GloQC = create_QC();
+	GloQC = new Query_Cache();
 	GloQC->print_version();
 	pthread_create(&GloQC->purge_thread_id, NULL, mysql_shared_query_cache_funct , NULL);
 	//void *(*__f)(void *) = (void* (*)(void*))&SQC->purgeHash_thread;
