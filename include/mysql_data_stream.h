@@ -8,6 +8,14 @@
 
 #define QUEUE_T_DEFAULT_SIZE	8192
 
+/*
+ * MySQL compressed protocol is a protocol in itself. It takes a series of
+ * packets, concatenates them, and splits them up into chunks (which may
+ * contain incomplete pieces of packets). These chunks are then compressed
+ * and sent as normal packets.
+ *
+ * This class decodes the incoming chunks into packets.
+ */
 class MySQL_Compression_Chunks_to_Packets_Converter {
 	
 private:
