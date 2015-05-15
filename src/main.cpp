@@ -112,33 +112,6 @@ char * gen_random_string(const int len) {
 
 
 
-/*
-void diagnostic_myds(MySQL_Data_Stream *myds) {
-	if (!myds) return;
-	fprintf(stderr,"      fd=%d, pkts_sent=%llu, pkts_recv=%llu, bytes_sent=%llu, bytes_recv=%llu\n", myds->fd, myds->pkts_sent, myds->pkts_recv, myds->bytes_info.bytes_sent, myds->bytes_info.bytes_recv);
-	//struct pollfd *_pollfd;
-	//_pollfd=&myds->sess->thread->mypolls.fds[myds->poll_fds_idx];
-	//fprintf(stderr,"      poll_fds_idx=%d pollfd={fd=%d, events=%d, revents=%d}\n", myds->poll_fds_idx, _pollfd->fd, _pollfd->events, _pollfd->revents);
-}
-
-void diagnostic_all() {
-	fprintf(stderr,"Diagnostic\n");
-	int i;
-	for (i=0;i<NUM_THREADS;i++) {
-		fprintf(stderr,"MySQL Thread: Object=%p, thread_id=0x%08lx\n", mysql_threads[i].worker, mysql_threads[i].thread_id);
-		unsigned int j;
-		MySQL_Thread *thr=mysql_threads[i].worker;
-		for (j=0; j<thr->mysql_sessions->len; j++) {
-			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->index(j);
-			fprintf(stderr," Session=%p\n", sess);
-			fprintf(stderr,"    Client Data Stream=%p, fd=%d\n", sess->client_myds, ( sess->client_myds ? sess->client_myds->fd : 0 ));
-			diagnostic_myds(sess->client_myds);
-			fprintf(stderr,"    Server Data Stream=%p, fd=%d\n", sess->server_myds, ( sess->server_myds ? sess->server_myds->fd : 0 ));
-			diagnostic_myds(sess->server_myds);
-		}
-	}
-}
-*/
 void * mysql_worker_thread_func(void *arg) {
 
 	__thr_sfp=l_mem_init();
@@ -173,7 +146,7 @@ void * mysql_shared_query_cache_funct(void *arg) {
 
 int main(int argc, const char * argv[]) {
 
-
+	unsigned int i;
 {
 #ifdef DEBUG
 	glovars.has_debug=true;
@@ -284,163 +257,6 @@ int main(int argc, const char * argv[]) {
 	}
 */
 
-
-
-	//bool rc;
-
-//	dlerror();
-//	char* dlsym_error = NULL;
-
-/*
-{
-	void * __memcached = dlopen("../deps/memcached/memcached/proxymemcached.so", RTLD_LAZY);
-	if (!__memcached) {
-		cerr << "Cannot load library: " << dlerror() << '\n';
-		exit(EXIT_FAILURE);
-	} else {
-		dlerror();
-		*(void **) (&__memcached_main) = dlsym(__memcached, "memcached_main");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol memcached_main: " << dlsym_error << '\n';
-			exit(EXIT_FAILURE);
-		}
-		pthread_create(&memcached_pthread, NULL, memcached_main_thread , NULL);
-	}
-}
-*/
-
-/*
-	create_QC_t* create_QC = NULL;
-
-{
-	__qc = dlopen("../lib/Standard_Query_Cache.so", RTLD_LAZY);
-	if (!__qc) {
-		cerr << "Cannot load library: " << dlerror() << '\n';
-	//	exit(EXIT_FAILURE);
-	} else {
-		dlerror();
-		create_QC = (create_QC_t*) dlsym(__qc, "create_QC_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol create_QC: " << dlsym_error << '\n';
-			//exit(EXIT_FAILURE);
-		}
-	}
-//	if (__qc==NULL || dlsym_error) {
-//		create_QC=&create_QC_func;
-//	}
-}
-*/
-/*
-{
-	dlerror();
-	dlsym_error=NULL;
-	//void* __mysql_thread = dlopen("../lib/Standard_MySQL_Thread.so", RTLD_LAZY|RTLD_DEEPBIND);
-	__mysql_thread = dlopen("../lib/Standard_MySQL_Thread.so", RTLD_LAZY);
-	if (!__mysql_thread) {
-		cerr << "Cannot load library: " << dlerror() << '\n';
-		exit(EXIT_FAILURE);
-	} else {
-		dlerror();
-		create_MySQL_Threads_Handler = (create_MySQL_Threads_Handler_t *) dlsym(__mysql_thread, "create_MySQL_Threads_Handler_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol create_MySQL_Threads_Handler_func: " << dlsym_error << '\n';
-			exit(EXIT_FAILURE);
-		}
-		dlerror();
-		create_MySQL_Thread = (create_MySQL_Thread_t *) dlsym(__mysql_thread, "create_MySQL_Thread_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol create_MySQL_Thread_func: " << dlsym_error << '\n';
-			exit(EXIT_FAILURE);
-		}
-		dlerror();
-		destroy_MySQL_Threads_Handler = (destroy_MySQL_Threads_Handler_t *) dlsym(__mysql_thread, "destroy_MySQL_Threads_Handler_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol destroy_MySQL_Threads_Handler_func: " << dlsym_error << '\n';
-			exit(EXIT_FAILURE);
-		}
-		dlerror();
-		destroy_MySQL_Thread = (destroy_MySQL_Thread_t *) dlsym(__mysql_thread, "destroy_MySQL_Thread_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol destroy_MySQL_Thread_func: " << dlsym_error << '\n';
-			exit(EXIT_FAILURE);
-		}
-	}
-//	if (__mysql_thread==NULL ||	dlsym_error) {
-//		create_MySQL_Thread=&create_MySQL_Thread_func;
-//	}
-}
-*/
-/*
-{
-	dlerror();
-	dlsym_error=NULL;
-	//void* __mysql_thread = dlopen("../lib/Standard_MySQL_Thread.so", RTLD_LAZY|RTLD_DEEPBIND);
-	__query_processor = dlopen("../lib/Standard_Query_Processor.so", RTLD_LAZY);
-	if (!__query_processor) {
-		cerr << "Cannot load library: " << dlerror() << '\n';
-		exit(EXIT_FAILURE);
-	} else {
-		dlerror();
-		create_Query_Processor = (create_Query_Processor_t *) dlsym(__query_processor, "create_Query_Processor_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol &create_Query_Processor_func: " << dlsym_error << '\n';
-			exit(EXIT_FAILURE);
-		}
-	}
-//	if (__mysql_thread==NULL ||	dlsym_error) {
-//		create_MySQL_Thread=&create_MySQL_Thread_func;
-//	}
-}
-*/
-/*
-{
-	dlerror();
-	dlsym_error=NULL;
-	__mysql_auth = dlopen("../lib/Standard_MySQL_Authentication.so", RTLD_LAZY);
-	if (!__mysql_auth) {
-		cerr << "Cannot load library: " << dlerror() << '\n';
-		//exit(EXIT_FAILURE);
-	} else {
-		dlerror();
-		create_MySQL_Authentication = (create_MySQL_Authentication_t *) dlsym(__mysql_auth, "create_MySQL_Authentication_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol &create_MySQL_Authentication: " << dlsym_error << '\n';
-			//exit(EXIT_FAILURE);
-		}
-	}
-	if (__mysql_auth==NULL || dlsym_error) {
-		create_MySQL_Authentication=&create_MySQL_Authentication_func;
-	}
-}
-*/
-
-/*
-{
-	dlerror();
-	dlsym_error=NULL;
-	__proxysql_admin = dlopen("../lib/Standard_ProxySQL_Admin.so", RTLD_LAZY);
-	if (!__proxysql_admin) {
-		cerr << "Cannot load library: " << dlerror() << '\n';
-		exit(EXIT_FAILURE);
-	} else {
-		dlerror();
-		create_ProxySQL_Admin = (create_ProxySQL_Admin_t *) dlsym(__proxysql_admin, "create_ProxySQL_Admin_func");
-		dlsym_error = dlerror();
-		if (dlsym_error!=NULL) {
-			cerr << "Cannot load symbol &create_ProxySQL_Admin_func: " << dlsym_error << '\n';
-			exit(EXIT_FAILURE);
-		}
-	}
-}
-*/
 __start_label:
 
 	GloQC=NULL;
@@ -524,34 +340,12 @@ __start_label:
 	// start all services
 
 
-	//listen_fd=listen_on_port((char *)"127.0.0.1",6033, 50);
-	//listen_fd=listen_on_port((char *)"0.0.0.0",6033, 50);
-	//socket_fd=listen_on_unix((char *)"/tmp/proxysql.sock", 50);
-	//ioctl_FIONBIO(listen_fd, 1);
-	//ioctl_FIONBIO(socket_fd, 1);
 
-	unsigned int i;
-
-
-	//GloMTH->init(6, 512*1024);
 	GloMTH->init();
-	//mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*NUM_THREADS);
-	//assert(mysql_threads);
 	
 	load_ = GloMTH->num_threads + 1;
 
 
-/*
-	pthread_attr_t attr;
-
-
-{
-	rc=pthread_attr_init(&attr);
-  rc=pthread_attr_setstacksize(&attr, 512*1024);
-  assert(rc==0);
-
-}
-*/
 	for (i=0; i<GloMTH->num_threads; i++) {
 		//pthread_create(&mysql_threads[i].thread_id, &attr, mysql_worker_thread_func , &mysql_threads[i]);
 		GloMTH->create_thread(i,mysql_worker_thread_func);
@@ -630,10 +424,6 @@ __shutdown:
 		GloQC->shutdown=1;
 		pthread_join(GloQC->purge_thread_id, NULL);
 	}
-	//SQC->empty();
-	//SQC->flush();
-
-
 
 
 	//if (GloVars.__cmd_proxysql_nostart) {
@@ -672,15 +462,6 @@ __shutdown:
 		goto __start_label;
 	}
 
-/*
-	if (RUNNING_ON_VALGRIND==0) {
-		dlclose(__qc);
-		dlclose(__mysql_thread);
-		dlclose(__query_processor);
-		dlclose(__mysql_auth);
-		dlclose(__proxysql_admin);
-	}
-*/
 	l_mem_destroy(__thr_sfp);
 
 
