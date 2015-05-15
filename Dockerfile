@@ -10,8 +10,6 @@ RUN apt-get install -y gcc
 RUN apt-get install -y g++
 RUN apt-get install -y libssl-dev
 RUN apt-get install -y libmysqlclient-dev
-# This will enable us to clone the ProxySQL repo without git prompting us for
-# the validity of the RSA fingerprint.
 RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git
 RUN cd /opt/proxysql-0.2; make clean && make
 RUN mkdir -p /var/run/proxysql
