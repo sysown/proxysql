@@ -34,8 +34,6 @@ typedef struct _creds_group_t {
 	PtrArray *cred_array;
 } creds_group_t;
 
-enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
-
 class MySQL_Authentication {
 	private:
 	creds_group_t creds_backends;

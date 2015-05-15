@@ -13,8 +13,6 @@
 //ProxySQL_GlobalVariables GloVars;
 
 
-extern "C" Query_Cache* create_QC_func();
-extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func();
 
 
 void * __qc;
@@ -22,11 +20,8 @@ void * __mysql_thread;
 void * __mysql_threads_handler;
 void * __query_processor;
 void * __mysql_auth; 
-void * __proxysql_admin; 
 
 
-create_Query_Processor_t * create_Query_Processor = NULL;
-create_ProxySQL_Admin_t * create_ProxySQL_Admin = NULL;
 
 //void (*__memcached_main)(int,char **);
 //pthread_t memcached_pthread;
@@ -294,7 +289,7 @@ int main(int argc, const char * argv[]) {
 	//bool rc;
 
 //	dlerror();
-	char* dlsym_error = NULL;
+//	char* dlsym_error = NULL;
 
 /*
 {
@@ -427,7 +422,7 @@ int main(int argc, const char * argv[]) {
 }
 */
 
-
+/*
 {
 	dlerror();
 	dlsym_error=NULL;
@@ -445,7 +440,7 @@ int main(int argc, const char * argv[]) {
 		}
 	}
 }
-
+*/
 __start_label:
 
 	GloQC=NULL;
@@ -458,7 +453,7 @@ __start_label:
 	GloMTH->print_version();
 
 {
-	GloAdmin = create_ProxySQL_Admin();
+	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->print_version();
 	GloAdmin->init();
 }
@@ -677,6 +672,7 @@ __shutdown:
 		goto __start_label;
 	}
 
+/*
 	if (RUNNING_ON_VALGRIND==0) {
 		dlclose(__qc);
 		dlclose(__mysql_thread);
@@ -684,6 +680,7 @@ __shutdown:
 		dlclose(__mysql_auth);
 		dlclose(__proxysql_admin);
 	}
+*/
 	l_mem_destroy(__thr_sfp);
 
 
