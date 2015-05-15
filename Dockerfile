@@ -2,14 +2,15 @@
 # g++ compilers. Also, it's a long term release.
 FROM ubuntu:14.04
 MAINTAINER Andrei Ismail <iandrei@gmail.com>
-RUN apt-get update
-RUN apt-get install -y git
-RUN apt-get install -y make
-RUN apt-get install -y cmake
-RUN apt-get install -y gcc
-RUN apt-get install -y g++
-RUN apt-get install -y libssl-dev
-RUN apt-get install -y libmysqlclient-dev
+RUN apt-get update && apt-get install -y\
+	cmake\
+	make\
+	g++\
+	gcc\
+	git\
+	libssl-dev\
+	libmysqlclient-dev
+
 RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git
 RUN cd /opt/proxysql-0.2; make clean && make
 RUN mkdir -p /var/run/proxysql
