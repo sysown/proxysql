@@ -114,6 +114,10 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_charset",
 	(char *)"have_compress",
 	(char *)"interfaces",
+	(char *)"monitor_connect_interval",
+	(char *)"monitor_connect_timeout",
+	(char *)"monitor_ping_interval",
+	(char *)"monitor_ping_timeout",
 	(char *)"ping_interval_server",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -147,6 +151,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	spinlock_rwlock_init(&rwlock);
 	pthread_attr_init(&attr);
 	variables.connect_timeout_server=10000;
+	variables.monitor_connect_interval=120000;
+	variables.monitor_connect_timeout=200;
+	variables.monitor_ping_interval=60000;
+	variables.monitor_ping_timeout=100;
 	variables.ping_interval_server=5000;
 	variables.ping_timeout_server=100;
 	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
@@ -261,6 +269,12 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 #ifdef DEBUG
 	if (!strcasecmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
+	if (!strncasecmp(name,"monitor_",8)) {
+		if (!strcasecmp(name,"monitor_connect_interval")) return (int)variables.monitor_connect_interval;
+		if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
+		if (!strcasecmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
+		if (!strcasecmp(name,"monitor_ping_timeout")) return (int)variables.monitor_ping_timeout;
+	}
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
@@ -285,6 +299,25 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		// FIXME : make it human readable
 		sprintf(intbuf,"%d",variables.server_capabilities);
 		return strdup(intbuf);
+	}
+	// monitor variables
+	if (!strncasecmp(name,"monitor_",8)) {
+		if (!strcasecmp(name,"monitor_connect_interval")) {
+			sprintf(intbuf,"%d",variables.monitor_connect_interval);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_connect_timeout")) {
+			sprintf(intbuf,"%d",variables.monitor_connect_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_ping_interval")) {
+			sprintf(intbuf,"%d",variables.monitor_ping_interval);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_ping_timeout")) {
+			sprintf(intbuf,"%d",variables.monitor_ping_timeout);
+			return strdup(intbuf);
+		}
 	}
 	if (!strcasecmp(name,"default_charset")) {
 		sprintf(intbuf,"%d",variables.default_charset);
@@ -349,6 +382,45 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	if (!value) return false;
 	size_t vallen=strlen(value);
 
+	// monitor variables
+	if (!strncasecmp(name,"monitor_",8)) {
+		if (!strcasecmp(name,"monitor_connect_interval")) {
+			int intv=atoi(value);
+			if (intv > 1000 && intv < 7*24*3600*1000) {
+				variables.monitor_connect_interval=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_connect_timeout")) {
+			int intv=atoi(value);
+			if (intv > 100 && intv < 600*1000) {
+				variables.monitor_connect_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_ping_interval")) {
+			int intv=atoi(value);
+			if (intv > 1000 && intv < 7*24*3600*1000) {
+				variables.monitor_ping_interval=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_ping_timeout")) {
+			int intv=atoi(value);
+			if (intv > 100 && intv < 600*1000) {
+				variables.monitor_ping_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+	}
 	if (!strcasecmp(name,"ping_interval_server")) {
 		int intv=atoi(value);
 		if (intv > 1000 && intv < 7*24*3600*1000) {

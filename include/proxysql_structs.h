@@ -630,6 +630,13 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
+
+/* variables used by the monitoring module */
+__thread int mysql_thread___monitor_connect_interval;
+__thread int mysql_thread___monitor_connect_timeout;
+__thread int mysql_thread___monitor_ping_interval;
+__thread int mysql_thread___monitor_ping_timeout;
+
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
