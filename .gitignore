@@ -74,6 +74,7 @@ deps/libdaemon/libdaemon-0.14/
 deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86/
 deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86_64/
 deps/mariadb-client-library/mariadb_client-2.0.0-src/
+deps/mariadb-client-library/mariadb-connector-c-2.1.0-src/
 
 #glib
 deps/glib/glib-2.40.0/

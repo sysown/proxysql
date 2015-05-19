@@ -9,6 +9,8 @@
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
 
+enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
+
 // list of possible debugging modules
 enum debug_module {
 	PROXY_DEBUG_GENERIC,
@@ -201,6 +203,7 @@ class ProxySQL_Poll;
 class Shared_Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
+class MySQL_Protocol;
 class PtrArray;
 class StatCounters;
 class ProxySQL_ConfigFile;

@@ -1,6 +1,5 @@
 #include "proxysql.h"
 #include "cpp.h"
-#include "Standard_MySQL_Thread.h"
 
 extern MySQL_Authentication *GloMyAuth;
 
@@ -446,7 +445,7 @@ MySQL_Prepared_Stmt_info::MySQL_Prepared_Stmt_info(unsigned char *pkt, unsigned 
 	pkt += sizeof(uint16_t);
 	pkt++; // reserved_1
 	warning_count = CPY2(pkt);
-	fprintf(stderr,"Generating prepared statement with id=%d, cols=%d, params=%d, warns=%d\n", statement_id, num_columns, num_params, warning_count);
+//	fprintf(stderr,"Generating prepared statement with id=%d, cols=%d, params=%d, warns=%d\n", statement_id, num_columns, num_params, warning_count);
 	pending_num_columns=num_columns;
 	pending_num_params=num_params;
 }

@@ -1,6 +1,5 @@
 #include "proxysql.h"
 #include "cpp.h"
-#include "Standard_MySQL_Thread.h"
 
 extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
@@ -424,7 +423,7 @@ __get_a_backend:
 					handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
 				}
 			} else {
-				if (client_myds->myconn->options.charset!=mybe->server_myds->myconn->options.charset || rand()%3==0) {
+				if (client_myds->myconn->options.charset!=mybe->server_myds->myconn->options.charset /* FIXME: this was for debugging only */ /*|| rand()%3==0 */) {
 					handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();
 				} else {
 					//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
@@ -805,7 +804,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STM
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 
-	fprintf(stderr,"%d %d\n", mybe->server_myds->myprot.current_PreStmt->pending_num_params, mybe->server_myds->myprot.current_PreStmt->pending_num_columns);
+	//fprintf(stderr,"%d %d\n", mybe->server_myds->myprot.current_PreStmt->pending_num_params, mybe->server_myds->myprot.current_PreStmt->pending_num_columns);
 	if (c==0xfe && pkt->size < 13) {
 		if (mybe->server_myds->myprot.current_PreStmt->pending_num_params+mybe->server_myds->myprot.current_PreStmt->pending_num_columns) {
 			mybe->server_myds->DSS=STATE_EOF1;
@@ -894,7 +893,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 	}
 } else {
 	if (mybe->server_myds->myconn->processing_prepared_statement_prepare==true) {
-		fprintf(stderr,"EOF: %d %d\n", mybe->server_myds->myprot.current_PreStmt->pending_num_params, mybe->server_myds->myprot.current_PreStmt->pending_num_columns);
+//		fprintf(stderr,"EOF: %d %d\n", mybe->server_myds->myprot.current_PreStmt->pending_num_params, mybe->server_myds->myprot.current_PreStmt->pending_num_columns);
 		if (mybe->server_myds->myprot.current_PreStmt->pending_num_params+mybe->server_myds->myprot.current_PreStmt->pending_num_columns) {
 			if (mybe->server_myds->myprot.current_PreStmt->pending_num_params) {
 				--mybe->server_myds->myprot.current_PreStmt->pending_num_params;
@@ -1355,6 +1354,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->assign_fd_from_mysql_conn();
 		mybe->server_myds->myds_type=MYDS_BACKEND;
 		mybe->server_myds->DSS=STATE_READY;
+		if (session_fast_forward==true) {
+			status=FAST_FORWARD;
+		}
 	}
 }
 
