@@ -400,7 +400,11 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			variables.interfaces=strdup(value);
 			return true;
 		} else {
-			return false;
+			if (vallen && strcmp(value,variables.interfaces)==0) {
+				return true;
+			} else {
+				return false;
+			}
 		}
 	}
 	if (!strcasecmp(name,"server_version")) {
