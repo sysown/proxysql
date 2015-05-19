@@ -259,6 +259,7 @@ class MySQL_Threads_Handler
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 	//virtual const char *version() {return NULL;};
+	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
 	void commit();

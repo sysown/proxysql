@@ -10,6 +10,7 @@
 #define MYSQL_MONITOR_VERSION "0.2.0519" DEB
 
 extern ProxySQL_Admin *GloAdmin;
+extern MySQL_Threads_Handler *GloMTH;
 
 MySQL_Monitor::MySQL_Monitor() {
 
@@ -28,12 +29,20 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
+
+	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
+	mysql_thr = new MySQL_Thread();
+	mysql_thr->curtime=monotonic_time();
+	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	mysql_thr->refresh_variables();
+
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
 	drop_tables_defs(tables_defs_monitor);
 	delete tables_defs_monitor;
 	delete monitordb;
+	delete mysql_thr;
 	fprintf(stderr,"MySQL_Monitor destroyed\n");
 };
 
@@ -77,7 +86,13 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 
 void * MySQL_Monitor::run() {
 	while (shutdown==false) {
-		usleep(100000);
+		usleep(1000000);
+		unsigned int glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			fprintf(stderr,"MySQL_Monitor refreshing variables\n");
+		}
 		fprintf(stderr,"MySQL_Monitor\n");
 	}
 	return NULL;

@@ -167,6 +167,11 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	MLM = new MySQL_Listeners_Manager();
 }
 
+
+unsigned int MySQL_Threads_Handler::get_global_version() {
+	return __sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0);
+}
+
 int MySQL_Threads_Handler::listener_add(const char *address, int port) {
 	char *s=(char *)malloc(strlen(address)+32);
 	sprintf(s,"%s:%d",address,port);
