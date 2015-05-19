@@ -71,7 +71,9 @@ class ProxySQL_Poll {
   ~ProxySQL_Poll() {
     unsigned int i;
     for (i=0;i<len;i++) {
-      if (myds[i]->myds_type==MYDS_LISTENER) {
+      if (
+				myds[i] && // fix bug #278 . This should be caused by not initialized datastreams used to ping the backend
+				myds[i]->myds_type==MYDS_LISTENER) {
         delete myds[i];
       }
     }

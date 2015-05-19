@@ -600,7 +600,9 @@ MySQL_Thread::~MySQL_Thread() {
 	}
 	unsigned int i;
 	for (i=0;i<mypolls.len;i++) {
-		if (mypolls.myds[i]->myds_type==MYDS_LISTENER) {
+		if (
+			mypolls.myds[i] && // fix bug #278 . This should be caused by not initialized datastreams used to ping the backend
+			mypolls.myds[i]->myds_type==MYDS_LISTENER) {
 			delete mypolls.myds[i];
 		}
 	}
