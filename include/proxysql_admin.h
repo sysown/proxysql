@@ -4,7 +4,6 @@
 #include "cpp.h"
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
-typedef struct { char * table_name; char * table_def; } table_def_t;
 
 
 class ProxySQL_Admin {

@@ -181,6 +181,7 @@ typedef unsigned spinlock;
 typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
+typedef struct { char * table_name; char * table_def; } table_def_t;
 //typedef struct _mysql_server_t mysql_server_t;
 
 #endif /* PROXYSQL_TYPEDEFS */
@@ -193,6 +194,7 @@ class MySQL_Data_Stream;
 class MySQL_Connection_userinfo;
 class MySQL_Session;
 class MySQL_Backend;
+class MySQL_Monitor;
 class MySQL_Thread;
 class MySQL_Threads_Handler;
 class SQLite3DB;

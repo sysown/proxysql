@@ -31,14 +31,13 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
 mariadb-client-library/mariadb_client/include/my_config.h:
-	cd mariadb-client-library && rm -rf mariadb_client-2.0.0-src
-	cd mariadb-client-library && tar -zxf mariadb_client-2.0.0-src.tar.gz
+	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.1.0-src.tar.gz
 	cd mariadb-client-library/mariadb_client && cmake .
-#	cd mariadb-client-library/mariadb_client && make 
-	cd mariadb-client-library/mariadb_client/include && make my_config.h
+	cd mariadb-client-library/mariadb_client && make
+# cd mariadb-client-library/mariadb_client/include && make my_config.h
 
 mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
-
 
 
 #sqlite3/sqlite3/sqlite3.o:
