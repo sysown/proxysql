@@ -2,36 +2,6 @@
 #include "cpp.h"
 
 
-/*
-static unsigned int g_seed;
-
-
-inline void fast_srand( int seed ) {
-g_seed = seed;
-}
-inline int fastrand() {
-	g_seed = (214013*g_seed+2531011);
-	return (g_seed>>16)&0x7FFF;
-}
-
-
-char * gen_random_string(const int len) {
-	char *s=(char *)malloc(len+1);
-    static const char alphanum[] =
-        "0123456789"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz";
-
-    for (int i = 0; i < len; ++i) {
-        s[i] = alphanum[fastrand() % (sizeof(alphanum) - 1)];
-    }
-
-    s[len] = 0;
-	return s;
-}
-*/
-
-
 int remove_spaces(const char *s) {
 	char *inp = (char *)s, *outp = (char *)s;
 	bool prev_space = false;
@@ -69,7 +39,6 @@ void * PtrArray::operator new(size_t size) {
 
 void PtrArray::operator delete(void *ptr) {
 	(((PtrArray *)ptr)->use_l_alloc ? l_free(sizeof(PtrArray), ptr) : free(ptr));
-	//free(ptr);
 }
 
 void * PtrArray::operator new(size_t size, bool b) {

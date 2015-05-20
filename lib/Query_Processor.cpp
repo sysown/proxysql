@@ -16,15 +16,6 @@
 #endif /* DEBUG */
 #define QUERY_PROCESSOR_VERSION "0.1.728" DEB
 
-/*
-moved to proxysql_macros.h
-#define strdup_null(__c) ( __c ? strdup(__c) : __c )
-#define char_malloc (char *)malloc
-#define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
-
-#define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
-*/
-
 class QP_rule_text_hitsonly {
 	public:
 	char **pta;
@@ -45,21 +36,6 @@ class QP_rule_text_hitsonly {
 class QP_rule_text {
 	public:
 	char **pta;
-/*
-	char * rule_id;
-	char * active;
-	char * username;
-	char * schemaname;
-	char * flagIN;
-	char * match_pattern;
-	char * negate_match_pattern;
-	char * flagOUT;
-	char * replace_pattern;
-	char * destination_hostgroup;
-	char * cache_ttl;
-	char * apply;
-	char * hits;
-*/
 	QP_rule_text(QP_rule_t *QPr) {
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*13);
@@ -76,42 +52,12 @@ class QP_rule_text {
 		itostr(pta[10], (long long)QPr->cache_ttl);
 		itostr(pta[11], (long long)QPr->apply);
 		itostr(pta[12], (long long)QPr->hits);
-/*
-		itostr(rule_id, QPr->rule_id);
-		itostr(active, QPr->active);
-		username=strdup_null(QPr->username);
-		schemaname=strdup_null(QPr->schemaname);
-		itostr(flagIN, QPr->flagIN);
-		match_pattern=strdup_null(QPr->match_pattern);
-		itostr(negate_match_pattern, QPr->negate_match_pattern);
-		itostr(flagOUT, QPr->flagOUT);
-		replace_pattern=strdup_null(QPr->replace_pattern);
-		itostr(destination_hostgroup, QPr->destination_hostgroup);
-		itostr(cache_ttl, QPr->cache_ttl);
-		itostr(apply, QPr->apply);
-		itostr(hits, QPr->hits);
-*/
 	}
 	~QP_rule_text() {
 		for(int i=0; i<13; i++) {
 			free_null(pta[i]);
 		}
 		free(pta);
-/*
-		free_null(rule_id);
-		free_null(active);
-		free_null(username);
-		free_null(schemaname);
-		free_null(flagIN);
-		free_null(match_pattern);
-		free_null(negate_match_pattern);
-		free_null(flagOUT);
-		free_null(replace_pattern);
-  	free_null(destination_hostgroup);
-		free_null(cache_ttl);
-		free_null(apply);
-		free_null(hits);
-*/
 	}
 };
 
@@ -122,7 +68,7 @@ struct __SQP_query_parser_t {
 
 typedef struct __SQP_query_parser_t SQP_par_t;
 
-static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];
+//static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];
 
 
 
@@ -176,7 +122,7 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 	qrs->clear();
 }
 
-
+/*
 class Command_Counter {
 	private:
 	int cmd_idx;
@@ -224,14 +170,14 @@ class Command_Counter {
 		free(pta);
 	}
 };
-
+*/
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
 //__thread unsigned int _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 __thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 
-
+/*
 class Standard_Query_Processor: public Query_Processor {
 
 private:
@@ -242,9 +188,9 @@ Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 
 volatile unsigned int version;
 protected:
-
 public:
-Standard_Query_Processor() {
+*/
+Query_Processor::Query_Processor() {
 #ifdef DEBUG
 	if (glovars.has_debug==false) {
 #else
@@ -304,13 +250,13 @@ Standard_Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_UNKNOWN]=(char *)"UNKNOWN";
 };
 
-virtual ~Standard_Query_Processor() {
+Query_Processor::~Query_Processor() {
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete commands_counters[i];
 	__reset_rules(&rules);
 };
 
 // This function is called by each thread when it starts. It create a Query Processor Table for each thread
-virtual void init_thread() {
+void Query_Processor::init_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Per-Thread Query Processor Table with version=0\n");
 	_thr_SQP_version=0;
 	_thr_SQP_rules=new std::vector<QP_rule_t *>;
@@ -318,28 +264,28 @@ virtual void init_thread() {
 };
 
 
-virtual void end_thread() {
+void Query_Processor::end_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Destroying Per-Thread Query Processor Table with version=%d\n", _thr_SQP_version);
 	__reset_rules(_thr_SQP_rules);
 	delete _thr_SQP_rules;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete _thr_commands_counters[i];
 };
 
-virtual void print_version() {
+void Query_Processor::print_version() {
 	fprintf(stderr,"Standard Query Processor rev. %s -- %s -- %s\n", QUERY_PROCESSOR_VERSION, __FILE__, __TIMESTAMP__);
 };
 
-virtual void wrlock() {
+void Query_Processor::wrlock() {
 	spin_wrlock(&rwlock);
 };
 
-virtual void wrunlock() {
+void Query_Processor::wrunlock() {
 	spin_wrunlock(&rwlock);
 };
 
 
 
-virtual QP_rule_t * new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, bool apply) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, bool apply) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -360,36 +306,17 @@ virtual QP_rule_t * new_query_rule(int rule_id, bool active, char *username, cha
 };
 
 
-virtual void delete_query_rule(QP_rule_t *qr) {
+void Query_Processor::delete_query_rule(QP_rule_t *qr) {
 	__delete_query_rule(qr);
-/*
-	if (qr->username)
-		free(qr->username);
-	if (qr->schemaname)
-		free(qr->schemaname);
-	if (qr->match_pattern)
-		free(qr->match_pattern);
-	if (qr->replace_pattern)
-		free(qr->replace_pattern);
-	free(qr);
-*/
 };
 
-virtual void reset_all(bool lock) {
+void Query_Processor::reset_all(bool lock) {
 	if (lock) spin_wrlock(&rwlock);
-/*
-	QP_rule_t *qr;
-	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
-		qr=*it;
-		__delete_query_rule(qr);
-	}
-	rules.clear();
-*/
 	__reset_rules(&rules);
 	if (lock) spin_wrunlock(&rwlock);
 };
 
-virtual bool insert(QP_rule_t *qr, bool lock) {
+bool Query_Processor::insert(QP_rule_t *qr, bool lock) {
 	bool ret=true;
 	if (lock) spin_wrlock(&rwlock);
 	rules.push_back(qr);
@@ -398,7 +325,7 @@ virtual bool insert(QP_rule_t *qr, bool lock) {
 };
 
 
-virtual void sort(bool lock) {
+void Query_Processor::sort(bool lock) {
 	if (lock) spin_wrlock(&rwlock);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Sorting rules\n");
 	std::sort (rules.begin(), rules.end(), rules_sort_comp_function);
@@ -407,7 +334,7 @@ virtual void sort(bool lock) {
 
 // when commit is called, the version number is increased and the this will trigger the mysql threads to get a new Query Processor Table
 // The operation is asynchronous
-virtual void commit() {
+void Query_Processor::commit() {
 	spin_wrlock(&rwlock);
 	__sync_add_and_fetch(&version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Increasing version number to %d - all threads will notice this and refresh their rules\n", version);
@@ -415,7 +342,7 @@ virtual void commit() {
 };
 
 
-virtual SQLite3_result * get_stats_commands_counters() {
+SQLite3_result * Query_Processor::get_stats_commands_counters() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping commands counters\n");
 	SQLite3_result *result=new SQLite3_result(15);
 	result->add_column_definition(SQLITE_TEXT,"Command");
@@ -437,18 +364,10 @@ virtual SQLite3_result * get_stats_commands_counters() {
 		char **pta=commands_counters[i]->get_row();
 		result->add_row(pta);
 		commands_counters[i]->free_row(pta);
-/*
-		char **pta=(char **)malloc(sizeof(char *)*2);
-		pta[0]=commands_counters_desc[i];
-		itostr(pta[1], (long long)commands_counters[i]);
-		result->add_row(pta);
-		free(pta[1]);
-		free(pta);
-*/
 	}
 	return result;
 }
-virtual SQLite3_result * get_stats_query_rules() {
+SQLite3_result * Query_Processor::get_stats_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping query rules statistics, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(2);
 	spin_rdlock(&rwlock);
@@ -468,7 +387,7 @@ virtual SQLite3_result * get_stats_query_rules() {
 	return result;
 }
 
-virtual SQLite3_result * get_current_query_rules() {
+SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(13);
 	spin_rdlock(&rwlock);
@@ -498,7 +417,7 @@ virtual SQLite3_result * get_current_query_rules() {
 }
 
 
-virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
+QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
 	QP_out_t *ret=NULL;
 	unsigned int len=size-sizeof(mysql_hdr)-1;
 	char *query=(char *)l_alloc(len+1);
@@ -577,9 +496,7 @@ virtual QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned 
 			ret->cache_ttl=-1;
 			ret->new_query=NULL;
 		}
-		//__sync_fetch_and	_add(&qr->hits,1);
 		qr->hits++; // this is done without atomic function because it updates only the local variables
-			//ret=(QP_out_t *)malloc(sizeof(QP_out_t));
 
 /*
 {
@@ -640,11 +557,11 @@ __exit_process_mysql_query:
 };
 
 // this function is called by mysql_session to free the result generated by process_mysql_query()
-virtual void delete_QP_out(QP_out_t *o) {
+void Query_Processor::delete_QP_out(QP_out_t *o) {
 	l_free(sizeof(QP_out_t),o);
 };
 
-virtual void update_query_processor_stats() {
+void Query_Processor::update_query_processor_stats() {
 	// Note:
 	// this function is called by each thread to update global query statistics
 	//
@@ -676,26 +593,26 @@ virtual void update_query_processor_stats() {
 	}
 };
 
-virtual void * query_parser_init(char *query, int query_length, int flags) {
+void * Query_Processor::query_parser_init(char *query, int query_length, int flags) {
 	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
 	libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	return (void *)qp;
 };
 
-virtual enum MYSQL_COM_QUERY_command query_parser_command_type(void *args) {
+enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(void *args) {
 	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(args);
 	//_thr_commands_counters[ret]++;
 	return ret;
 }
 
-virtual unsigned long long query_parser_update_counters(enum MYSQL_COM_QUERY_command c, unsigned long long t) {
+unsigned long long Query_Processor::query_parser_update_counters(enum MYSQL_COM_QUERY_command c, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 	return ret;
 }
 
 
-enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args) {
+enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
 	while (libinjection_sqli_tokenize(&qp->sf)) {
 		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
@@ -805,19 +722,9 @@ enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args) {
 	return MYSQL_COM_QUERY_UNKNOWN;
 }
 
-virtual char * query_parser_first_comment(void *args) { return NULL; }
+char * Query_Processor::query_parser_first_comment(void *args) { return NULL; }
 
-virtual void query_parser_free(void *args) {
+void Query_Processor::query_parser_free(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
 	free(qp);	
 };
-
-};
-
-extern "C" Query_Processor * create_Query_Processor_func() {
-    return new Standard_Query_Processor();
-}
-
-extern "C" void destroy_Query_Processor(Query_Processor * qp) {
-    delete qp;
-}

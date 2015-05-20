@@ -101,8 +101,6 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 
 MySQL_Connection::MySQL_Connection() {
 	//memset(&myconn,0,sizeof(MYSQL));
-	MCA=NULL;
-	//mshge=NULL;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -121,26 +119,7 @@ MySQL_Connection::MySQL_Connection() {
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
-	//if (myconn.host) free(myconn.host);
-	//if (myconn.user) free(myconn.user);
-	//if (myconn.passwd) free(myconn.passwd);
-	//if (myconn.db) free(myconn.db);
-/*
-	if (myconn.user) l_free_string(myconn.user);
-	if (myconn.passwd) l_free_string(myconn.passwd);
-	if (myconn.db) l_free_string(myconn.db);
-*/
-	//if (myconn.unix_socket) free(myconn.unix_socket);
 	if (options.server_version) free(options.server_version);
-	//if (myconn.host_info) free(myconn.host_info);
-	//if (myconn.info) free(myconn.info);
-//	if (myconn.server_version) l_free_string(myconn.server_version);
-	//if (myconn.charset) free(const_cast<charset_info_st *>(myconn.charset));
-//	if (myconn.charset) l_free(sizeof(charset_info_st), const_cast<charset_info_st *>(myconn.charset));
-//	if (myconn.charset) free(myconn.charset);
-//	if (mshge) {
-//	__sync_add_and_fetch(&mshge->references,-1);
-//	};
 	if (userinfo) {
 		delete userinfo;
 		userinfo=NULL;
@@ -159,48 +138,6 @@ uint8_t MySQL_Connection::set_charset(uint8_t _c) {
 	options.charset=_c;
 	return _c;
 }
-
-MyConnArray * MySQL_Connection::set_MCA(MySQL_Connection_Pool *_MyConnPool, const char *hostname, const char *username, const char *password, const char *db, unsigned int port) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection_Pool=%p, Host=%s, user=%s, pass=%s, db=%s, port=%d\n", _MyConnPool, hostname, username, password, db, port);
-	MCA=_MyConnPool->MyConnArray_lookup(hostname, username, password, db, port);
-	assert(MCA);
-	return MCA;
-}
-
-bool MySQL_Connection::return_to_connection_pool() {
-	assert(MCA);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Returning MySQL_Connection %p at MCA=%p\n", this, MCA);
-	MCA->add(this);
-	return true;
-}
-
-/*
-void MySQL_Connection::set_mshge(MySQL_Hostgroup_Entry *_mshge) {
-	mshge=_mshge;
-	__sync_add_and_fetch(&mshge->references,1);
-};
-
-void MySQL_Connection::free_mshge() {
-	__sync_add_and_fetch(&mshge->references,-1);
-	mshge=NULL;
-};
-*/
-//int MySQL_Connection::assign_mshge(unsigned int hid) { // FIXME
-/*	FIXME
-		a) shouldn't always return 0
-		b) MSHGE_find should get a random server
-*/
-	//MyHGH->rdlock();
-//	if (mshge) { free_mshge(); }
-	//MySQL_Hostgroup_Entry *_mshge=MyHGH->MSHGE_find(hid,(char *)"127.0.0.1", 3306);
-	//MySQL_Hostgroup_Entry *_mshge=MyHGH->get_random_hostgroup_entry(hid);
-	//assert(_mshge);
-	//if (_mshge) {
-	//	set_mshge(_mshge);
-	//}
-	//MyHGH->rdunlock();
-//	return 0;
-//};
 
 bool MySQL_Connection::is_expired(unsigned long long timeout) {
 // FIXME: here the check should be a sanity check

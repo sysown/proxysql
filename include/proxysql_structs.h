@@ -9,6 +9,8 @@
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
 
+enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
+
 // list of possible debugging modules
 enum debug_module {
 	PROXY_DEBUG_GENERIC,
@@ -60,6 +62,7 @@ enum session_status {
 	CHANGING_CHARSET,
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
+	FAST_FORWARD,
 	NONE
 };
 
@@ -200,8 +203,7 @@ class ProxySQL_Poll;
 class Shared_Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
-class MyConnArray;
-class MySQL_Connection_Pool;
+class MySQL_Protocol;
 class PtrArray;
 class StatCounters;
 class ProxySQL_ConfigFile;
@@ -622,8 +624,10 @@ __thread char *mysql_thread___connect_timeout_server_error;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
 __thread int mysql_thread___poll_timeout;
+__thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
+__thread bool mysql_thread___commands_stats;
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
@@ -642,8 +646,10 @@ extern __thread char *mysql_thread___connect_timeout_server_error;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
 extern __thread int mysql_thread___poll_timeout;
+extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
+extern __thread bool mysql_thread___commands_stats;
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */

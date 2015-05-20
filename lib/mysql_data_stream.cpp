@@ -338,7 +338,8 @@ int MySQL_Data_Stream::write_to_net_poll() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p --\n", sess, this);
 	if (queue_data(queueOUT)) {
 		if ((sess->admin==false)) {
-			if (poll_fds_idx>-1 && (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+			//if (poll_fds_idx>-1 && (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+			if (poll_fds_idx>-1) { // NOTE: attempt to force writes
 				if (net_failure==false)
 					rc=write_to_net();
 			}
@@ -364,7 +365,7 @@ int MySQL_Data_Stream::read_pkts() {
 
 int MySQL_Data_Stream::buffer2array() {
 	int ret=0;
-	int fast_mode=0;
+	bool fast_mode=sess->session_fast_forward;
 	if (queue_data(queueIN)==0) return ret;
 	if ((queueIN.pkt.size==0) && queue_data(queueIN)<sizeof(mysql_hdr)) {
 		queue_zero(queueIN);

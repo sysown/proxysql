@@ -24,6 +24,7 @@ class Query_Info {
 	unsigned char *QueryPointer;
 	int QueryLength;
 	Query_Info();
+	~Query_Info();
 	void init(unsigned char *_p, int len, bool mysql_header=false);
 	void query_parser_init(); 
 	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
@@ -74,7 +75,6 @@ class MySQL_Session
 	void * operator new(size_t);
 	void operator delete(void *);
 	MySQL_Thread *thread;
-	MySQL_Connection_Pool *MyConnPool;
 //	enum session_states sess_states;
 	QP_out_t *qpo;
 	StatCounters *command_counters;
@@ -89,7 +89,10 @@ class MySQL_Session
 	int current_hostgroup;
 	int default_hostgroup;
 	int active_transactions;
+	char * default_schema;
+	bool schema_locked;
 	bool transaction_persistent;
+	bool session_fast_forward;
 	int to_process;
 	int pending_connect;
 	Query_Info CurrentQuery;
