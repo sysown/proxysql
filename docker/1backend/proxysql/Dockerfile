@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y\
 RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git proxysql
 RUN cd /opt/proxysql; make clean && make
 RUN mkdir -p /var/run/proxysql
-ADD ./proxysql.cfg /etc/
+ADD ./proxysql.cnf /etc/
 
 WORKDIR /opt/proxysql/src
 CMD ["/opt/proxysql/src/proxysql", "--initial"]
