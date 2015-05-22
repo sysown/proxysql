@@ -1,0 +1,5 @@
+CREATE DATABASE test;
+
+USE test;
+
+CREATE TABLE strings(value LONGTEXT);
