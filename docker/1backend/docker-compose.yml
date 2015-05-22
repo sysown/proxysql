@@ -3,7 +3,7 @@ proxysql:
   links:
     - backend1hostgroup0
   ports:
-    - "127.0.0.1:6032:6032"
+    - "6032:6032"
     - "6033:6033"
 
 backend1hostgroup0:
