@@ -94,6 +94,21 @@ void * MySQL_Monitor::monitor_connect() {
 			mysql_thr->refresh_variables();
 			fprintf(stderr,"MySQL_Monitor - CONNECT - refreshing variables\n");
 		}
+
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *query=(char *)"SELECT hostname, port FROM mysql_servers";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		monitordb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", query, error);
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+			}
+		}
 		fprintf(stderr,"MySQL_Monitor - CONNECT\n");
 		usleep(1000000);
 	}
@@ -107,6 +122,11 @@ void * MySQL_Monitor::monitor_ping() {
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
+
+	unsigned int t1;
+	unsigned int t2;
+	t1=monotonic_time();
+
 	while (shutdown==false) {
 		unsigned int glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
@@ -114,6 +134,7 @@ void * MySQL_Monitor::monitor_ping() {
 			mysql_thr->refresh_variables();
 			fprintf(stderr,"MySQL_Monitor - PING - refreshing variables\n");
 		}
+
 		fprintf(stderr,"MySQL_Monitor - PING\n");
 		usleep(1000000);
 	}
