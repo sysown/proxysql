@@ -12,3 +12,5 @@ backend1hostgroup0:
     MYSQL_ROOT_PASSWORD: root
   expose:
     - "3306"
+  ports:
+    - "13306:3306"
