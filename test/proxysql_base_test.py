@@ -20,6 +20,12 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def _startup_docker_services(cls):
+		"""Start up all the docker services necessary to start this test.
+
+		They are specified in the docker compose file specified in the variable
+		cls.DOCKER_COMPOSE_FILE.
+		"""
+
 		# We have to perform docker-compose build + docker-compose up,
 		# instead of just doing the latter because of a bug which will give a
 		# 500 internal error for the Docker bug. When this is fixed, we should
@@ -29,11 +35,24 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def _shutdown_docker_services(cls):
+		"""Shut down all the docker services necessary to start this test.
+
+		They are specified in the docker compose file specified in the variable
+		cls.DOCKER_COMPOSE_FILE.
+		"""
+
 		subprocess.call(["docker-compose", "stop"], cwd=cls.DOCKER_COMPOSE_FILE)
 		subprocess.call(["docker-compose", "rm", "--force"], cwd=cls.DOCKER_COMPOSE_FILE)
 
 	@classmethod
 	def _get_proxysql_container(cls):
+		"""Out of all the started docker containers, select the one which
+		represents the proxy instance.
+
+		Note that this only supports one proxy instance for now. This method
+		relies on interogating the Docker daemon via its REST API.
+		"""
+
 		containers = Client(**kwargs_from_env()).containers()
 		for container in containers:
 			if 'proxysql' in container['Image']:
@@ -41,6 +60,12 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def _get_mysql_containers(cls):
+		"""Out of all the started docker containers, select the ones which
+		represent the MySQL backend instances.
+
+		This method relies on interogating the Docker daemon via its REST API.
+		"""
+
 		result = []
 		containers = Client(**kwargs_from_env()).containers()
 		for container in containers:
@@ -50,6 +75,13 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def _populate_mysql_containers_with_dump(cls):
+		"""Populates the started MySQL backend containers with the specified
+		SQL dump file.
+
+		The reason for doing this __after__ the containers are started is
+		because we want to keep them as generic as possible.
+		"""
+
 		mysql_containers = cls._get_mysql_containers()
 		# We have already added the SQL dump to the container by using
 		# the ADD mysql command in the Dockerfile for mysql -- check it
@@ -64,15 +96,33 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def _extract_hostgroup_from_container_name(cls, container_name):
+		"""MySQL backend containers are named using a naming convention:
+		backendXhostgroupY, where X and Y can be multi-digit numbers.
+		This extracts the value of the hostgroup from the container name.
+
+		I made this choice because I wasn't able to find another easy way to
+		associate arbitrary metadata with a Docker container through the
+		docker compose file.
+		"""
+
 		service_name = container_name.split('_')[1]
 		return int(re.search(r'BACKEND(\d+)HOSTGROUP(\d+)', service_name).group(2))
 
 	@classmethod
 	def _extract_port_number_from_uri(cls, uri):
+		"""Given a Docker container URI (exposed as an environment variable by
+		the host linking mechanism), extract the TCP port number from it."""
 		return int(uri.split(':')[2])
 
 	@classmethod
 	def _get_environment_variables_from_container(cls, container_name):
+		"""Retrieve the environment variables from the given container.
+
+		This is useful because the host linking mechanism will expose
+		connectivity information to the linked hosts by the use of environment
+		variables.
+		"""
+
 		output = Client(**kwargs_from_env()).execute(container_name, 'env')
 		result = {}
 		lines = output.split('\n')
@@ -86,6 +136,18 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def _populate_proxy_configuration_with_backends(cls):
+		"""Populate ProxySQL's admin information with the MySQL backends
+		and their associated hostgroups.
+
+		This is needed because I do not want to hardcode this into the ProxySQL
+		config file of the test scenario, as it leaves more room for quick
+		iteration.
+
+		In order to configure ProxySQL with the correct backends, we are using
+		the MySQL admin interface of ProxySQL, and inserting rows into the
+		`mysql_servers` table, which contains a list of which servers go into
+		which hostgroup.
+		"""
 		proxysql_container = cls._get_proxysql_container()
 		mysql_containers = cls._get_mysql_containers()
 		environment_variables = cls._get_environment_variables_from_container(
@@ -113,12 +175,16 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def setUpClass(cls):
+		# Always shutdown docker services because the previous test might have
+		# left them in limbo.
 		cls._shutdown_docker_services()
+
 		cls._startup_docker_services()
 
-		# TODO(andrei): figure out a more reliable method to wait for
-		# MySQL to start up within the container. Otherwise, there will be
-		# an error when we try to initialize the MySQL instance with the dump.
+		# Sleep for 30 seconds because we want to populate the MySQL containers
+		# with SQL dumps, but there is a race condition because we do not know
+		# when the MySQL daemons inside them have actually started or not.
+		# TODO(andrei): find a better solution
 		time.sleep(30)
 		cls._populate_mysql_containers_with_dump()
 
