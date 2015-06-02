@@ -1,3 +1,4 @@
+import random
 import re
 import subprocess
 import time
@@ -126,5 +127,78 @@ class ProxySQLBaseTest(TestCase):
 	@classmethod
 	def tearDownClass(cls):
 		cls._shutdown_docker_services()
-
 	
+	def run_query_proxysql(self, query, db, return_result=True):
+		"""Run a query against the ProxySQL proxy and optionally return its
+		results as a set of rows."""
+		proxy_connection = MySQLdb.connect("127.0.0.1",
+											ProxySQLBaseTest.PROXYSQL_RW_USERNAME,
+											ProxySQLBaseTest.PROXYSQL_RW_PASSWORD,
+											port=ProxySQLBaseTest.PROXYSQL_RW_PORT,
+											db=db)
+		cursor = proxy_connection.cursor()
+		cursor.execute(query)
+		if return_result:
+			rows = cursor.fetchall()
+		cursor.close()
+		proxy_connection.close()
+		if return_result:
+			return rows
+
+	def run_query_mysql(self, query, db, return_result=True, hostgroup=0):
+		"""Run a query against the MySQL backend and optionally return its
+		results as a set of rows.
+
+		IMPORTANT: since the queries are actually ran against the MySQL backend,
+		that backend needs to expose its MySQL port to the outside through
+		docker compose's port mapping mechanism.
+
+		This will actually parse the docker-compose configuration file to
+		retrieve the available backends and hostgroups and will pick a backend
+		from the specified hostgroup."""
+
+		# Figure out which are the containers for the specified hostgroup
+		mysql_backends = ProxySQLBaseTest._get_mysql_containers()
+		mysql_backends_in_hostgroup = []
+		for backend in mysql_backends:
+			container_name = backend['Names'][0][1:].upper()
+			backend_hostgroup = ProxySQLBaseTest._extract_hostgroup_from_container_name(container_name)
+
+			mysql_port_exposed=False
+			if not backend.get('Ports'):
+				continue
+			for exposed_port in backend.get('Ports', []):
+				if exposed_port['PrivatePort'] == 3306:
+					mysql_port_exposed = True
+
+			if backend_hostgroup == hostgroup and mysql_port_exposed:
+				mysql_backends_in_hostgroup.append(backend)
+
+		if len(mysql_backends_in_hostgroup) == 0:
+			raise Exception('No backends with a publicly exposed port were '
+							'found in hostgroup %d' % hostgroup)
+
+		# Pick a random container, extract its connection details
+		container = random.choice(mysql_backends_in_hostgroup)
+		for exposed_port in container.get('Ports', []):
+			if exposed_port['PrivatePort'] == 3306:
+				mysql_port = exposed_port['PublicPort']
+
+		mysql_connection = MySQLdb.connect("127.0.0.1",
+											# Warning: this assumes that ProxySQL
+											# and all the backends have the same
+											# credentials.
+											# TODO(andrei): revisit this assumption
+											# in authentication tests.
+											ProxySQLBaseTest.PROXYSQL_RW_USERNAME,
+											ProxySQLBaseTest.PROXYSQL_RW_PASSWORD,
+											port=mysql_port,
+											db=db)
+		cursor = mysql_connection.cursor()
+		cursor.execute(query)
+		if return_result:
+			rows = cursor.fetchall()
+		cursor.close()
+		mysql_connection.close()
+		if return_result:
+			return rows
