@@ -11,7 +11,10 @@ RUN apt-get update && apt-get install -y\
 	libssl-dev\
 	libmysqlclient-dev
 
-RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git
-RUN cd /opt/proxysql-0.2; make clean && make
+RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git proxysql
+RUN cd /opt/proxysql; make clean && make
 RUN mkdir -p /var/run/proxysql
-RUN cp /opt/proxysql-0.2/proxysql.cfg /etc
+ADD ./proxysql.cnf /etc/
+
+WORKDIR /opt/proxysql/src
+CMD ["/opt/proxysql/src/proxysql", "--initial"]
