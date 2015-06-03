@@ -1,5 +1,5 @@
 proxysql:
-  build: ./proxysql
+  build: ../base/proxysql
   links:
     - backend1hostgroup0
   ports:
