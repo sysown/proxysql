@@ -44,3 +44,14 @@ example is one_backend_test.py. The only thing which you should specify is
 the docker-compose filename, and then start querying both the proxy and the
 MySQL backends and testing assertions by using the `run_query_proxysql` and
 `run_query_mysql' class methods.
+
+# How do I run the tests locally?
+
+1) install vagrant on the machine where you'll be running the tests
+
+2) vagrant box add ubuntu-14.04 ubuntu-14.04.box
+(The ubuntu-14.04.box file is obtained from https://github.com/jose-lpa/packer-ubuntu_14.04/releases/download/v2.0/ubuntu-14.04.box)
+
+# This will actually install what is needed on the Vagrant box
+3) cd proxysql/test; vagrant up; vagrant ssh -c "cd /opt/proxysql; nosetests --nocapture"; vagrant halt
+

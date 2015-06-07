@@ -90,3 +90,6 @@ deps/libconfig/libconfig-1.4.9/
 
 #re2
 deps/re2/re2/
+
+test/.vagrant
+.DS_Store
