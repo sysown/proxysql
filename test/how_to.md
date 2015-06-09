@@ -55,3 +55,44 @@ MySQL backends and testing assertions by using the `run_query_proxysql` and
 # This will actually install what is needed on the Vagrant box
 3) cd proxysql/test; vagrant up; vagrant ssh -c "cd /opt/proxysql; nosetests --nocapture"; vagrant halt
 
+# How do I run the tests on a machine without internet connectivity?
+
+For that you need to prepare a Virtual box .box file with the latest state of
+the code and the packages from a machine that has internet connectivity and
+copy it over to the machine with no connectivity.
+
+To prepare the .box file:
+
+1) clone proxysql test repo locally, let's assume it's in ~/proxysql
+
+2) cd ~/proxysql/test; vagrant up
+
+This will update the machine with the latest master code. If you need to be
+testing a different branch, you will have to do an extra step (step 3):
+
+3) vagrant ssh -c "cd /opt/proxysql/test; git checkout my-branch; git pull origin my-branch; sudo pip install -r requirements.txt"
+
+This will fetch the code for the given branch __and__ install the necessary
+packages for running the tests on that branch (if there are any new packages).
+
+4) Package it all in a .box file
+
+vagrant package --output proxysql-tests.box
+
+This will generate a big .box file, approximately 1.1GB as of the writing of
+this document. This file can be run without having internet connectivity.
+
+5) Copy the proxysql-tests.box to the machine where you want to run the tests
+
+6) vagrant box add proxysql-tests proxysql-tests.box (from the directory where
+you copied the .box file and where you are planning to run the tests)
+
+7) vagrant init proxysql-tests; vagrant up
+
+8) vagrant up; vagrant ssh -c "cd /opt/proxysql; nosetests --nocapture"; vagrant halt
+
+to actually run the tests.
+
+NB: we are assuming that the only useful output from running the tests is
+stdout. As we will add more tests to the test suite, this section will be
+refined on how to retrieve the results as well.
