@@ -14,5 +14,11 @@ mysql_users =
 		username = "root"
 		password = "root"
 		default_hostgroup = 0
+	},
+
+	{
+		username = "john"
+		password = "doe"
+		default_hostgroup = 0
 	}
 )

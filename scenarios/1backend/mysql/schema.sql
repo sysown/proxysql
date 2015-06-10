@@ -1,6 +1,12 @@
 DROP DATABASE IF EXISTS test;
-
 CREATE DATABASE test;
+
+CREATE USER john@'%' IDENTIFIED BY 'doe';
+CREATE USER danny@'%' IDENTIFIED BY 'white'; 
+
+GRANT ALL PRIVILEGES ON test.* TO 'john'@'%';
+GRANT ALL PRIVILEGES ON test.* TO 'danny'@'%';
+FLUSH PRIVILEGES;
 
 USE test;
 
