@@ -194,13 +194,17 @@ class ProxySQLBaseTest(TestCase):
 	def tearDownClass(cls):
 		cls._shutdown_docker_services()
 	
-	def run_query_proxysql(self, query, db, return_result=True):
+	def run_query_proxysql(self, query, db, return_result=True,
+							username=None, password=None, port=None):
 		"""Run a query against the ProxySQL proxy and optionally return its
 		results as a set of rows."""
+		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
+		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
+		port = port or ProxySQLBaseTest.PROXYSQL_RW_PORT
 		proxy_connection = MySQLdb.connect("127.0.0.1",
-											ProxySQLBaseTest.PROXYSQL_RW_USERNAME,
-											ProxySQLBaseTest.PROXYSQL_RW_PASSWORD,
-											port=ProxySQLBaseTest.PROXYSQL_RW_PORT,
+											username,
+											password,
+											port=port,
 											db=db)
 		cursor = proxy_connection.cursor()
 		cursor.execute(query)
@@ -211,7 +215,8 @@ class ProxySQLBaseTest(TestCase):
 		if return_result:
 			return rows
 
-	def run_query_mysql(self, query, db, return_result=True, hostgroup=0):
+	def run_query_mysql(self, query, db, return_result=True, hostgroup=0,
+					    username=None, password=None):
 		"""Run a query against the MySQL backend and optionally return its
 		results as a set of rows.
 
@@ -250,14 +255,11 @@ class ProxySQLBaseTest(TestCase):
 			if exposed_port['PrivatePort'] == 3306:
 				mysql_port = exposed_port['PublicPort']
 
+		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
+		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
 		mysql_connection = MySQLdb.connect("127.0.0.1",
-											# Warning: this assumes that ProxySQL
-											# and all the backends have the same
-											# credentials.
-											# TODO(andrei): revisit this assumption
-											# in authentication tests.
-											ProxySQLBaseTest.PROXYSQL_RW_USERNAME,
-											ProxySQLBaseTest.PROXYSQL_RW_PASSWORD,
+											username,
+											password,
 											port=mysql_port,
 											db=db)
 		cursor = mysql_connection.cursor()
