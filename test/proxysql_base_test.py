@@ -270,3 +270,34 @@ class ProxySQLBaseTest(TestCase):
 		mysql_connection.close()
 		if return_result:
 			return rows
+
+	def run_sysbench_proxysql(self, threads=4, time=60, db="test",
+								username=None, password=None, port=None):
+		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
+		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
+		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
+		port = port or ProxySQLBaseTest.PROXYSQL_RW_PORT
+
+		params = [
+					"docker", "exec", proxysql_container_id,
+				 	"sysbench",
+					 "--test=/opt/sysbench/sysbench/tests/db/oltp.lua",
+					 "--num-threads=%d" % threads,
+					 "--max-requests=0",
+					 "--max-time=%d" % time,
+					 "--mysql-user=%s" % username,
+					 "--mysql-password=%s" % password,
+					 "--mysql-db=%s" % db,
+					 "--db-driver=mysql",
+					 "--oltp-tables-count=4",
+					 "--oltp-read-only=on",
+					 "--oltp-skip-trx=on",
+					 "--report-interval=1",
+					 "--oltp-point-selects=100",
+					 "--oltp-table-size=400000",
+					 "--mysql-host=127.0.0.1",
+					 "--mysql-port=%s" % port
+				 ]
+		subprocess.call(params + ["prepare"])
+		subprocess.call(params + ["run"])
+		subprocess.call(params + ["cleanup"])
