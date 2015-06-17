@@ -5,6 +5,8 @@ proxysql:
   ports:
     - "6032:6032"
     - "6033:6033"
+    # gdbserver
+    - "2345:2345"
   privileged: true
 
 backend1hostgroup0:
