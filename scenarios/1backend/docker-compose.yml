@@ -5,6 +5,7 @@ proxysql:
   ports:
     - "6032:6032"
     - "6033:6033"
+  privileged: true
 
 backend1hostgroup0:
   build: ./mysql
