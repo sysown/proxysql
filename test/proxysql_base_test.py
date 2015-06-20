@@ -295,6 +295,14 @@ class ProxySQLBaseTest(TestCase):
 
 	def run_sysbench_proxysql(self, threads=4, time=60, db="test",
 								username=None, password=None, port=None):
+		"""Runs a sysbench test with the given parameters against the given
+		ProxySQL instance.
+
+		In this case, due to better encapsulation and reduced latency to
+		ProxySQL, we are assuming that sysbench is installed on the same
+		container with it.
+		"""
+
 		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
 		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
 		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
