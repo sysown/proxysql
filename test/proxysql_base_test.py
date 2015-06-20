@@ -346,3 +346,17 @@ class ProxySQLBaseTest(TestCase):
 		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
 		exec_params = ["docker", "exec", proxysql_container_id] + params
 		subprocess.call(exec_params)
+
+	@classmethod
+	def _compile_host_proxysql(cls):
+		"""Compile ProxySQL on the Docker host from which we're running the
+		tests.
+
+		This is used for remote debugging, because that's how the
+		gdb + gdbserver pair works:
+		- local gdb with access to the binary with debug symbols
+		- remote gdbserver which wraps the remote binary so that it can be
+		debugged when it crashes.
+		"""
+		subprocess.call(["make", "clean"])
+		subprocess.call(["make"])
