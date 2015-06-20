@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y\
 	make\
 	g++\
 	gcc\
+	gdb\
+	gdbserver\
 	git\
 	libmysqlclient-dev\
 	libssl-dev\
@@ -22,4 +24,4 @@ RUN mkdir -p /var/run/proxysql
 ADD ./proxysql.cnf /etc/
 
 WORKDIR /opt/proxysql/src
-CMD ["/opt/proxysql/src/proxysql", "--initial"]
+CMD ["gdbserver", "0.0.0.0:2345", "/opt/proxysql/src/proxysql", "--initial"]

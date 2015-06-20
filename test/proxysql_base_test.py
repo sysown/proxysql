@@ -17,6 +17,9 @@ class ProxySQLBaseTest(TestCase):
 	PROXYSQL_RW_PORT = 6033
 	PROXYSQL_RW_USERNAME = "root"
 	PROXYSQL_RW_PASSWORD = "root"
+	# TODO(andrei): make it possible to set this to False, and make False
+	# the default value.
+	INTERACTIVE_TEST = True
 
 	@classmethod
 	def _startup_docker_services(cls):
@@ -181,6 +184,10 @@ class ProxySQLBaseTest(TestCase):
 
 		cls._startup_docker_services()
 
+		if cls.INTERACTIVE_TEST:
+			cls._compile_host_proxysql()
+			cls._connect_gdb_to_proxysql_within_container()
+
 		# Sleep for 30 seconds because we want to populate the MySQL containers
 		# with SQL dumps, but there is a race condition because we do not know
 		# when the MySQL daemons inside them have actually started or not.
@@ -192,6 +199,10 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def tearDownClass(cls):
+		if cls.INTERACTIVE_TEST:
+			# TODO(andrei): find better solution like wait with timeout + 
+			# terminate afterwards
+			cls._gdb_process.terminate()
 		cls._shutdown_docker_services()
 	
 	def run_query_proxysql(self, query, db, return_result=True,
@@ -214,6 +225,28 @@ class ProxySQLBaseTest(TestCase):
 		proxy_connection.close()
 		if return_result:
 			return rows
+
+	def run_query_proxysql_admin(self, query, return_result=True):
+		"""Run a query against the ProxySQL admin.
+
+		Note: we do not need to specify a db for this query, as it's always
+		against the "main" database.
+		TODO(andrei): revisit db assumption once stats databases from ProxySQL
+		are accessible via the MySQL interface.
+		"""
+
+		return self.run_query_proxysql(
+			query,
+			# "main" database is hardcoded within the
+			# ProxySQL admin -- it contains the SQLite3
+			# tables with metadata about servers and users
+			"main",
+			return_result,
+			username=ProxySQLBaseTest.PROXYSQL_ADMIN_USERNAME,
+			password=ProxySQLBaseTest.PROXYSQL_ADMIN_PASSWORD,
+			port=ProxySQLBaseTest.PROXYSQL_ADMIN_PORT
+		)
+
 
 	def run_query_mysql(self, query, db, return_result=True, hostgroup=0,
 					    username=None, password=None):
@@ -273,13 +306,20 @@ class ProxySQLBaseTest(TestCase):
 
 	def run_sysbench_proxysql(self, threads=4, time=60, db="test",
 								username=None, password=None, port=None):
+		"""Runs a sysbench test with the given parameters against the given
+		ProxySQL instance.
+
+		In this case, due to better encapsulation and reduced latency to
+		ProxySQL, we are assuming that sysbench is installed on the same
+		container with it.
+		"""
+
 		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
 		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
 		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
 		port = port or ProxySQLBaseTest.PROXYSQL_RW_PORT
 
 		params = [
-					"docker", "exec", proxysql_container_id,
 				 	"sysbench",
 					 "--test=/opt/sysbench/sysbench/tests/db/oltp.lua",
 					 "--num-threads=%d" % threads,
@@ -298,6 +338,54 @@ class ProxySQLBaseTest(TestCase):
 					 "--mysql-host=127.0.0.1",
 					 "--mysql-port=%s" % port
 				 ]
-		subprocess.call(params + ["prepare"])
-		subprocess.call(params + ["run"])
-		subprocess.call(params + ["cleanup"])
+
+		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["prepare"])
+		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["run"])
+		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["cleanup"])
+
+	@classmethod
+	def run_bash_command_within_proxysql(cls, params):
+		"""Run a bash command given as an array of tokens within the ProxySQL
+		container.
+
+		This is useful in a lot of scenarios:
+		- running sysbench against the ProxySQL instance
+		- getting environment variables from the ProxySQL container
+		- running various debugging commands against the ProxySQL instance
+		"""
+
+		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
+		exec_params = ["docker", "exec", proxysql_container_id] + params
+		subprocess.call(exec_params)
+
+	@classmethod
+	def _compile_host_proxysql(cls):
+		"""Compile ProxySQL on the Docker host from which we're running the
+		tests.
+
+		This is used for remote debugging, because that's how the
+		gdb + gdbserver pair works:
+		- local gdb with access to the binary with debug symbols
+		- remote gdbserver which wraps the remote binary so that it can be
+		debugged when it crashes.
+		"""
+		subprocess.call(["make", "clean"])
+		subprocess.call(["make"])
+
+	@classmethod
+	def _connect_gdb_to_proxysql_within_container(cls):
+		"""Connect a local gdb running on the docker host to the remote
+		ProxySQL binary for remote debugging.
+
+		This is useful in interactive mode, where we want to stop at a failing
+		test and prompt the developer to debug the failing instance.
+
+		Note: gdb is ran in a separate process because otherwise it will block
+		the test running process, and it will not be able to run queries anymore
+		and make assertions. However, we save the process handle so that we can
+		shut down the process later on.
+		"""
+
+		cls._gdb_process = subprocess.Popen(["gdb", "--command=gdb-commands.txt",
+											 "./proxysql"],
+											cwd="./src")
