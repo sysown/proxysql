@@ -215,6 +215,28 @@ class ProxySQLBaseTest(TestCase):
 		if return_result:
 			return rows
 
+	def run_query_proxysql_admin(self, query, return_result=True):
+		"""Run a query against the ProxySQL admin.
+
+		Note: we do not need to specify a db for this query, as it's always
+		against the "main" database.
+		TODO(andrei): revisit db assumption once stats databases from ProxySQL
+		are accessible via the MySQL interface.
+		"""
+
+		return self.run_query_proxysql(
+			query,
+			# "main" database is hardcoded within the
+			# ProxySQL admin -- it contains the SQLite3
+			# tables with metadata about servers and users
+			"main",
+			return_result,
+			username=ProxySQLBaseTest.PROXYSQL_ADMIN_USERNAME,
+			password=ProxySQLBaseTest.PROXYSQL_ADMIN_PASSWORD,
+			port=ProxySQLBaseTest.PROXYSQL_ADMIN_PORT
+		)
+
+
 	def run_query_mysql(self, query, db, return_result=True, hostgroup=0,
 					    username=None, password=None):
 		"""Run a query against the MySQL backend and optionally return its
