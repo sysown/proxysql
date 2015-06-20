@@ -3,7 +3,9 @@ proxysql:
   links:
     - backend1hostgroup0
   ports:
+    # ProxySQL admin port for MySQL commands
     - "6032:6032"
+    # ProxySQL main port
     - "6033:6033"
     # gdbserver
     - "2345:2345"
