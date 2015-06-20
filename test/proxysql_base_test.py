@@ -360,3 +360,21 @@ class ProxySQLBaseTest(TestCase):
 		"""
 		subprocess.call(["make", "clean"])
 		subprocess.call(["make"])
+
+	@classmethod
+	def _connect_gdb_to_proxysql_within_container(cls):
+		"""Connect a local gdb running on the docker host to the remote
+		ProxySQL binary for remote debugging.
+
+		This is useful in interactive mode, where we want to stop at a failing
+		test and prompt the developer to debug the failing instance.
+
+		Note: gdb is ran in a separate process because otherwise it will block
+		the test running process, and it will not be able to run queries anymore
+		and make assertions. However, we save the process handle so that we can
+		shut down the process later on.
+		"""
+
+		cls._gdb_process = subprocess.Popen(["gdb", "--command=gdb-commands.txt",
+											 "./proxysql"],
+											cwd="./src")
