@@ -17,6 +17,9 @@ class ProxySQLBaseTest(TestCase):
 	PROXYSQL_RW_PORT = 6033
 	PROXYSQL_RW_USERNAME = "root"
 	PROXYSQL_RW_PASSWORD = "root"
+	# TODO(andrei): make it possible to set this to False, and make False
+	# the default value.
+	INTERACTIVE_TEST = True
 
 	@classmethod
 	def _startup_docker_services(cls):
@@ -181,6 +184,10 @@ class ProxySQLBaseTest(TestCase):
 
 		cls._startup_docker_services()
 
+		if cls.INTERACTIVE_TEST:
+			cls._compile_host_proxysql()
+			cls._connect_gdb_to_proxysql_within_container()
+
 		# Sleep for 30 seconds because we want to populate the MySQL containers
 		# with SQL dumps, but there is a race condition because we do not know
 		# when the MySQL daemons inside them have actually started or not.
@@ -192,6 +199,10 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def tearDownClass(cls):
+		if cls.INTERACTIVE_TEST:
+			# TODO(andrei): find better solution like wait with timeout + 
+			# terminate afterwards
+			cls._gdb_process.terminate()
 		cls._shutdown_docker_services()
 	
 	def run_query_proxysql(self, query, db, return_result=True,
