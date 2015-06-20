@@ -301,7 +301,6 @@ class ProxySQLBaseTest(TestCase):
 		port = port or ProxySQLBaseTest.PROXYSQL_RW_PORT
 
 		params = [
-					"docker", "exec", proxysql_container_id,
 				 	"sysbench",
 					 "--test=/opt/sysbench/sysbench/tests/db/oltp.lua",
 					 "--num-threads=%d" % threads,
@@ -320,6 +319,22 @@ class ProxySQLBaseTest(TestCase):
 					 "--mysql-host=127.0.0.1",
 					 "--mysql-port=%s" % port
 				 ]
-		subprocess.call(params + ["prepare"])
-		subprocess.call(params + ["run"])
-		subprocess.call(params + ["cleanup"])
+
+		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["prepare"])
+		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["run"])
+		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["cleanup"])
+
+	@classmethod
+	def run_bash_command_within_proxysql(cls, params):
+		"""Run a bash command given as an array of tokens within the ProxySQL
+		container.
+
+		This is useful in a lot of scenarios:
+		- running sysbench against the ProxySQL instance
+		- getting environment variables from the ProxySQL container
+		- running various debugging commands against the ProxySQL instance
+		"""
+
+		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
+		exec_params = ["docker", "exec", proxysql_container_id] + params
+		subprocess.call(exec_params)
