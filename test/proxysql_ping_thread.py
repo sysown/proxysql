@@ -59,7 +59,7 @@ class ProxySQL_Ping_Thread(Thread):
 				self.failed_connections = 0
 			except:
 				self.failed_connections = self.failed_connections + 1
-				if self.failed_connections == ProxySQL_Ping_Thread.FAILED_CONNECTIONS_BEFORE_ALERT:
+				if self.failed_connections >= ProxySQL_Ping_Thread.FAILED_CONNECTIONS_BEFORE_ALERT:
 					self.send_error_email()
 					self.running = False
 
