@@ -16,6 +16,8 @@ class ProxySQL_Ping_Thread(Thread):
 	continuously keeping an eye on the tests.
 	"""
 
+	FAILED_CONNECTIONS_BEFORE_ALERT = 3
+
 	def __init__(self, username, password,
 				 hostname="127.0.0.1", port=6033, db="test",
 				 ping_command="SELECT @@version_comment LIMIT 1",
@@ -28,6 +30,7 @@ class ProxySQL_Ping_Thread(Thread):
 		self.ping_command = ping_command
 		self.interval = interval
 		self.running = False
+		self.failed_connections = 0
 		super(ProxySQL_Ping_Thread, self).__init__(**kwargs)
 
 	def run(self):
@@ -50,9 +53,12 @@ class ProxySQL_Ping_Thread(Thread):
 				connection.close()
 				print("ProxySQL server @ %s:%d responded to query %s with %r" % 
 						(self.hostname, self.port, self.ping_command, rows))
+				self.failed_connections = 0
 			except:
-				self.send_error_email()
-				self.running = False
+				self.failed_connections = self.failed_connections + 1
+				if self.failed_connections == ProxySQL_Ping_Thread.FAILED_CONNECTIONS_BEFORE_ALERT:
+					self.send_error_email()
+					self.running = False
 
 	def stop(self):
 		self.running = False
