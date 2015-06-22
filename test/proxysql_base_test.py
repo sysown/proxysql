@@ -8,6 +8,8 @@ from docker import Client
 from docker.utils import kwargs_from_env
 import MySQLdb
 
+from proxysql_ping_thread import ProxySQL_Ping_Thread
+
 class ProxySQLBaseTest(TestCase):
 
 	DOCKER_COMPOSE_FILE = None
@@ -193,16 +195,20 @@ class ProxySQLBaseTest(TestCase):
 		# when the MySQL daemons inside them have actually started or not.
 		# TODO(andrei): find a better solution
 		time.sleep(30)
-		cls._populate_mysql_containers_with_dump()
 
+		cls._populate_mysql_containers_with_dump()
 		cls._populate_proxy_configuration_with_backends()
+		cls._start_proxysql_pings()
 
 	@classmethod
 	def tearDownClass(cls):
 		if cls.INTERACTIVE_TEST:
-			# TODO(andrei): find better solution like wait with timeout + 
-			# terminate afterwards
-			cls._gdb_process.terminate()
+			cls._gdb_process.wait()
+		# It's essential that pings are stopped __after__ the gdb process has
+		# finished. This allows them to keep pinging ProxySQL in the background
+		# while it's stuck waiting for user interaction (user interaction needed
+		# in order to debug the problem causing it to crash).
+		cls._stop_proxysql_pings()
 		cls._shutdown_docker_services()
 	
 	def run_query_proxysql(self, query, db, return_result=True,
@@ -389,3 +395,22 @@ class ProxySQLBaseTest(TestCase):
 		cls._gdb_process = subprocess.Popen(["gdb", "--command=gdb-commands.txt",
 											 "./proxysql"],
 											cwd="./src")
+
+	@classmethod
+	def _start_proxysql_pings(cls):
+		"""During the running of the tests, the test suite will continuously
+		monitor the ProxySQL daemon in order to check that it's up.
+
+		This special thread will do exactly that."""
+
+		cls.ping_thread = ProxySQL_Ping_Thread(username=cls.PROXYSQL_RW_USERNAME,
+												password=cls.PROXYSQL_RW_PASSWORD,
+												hostname="127.0.0.1",
+												port=cls.PROXYSQL_RW_PORT)
+		cls.ping_thread.start()
+
+	@classmethod
+	def _stop_proxysql_pings(cls):
+		"""Stop the special thread which pings the ProxySQL daemon."""
+		cls.ping_thread.stop()
+		cls.ping_thread.join()
