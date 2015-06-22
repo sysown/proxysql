@@ -202,9 +202,13 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def tearDownClass(cls):
-		cls._stop_proxysql_pings()
 		if cls.INTERACTIVE_TEST:
 			cls._gdb_process.wait()
+		# It's essential that pings are stopped __after__ the gdb process has
+		# finished. This allows them to keep pinging ProxySQL in the background
+		# while it's stuck waiting for user interaction (user interaction needed
+		# in order to debug the problem causing it to crash).
+		cls._stop_proxysql_pings()
 		cls._shutdown_docker_services()
 	
 	def run_query_proxysql(self, query, db, return_result=True,
