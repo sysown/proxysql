@@ -41,7 +41,8 @@ class ProxySQL_Ping_Thread(Thread):
 											 self.username,
 											 self.password,
 											 port=self.port,
-											 db=self.db)
+											 db=self.db,
+											 connect_timeout=30)
 				cursor = connection.cursor()
 				cursor.execute(self.ping_command)
 				rows = cursor.fetchall()
