@@ -204,9 +204,7 @@ class ProxySQLBaseTest(TestCase):
 	def tearDownClass(cls):
 		cls._stop_proxysql_pings()
 		if cls.INTERACTIVE_TEST:
-			# TODO(andrei): find better solution like wait with timeout + 
-			# terminate afterwards
-			cls._gdb_process.terminate()
+			cls._gdb_process.wait()
 		cls._shutdown_docker_services()
 	
 	def run_query_proxysql(self, query, db, return_result=True,
