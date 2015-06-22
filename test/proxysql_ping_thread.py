@@ -39,6 +39,9 @@ class ProxySQL_Ping_Thread(Thread):
 		while self.running:
 			time.sleep(self.interval)
 
+			if not self.running:
+				return
+
 			try:
 				connection = MySQLdb.connect(self.hostname,
 											 self.username,
