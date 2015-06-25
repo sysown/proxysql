@@ -699,6 +699,7 @@ void * MySQL_Monitor::run() {
 			mysql_thr->refresh_variables();
 			proxy_error("%s\n","MySQL_Monitor refreshing variables");
 		}
+		usleep(1000000);
 	}
 	monitor_connect_thread->join();
 	monitor_ping_thread->join();
