@@ -106,24 +106,18 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYSQL *my) {
 	size++;
 	std::map<char *, std::list<MYSQL *>* >::iterator it;
-	//std::map<std::pair<char *, int>, std::list<MYSQL *>* >::iterator it;
 	char * buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
 	it = my_connections.find(buf);
-	//it = my_connections.find(std::make_pair(hostname,port));
 	std::list<MYSQL *> *lst=NULL;
 	if (it==my_connections.end()) {
 		lst=new std::list<MYSQL *>;
-		//my_connections.insert(std::pair<std::pair<char *,int>(hostname,port), std::list<MYSQL *>*>(lst));
 		my_connections.insert(my_connections.begin(), std::pair<char *,std::list<MYSQL *>*>(buf,lst));
 	} else {
 		free(buf);
 		lst=it->second;
 	}
 	lst->push_back(my);
-	if (lst->size()%1000==0) {
-		fprintf(stderr,"list size=%lu\n", lst->size());
-	}
 }
 
 enum MySQL_Monitor_State_Data_Task_Type {
@@ -142,7 +136,6 @@ class MySQL_Monitor_State_Data {
 	int port;
 	struct event *ev_mysql;
 	MYSQL *mysql;
-//	MYSQL *mysql_ptr;
 	struct event_base *base;
 	MYSQL_RES *result;
 	MYSQL *ret;
@@ -167,9 +160,6 @@ class MySQL_Monitor_State_Data {
 			free(hostname);
 		}
 		assert(mysql==NULL); // if mysql is not NULL, there is a bug
-		//if (mysql) {
-		//	mysql_close(mysql);
-		//}
 		if (mysql_error_msg) {
 			free(mysql_error_msg);
 		}
@@ -183,7 +173,6 @@ class MySQL_Monitor_State_Data {
 	int handler(int fd, short event) {
 		int status;
 again:
-		//fprintf(stderr, "Status: %s %d %d\n", hostname, port, ST);
 		switch (ST) {
 			case 0:
 				mysql=mysql_init(NULL);
@@ -294,7 +283,6 @@ again:
 					evutil_gettimeofday(&tv_out, NULL);
 				}
 				t2=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				//fprintf(stderr, "Connect time: %lluus\n", t2-t1);
 				NEXT_IMMEDIATE(50); // TEMP
 				status= mysql_close_start(mysql);
 				if (status)
@@ -341,8 +329,6 @@ again:
 		else
 			fd= -1;
 		if (status & MYSQL_WAIT_TIMEOUT) {
-			//tv.tv_sec= mysql_get_timeout_value(mysql);
-			//tv.tv_usec= 0;
 			tv.tv_sec= 0;
 			tv.tv_usec= 10000;
 			ptv= &tv;
@@ -358,17 +344,8 @@ again:
 		event_assign(ev_mysql, base, fd, wait_event, state_machine_handler, this);
 		event_add(ev_mysql, ptv);
 		ST= new_st;
-		//fprintf(stderr,"FD:%d %d\n", fd, (ptv ? tv.tv_sec : 0));	
 	}
 };
-
-
-
-//static void
-//next_event(int new_st, int status, MySQL_Monitor_State_Data *sd)
-//{
-//}
-
 
 
 static void
@@ -413,7 +390,6 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	// define monitoring tables
 	tables_defs_monitor=new std::vector<table_def_t *>;
-	//insert_into_tables_defs(tables_defs_monitor,"mysql_servers", MONITOR_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT);	
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_ping", MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING);
@@ -431,8 +407,6 @@ MySQL_Monitor::~MySQL_Monitor() {
 	delete tables_defs_monitor;
 	delete monitordb;
 	delete admindb;
-	//delete mysql_thr;
-	fprintf(stderr,"MySQL_Monitor destroyed\n");
 };
 
 
@@ -501,7 +475,7 @@ void * MySQL_Monitor::monitor_connect() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			fprintf(stderr,"MySQL_Monitor - CONNECT - refreshing variables\n");
+			proxy_error("%s\n", "MySQL_Monitor - CONNECT - refreshing variables");
 		}
 
 		char *error=NULL;
@@ -524,14 +498,10 @@ void * MySQL_Monitor::monitor_connect() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				//fprintf(stderr,"Host:%s, port:%s\n", r->fields[0], r->fields[1]);
 				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
 				sds[i]->task_id=MON_CONNECT;
 				connect__num_active_connections++;
 				total_connect__num_active_connections++;
-				if (total_connect__num_active_connections%1000==0) {
-					fprintf(stderr,"total conns: %d\n", total_connect__num_active_connections);
-				}
 				state_machine_handler(-1,-1,sds[i]);
 				i++;
 			}
@@ -558,7 +528,6 @@ __end_monitor_connect_loop:
 
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
-			//fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 			assert(rc==SQLITE_OK);
 			while (i>0) {
 				i--;
@@ -583,12 +552,9 @@ __end_monitor_connect_loop:
 
 		t2=monotonic_time();
 
-		//fprintf(stderr,"%llu %llu %llu\n", t1, t2, mysql_thread___monitor_connect_interval); 
 		if (t1+(1000*mysql_thread___monitor_connect_interval)>t2) {
 			usleep(t1+(1000*mysql_thread___monitor_connect_interval)-t2);
 		}
-		//fprintf(stderr,"MySQL_Monitor - CONNECT\n");
-		//usleep(1000);
 	}
 	return NULL;
 }
@@ -625,7 +591,7 @@ void * MySQL_Monitor::monitor_ping() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			fprintf(stderr,"MySQL_Monitor - PING - refreshing variables\n");
+			proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
 		}
 
 		char *error=NULL;
@@ -648,14 +614,10 @@ void * MySQL_Monitor::monitor_ping() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				//fprintf(stderr,"Host:%s, port:%s\n", r->fields[0], r->fields[1]);
 				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
 				sds[i]->task_id=MON_PING;
 				ping__num_active_connections++;
 				total_ping__num_active_connections++;
-				if (total_ping__num_active_connections%1000==0) {
-					fprintf(stderr,"total conns: %d\n", total_ping__num_active_connections);
-				}
 				MySQL_Monitor_State_Data *_mmsd=sds[i];
 				_mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(_mmsd->hostname, _mmsd->port);
 				if (_mmsd->mysql==NULL) {
@@ -689,7 +651,6 @@ __end_monitor_ping_loop:
 
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
-			//fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 			assert(rc==SQLITE_OK);
 			while (i>0) {
 				i--;
@@ -715,12 +676,9 @@ __end_monitor_ping_loop:
 
 		t2=monotonic_time();
 
-		//fprintf(stderr,"%llu %llu %llu\n", t1, t2, mysql_thread___monitor_connect_interval); 
 		if (t1+(1000*mysql_thread___monitor_ping_interval)>t2) {
 			usleep(t1+(1000*mysql_thread___monitor_ping_interval)-t2);
 		}
-		//fprintf(stderr,"MySQL_Monitor - PING\n");
-		//usleep(1000000);
 	}
 	return NULL;
 }
@@ -739,10 +697,8 @@ void * MySQL_Monitor::run() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			fprintf(stderr,"MySQL_Monitor refreshing variables\n");
+			proxy_error("%s\n","MySQL_Monitor refreshing variables");
 		}
-		fprintf(stderr,"MySQL_Monitor\n");
-		usleep(1000000);
 	}
 	monitor_connect_thread->join();
 	monitor_ping_thread->join();
