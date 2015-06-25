@@ -114,10 +114,18 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_charset",
 	(char *)"have_compress",
 	(char *)"interfaces",
+	(char *)"monitor_history",
 	(char *)"monitor_connect_interval",
 	(char *)"monitor_connect_timeout",
 	(char *)"monitor_ping_interval",
 	(char *)"monitor_ping_timeout",
+	(char *)"monitor_username",
+	(char *)"monitor_password",
+	(char *)"monitor_query_variables",
+	(char *)"monitor_query_status",
+	(char *)"monitor_query_interval",
+	(char *)"monitor_query_timeout",
+	(char *)"monitor_timer_cached",
 	(char *)"ping_interval_server",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -151,10 +159,18 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	spinlock_rwlock_init(&rwlock);
 	pthread_attr_init(&attr);
 	variables.connect_timeout_server=10000;
+	variables.monitor_history=600000;
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=200;
 	variables.monitor_ping_interval=60000;
 	variables.monitor_ping_timeout=100;
+	variables.monitor_query_interval=60000;
+	variables.monitor_query_timeout=100;
+	variables.monitor_username=strdup((char *)"monitor");
+	variables.monitor_password=strdup((char *)"monitor");
+	variables.monitor_query_variables=strdup((char *)"SELECT * FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES");
+	variables.monitor_query_status=strdup((char *)"SELECT * FROM INFORMATION_SCHEMA.GLOBAL_STATUS");
+	variables.monitor_timer_cached=true;
 	variables.ping_interval_server=5000;
 	variables.ping_timeout_server=100;
 	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
@@ -245,6 +261,12 @@ void MySQL_Threads_Handler::commit() {
 }
 
 char * MySQL_Threads_Handler::get_variable_string(char *name) {
+	if (!strncasecmp(name,"monitor_",8)) {
+		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
+		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
+		if (!strcasecmp(name,"monitor_query_variables")) return strdup(variables.monitor_query_variables);
+		if (!strcasecmp(name,"monitor_query_status")) return strdup(variables.monitor_query_status);
+	}
 	if (!strcasecmp(name,"connect_timeout_server_error")) return strdup(variables.connect_timeout_server_error);
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
@@ -270,10 +292,14 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
 	if (!strncasecmp(name,"monitor_",8)) {
+		if (!strcasecmp(name,"monitor_history")) return (int)variables.monitor_history;
 		if (!strcasecmp(name,"monitor_connect_interval")) return (int)variables.monitor_connect_interval;
 		if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
 		if (!strcasecmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
 		if (!strcasecmp(name,"monitor_ping_timeout")) return (int)variables.monitor_ping_timeout;
+		if (!strcasecmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
+		if (!strcasecmp(name,"monitor_query_timeout")) return (int)variables.monitor_query_timeout;
+		if (!strcasecmp(name,"monitor_timer_cached")) return (int)variables.monitor_timer_cached;
 	}
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
@@ -302,6 +328,14 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	// monitor variables
 	if (!strncasecmp(name,"monitor_",8)) {
+		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
+		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
+		if (!strcasecmp(name,"monitor_query_variables")) return strdup(variables.monitor_query_variables);
+		if (!strcasecmp(name,"monitor_query_status")) return strdup(variables.monitor_query_status);
+		if (!strcasecmp(name,"monitor_history")) {
+			sprintf(intbuf,"%d",variables.monitor_history);
+			return strdup(intbuf);
+		}
 		if (!strcasecmp(name,"monitor_connect_interval")) {
 			sprintf(intbuf,"%d",variables.monitor_connect_interval);
 			return strdup(intbuf);
@@ -317,6 +351,17 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		if (!strcasecmp(name,"monitor_ping_timeout")) {
 			sprintf(intbuf,"%d",variables.monitor_ping_timeout);
 			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_query_interval")) {
+			sprintf(intbuf,"%d",variables.monitor_query_interval);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_query_timeout")) {
+			sprintf(intbuf,"%d",variables.monitor_query_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_timer_cached")) {
+			return strdup((variables.monitor_timer_cached ? "true" : "false"));
 		}
 	}
 	if (!strcasecmp(name,"default_charset")) {
@@ -384,9 +429,54 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 
 	// monitor variables
 	if (!strncasecmp(name,"monitor_",8)) {
-		if (!strcasecmp(name,"monitor_connect_interval")) {
+		if (!strcasecmp(name,"monitor_username")) {
+			if (vallen) {
+				free(variables.monitor_username);
+				variables.monitor_username=strdup(value);
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_password")) {
+			if (vallen) {
+				free(variables.monitor_password);
+				variables.monitor_password=strdup(value);
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_query_variables")) {
+			if (vallen) {
+				free(variables.monitor_query_variables);
+				variables.monitor_query_variables=strdup(value);
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_query_status")) {
+			if (vallen) {
+				free(variables.monitor_query_status);
+				variables.monitor_query_status=strdup(value);
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_history")) {
 			int intv=atoi(value);
 			if (intv > 1000 && intv < 7*24*3600*1000) {
+				variables.monitor_history=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_connect_interval")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv < 7*24*3600*1000) {
 				variables.monitor_connect_interval=intv;
 				return true;
 			} else {
@@ -395,7 +485,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_connect_timeout")) {
 			int intv=atoi(value);
-			if (intv > 100 && intv < 600*1000) {
+			if (intv >= 100 && intv < 600*1000) {
 				variables.monitor_connect_timeout=intv;
 				return true;
 			} else {
@@ -404,7 +494,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_ping_interval")) {
 			int intv=atoi(value);
-			if (intv > 1000 && intv < 7*24*3600*1000) {
+			if (intv >= 100 && intv < 7*24*3600*1000) {
 				variables.monitor_ping_interval=intv;
 				return true;
 			} else {
@@ -413,12 +503,41 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_ping_timeout")) {
 			int intv=atoi(value);
-			if (intv > 100 && intv < 600*1000) {
+			if (intv >= 100 && intv < 600*1000) {
 				variables.monitor_ping_timeout=intv;
 				return true;
 			} else {
 				return false;
 			}
+		}
+		if (!strcasecmp(name,"monitor_query_interval")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv < 7*24*3600*1000) {
+				variables.monitor_query_interval=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_query_timeout")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv < 600*1000) {
+				variables.monitor_query_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_timer_cached")) {
+			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+				variables.monitor_timer_cached=true;
+				return true;
+			}
+			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+				variables.monitor_timer_cached=false;
+				return true;
+			}
+			return false;
 		}
 	}
 	if (!strcasecmp(name,"ping_interval_server")) {
@@ -1094,6 +1213,24 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
 	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
 	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
+
+	if (mysql_thread___monitor_username) free(mysql_thread___monitor_username);
+	mysql_thread___monitor_username=GloMTH->get_variable_string((char *)"monitor_username");
+	if (mysql_thread___monitor_password) free(mysql_thread___monitor_password);
+	mysql_thread___monitor_password=GloMTH->get_variable_string((char *)"monitor_password");
+	if (mysql_thread___monitor_query_variables) free(mysql_thread___monitor_query_variables);
+	mysql_thread___monitor_query_variables=GloMTH->get_variable_string((char *)"monitor_query_variables");
+	if (mysql_thread___monitor_query_status) free(mysql_thread___monitor_query_status);
+	mysql_thread___monitor_query_status=GloMTH->get_variable_string((char *)"monitor_query_status");
+	mysql_thread___monitor_timer_cached=(bool)GloMTH->get_variable_int((char *)"monitor_timer_cached");
+	mysql_thread___monitor_history=GloMTH->get_variable_int((char *)"monitor_history");
+	mysql_thread___monitor_connect_interval=GloMTH->get_variable_int((char *)"monitor_connect_interval");
+	mysql_thread___monitor_connect_timeout=GloMTH->get_variable_int((char *)"monitor_connect_timeout");
+	mysql_thread___monitor_ping_interval=GloMTH->get_variable_int((char *)"monitor_ping_interval");
+	mysql_thread___monitor_ping_timeout=GloMTH->get_variable_int((char *)"monitor_ping_timeout");
+	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
+	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
+
 	if (mysql_thread___server_version) free(mysql_thread___server_version);
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);

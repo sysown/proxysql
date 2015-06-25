@@ -1,6 +1,6 @@
 
 
-default: libconfig libdaemon jemalloc mariadb_client re2 libinjection
+default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection
 .PHONY: default
 
 
@@ -12,7 +12,13 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
+libevent/libevent/.libs/libevent.a:
+	cd libevent && rm -rf libevent-2.0.22-stable
+	cd libevent && tar -zxf libevent-2.0.22-stable.tar.gz
+	cd libevent/libevent && ./configure
+	cd libevent/libevent && make
 
+libevent: libevent/libevent/.libs/libevent.a
 
 libinjection/libinjection.a:
 	cd libinjection && make
@@ -34,6 +40,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.1.0-src.tar.gz
 	cd mariadb-client-library/mariadb_client && cmake .
+	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
 	cd mariadb-client-library/mariadb_client && make
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
 
@@ -46,7 +53,6 @@ mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
 #	cd sqlite3/sqlite3 && cc -O2 -c -o sqlite3.o sqlite3.c
 #
 #sqlite3: sqlite3/sqlite3/sqlite3.o
-
 
 libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig && rm -rf libconfig-1.4.9
@@ -73,8 +79,7 @@ cleanall:
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
 	cd libinjection && make clean
-#	cd glib && rm -rf glib-2.40.0
-#	cd libevent && rm -rf libevent-2.0.21-stable
+	cd libevent && rm -rf libevent-2.0.22-stable
 #	cd sqlite3 && rm -rf sqlite-amalgamation-3080403
 .PHONY: cleanall
 

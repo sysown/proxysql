@@ -235,10 +235,18 @@ class MySQL_Threads_Handler
 	pthread_attr_t attr;
 	rwlock_t rwlock;
 	struct {
+		int monitor_history;
 		int monitor_connect_interval;
 		int monitor_connect_timeout;
 		int monitor_ping_interval;
 		int monitor_ping_timeout;
+		int monitor_query_interval;
+		int monitor_query_timeout;
+		char * monitor_query_variables;
+		char * monitor_query_status;
+		char *monitor_username;
+		char *monitor_password;
+		bool monitor_timer_cached;
 		int ping_interval_server;
 		int ping_timeout_server;
 		int connect_timeout_server;

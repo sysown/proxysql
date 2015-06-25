@@ -1317,6 +1317,8 @@ bool ProxySQL_Admin::init() {
 	configdb=new SQLite3DB();
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
+	monitordb = new SQLite3DB();
+	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
 	tables_defs_admin=new std::vector<table_def_t *>;
 	tables_defs_stats=new std::vector<table_def_t *>;
@@ -1349,6 +1351,7 @@ bool ProxySQL_Admin::init() {
 
 	__attach_db_to_admindb(configdb, (char *)"disk");
 	__attach_db_to_admindb(statsdb, (char *)"stats");
+	__attach_db_to_admindb(monitordb, (char *)"monitor");
 
 #ifdef DEBUG	
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
@@ -1426,6 +1429,7 @@ void ProxySQL_Admin::admin_shutdown() {
 	delete admindb;
 	delete statsdb;
 	delete configdb;
+	delete monitordb;
 	sqlite3_shutdown();
 	if (main_poll_fds) {
 		for (i=0;i<main_poll_nfds;i++) {
