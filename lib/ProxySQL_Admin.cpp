@@ -1349,9 +1349,10 @@ bool ProxySQL_Admin::init() {
 	check_and_build_standard_tables(configdb, tables_defs_config);
 	check_and_build_standard_tables(statsdb, tables_defs_stats);
 
-	__attach_db_to_admindb(configdb, (char *)"disk");
-	__attach_db_to_admindb(statsdb, (char *)"stats");
-	__attach_db_to_admindb(monitordb, (char *)"monitor");
+	__attach_db(admindb, configdb, (char *)"disk");
+	__attach_db(admindb, statsdb, (char *)"stats");
+	__attach_db(admindb, monitordb, (char *)"monitor");
+	__attach_db(statsdb, monitordb, (char *)"monitor");
 
 #ifdef DEBUG	
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
@@ -2096,12 +2097,12 @@ void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 
 
 
-void ProxySQL_Admin::__attach_db_to_admindb(SQLite3DB *db, char *alias) {
+void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
 	const char *a="ATTACH DATABASE '%s' AS %s";
-	int l=strlen(a)+strlen(db->get_url())+strlen(alias)+5;
+	int l=strlen(a)+strlen(db2->get_url())+strlen(alias)+5;
 	char *cmd=(char *)malloc(l);
-	sprintf(cmd,a,db->get_url(), alias);
-	admindb->execute(cmd);
+	sprintf(cmd,a,db2->get_url(), alias);
+	db1->execute(cmd);
 	free(cmd);
 }
 

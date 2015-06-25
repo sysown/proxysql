@@ -52,7 +52,7 @@ class ProxySQL_Admin {
 	void __delete_disktable();
 	void __insert_or_replace_disktable_select_maintable();
 //	void __attach_configdb_to_admindb();
-	void __attach_db_to_admindb(SQLite3DB *db, char *alias);
+	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
 
 	void __add_active_users(enum cred_username_type usertype);
