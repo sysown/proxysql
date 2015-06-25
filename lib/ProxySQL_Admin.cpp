@@ -830,20 +830,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);	
 			goto __run_query;
 		}
-		if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
-			strA=query_no_space+17;
-			strAl=strlen(strA);
-			strB=(char *)"SELECT name AS tables FROM %s.sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')";
-			strBl=strlen(strB);
-			int l=strBl+strAl-2;
-			char *b=(char *)l_alloc(l+1);
-			snprintf(b,l+1,strB,strA);
-			b[l]=0;
-			l_free(query_length,query);
-			query=b;
-			query_length=l+1;
-			goto __run_query;
-		}
 	}
 
 	// FIXME: this should be removed, it is just a POC for issue #253 . What is important is the call to GloMTH->signal_all_threads();
@@ -867,6 +853,21 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')");
 		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
+		strA=query_no_space+17;
+		strAl=strlen(strA);
+		strB=(char *)"SELECT name AS tables FROM %s.sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')";
+		strBl=strlen(strB);
+		int l=strBl+strAl-2;
+		char *b=(char *)l_alloc(l+1);
+		snprintf(b,l+1,strB,strA);
+		b[l]=0;
+		l_free(query_length,query);
+		query=b;
+		query_length=l+1;
 		goto __run_query;
 	}
 
