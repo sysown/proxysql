@@ -546,7 +546,7 @@ __end_monitor_connect_loop:
 				if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
 					fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 					assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-					usleep(1000);
+					usleep(100);
 				}
 			} while (rc!=SQLITE_DONE);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
@@ -570,7 +570,7 @@ __end_monitor_connect_loop:
 					if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
 						fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 						assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-						usleep(1000);
+						usleep(100);
 					}
 				} while (rc!=SQLITE_DONE);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
@@ -691,7 +691,7 @@ __end_monitor_ping_loop:
 				if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
 					fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 					assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-					usleep(1000);
+					usleep(100);
 				}
 			} while (rc!=SQLITE_DONE);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
@@ -715,7 +715,7 @@ __end_monitor_ping_loop:
 					if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
 						fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 						assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-						usleep(1000);
+						usleep(100);
 					}
 				} while (rc!=SQLITE_DONE);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
