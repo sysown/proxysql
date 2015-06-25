@@ -9,6 +9,7 @@
 #include "simple_kv.h"
 #include "gen_utils.h"
 #include "StatCounters.h"
+#include "MySQL_Monitor.hpp"
 #include "MySQL_Protocol.h"
 #include "MySQL_Authentication.hpp"
 #include "fileutils.hpp"

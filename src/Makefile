@@ -6,7 +6,7 @@ DEPS_PATH=../deps
 
 MARIADB_PATH=$(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR=$(MARIADB_PATH)/include
-#MARIADB_LDIR=$(MARIADB_PATH)/libmariadb
+MARIADB_LDIR=$(MARIADB_PATH)/libmariadb
 
 
 #LIBEVENT_PATH=$(DEPS_PATH)/libevent/libevent
@@ -31,6 +31,9 @@ LIBCONFIG_LDIR=-L$(LIBCONFIG_PATH)/lib/.libs
 INJECTION_PATH=$(DEPS_PATH)/libinjection
 INJECTION_IDIR=$(INJECTION_PATH)
 
+LIBEVENT_PATH=$(DEPS_PATH)/libevent/libevent
+LIBEVENT_IDIR=$(LIBEVENT_PATH)/include
+LIBEVENT_LDIR=$(LIBEVENT_PATH)/.libs
 
 RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
@@ -40,12 +43,12 @@ LDIR=../lib
 #IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBEVENT_IDIR) $(GLIB_IDIRS) $(LIBCONFIG_IDIR)
 #LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) -L$(LIBEVENT_LDIR) $(GLIB_LDIRS) $(LIBCONFIG_LDIR)
 IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(INJECTION_PATH) -L$(LIBEVENT_LDIR) -L$(MARIADB_LDIR)
 #LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) $(GLIB_LDIRS) $(LIBCONFIG_LDIR)
 
 
 CFLAGS=-std=c++0x $(IDIRS) $(OPTZ) $(DEBUG)
-LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ljemalloc -lconfig++ -lre2 -linjection -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl $(EXTRALINK)
+LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl $(EXTRALINK)
 #LIBS=-rdynamic -Wl,-Bstatic -lproxysql -ljemalloc -levent $(GLIB_LIB) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a

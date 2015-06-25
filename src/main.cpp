@@ -1,4 +1,5 @@
 #include <iostream>
+#include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
 
@@ -49,6 +50,10 @@ MySQL_Authentication *GloMyAuth;
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH;
+
+MySQL_Monitor *GloMyMon;
+std::thread *MyMon_thread;
+
 /*
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 
@@ -262,6 +267,8 @@ __start_label:
 	GloQC=NULL;
 	GloQPro=NULL;
 	GloMTH=NULL;
+	GloMyAuth=NULL;
+	GloMyMon=NULL;
 //	MyHGH=new MySQL_HostGroups_Handler();
 	MyHGM=new MySQL_HostGroups_Manager();
 
@@ -397,6 +404,12 @@ __start_label:
 
 	//sleep(10);
 
+	// start MySQL_Monitor
+	GloMyMon = new MySQL_Monitor();
+	MyMon_thread = new std::thread(&MySQL_Monitor::run,GloMyMon);
+	GloMyMon->print_version();
+
+
 	while (glovars.shutdown==0) {
 		sleep(1);   // FIXME: TERRIBLE UGLY
 	}
@@ -422,6 +435,19 @@ __shutdown:
 */
 	if (GloQC) {
 		GloQC->shutdown=1;
+	}
+
+	if (GloMyMon) {
+		GloMyMon->shutdown=true;
+	}
+
+	// join GloMyMon thread
+	if (GloMyMon) {
+		MyMon_thread->join();
+	}
+
+	// join GloQC thread
+	if (GloQC) {
 		pthread_join(GloQC->purge_thread_id, NULL);
 	}
 
@@ -429,6 +455,11 @@ __shutdown:
 	//if (GloVars.__cmd_proxysql_nostart) {
 	if (GloVars.global.nostart) {
 		pthread_mutex_unlock(&GloVars.global.start_mutex);
+	}
+
+	if (GloMyMon) {
+		delete GloMyMon;
+		GloMyMon=NULL;
 	}
 
 	if (GloQC) {

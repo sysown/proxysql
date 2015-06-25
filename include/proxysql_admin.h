@@ -4,7 +4,6 @@
 #include "cpp.h"
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
-typedef struct { char * table_name; char * table_def; } table_def_t;
 
 
 class ProxySQL_Admin {
@@ -85,6 +84,7 @@ class ProxySQL_Admin {
 	SQLite3DB *admindb;	// in memory
 	SQLite3DB *statsdb;	// in memory
 	SQLite3DB *configdb; // on disk
+	SQLite3DB *monitordb;	// in memory
 	void print_version();
 	bool init();
 	void init_users();

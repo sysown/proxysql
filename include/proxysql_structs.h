@@ -181,6 +181,7 @@ typedef unsigned spinlock;
 typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
+typedef struct { char * table_name; char * table_def; } table_def_t;
 //typedef struct _mysql_server_t mysql_server_t;
 
 #endif /* PROXYSQL_TYPEDEFS */
@@ -193,6 +194,7 @@ class MySQL_Data_Stream;
 class MySQL_Connection_userinfo;
 class MySQL_Session;
 class MySQL_Backend;
+class MySQL_Monitor;
 class MySQL_Thread;
 class MySQL_Threads_Handler;
 class SQLite3DB;
@@ -628,6 +630,21 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
+
+/* variables used by the monitoring module */
+__thread int mysql_thread___monitor_history;
+__thread int mysql_thread___monitor_connect_interval;
+__thread int mysql_thread___monitor_connect_timeout;
+__thread int mysql_thread___monitor_ping_interval;
+__thread int mysql_thread___monitor_ping_timeout;
+__thread int mysql_thread___monitor_query_interval;
+__thread int mysql_thread___monitor_query_timeout;
+__thread char * mysql_thread___monitor_query_variables;
+__thread char * mysql_thread___monitor_query_status;
+__thread char * mysql_thread___monitor_username;
+__thread char * mysql_thread___monitor_password;
+__thread bool mysql_thread___monitor_timer_cached;
+
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
@@ -650,6 +667,21 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
+
+/* variables used by the monitoring module */
+extern __thread int mysql_thread___monitor_history;
+extern __thread int mysql_thread___monitor_connect_interval;
+extern __thread int mysql_thread___monitor_connect_timeout;
+extern __thread int mysql_thread___monitor_ping_interval;
+extern __thread int mysql_thread___monitor_ping_timeout;
+extern __thread int mysql_thread___monitor_query_interval;
+extern __thread int mysql_thread___monitor_query_timeout;
+extern __thread char * mysql_thread___monitor_query_variables;
+extern __thread char * mysql_thread___monitor_query_status;
+extern __thread char * mysql_thread___monitor_username;
+extern __thread char * mysql_thread___monitor_password;
+extern __thread bool mysql_thread___monitor_timer_cached;
+
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */

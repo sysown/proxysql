@@ -71,7 +71,9 @@ class ProxySQL_Poll {
   ~ProxySQL_Poll() {
     unsigned int i;
     for (i=0;i<len;i++) {
-      if (myds[i]->myds_type==MYDS_LISTENER) {
+      if (
+				myds[i] && // fix bug #278 . This should be caused by not initialized datastreams used to ping the backend
+				myds[i]->myds_type==MYDS_LISTENER) {
         delete myds[i];
       }
     }
@@ -233,6 +235,18 @@ class MySQL_Threads_Handler
 	pthread_attr_t attr;
 	rwlock_t rwlock;
 	struct {
+		int monitor_history;
+		int monitor_connect_interval;
+		int monitor_connect_timeout;
+		int monitor_ping_interval;
+		int monitor_ping_timeout;
+		int monitor_query_interval;
+		int monitor_query_timeout;
+		char * monitor_query_variables;
+		char * monitor_query_status;
+		char *monitor_username;
+		char *monitor_password;
+		bool monitor_timer_cached;
 		int ping_interval_server;
 		int ping_timeout_server;
 		int connect_timeout_server;
@@ -257,6 +271,7 @@ class MySQL_Threads_Handler
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 	//virtual const char *version() {return NULL;};
+	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
 	void commit();
