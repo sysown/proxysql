@@ -1,6 +1,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#define USLEEP_SQLITE_LOCKED 100
 
 SQLite3DB::SQLite3DB() {
 	db=NULL;
@@ -68,7 +69,12 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 	*cols = sqlite3_column_count(statement);
 	if (*cols==0) { // not a SELECT
 		*resultset=NULL;
-		rc=sqlite3_step(statement);
+		do {
+			rc=sqlite3_step(statement);
+			if (rc==SQLITE_LOCKED) { // the execution of the prepared statement failed because locked
+				usleep(USLEEP_SQLITE_LOCKED);
+			}
+		} while (rc==SQLITE_LOCKED);
 		if (rc==SQLITE_DONE) {
 			*affected_rows=sqlite3_changes(db);
 			ret=true;

@@ -23,6 +23,16 @@ static MySQL_Monitor *GloMyMon;
 
 #define NEXT_IMMEDIATE(new_st) do { ST= new_st; goto again; } while (0)
 
+#define SAFE_SQLITE3_STEP(_stmt) do {\
+	do {\
+		rc=sqlite3_step(_stmt);\
+		if (rc!=SQLITE_DONE) {\
+			assert(rc==SQLITE_LOCKED);\
+			usleep(100);\
+		}\
+	} while (rc!=SQLITE_DONE);\
+} while (0)
+
 static void state_machine_handler(int fd, short event, void *arg);
 
 
@@ -541,14 +551,7 @@ __end_monitor_connect_loop:
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 1, start_time-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			do {
-				rc=sqlite3_step(statement);
-				if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-					fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-					assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-					usleep(100);
-				}
-			} while (rc!=SQLITE_DONE);
+			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
@@ -565,14 +568,7 @@ __end_monitor_connect_loop:
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				do {
-					rc=sqlite3_step(statement);
-					if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-						fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-						assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-						usleep(100);
-					}
-				} while (rc!=SQLITE_DONE);
+				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 				delete mmsd;
@@ -686,14 +682,7 @@ __end_monitor_ping_loop:
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 1, start_time-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			do {
-				rc=sqlite3_step(statement);
-				if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-					fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-					assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-					usleep(100);
-				}
-			} while (rc!=SQLITE_DONE);
+			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
@@ -710,14 +699,7 @@ __end_monitor_ping_loop:
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				do {
-					rc=sqlite3_step(statement);
-					if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-						fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-						assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-						usleep(100);
-					}
-				} while (rc!=SQLITE_DONE);
+				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 				delete mmsd;
