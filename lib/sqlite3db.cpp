@@ -92,6 +92,26 @@ __exit_execute_statement:
 	return ret;
 }
 
+int SQLite3DB::return_one_int(const char *str) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	int ret=0;
+	SQLite3_result *resultset=NULL;
+	execute_statement(str, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", str, error);
+		free(error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			ret=atoi(r->fields[0]);
+			break;
+		}
+	}
+	if (resultset) delete resultset;
+	return ret;
+}
 
 int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=\"%s\" AND sql=\"%s\"";

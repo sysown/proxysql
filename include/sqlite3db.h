@@ -141,6 +141,7 @@ class SQLite3DB {
 	int open(char *, int);
 	bool execute(const char *);
 	bool execute_statement(const char *, char **, int *, int *, SQLite3_result **);
+	int return_one_int(const char *);
 	int check_table_structure(char *table_name, char *table_def);
 	bool build_table(char *table_name, char *table_def, bool dropit);
 	bool check_and_build_table(char *table_name, char *table_def);

@@ -2096,8 +2096,6 @@ void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
-
-
 void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
 	const char *a="ATTACH DATABASE '%s' AS %s";
 	int l=strlen(a)+strlen(db2->get_url())+strlen(alias)+5;
