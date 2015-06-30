@@ -29,13 +29,11 @@ class ProxySQL_Ping_Thread(Thread):
 		self.db = db
 		self.ping_command = ping_command
 		self.interval = interval
-		self.running = False
+		self.running = True
 		self.failed_connections = 0
 		super(ProxySQL_Ping_Thread, self).__init__(**kwargs)
 
 	def run(self):
-		self.running = True
-
 		while self.running:
 			time.sleep(self.interval)
 
