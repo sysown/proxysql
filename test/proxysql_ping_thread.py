@@ -23,7 +23,7 @@ class ProxySQL_Ping_Thread(Thread):
 		self.port = int(config.get('ProxySQL', 'port'))
 		self.db = config.get('Ping', 'db')
 		self.ping_command = config.get('Ping', 'ping_command')
-		self.interval = config.get('Ping', 'ping_interval')
+		self.interval = int(config.get('Ping', 'ping_interval'))
 		self.max_failed_connections = int(config.get('Ping', 'failed_connections_before_alert'))
 		self.config=config
 		self.running = True
