@@ -454,8 +454,8 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				if (myds->revents & POLLOUT) ms_status |= MYSQL_WAIT_WRITE;
 				if (myds->revents & POLLPRI) ms_status |= MYSQL_WAIT_EXCEPT;
 				if (ms_status) {
-					myconn->async_status = mysql_real_connect_cont(&myconn->ret_mysql, myconn->mysql, ms_status);
-					if (myconn->async_status==0) {
+					myconn->async_exit_status = mysql_real_connect_cont(&myconn->ret_mysql, myconn->mysql, ms_status);
+					if (myconn->async_exit_status==0) {
 					if (myconn->ret_mysql) {
 						myds->myds_type=MYDS_BACKEND;
 						myds->DSS=STATE_READY;
@@ -1303,9 +1303,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 
 		if (myconn->parent->port) {
-			myconn->async_status=mysql_real_connect_start(&myconn->ret_mysql,myconn->mysql, myconn->parent->address, myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname, myconn->parent->port, NULL, 0);
+			myconn->async_exit_status=mysql_real_connect_start(&myconn->ret_mysql,myconn->mysql, myconn->parent->address, myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname, myconn->parent->port, NULL, 0);
 		} else {
-			myconn->async_status=mysql_real_connect_start(&myconn->ret_mysql,myconn->mysql, "localhost", myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname, myconn->parent->port, myconn->parent->address, 0);
+			myconn->async_exit_status=mysql_real_connect_start(&myconn->ret_mysql,myconn->mysql, "localhost", myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname, myconn->parent->port, myconn->parent->address, 0);
 		}
 		myconn->fd=mysql_get_socket(myconn->mysql);
 		mybe->server_myds->fd=myconn->fd;

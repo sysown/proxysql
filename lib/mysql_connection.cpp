@@ -202,9 +202,9 @@ bool MySQL_Connection::get_status_prepared_statement() {
 // non blocking API
 void MySQL_Connection::connect_start() {
 	if (parent->port) {
-		async_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, 0);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, 0);
 	} else {
-		async_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, userinfo->password, userinfo->schemaname, parent->port, parent->address, 0);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, userinfo->password, userinfo->schemaname, parent->port, parent->address, 0);
 	}
 	fd=mysql_get_socket(mysql);
 }

@@ -992,7 +992,7 @@ void MySQL_Thread::run() {
 //				mypolls.myds[n]->set_pollout();
 				if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
 					mypolls.fds[n].events = POLLIN;
-					if (mypolls.myds[n]->myconn->async_status & MYSQL_WAIT_WRITE)
+					if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
 						mypolls.fds[n].events |= POLLOUT;
 				} else {
 					mypolls.myds[n]->set_pollout();

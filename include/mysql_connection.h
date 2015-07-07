@@ -34,7 +34,8 @@ class MySQL_Connection {
 	public:
 	int fd;
 	char scramble_buff[40];
-	int async_status;
+	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
+	int async_state_machine;	// Async state machine
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
 	struct {
