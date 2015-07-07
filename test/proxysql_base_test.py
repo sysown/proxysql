@@ -198,6 +198,12 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def tearDownClass(cls):
+		try:
+			cls.run_query_proxysql_admin("PROXYSQL SHUTDOWN")
+		except:
+			# This will throw an exception because it will forcefully shut down
+			# the connection with the MySQL client.
+			pass
 		if cls.INTERACTIVE_TEST:
 			cls._gdb_process.wait()
 		# It's essential that pings are stopped __after__ the gdb process has
