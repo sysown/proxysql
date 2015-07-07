@@ -1068,41 +1068,12 @@ void MySQL_Thread::run() {
 			continue;
 			}
 			if (mypolls.fds[n].revents==0) {
-
-/*
 			// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
-				switch(myds->myds_type) {
-					case MYDS_BACKEND_NOT_CONNECTED:
-						myds_backend_set_failed_connect(myds,n);
-						break;
-					case MYDS_BACKEND_PAUSE_CONNECT:
-						myds_backend_set_failed_connect(myds,n);
-						break;
-					default:
-						//if (mypolls.fds[n].revents==0 && ( mypolls.myds[n]->myds_type!=MYDS_BACKEND_NOT_CONNECTED && mypolls.myds[n]->myds_type!=MYDS_BACKEND_PAUSE_CONNECT ) ) continue;
-						continue;
-						break;
-				}
-*/
 			} else {
 				// check if the FD is valid
 				assert(mypolls.fds[n].revents!=POLLNVAL);
 				switch(myds->myds_type) {
-/*
-		// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
-					case MYDS_BACKEND_NOT_CONNECTED:
-//			if (myds->myds_type==MYDS_BACKEND_NOT_CONNECTED && mypolls.fds[n].revents) {
-						if ( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) ) {
-							// error on connect
-							myds_backend_pause_connect(myds);
-							continue;
-						}
-						if (mypolls.fds[n].revents & POLLOUT) {
-							// first data on connect from a not blocking socket
-							myds_backend_first_packet_after_connect(myds, n);
-						}
-						break;
-*/
+		// Note: this logic that was here was removed completely because we added mariadb client library.
 					case MYDS_LISTENER:
 						// we got a new connection!
 						listener_handle_new_connection(myds,n);
@@ -1153,46 +1124,6 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 						myds->sess->set_unhealthy();
 					}
 				}
-
-/*
-	      if (myds->active==FALSE) {
-					mypolls.remove_index_fast(n);
-					proxy_debug(PROXY_DEBUG_NET,1, "Session=%p, DataStream=%p -- Deleting FD %d\n", myds->sess, myds, myds->fd);
-					//myds->shut_hard();
-					MySQL_Session *sess=myds->sess;
-					if (
-						(sess->server_myds==myds)
-						&&
-						(myds->myds_type==MYDS_BACKEND)
-						&&
-						(myds->DSS==STATE_READY)
-					) {
-						if (sess->mybe->myconn) {
-							MyHGM->destroy_MyConn_from_pool(sess->mybe->myconn);
-							sess->mybe->myconn=NULL;
-						}
-						// This is a failed backend, let's try to save the session
-						return;
-					}
-
-					sess->healthy=0;
-					if (sess->client_myds==myds) {
-						sess->client_myds=NULL;
-						delete myds;
-					}
-					if (sess->server_myds==myds) {
-						sess->server_myds=NULL;
-					}
-					//delete myds;
-					//myds=NULL; // useless?
-// FIXME
-//  	   		if (sess->client_myds==NULL && sess->server_myds==NULL) {
-//						mysql_sessions->remove_fast(sess);
-//						delete sess;
-//						continue;
-//					}
-				}
-*/
 }
 
 
@@ -1318,38 +1249,6 @@ void MySQL_Thread::unregister_session_connection_handler(int idx) {
 	mysql_sessions_connections_handler->remove_index_fast(idx);
 }
 
-/*
-void MySQL_Thread::myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n) {
-	if (curtime>mypolls.last_recv[n]+10000000) {
-		proxy_error("connect() timeout . curtime: %llu , last_recv: %llu , failed after %lluus . fd: %d , myds_type: %s\n", curtime, mypolls.last_recv[n] , (curtime-mypolls.last_recv[n]) , myds->fd, (myds->myds_type==MYDS_BACKEND_PAUSE_CONNECT ? "MYDS_BACKEND_PAUSE_CONNECT" : "MYDS_BACKEND_NOT_CONNECTED" ) );
-		myds->myds_type=MYDS_BACKEND_FAILED_CONNECT;
-		myds->sess->pause=curtime+10000000;
-		myds->sess->to_process=1;
-	}
-}
-
-void MySQL_Thread::myds_backend_pause_connect(MySQL_Data_Stream *myds) {
-	proxy_error("connect() error on fd %d . Pausing ...\n", myds->fd);
-	myds->myds_type=MYDS_BACKEND_PAUSE_CONNECT;
-	myds->sess->pause=curtime+10000000;
-	myds->sess->to_process=1;
-}
-
-void MySQL_Thread::myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n) {
-	int optval;
-	socklen_t optlen=sizeof(optval);
-	getsockopt(myds->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen);
-	if (optval==0) {
-		mypolls.last_recv[n]=curtime;
-		myds->myds_type=MYDS_BACKEND;
-		myds->sess->pause=0;
-	} else {
-		fprintf(stderr,"Connect() error\n");
-		myds->myds_type=MYDS_BACKEND_PAUSE_CONNECT;
-		myds->sess->pause=curtime+10000000;
-	}
-}
-*/
 
 void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n) {
 	int c;
