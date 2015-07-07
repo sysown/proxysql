@@ -6,4 +6,4 @@ class AdminTest(ProxySQLBaseTest):
 
 	def test_stop_main_thread(self):
 		# This test will just assert that PROXYSQL STOP works correctly
-		self.run_query_proxysql_admin("PROXYSQL STOP")
+		ProxySQLBaseTest.run_query_proxysql_admin("PROXYSQL STOP")

@@ -16,26 +16,21 @@ class ProxySQL_Ping_Thread(Thread):
 	continuously keeping an eye on the tests.
 	"""
 
-	FAILED_CONNECTIONS_BEFORE_ALERT = 3
-
-	def __init__(self, username, password,
-				 hostname="127.0.0.1", port=6033, db="test",
-				 ping_command="SELECT @@version_comment LIMIT 1",
-				 interval=60, **kwargs):
-		self.username = username
-		self.password = password
-		self.hostname = hostname
-		self.port = port
-		self.db = db
-		self.ping_command = ping_command
-		self.interval = interval
-		self.running = False
+	def __init__(self, config, **kwargs):
+		self.username = config.get('ProxySQL', 'username')
+		self.password = config.get('ProxySQL', 'password')
+		self.hostname = config.get('ProxySQL', 'hostname')
+		self.port = int(config.get('ProxySQL', 'port'))
+		self.db = config.get('Ping', 'db')
+		self.ping_command = config.get('Ping', 'ping_command')
+		self.interval = int(config.get('Ping', 'ping_interval'))
+		self.max_failed_connections = int(config.get('Ping', 'failed_connections_before_alert'))
+		self.config=config
+		self.running = True
 		self.failed_connections = 0
 		super(ProxySQL_Ping_Thread, self).__init__(**kwargs)
 
 	def run(self):
-		self.running = True
-
 		while self.running:
 			time.sleep(self.interval)
 
@@ -59,7 +54,7 @@ class ProxySQL_Ping_Thread(Thread):
 				self.failed_connections = 0
 			except:
 				self.failed_connections = self.failed_connections + 1
-				if self.failed_connections >= ProxySQL_Ping_Thread.FAILED_CONNECTIONS_BEFORE_ALERT:
+				if self.failed_connections >= self.max_failed_connections:
 					self.send_error_email()
 					self.running = False
 					return
@@ -74,15 +69,19 @@ class ProxySQL_Ping_Thread(Thread):
 		# me == the sender's email address
 		# you == the recipient's email address
 		msg['Subject'] = 'Daemon has stopped responding'
-		msg['From'] = 'ProxySQL Tests <proxysql.tests@gmail.com>'
-		msg['To'] = 'Andrei-Adnan Ismail <iandrei@gmail.com>'
+		msg['From'] = self.config.get('Email', 'from')
+		msg['To'] = self.config.get('Email', 'to')
 
 		# Send the message via our own SMTP server, but don't include the
 		# envelope header.
-		s = smtplib.SMTP('smtp.gmail.com', 587)
+		s = smtplib.SMTP(self.config.get('Email', 'smtp_server'),
+						 int(self.config.get('Email', 'smtp_port')))
 		s.ehlo()
 		s.starttls()
-		s.login('proxysql.tests', 'pr0xysql')
-		s.sendmail('proxysql.tests@gmail.com', ['iandrei@gmail.com'], msg.as_string())
+		s.login(self.config.get('Email', 'username'),
+				self.config.get('Email', 'password'))
+		s.sendmail(self.config.get('Email', 'from'),
+					[self.config.get('Email', 'to')],
+					msg.as_string())
 		s.quit()
 

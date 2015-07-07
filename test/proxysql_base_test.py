@@ -9,16 +9,11 @@ from docker.utils import kwargs_from_env
 import MySQLdb
 
 from proxysql_ping_thread import ProxySQL_Ping_Thread
+from proxysql_tests_config import ProxySQL_Tests_Config
 
 class ProxySQLBaseTest(TestCase):
 
 	DOCKER_COMPOSE_FILE = None
-	PROXYSQL_ADMIN_PORT = 6032
-	PROXYSQL_ADMIN_USERNAME = "admin"
-	PROXYSQL_ADMIN_PASSWORD = "admin"
-	PROXYSQL_RW_PORT = 6033
-	PROXYSQL_RW_USERNAME = "root"
-	PROXYSQL_RW_PASSWORD = "root"
 	# TODO(andrei): make it possible to set this to False, and make False
 	# the default value.
 	INTERACTIVE_TEST = True
@@ -153,15 +148,16 @@ class ProxySQLBaseTest(TestCase):
 		`mysql_servers` table, which contains a list of which servers go into
 		which hostgroup.
 		"""
+		config = ProxySQL_Tests_Config()
 		proxysql_container = cls._get_proxysql_container()
 		mysql_containers = cls._get_mysql_containers()
 		environment_variables = cls._get_environment_variables_from_container(
 											 proxysql_container['Names'][0][1:])
 
-		proxy_admin_connection = MySQLdb.connect("127.0.0.1",
-												cls.PROXYSQL_ADMIN_USERNAME,
-												cls.PROXYSQL_ADMIN_PASSWORD,
-												port=cls.PROXYSQL_ADMIN_PORT)
+		proxy_admin_connection = MySQLdb.connect(config.get('ProxySQL', 'hostname'),
+												config.get('ProxySQL', 'admin_username'),
+												config.get('ProxySQL', 'admin_password'),
+												port=int(config.get('ProxySQL', 'admin_port')))
 		cursor = proxy_admin_connection.cursor()
 
 		for mysql_container in mysql_containers:
@@ -202,6 +198,12 @@ class ProxySQLBaseTest(TestCase):
 
 	@classmethod
 	def tearDownClass(cls):
+		try:
+			cls.run_query_proxysql_admin("PROXYSQL SHUTDOWN")
+		except:
+			# This will throw an exception because it will forcefully shut down
+			# the connection with the MySQL client.
+			pass
 		if cls.INTERACTIVE_TEST:
 			cls._gdb_process.wait()
 		# It's essential that pings are stopped __after__ the gdb process has
@@ -211,14 +213,17 @@ class ProxySQLBaseTest(TestCase):
 		cls._stop_proxysql_pings()
 		cls._shutdown_docker_services()
 	
-	def run_query_proxysql(self, query, db, return_result=True,
+	@classmethod
+	def run_query_proxysql(cls, query, db, return_result=True,
 							username=None, password=None, port=None):
 		"""Run a query against the ProxySQL proxy and optionally return its
 		results as a set of rows."""
-		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
-		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
-		port = port or ProxySQLBaseTest.PROXYSQL_RW_PORT
-		proxy_connection = MySQLdb.connect("127.0.0.1",
+		config = ProxySQL_Tests_Config()
+		username = username or config.get('ProxySQL', 'username')
+		password = password or config.get('ProxySQL', 'password')
+		port = port or int(config.get('ProxySQL', 'port'))
+		hostname = config.get('ProxySQL', 'hostname')
+		proxy_connection = MySQLdb.connect(hostname,
 											username,
 											password,
 											port=port,
@@ -232,7 +237,8 @@ class ProxySQLBaseTest(TestCase):
 		if return_result:
 			return rows
 
-	def run_query_proxysql_admin(self, query, return_result=True):
+	@classmethod
+	def run_query_proxysql_admin(cls, query, return_result=True):
 		"""Run a query against the ProxySQL admin.
 
 		Note: we do not need to specify a db for this query, as it's always
@@ -240,21 +246,22 @@ class ProxySQLBaseTest(TestCase):
 		TODO(andrei): revisit db assumption once stats databases from ProxySQL
 		are accessible via the MySQL interface.
 		"""
+		config = ProxySQL_Tests_Config() 
 
-		return self.run_query_proxysql(
+		return cls.run_query_proxysql(
 			query,
 			# "main" database is hardcoded within the
 			# ProxySQL admin -- it contains the SQLite3
 			# tables with metadata about servers and users
 			"main",
 			return_result,
-			username=ProxySQLBaseTest.PROXYSQL_ADMIN_USERNAME,
-			password=ProxySQLBaseTest.PROXYSQL_ADMIN_PASSWORD,
-			port=ProxySQLBaseTest.PROXYSQL_ADMIN_PORT
+			username=config.get('ProxySQL', 'admin_username'),
+			password=config.get('ProxySQL', 'admin_password'),
+			port=int(config.get('ProxySQL', 'admin_port'))
 		)
 
-
-	def run_query_mysql(self, query, db, return_result=True, hostgroup=0,
+	@classmethod
+	def run_query_mysql(cls, query, db, return_result=True, hostgroup=0,
 					    username=None, password=None):
 		"""Run a query against the MySQL backend and optionally return its
 		results as a set of rows.
@@ -268,11 +275,11 @@ class ProxySQLBaseTest(TestCase):
 		from the specified hostgroup."""
 
 		# Figure out which are the containers for the specified hostgroup
-		mysql_backends = ProxySQLBaseTest._get_mysql_containers()
+		mysql_backends = cls._get_mysql_containers()
 		mysql_backends_in_hostgroup = []
 		for backend in mysql_backends:
 			container_name = backend['Names'][0][1:].upper()
-			backend_hostgroup = ProxySQLBaseTest._extract_hostgroup_from_container_name(container_name)
+			backend_hostgroup = cls._extract_hostgroup_from_container_name(container_name)
 
 			mysql_port_exposed=False
 			if not backend.get('Ports'):
@@ -294,9 +301,11 @@ class ProxySQLBaseTest(TestCase):
 			if exposed_port['PrivatePort'] == 3306:
 				mysql_port = exposed_port['PublicPort']
 
-		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
-		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
-		mysql_connection = MySQLdb.connect("127.0.0.1",
+		config = ProxySQL_Tests_Config()
+		hostname = config.get('ProxySQL', 'hostname')
+		username = username or config.get('ProxySQL', 'username')
+		password = password or config.get('ProxySQL', 'password')
+		mysql_connection = MySQLdb.connect(hostname,
 											username,
 											password,
 											port=mysql_port,
@@ -310,7 +319,8 @@ class ProxySQLBaseTest(TestCase):
 		if return_result:
 			return rows
 
-	def run_sysbench_proxysql(self, threads=4, time=60, db="test",
+	@classmethod
+	def run_sysbench_proxysql(cls, threads=4, time=60, db="test",
 								username=None, password=None, port=None):
 		"""Runs a sysbench test with the given parameters against the given
 		ProxySQL instance.
@@ -321,9 +331,11 @@ class ProxySQLBaseTest(TestCase):
 		"""
 
 		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
-		username = username or ProxySQLBaseTest.PROXYSQL_RW_USERNAME
-		password = password or ProxySQLBaseTest.PROXYSQL_RW_PASSWORD
-		port = port or ProxySQLBaseTest.PROXYSQL_RW_PORT
+		config = ProxySQL_Tests_Config()
+		hostname = config.get('ProxySQL', 'hostname')
+		username = username or config.get('ProxySQL', 'username')
+		password = password or config.get('ProxySQL', 'password')
+		port = port or config.get('ProxySQL', 'port')
 
 		params = [
 				 	"sysbench",
@@ -341,13 +353,13 @@ class ProxySQLBaseTest(TestCase):
 					 "--report-interval=1",
 					 "--oltp-point-selects=100",
 					 "--oltp-table-size=400000",
-					 "--mysql-host=127.0.0.1",
+					 "--mysql-host=%s" % hostname,
 					 "--mysql-port=%s" % port
 				 ]
 
-		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["prepare"])
-		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["run"])
-		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["cleanup"])
+		cls.run_bash_command_within_proxysql(params + ["prepare"])
+		cls.run_bash_command_within_proxysql(params + ["run"])
+		cls.run_bash_command_within_proxysql(params + ["cleanup"])
 
 	@classmethod
 	def run_bash_command_within_proxysql(cls, params):
@@ -360,7 +372,7 @@ class ProxySQLBaseTest(TestCase):
 		- running various debugging commands against the ProxySQL instance
 		"""
 
-		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
+		proxysql_container_id = cls._get_proxysql_container()['Id']
 		exec_params = ["docker", "exec", proxysql_container_id] + params
 		subprocess.call(exec_params)
 
@@ -402,11 +414,7 @@ class ProxySQLBaseTest(TestCase):
 		monitor the ProxySQL daemon in order to check that it's up.
 
 		This special thread will do exactly that."""
-
-		cls.ping_thread = ProxySQL_Ping_Thread(username=cls.PROXYSQL_RW_USERNAME,
-												password=cls.PROXYSQL_RW_PASSWORD,
-												hostname="127.0.0.1",
-												port=cls.PROXYSQL_RW_PORT)
+		cls.ping_thread = ProxySQL_Ping_Thread(ProxySQL_Tests_Config())
 		cls.ping_thread.start()
 
 	@classmethod
