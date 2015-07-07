@@ -101,6 +101,8 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 
 MySQL_Connection::MySQL_Connection() {
 	//memset(&myconn,0,sizeof(MYSQL));
+	mysql=NULL;
+	ret_mysql=NULL;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -124,7 +126,11 @@ MySQL_Connection::~MySQL_Connection() {
 		delete userinfo;
 		userinfo=NULL;
 	}
-	if (myds) {
+	if (mysql) {
+		mysql_close(mysql);
+		mysql=NULL;
+	}
+	if (myds) { // FIXME: with the use of mysql client library , this part should be gone 
 		myds->shut_hard();
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection %p , fd:%d\n", this, fd);
@@ -192,3 +198,14 @@ bool MySQL_Connection::get_status_user_variable() {
 bool MySQL_Connection::get_status_prepared_statement() {
 	return status_flags & STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
 }
+
+// non blocking API
+void MySQL_Connection::connect_start() {
+	if (parent->port) {
+		async_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, 0);
+	} else {
+		async_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, userinfo->password, userinfo->schemaname, parent->port, parent->address, 0);
+	}
+	fd=mysql_get_socket(mysql);
+}
+

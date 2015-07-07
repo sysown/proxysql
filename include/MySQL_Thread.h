@@ -177,9 +177,9 @@ class MySQL_Thread
   void process_all_sessions_connections_handler();
   void register_session_connection_handler(MySQL_Session *_sess);
   void unregister_session_connection_handler(int idx);
-  void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
-  void myds_backend_pause_connect(MySQL_Data_Stream *myds);
-  void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
+  //void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
+  //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
+  //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
   SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
 };

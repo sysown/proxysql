@@ -34,6 +34,9 @@ class MySQL_Connection {
 	public:
 	int fd;
 	char scramble_buff[40];
+	int async_status;
+	MYSQL *mysql;
+	MYSQL *ret_mysql;
 	struct {
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
@@ -71,5 +74,6 @@ class MySQL_Connection {
 	bool get_status_compression();
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
+	void connect_start();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */
