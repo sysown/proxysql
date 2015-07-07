@@ -207,7 +207,8 @@ class ProxySQLBaseTest(TestCase):
 		cls._stop_proxysql_pings()
 		cls._shutdown_docker_services()
 	
-	def run_query_proxysql(self, query, db, return_result=True,
+	@classmethod
+	def run_query_proxysql(cls, query, db, return_result=True,
 							username=None, password=None, port=None):
 		"""Run a query against the ProxySQL proxy and optionally return its
 		results as a set of rows."""
@@ -230,7 +231,8 @@ class ProxySQLBaseTest(TestCase):
 		if return_result:
 			return rows
 
-	def run_query_proxysql_admin(self, query, return_result=True):
+	@classmethod
+	def run_query_proxysql_admin(cls, query, return_result=True):
 		"""Run a query against the ProxySQL admin.
 
 		Note: we do not need to specify a db for this query, as it's always
@@ -240,7 +242,7 @@ class ProxySQLBaseTest(TestCase):
 		"""
 		config = ProxySQL_Tests_Config() 
 
-		return self.run_query_proxysql(
+		return cls.run_query_proxysql(
 			query,
 			# "main" database is hardcoded within the
 			# ProxySQL admin -- it contains the SQLite3
@@ -252,8 +254,8 @@ class ProxySQLBaseTest(TestCase):
 			port=int(config.get('ProxySQL', 'admin_port'))
 		)
 
-
-	def run_query_mysql(self, query, db, return_result=True, hostgroup=0,
+	@classmethod
+	def run_query_mysql(cls, query, db, return_result=True, hostgroup=0,
 					    username=None, password=None):
 		"""Run a query against the MySQL backend and optionally return its
 		results as a set of rows.
@@ -267,11 +269,11 @@ class ProxySQLBaseTest(TestCase):
 		from the specified hostgroup."""
 
 		# Figure out which are the containers for the specified hostgroup
-		mysql_backends = ProxySQLBaseTest._get_mysql_containers()
+		mysql_backends = cls._get_mysql_containers()
 		mysql_backends_in_hostgroup = []
 		for backend in mysql_backends:
 			container_name = backend['Names'][0][1:].upper()
-			backend_hostgroup = ProxySQLBaseTest._extract_hostgroup_from_container_name(container_name)
+			backend_hostgroup = cls._extract_hostgroup_from_container_name(container_name)
 
 			mysql_port_exposed=False
 			if not backend.get('Ports'):
@@ -311,7 +313,8 @@ class ProxySQLBaseTest(TestCase):
 		if return_result:
 			return rows
 
-	def run_sysbench_proxysql(self, threads=4, time=60, db="test",
+	@classmethod
+	def run_sysbench_proxysql(cls, threads=4, time=60, db="test",
 								username=None, password=None, port=None):
 		"""Runs a sysbench test with the given parameters against the given
 		ProxySQL instance.
@@ -348,9 +351,9 @@ class ProxySQLBaseTest(TestCase):
 					 "--mysql-port=%s" % port
 				 ]
 
-		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["prepare"])
-		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["run"])
-		ProxySQLBaseTest.run_bash_command_within_proxysql(params + ["cleanup"])
+		cls.run_bash_command_within_proxysql(params + ["prepare"])
+		cls.run_bash_command_within_proxysql(params + ["run"])
+		cls.run_bash_command_within_proxysql(params + ["cleanup"])
 
 	@classmethod
 	def run_bash_command_within_proxysql(cls, params):
@@ -363,7 +366,7 @@ class ProxySQLBaseTest(TestCase):
 		- running various debugging commands against the ProxySQL instance
 		"""
 
-		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
+		proxysql_container_id = cls._get_proxysql_container()['Id']
 		exec_params = ["docker", "exec", proxysql_container_id] + params
 		subprocess.call(exec_params)
 
