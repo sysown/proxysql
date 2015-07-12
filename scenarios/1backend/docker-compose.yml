@@ -14,7 +14,7 @@ proxysql:
   privileged: true
 
 backend1hostgroup0:
-  build: ./mysql
+  build: mysql
   environment:
     MYSQL_ROOT_PASSWORD: root
   expose:
