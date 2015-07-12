@@ -4,7 +4,7 @@ from proxysql_base_test import ProxySQLBaseTest
 
 class OneBackendTest(ProxySQLBaseTest):
 
-	DOCKER_COMPOSE_FILE = "./scenarios/1backend"
+	SCENARIO = "./scenarios/1backend"
 
 	def test_select_strings_returns_correct_result(self):
 
