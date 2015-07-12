@@ -1,5 +1,7 @@
+import os
 import random
 import re
+import shutil
 import subprocess
 import time
 from unittest import TestCase
@@ -180,6 +182,13 @@ class ProxySQLBaseTest(TestCase):
 		# left them in limbo.
 		cls._shutdown_docker_services()
 
+		try:
+			shutil.rmtree('/tmp/proxysql-tests')
+		except:
+			pass
+		os.mkdir('/tmp/proxysql-tests')
+		os.system("cp -R " + os.path.dirname(__file__) + "/../* /tmp/proxysql-tests")
+		
 		cls._startup_docker_services()
 
 		if cls.INTERACTIVE_TEST:
@@ -212,6 +221,8 @@ class ProxySQLBaseTest(TestCase):
 		# in order to debug the problem causing it to crash).
 		cls._stop_proxysql_pings()
 		cls._shutdown_docker_services()
+
+		shutil.rmtree('/tmp/proxysql-tests/')
 	
 	@classmethod
 	def run_query_proxysql(cls, query, db, return_result=True,

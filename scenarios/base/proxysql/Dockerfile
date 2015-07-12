@@ -18,10 +18,8 @@ RUN apt-get update && apt-get install -y\
 RUN cd /opt; git clone https://github.com/akopytov/sysbench.git
 RUN cd /opt/sysbench; ./autogen.sh; ./configure --bindir=/usr/bin; make; make install
 
-RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git proxysql
-RUN cd /opt/proxysql; make clean && make
-RUN mkdir -p /var/run/proxysql
 ADD ./proxysql.cnf /etc/
+RUN mkdir -p /var/run/proxysql
+ADD ./compile_and_start_proxysql.sh /tmp/
 
-WORKDIR /opt/proxysql/src
-CMD ["gdbserver", "0.0.0.0:2345", "/opt/proxysql/src/proxysql", "--initial"]
+CMD ["/tmp/compile_and_start_proxysql.sh"]
