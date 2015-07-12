@@ -9,6 +9,8 @@ proxysql:
     - "6033:6033"
     # gdbserver
     - "2345:2345"
+  volumes:
+    - /tmp/proxysql-tests:/opt/proxysql
   privileged: true
 
 backend1hostgroup0:
