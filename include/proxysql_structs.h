@@ -11,6 +11,14 @@
 
 enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
 
+enum MDB_ASYNC_ST { // MariaDB Async State Machine
+	ASYNC_CONNECT_START,
+	ASYNC_CONNECT_CONT,
+	ASYNC_CONNECT_END,
+	ASYNC_CONNECT_SUCCESSFUL,
+	ASYNC_CONNECT_FAILED
+};
+
 // list of possible debugging modules
 enum debug_module {
 	PROXY_DEBUG_GENERIC,

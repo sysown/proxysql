@@ -6,7 +6,6 @@ extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 
-
 Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
@@ -447,16 +446,19 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
-		int ms_status = 0;
+//		int ms_status = 0;
 		switch (status) {
 			case CONNECTING_SERVER:
-				if (myds->revents & POLLIN) ms_status |= MYSQL_WAIT_READ;
-				if (myds->revents & POLLOUT) ms_status |= MYSQL_WAIT_WRITE;
-				if (myds->revents & POLLPRI) ms_status |= MYSQL_WAIT_EXCEPT;
-				if (ms_status) {
-					myconn->async_exit_status = mysql_real_connect_cont(&myconn->ret_mysql, myconn->mysql, ms_status);
-					if (myconn->async_exit_status==0) {
+//				if (myds->revents & POLLIN) ms_status |= MYSQL_WAIT_READ;
+//				if (myds->revents & POLLOUT) ms_status |= MYSQL_WAIT_WRITE;
+//				if (myds->revents & POLLPRI) ms_status |= MYSQL_WAIT_EXCEPT;
+//				if (ms_status) {
+				if (myds->revents) {
+					myconn->handler(myds->revents);
+//					myconn->async_exit_status = mysql_real_connect_cont(&myconn->ret_mysql, myconn->mysql, ms_status);
+//					if (myconn->async_exit_status==0) {
 					if (myconn->ret_mysql) {
+						if (myconn->async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
 						myds->myds_type=MYDS_BACKEND;
 						myds->DSS=STATE_READY;
 						//mybe->myconn=server_myds->myconn;
@@ -468,9 +470,12 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 							myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
 							myds->DSS=STATE_QUERY_SENT_DS;
 						}
+					} else {
+						assert(0);
+					}
       //assert(0);
 					}
-				}
+//				}
 			}
 			break;
 		default:
@@ -1293,21 +1298,29 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection has no FD\n", this);
 		int __fd;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
-		myconn->mysql=mysql_init(NULL);
-		assert(myconn->mysql);
-		mysql_options(myconn->mysql, MYSQL_OPT_NONBLOCK, 0);
+//		myconn->mysql=mysql_init(NULL);
+//		assert(myconn->mysql);
+//		mysql_options(myconn->mysql, MYSQL_OPT_NONBLOCK, 0);
 		myconn->userinfo->set(client_myds->myconn->userinfo);
 		// FIXME: set client_flags
 		//mybe->server_myds->myconn->connect_start();
 		//mybe->server_myds->fd=myconn->fd;
 
-
+		//myconn->connect_start();
+		myconn->handler(0);
+/*
 		if (myconn->parent->port) {
 			myconn->async_exit_status=mysql_real_connect_start(&myconn->ret_mysql,myconn->mysql, myconn->parent->address, myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname, myconn->parent->port, NULL, 0);
 		} else {
 			myconn->async_exit_status=mysql_real_connect_start(&myconn->ret_mysql,myconn->mysql, "localhost", myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname, myconn->parent->port, myconn->parent->address, 0);
 		}
 		myconn->fd=mysql_get_socket(myconn->mysql);
+		if (myconn->async_exit_status) {
+//			myconn->async_state_machine=1;
+		} else {
+//			myconn->async_state_machine=2;	
+		}
+*/
 		mybe->server_myds->fd=myconn->fd;
 		mybe->server_myds->DSS=STATE_MARIADB_CONNECTING;
 		status=CONNECTING_SERVER;

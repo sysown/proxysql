@@ -33,9 +33,11 @@ class MySQL_Connection {
 	unsigned long long inserted_into_pool;
 	public:
 	int fd;
+	short wait_events;
+	unsigned long long timeout;
 	char scramble_buff[40];
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
-	int async_state_machine;	// Async state machine
+	MDB_ASYNC_ST async_state_machine;	// Async state machine
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
 	struct {
@@ -76,5 +78,8 @@ class MySQL_Connection {
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
 	void connect_start();
+	void connect_cont(short event);
+	MDB_ASYNC_ST handler(short event);
+	void next_event(MDB_ASYNC_ST new_st);
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

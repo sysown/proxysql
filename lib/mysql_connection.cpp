@@ -14,6 +14,20 @@ void MySQL_Connection::operator delete(void *ptr) {
 
 //extern __thread char *mysql_thread___default_schema;
 
+static int
+mysql_status(short event) {
+	int status= 0;
+	if (event & POLLIN)
+		status|= MYSQL_WAIT_READ;
+	if (event & POLLOUT)
+		status|= MYSQL_WAIT_WRITE;
+//	FIXME: handle timeout
+//	if (event & PROXY_TIMEOUT)
+//		status|= MYSQL_WAIT_TIMEOUT;
+	return status;
+}
+
+
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
 	password=NULL;
@@ -102,6 +116,7 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 MySQL_Connection::MySQL_Connection() {
 	//memset(&myconn,0,sizeof(MYSQL));
 	mysql=NULL;
+	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
 	myds=NULL;
 	inserted_into_pool=0;
@@ -201,6 +216,9 @@ bool MySQL_Connection::get_status_prepared_statement() {
 
 // non blocking API
 void MySQL_Connection::connect_start() {
+	mysql=mysql_init(NULL);
+	assert(mysql);
+	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 	if (parent->port) {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, 0);
 	} else {
@@ -209,3 +227,83 @@ void MySQL_Connection::connect_start() {
 	fd=mysql_get_socket(mysql);
 }
 
+void MySQL_Connection::connect_cont(short event) {
+	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event));
+}
+
+#define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
+
+MDB_ASYNC_ST MySQL_Connection::handler(short event) {
+	if (mysql==NULL) {
+		// it is the first time handler() is being called
+		async_state_machine=ASYNC_CONNECT_START;
+	}
+handler_again:
+	switch (async_state_machine) {
+		case ASYNC_CONNECT_START:
+			connect_start();
+			if (async_exit_status) {
+				next_event(ASYNC_CONNECT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_CONNECT_END);
+			}
+			break;
+		case ASYNC_CONNECT_CONT:
+			connect_cont(event);
+			if (async_exit_status) {
+      	next_event(ASYNC_CONNECT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_CONNECT_END);
+			}
+    break;
+			break;
+		case ASYNC_CONNECT_END:
+			if (!ret_mysql) {
+				fprintf(stderr,"Failed to mysql_real_connect()");
+    		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
+			} else {
+    		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
+			}
+    	break;
+		case ASYNC_CONNECT_SUCCESSFUL:
+			break;
+		case ASYNC_CONNECT_FAILED:
+			break;
+		default:
+			assert(0); //we should never reach here
+			break;
+		}
+	return async_state_machine;
+}
+
+
+void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
+	int fd;
+	wait_events=0;
+
+	if (async_exit_status & MYSQL_WAIT_READ)
+		wait_events |= POLLIN;
+	if (async_exit_status & MYSQL_WAIT_WRITE)
+		wait_events|= POLLOUT;
+	if (wait_events)
+		fd= mysql_get_socket(mysql);
+	else
+		fd= -1;
+	if (async_exit_status & MYSQL_WAIT_TIMEOUT) {
+	timeout=10000;
+	//tv.tv_sec= 0;
+	//tv.tv_usec= 10000;
+      //ptv= &tv;
+	} else {
+      //ptv= NULL;
+	}
+    //event_set(ev_mysql, fd, wait_event, state_machine_handler, this);
+    //if (ev_mysql==NULL) {
+    //  ev_mysql=event_new(base, fd, wait_event, state_machine_handler, this);
+      //event_add(ev_mysql, ptv);
+	//}
+    //event_del(ev_mysql);
+    //event_assign(ev_mysql, base, fd, wait_event, state_machine_handler, this);
+    //event_add(ev_mysql, ptv);
+	async_state_machine = new_st;
+};
