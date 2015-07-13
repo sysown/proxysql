@@ -82,6 +82,10 @@ class MySQL_Connection {
 	void connect_cont(short event);
 	void ping_start();
 	void ping_cont(short event);
+	void set_names_start();
+	void set_names_cont(short event);
+	void initdb_start();
+	void initdb_cont(short event);
 	MDB_ASYNC_ST handler(short event);
 	void next_event(MDB_ASYNC_ST new_st);
 };

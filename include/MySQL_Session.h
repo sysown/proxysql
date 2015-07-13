@@ -35,9 +35,9 @@ class Query_Info {
 class MySQL_Session
 {
 	private:
-	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
+//	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
 	bool handler___status_CHANGING_USER_SERVER(PtrSize_t *);
-	bool handler___status_CHANGING_CHARSET(PtrSize_t *);
+//	bool handler___status_CHANGING_CHARSET(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *);
 //	void handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *);

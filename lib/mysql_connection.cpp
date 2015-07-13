@@ -2,6 +2,10 @@
 #include "cpp.h"
 #include "SpookyV2.h"
 
+// Bug https://mariadb.atlassian.net/browse/CONC-136
+//int STDCALL mysql_select_db_start(int *ret, MYSQL *mysql, const char *db);
+//int STDCALL mysql_select_db_cont(int *ret, MYSQL *mysql, int ready_status);
+
 /*
 void * MySQL_Connection::operator new(size_t size) {
 	return l_alloc(size);
@@ -239,6 +243,23 @@ void MySQL_Connection::ping_cont(short event) {
 	async_exit_status = mysql_ping_cont(&interr,mysql, mysql_status(event));
 }
 
+void MySQL_Connection::initdb_start() {
+	async_exit_status = mysql_select_db_start(&interr,mysql,userinfo->schemaname);
+}
+
+void MySQL_Connection::initdb_cont(short event) {
+	async_exit_status = mysql_select_db_cont(&interr,mysql, mysql_status(event));
+}
+
+// FIXME: UTF8 is hardcoded for now, needs to be dynamic
+void MySQL_Connection::set_names_start() {
+	async_exit_status = mysql_set_character_set_start(&interr,mysql,"UTF8");
+}
+
+void MySQL_Connection::set_names_cont(short event) {
+	async_exit_status = mysql_set_character_set_cont(&interr,mysql, mysql_status(event));
+}
+
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 MDB_ASYNC_ST MySQL_Connection::handler(short event) {
@@ -303,6 +324,62 @@ handler_again:
 		case ASYNC_PING_SUCCESSFUL:
 			break;
 		case ASYNC_PING_FAILED:
+			break;
+		case ASYNC_SET_NAMES_START:
+			set_names_start();
+			if (async_exit_status) {
+				next_event(ASYNC_SET_NAMES_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_NAMES_END);
+			}
+			break;
+		case ASYNC_SET_NAMES_CONT:
+			set_names_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_SET_NAMES_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_NAMES_END);
+			}
+			break;
+		case ASYNC_SET_NAMES_END:
+			if (interr) {
+				NEXT_IMMEDIATE(ASYNC_SET_NAMES_FAILED);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_NAMES_SUCCESSFUL);
+			}
+			break;
+		case ASYNC_SET_NAMES_SUCCESSFUL:
+			break;
+		case ASYNC_SET_NAMES_FAILED:
+			fprintf(stderr,"%s\n",mysql_error(mysql));
+			break;
+		case ASYNC_INITDB_START:
+			initdb_start();
+			if (async_exit_status) {
+				next_event(ASYNC_INITDB_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_INITDB_END);
+			}
+			break;
+		case ASYNC_INITDB_CONT:
+			initdb_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_INITDB_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_INITDB_END);
+			}
+			break;
+		case ASYNC_INITDB_END:
+			if (interr) {
+				NEXT_IMMEDIATE(ASYNC_INITDB_FAILED);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_INITDB_SUCCESSFUL);
+			}
+			break;
+		case ASYNC_INITDB_SUCCESSFUL:
+			break;
+		case ASYNC_INITDB_FAILED:
+			fprintf(stderr,"%s\n",mysql_error(mysql));
 			break;
 		default:
 			assert(0); //we should never reach here

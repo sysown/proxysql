@@ -1,6 +1,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+
 extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
@@ -503,6 +504,48 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				}
 			}
 			break;
+		case CHANGING_SCHEMA:
+			if (myds->revents) {
+				myconn->handler(myds->revents);
+				if (myconn->async_state_machine==ASYNC_INITDB_SUCCESSFUL) {
+					myds->DSS=STATE_READY;
+					status=WAITING_SERVER_DATA;
+					unsigned int k;
+					PtrSize_t pkt2;
+					for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
+						myds->PSarrayOUTpending->remove_index(0,&pkt2);
+						myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+						myds->DSS=STATE_QUERY_SENT_DS;
+					}
+				}
+				if (myconn->async_state_machine==ASYNC_INITDB_FAILED) {
+					set_unhealthy();
+					myds->myconn->reusable=false;
+					return -1;
+				}
+			}
+			break;
+		case CHANGING_CHARSET:
+			if (myds->revents) {
+				myconn->handler(myds->revents);
+				if (myconn->async_state_machine==ASYNC_SET_NAMES_SUCCESSFUL) {
+					myds->DSS=STATE_READY;
+					status=WAITING_SERVER_DATA;
+					unsigned int k;
+					PtrSize_t pkt2;
+					for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
+						myds->PSarrayOUTpending->remove_index(0,&pkt2);
+						myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+						myds->DSS=STATE_QUERY_SENT_DS;
+					}
+				}
+				if (myconn->async_state_machine==ASYNC_SET_NAMES_FAILED) {
+					set_unhealthy();
+					myds->myconn->reusable=false;
+					return -1;
+				}
+			}
+			break;
 		default:
 			assert(0);
 			break;
@@ -543,11 +586,11 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				}
 				break;
 
-			case CHANGING_SCHEMA:
-				if (handler___status_CHANGING_SCHEMA(&pkt)==false) {
-					return -1;
-				}
-				break;
+//			case CHANGING_SCHEMA:
+//				if (handler___status_CHANGING_SCHEMA(&pkt)==false) {
+//					return -1;
+//				}
+//				break;
 
 			case CHANGING_USER_SERVER:
 				if (handler___status_CHANGING_USER_SERVER(&pkt)==false) {
@@ -555,11 +598,11 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 				}
 				break;
 
-			case CHANGING_CHARSET:
-				if (handler___status_CHANGING_CHARSET(&pkt)==false) {
-					return -1;
-				}
-				break;
+//			case CHANGING_CHARSET:
+//				if (handler___status_CHANGING_CHARSET(&pkt)==false) {
+//					return -1;
+//				}
+//				break;
 
 			case FAST_FORWARD:
 				client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
@@ -651,34 +694,34 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 }
 
 
-bool MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_SCHEMA - UNKNWON\n");
-	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
-		l_free(pkt->size,pkt->ptr);
-		mybe->server_myds->DSS=STATE_READY;
-		//mybe->myconn=server_myds->myconn;
-		status=WAITING_SERVER_DATA;
-		unsigned int k;
-		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-		}
-		// set prepared statement processing
-		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
-		return true;
-	} else {
-		l_free(pkt->size,pkt->ptr);
-		set_unhealthy();
-		//mybe->myconn=server_myds->myconn;
-		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
-		// although we enforce this here
-		mybe->server_myds->myconn->reusable=false;
-		return false;
-	}
-	return false;
-}
+//bool MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
+//	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_SCHEMA - UNKNWON\n");
+//	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
+//		l_free(pkt->size,pkt->ptr);
+//		mybe->server_myds->DSS=STATE_READY;
+//		//mybe->myconn=server_myds->myconn;
+//		status=WAITING_SERVER_DATA;
+//		unsigned int k;
+//		PtrSize_t pkt2;
+//		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
+//			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
+//			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+//			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
+//		}
+//		// set prepared statement processing
+//		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
+//		return true;
+//	} else {
+//		l_free(pkt->size,pkt->ptr);
+//		set_unhealthy();
+//		//mybe->myconn=server_myds->myconn;
+//		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
+//		// although we enforce this here
+//		mybe->server_myds->myconn->reusable=false;
+//		return false;
+//	}
+//	return false;
+//}
 
 bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_USER_SERVER - UNKNWON\n");
@@ -709,34 +752,34 @@ bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 	return false;
 }
 
-bool MySQL_Session::handler___status_CHANGING_CHARSET(PtrSize_t *pkt) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_CHARSET - UNKNWON\n");
-	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
-		l_free(pkt->size,pkt->ptr);
-		mybe->server_myds->DSS=STATE_READY;
-		//mybe->myconn=server_myds->myconn;
-		status=WAITING_SERVER_DATA;
-		unsigned int k;
-		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-		}
-		// set prepared statement processing
-		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
-		return true;
-	} else {
-		l_free(pkt->size,pkt->ptr);
-		set_unhealthy();
-		//mybe->myconn=server_myds->myconn;
-		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
-		// although we enforce this here
-		mybe->server_myds->myconn->reusable=false;
-		return false;
-	}
-	return false;
-}
+//bool MySQL_Session::handler___status_CHANGING_CHARSET(PtrSize_t *pkt) {
+//	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_CHARSET - UNKNWON\n");
+//	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
+//		l_free(pkt->size,pkt->ptr);
+//		mybe->server_myds->DSS=STATE_READY;
+//		//mybe->myconn=server_myds->myconn;
+//		status=WAITING_SERVER_DATA;
+//		unsigned int k;
+//		PtrSize_t pkt2;
+//		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
+//			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
+//			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
+//			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
+//		}
+//		// set prepared statement processing
+//		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
+//		return true;
+//	} else {
+//		l_free(pkt->size,pkt->ptr);
+//		set_unhealthy();
+//		//mybe->myconn=server_myds->myconn;
+//		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
+//		// although we enforce this here
+//		mybe->server_myds->myconn->reusable=false;
+//		return false;
+//	}
+//	return false;
+//}
 
 
 //void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *pkt) {
@@ -1379,20 +1422,29 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend() {
 	mybe->server_myds->move_from_OUT_to_OUTpending();
-	//userinfo_server.set_schemaname(userinfo_client.schemaname,strlen(userinfo_client.schemaname));
 	mybe->server_myds->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
-	//myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
-	mybe->server_myds->myprot.generate_COM_INIT_DB(true,NULL,NULL,mybe->server_myds->myconn->userinfo->schemaname);
-	mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 	status=CHANGING_SCHEMA;
+	mybe->server_myds->DSS=STATE_MARIADB_INITDB;
+	mybe->server_myds->myconn->async_state_machine=ASYNC_INITDB_START;
+	mybe->server_myds->myconn->handler(0);
+//	mybe->server_myds->move_from_OUT_to_OUTpending();
+//	//userinfo_server.set_schemaname(userinfo_client.schemaname,strlen(userinfo_client.schemaname));
+//	mybe->server_myds->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
+//	//myprot_server.generate_COM_INIT_DB(true,NULL,NULL,userinfo_server.schemaname);
+//	mybe->server_myds->myprot.generate_COM_INIT_DB(true,NULL,NULL,mybe->server_myds->myconn->userinfo->schemaname);
+//	mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
+//	status=CHANGING_SCHEMA;
 }
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend() {
 	mybe->server_myds->move_from_OUT_to_OUTpending();
 	mybe->server_myds->myconn->set_charset(client_myds->myconn->options.charset);
-	mybe->server_myds->myprot.generate_COM_QUERY(true,NULL,NULL,(char *)"SET NAMES utf8");
-	mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-	status=CHANGING_SCHEMA;
+//	mybe->server_myds->myprot.generate_COM_QUERY(true,NULL,NULL,(char *)"SET NAMES utf8");
+//	mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
+	mybe->server_myds->DSS=STATE_MARIADB_SET_NAMES;
+	mybe->server_myds->myconn->async_state_machine=ASYNC_SET_NAMES_START;
+	mybe->server_myds->myconn->handler(0);
+	status=CHANGING_CHARSET;
 }
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend() {
