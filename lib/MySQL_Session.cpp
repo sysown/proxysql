@@ -474,6 +474,9 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 						assert(0);
 					}
       //assert(0);
+					} else {
+						//assert(0);
+						wrong_pass=1;
 					}
 //				}
 			}
