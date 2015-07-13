@@ -940,7 +940,8 @@ void MySQL_Thread::run() {
 			MySQL_Data_Stream *myds;
 			myds=new MySQL_Data_Stream();
 			MySQL_Connection *mc=my_idle_conns[i];
-			myds->myconn=mc;
+//			myds->myconn=mc;
+			myds->attach_connection(mc);
 			myds->assign_fd_from_mysql_conn();
 			myds->myds_type=MYDS_BACKEND;
 			MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(i);
@@ -951,13 +952,17 @@ void MySQL_Thread::run() {
 			sess->mybe->server_myds=myds;
 			sess->to_process=1;
 			myds->timeout=curtime+mysql_thread___ping_timeout_server*1000;	// max_timeout
-			sess->status=WAITING_SERVER_DATA;
+//			sess->status=WAITING_SERVER_DATA;
 			myds->mypolls=&mypolls;
 			mc->last_time_used=curtime;
 			myds->myprot.init(&myds, myds->myconn->userinfo, NULL);
-			myds->myprot.generate_COM_PING(true,NULL,NULL);
-			myds->array2buffer_full();
-			myds->DSS=STATE_QUERY_SENT_DS;
+//			myds->myprot.generate_COM_PING(true,NULL,NULL);
+//			myds->array2buffer_full();
+//			myds->DSS=STATE_QUERY_SENT_DS;
+			sess->status=PINGING_SERVER;
+			myds->DSS=STATE_MARIADB_PING;
+			myds->myconn->async_state_machine=ASYNC_PING_START;
+			myds->myconn->handler(0);
 			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, curtime);
 		}
 		processing_idles=true;

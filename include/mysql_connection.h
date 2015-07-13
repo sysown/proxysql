@@ -37,6 +37,7 @@ class MySQL_Connection {
 	unsigned long long timeout;
 	char scramble_buff[40];
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
+	int interr;	// integer return
 	MDB_ASYNC_ST async_state_machine;	// Async state machine
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
@@ -79,6 +80,8 @@ class MySQL_Connection {
 	bool get_status_user_variable();
 	void connect_start();
 	void connect_cont(short event);
+	void ping_start();
+	void ping_cont(short event);
 	MDB_ASYNC_ST handler(short event);
 	void next_event(MDB_ASYNC_ST new_st);
 };

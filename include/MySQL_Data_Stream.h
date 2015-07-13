@@ -130,7 +130,7 @@ class MySQL_Data_Stream
 
 	// safe way to detach a MySQL Connection
 	void detach_connection() {
-		assert(myconn==NULL);
+		assert(myconn);
 		myconn->myds=NULL;
 		myconn=NULL;
 	}

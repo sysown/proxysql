@@ -199,17 +199,17 @@ int MySQL_Session::handler() {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
 		assert(mybe);
 		assert(mybe->server_myds);
-		if (mybe->server_myds->DSS==STATE_PING_SENT_NET) {
-			assert(mybe->server_myds->myconn);
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds . server_myds=%p , myconn=%p , fd=%d , timeout=%llu , curtime=%llu\n", this, mybe->server_myds , mybe->server_myds->myconn, mybe->server_myds->myconn->fd , mybe->server_myds->timeout , thread->curtime);
-			if (mybe->server_myds->timeout < thread->curtime) {
-				MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
-				mybe->server_myds->myconn=NULL;
-				mybe->server_myds->fd=-1;
-				thread->mypolls.remove_index_fast(mybe->server_myds->poll_fds_idx);
-				return -1;
-			}
-		}
+//		if (mybe->server_myds->DSS==STATE_PING_SENT_NET) {
+//			assert(mybe->server_myds->myconn);
+//			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds . server_myds=%p , myconn=%p , fd=%d , timeout=%llu , curtime=%llu\n", this, mybe->server_myds , mybe->server_myds->myconn, mybe->server_myds->myconn->fd , mybe->server_myds->timeout , thread->curtime);
+//			if (mybe->server_myds->timeout < thread->curtime) {
+//				MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
+//				mybe->server_myds->myconn=NULL;
+//				mybe->server_myds->fd=-1;
+//				thread->mypolls.remove_index_fast(mybe->server_myds->poll_fds_idx);
+//				return -1;
+//			}
+//		}
 		goto __exit_DSS__STATE_NOT_INITIALIZED;
 	}
 	}
@@ -446,6 +446,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
 //		int ms_status = 0;
 		switch (status) {
 			case CONNECTING_SERVER:
@@ -476,9 +477,30 @@ __exit_DSS__STATE_NOT_INITIALIZED:
       //assert(0);
 					} else {
 						//assert(0);
-						wrong_pass=1;
+						if (myconn->async_state_machine!=ASYNC_CONNECT_CONT) {
+							wrong_pass=true;
+						}
 					}
 //				}
+			}
+			break;
+		case PINGING_SERVER:
+			if (myds->revents) {
+				myconn->handler(myds->revents);
+				if (myconn->async_state_machine==ASYNC_PING_SUCCESSFUL) {
+					myds->DSS=STATE_READY;
+					/* multi-plexing attempt */
+					if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+						myds->myconn->last_time_used=thread->curtime;
+						MyHGM->push_MyConn_to_pool(myds->myconn);
+				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
+				//mybe->server_myds->myconn=NULL;
+						myds->detach_connection();
+						myds->unplug_backend();
+					}
+					/* multi-plexing attempt */
+					status=NONE;
+				}
 			}
 			break;
 		default:
@@ -496,9 +518,9 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		switch (status) {
 			case WAITING_SERVER_DATA:
 				switch (mybe->server_myds->DSS) {
-					case STATE_PING_SENT_NET:
-						handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(&pkt);
-						break;
+//					case STATE_PING_SENT_NET:
+//						handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(&pkt);
+//						break;
 
 					case STATE_QUERY_SENT_NET:
 						handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(&pkt);
@@ -572,7 +594,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		if (connections_handler) {
 			//fprintf(stderr,"time=%llu\n",monotonic_time());
 			//mybe->server_myds->timeout=thread->curtime+100;
-			mybe->server_myds->DSS=STATE_PING_SENT_NET;
+			//mybe->server_myds->DSS=STATE_PING_SENT_NET;
 		} else {
 			mybe->server_myds->setDSS_STATE_QUERY_SENT_NET();
 		}
@@ -717,29 +739,29 @@ bool MySQL_Session::handler___status_CHANGING_CHARSET(PtrSize_t *pkt) {
 }
 
 
-void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *pkt) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_PING_SENT\n");
-	unsigned char c;
-	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
-	if (c==0 || c==0xff) {
-		mybe->server_myds->DSS=STATE_READY;
-		/* multi-plexing attempt */
-		if (c==0) {
-			mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size);
-			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-				mybe->server_myds->myconn->last_time_used=thread->curtime;
-				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);
-				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
-				//mybe->server_myds->myconn=NULL;
-				mybe->server_myds->detach_connection();
-				mybe->server_myds->unplug_backend();
-			}
-		}
-		/* multi-plexing attempt */	
-		status=NONE;
-	}
-	l_free(pkt->size,pkt->ptr);
-}
+//void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *pkt) {
+//	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_PING_SENT\n");
+//	unsigned char c;
+//	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
+//	if (c==0 || c==0xff) {
+//		mybe->server_myds->DSS=STATE_READY;
+//		/* multi-plexing attempt */
+//		if (c==0) {
+//			mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size);
+//			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+//				mybe->server_myds->myconn->last_time_used=thread->curtime;
+//				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);
+//				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
+//				//mybe->server_myds->myconn=NULL;
+//				mybe->server_myds->detach_connection();
+//				mybe->server_myds->unplug_backend();
+//			}
+//		}
+//		/* multi-plexing attempt */	
+//		status=NONE;
+//	}
+//	l_free(pkt->size,pkt->ptr);
+//}
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_QUERY_SENT\n");
@@ -1327,6 +1349,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->fd=myconn->fd;
 		mybe->server_myds->DSS=STATE_MARIADB_CONNECTING;
 		status=CONNECTING_SERVER;
+		mybe->server_myds->myconn->reusable=true;
 
 /*
 		__fd=mybe->server_myds->myds_connect(mybe->server_myds->myconn->parent->address, mybe->server_myds->myconn->parent->port, &pending_connect);

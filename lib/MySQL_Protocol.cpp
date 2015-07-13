@@ -941,25 +941,25 @@ bool MySQL_Protocol::generate_COM_QUERY(bool send, void **ptr, unsigned int *len
 }
 
 //bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len) {
-	mysql_hdr myhdr;
-	myhdr.pkt_id=0;
-	myhdr.pkt_length=1;
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(_ptr, &myhdr);
-  int l=sizeof(mysql_hdr);
-	_ptr[l]=0x0e; l++;
-	
-	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-#ifdef DEBUG
-	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-#endif
-	return true;
-}
+//bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len) {
+//	mysql_hdr myhdr;
+//	myhdr.pkt_id=0;
+//	myhdr.pkt_length=1;
+//  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+//  unsigned char *_ptr=(unsigned char *)l_alloc(size);
+//  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+//  //Copy4B(_ptr, &myhdr);
+//  int l=sizeof(mysql_hdr);
+//	_ptr[l]=0x0e; l++;
+//	
+//	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
+//	if (len) { *len=size; }
+//	if (ptr) { *ptr=(void *)_ptr; }
+//#ifdef DEBUG
+//	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+//#endif
+//	return true;
+//}
 
 //bool MySQL_Protocol::generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_COM_RESET_CONNECTION(bool send, void **ptr, unsigned int *len) {
