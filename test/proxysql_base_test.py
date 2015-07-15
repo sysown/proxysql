@@ -183,7 +183,7 @@ class ProxySQLBaseTest(TestCase):
 		cls._shutdown_docker_services()
 
 		try:
-			shutil.rmtree('/tmp/proxysql-tests')
+			shutil.rmtree('/tmp/proxysql-tests/', onerror=cls.onerror)
 		except:
 			pass
 		os.mkdir('/tmp/proxysql-tests')
