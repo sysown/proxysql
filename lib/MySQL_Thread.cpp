@@ -1112,7 +1112,7 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 				mypolls.last_recv[n]=curtime;
 				myds->revents=mypolls.fds[n].revents;
 				myds->sess->to_process=1;
-				if (myds->myds_type==MYDS_BACKEND && myds->sess->fast_forward==false) {
+				if (myds->myds_type==MYDS_BACKEND && myds->sess->status!=FAST_FORWARD) {
 					return;
 				}
 				if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {

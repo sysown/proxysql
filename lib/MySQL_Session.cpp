@@ -195,26 +195,18 @@ int MySQL_Session::handler() {
 	unsigned int j;
 	unsigned char c;
 
+//	FIXME: Sessions without frontend are an ugly hack
 	if (session_fast_forward==false) {
 	if (client_myds==NULL) {
 		// if we are here, probably we are trying to ping backends
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
 		assert(mybe);
 		assert(mybe->server_myds);
-//		if (mybe->server_myds->DSS==STATE_PING_SENT_NET) {
-//			assert(mybe->server_myds->myconn);
-//			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds . server_myds=%p , myconn=%p , fd=%d , timeout=%llu , curtime=%llu\n", this, mybe->server_myds , mybe->server_myds->myconn, mybe->server_myds->myconn->fd , mybe->server_myds->timeout , thread->curtime);
-//			if (mybe->server_myds->timeout < thread->curtime) {
-//				MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
-//				mybe->server_myds->myconn=NULL;
-//				mybe->server_myds->fd=-1;
-//				thread->mypolls.remove_index_fast(mybe->server_myds->poll_fds_idx);
-//				return -1;
-//			}
-//		}
 		goto __exit_DSS__STATE_NOT_INITIALIZED;
 	}
 	}
+
+
 	for (j=0; j<client_myds->PSarrayIN->len;) {
 		client_myds->PSarrayIN->remove_index(0,&pkt);
 		//prot.parse_mysql_pkt(&pkt,client_myds);
@@ -360,7 +352,8 @@ int MySQL_Session::handler() {
 				break;
 			case NONE:
 			default:
-				assert(0);
+				proxy_error("Unexpected packet from client, disconnecting the client\n");
+				return -1;
 				break;
 		}
 	}
