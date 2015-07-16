@@ -755,35 +755,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 }
 
 
-//bool MySQL_Session::handler___status_CHANGING_SCHEMA(PtrSize_t *pkt) {
-//	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_SCHEMA - UNKNWON\n");
-//	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
-//		l_free(pkt->size,pkt->ptr);
-//		mybe->server_myds->DSS=STATE_READY;
-//		//mybe->myconn=server_myds->myconn;
-//		status=WAITING_SERVER_DATA;
-//		unsigned int k;
-//		PtrSize_t pkt2;
-//		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-//			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-//			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-//			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-//		}
-//		// set prepared statement processing
-//		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
-//		return true;
-//	} else {
-//		l_free(pkt->size,pkt->ptr);
-//		set_unhealthy();
-//		//mybe->myconn=server_myds->myconn;
-//		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
-//		// although we enforce this here
-//		mybe->server_myds->myconn->reusable=false;
-//		return false;
-//	}
-//	return false;
-//}
-
 bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_USER_SERVER - UNKNWON\n");
 	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
@@ -812,60 +783,6 @@ bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 	}
 	return false;
 }
-
-//bool MySQL_Session::handler___status_CHANGING_CHARSET(PtrSize_t *pkt) {
-//	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_CHARSET - UNKNWON\n");
-//	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
-//		l_free(pkt->size,pkt->ptr);
-//		mybe->server_myds->DSS=STATE_READY;
-//		//mybe->myconn=server_myds->myconn;
-//		status=WAITING_SERVER_DATA;
-//		unsigned int k;
-//		PtrSize_t pkt2;
-//		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-//			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-//			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-//			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-//		}
-//		// set prepared statement processing
-//		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
-//		return true;
-//	} else {
-//		l_free(pkt->size,pkt->ptr);
-//		set_unhealthy();
-//		//mybe->myconn=server_myds->myconn;
-//		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
-//		// although we enforce this here
-//		mybe->server_myds->myconn->reusable=false;
-//		return false;
-//	}
-//	return false;
-//}
-
-
-//void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *pkt) {
-//	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_PING_SENT\n");
-//	unsigned char c;
-//	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
-//	if (c==0 || c==0xff) {
-//		mybe->server_myds->DSS=STATE_READY;
-//		/* multi-plexing attempt */
-//		if (c==0) {
-//			mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size);
-//			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-//				mybe->server_myds->myconn->last_time_used=thread->curtime;
-//				MyHGM->push_MyConn_to_pool(mybe->server_myds->myconn);
-//				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
-//				//mybe->server_myds->myconn=NULL;
-//				mybe->server_myds->detach_connection();
-//				mybe->server_myds->unplug_backend();
-//			}
-//		}
-//		/* multi-plexing attempt */	
-//		status=NONE;
-//	}
-//	l_free(pkt->size,pkt->ptr);
-//}
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_QUERY_SENT\n");
@@ -1564,14 +1481,6 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
 			myprot->generate_pkt_ERR(true,NULL,NULL,sid,mysql_errno(mysql),sqlstate,mysql_error(mysql));
 		}
-//		if (error) {
-//			// there was an error
-//			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"#28000",error);
-//		} else {
-//			// no error, DML succeeded
-//			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,0,0,NULL);
-//		}
-//		myds->DSS=STATE_SLEEP;
 	}
 }
 
