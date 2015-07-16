@@ -993,7 +993,7 @@ void MySQL_Thread::run() {
 
 		for (n = 0; n < mypolls.len; n++) {
 			mypolls.fds[n].revents=0;
-			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER && mypolls.myds[n]->myds_type!=MYDS_BACKEND_PAUSE_CONNECT) {
+			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER) {
 //				mypolls.myds[n]->set_pollout();
 				if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
 					mypolls.fds[n].events = POLLIN;
