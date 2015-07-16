@@ -1074,6 +1074,7 @@ void MySQL_Thread::run() {
 			}
 			if (mypolls.fds[n].revents==0) {
 			// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
+			// check for timeout
 			} else {
 				// check if the FD is valid
 				assert(mypolls.fds[n].revents!=POLLNVAL);
@@ -1084,6 +1085,8 @@ void MySQL_Thread::run() {
 						listener_handle_new_connection(myds,n);
 						continue;
 						break;
+/*
+					//Removing from here. Management of backend should be done within the session
 					case MYDS_FRONTEND:
 						// detected an error on backend
 						if ( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) ) {
@@ -1091,6 +1094,7 @@ void MySQL_Thread::run() {
 							myds->sess->set_unhealthy();
 						}
 						break;
+*/
 					default:
 						break;
 				}
@@ -1107,6 +1111,10 @@ void MySQL_Thread::run() {
 void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 				mypolls.last_recv[n]=curtime;
 				myds->revents=mypolls.fds[n].revents;
+				myds->sess->to_process=1;
+				if (myds->myds_type!=MYDS_FRONTEND) {
+					return;
+				}
 				if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
 					// only if we aren't using MariaDB Client Library
 					myds->read_from_net();
@@ -1120,7 +1128,6 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 				}
 
 				myds->check_data_flow();
-				myds->sess->to_process=1;
 
 
 	      if (myds->active==FALSE) {
