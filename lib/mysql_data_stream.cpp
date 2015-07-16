@@ -95,6 +95,9 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	pkts_recv=0;
 	pkts_sent=0;
 
+	mysql_real_query.ptr=NULL;
+	mysql_real_query.size=0;
+
 	timeout=0;
 	connect_tries=0;
 	poll_fds_idx=-1;
@@ -255,7 +258,8 @@ int MySQL_Data_Stream::read_from_net() {
 	//proxy_error("read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
 	if (r < 1) {
 		if (encrypted==false) {
-			if (r==0 || (r==-1 && errno != EINTR && errno != EAGAIN)) {
+			int myds_errno=errno;
+			if (r==0 || (r==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
 				shut_soft();
 			}
 		} else {

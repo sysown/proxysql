@@ -129,6 +129,7 @@ class MySQL_Session
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, MySQL_Protocol *myprot);
 	SQLite3_result * SQL3_Session_status();
 
 	void reset_all_backends();

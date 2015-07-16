@@ -84,6 +84,11 @@ class MySQL_Data_Stream
 
 	bool net_failure;
 
+	struct {
+		char *ptr;
+		unsigned int size;
+	} mysql_real_query;
+
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
 

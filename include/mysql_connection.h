@@ -41,6 +41,11 @@ class MySQL_Connection {
 	MDB_ASYNC_ST async_state_machine;	// Async state machine
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
+	MYSQL_RES *mysql_result;
+	struct {
+		char *ptr;
+		unsigned long length;
+	} query;
 	struct {
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
@@ -84,8 +89,13 @@ class MySQL_Connection {
 	void ping_cont(short event);
 	void set_names_start();
 	void set_names_cont(short event);
+	void real_query_start();
+	void real_query_cont(short event);
+	void store_result_start();
+	void store_result_cont(short event);
 	void initdb_start();
 	void initdb_cont(short event);
+	void set_query(char *stmt, unsigned long length);
 	MDB_ASYNC_ST handler(short event);
 	void next_event(MDB_ASYNC_ST new_st);
 };

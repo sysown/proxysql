@@ -1102,7 +1102,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 }
 
 
-bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, int *fieldslen, char **fieldstxt) {
+bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
 	int col=0;
 	int rowlen=0;
 	for (col=0; col<colnums; col++) {

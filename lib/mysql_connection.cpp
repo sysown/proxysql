@@ -260,6 +260,27 @@ void MySQL_Connection::set_names_cont(short event) {
 	async_exit_status = mysql_set_character_set_cont(&interr,mysql, mysql_status(event));
 }
 
+void MySQL_Connection::set_query(char *stmt, unsigned long length) {
+	query.ptr=stmt;
+	query.length=length;
+}
+
+void MySQL_Connection::real_query_start() {
+	async_exit_status = mysql_real_query_start(&interr , mysql, query.ptr, query.length);
+}
+
+void MySQL_Connection::real_query_cont(short event) {
+	async_exit_status = mysql_real_query_cont(&interr ,mysql , mysql_status(event));
+}
+
+void MySQL_Connection::store_result_start() {
+	async_exit_status = mysql_store_result_start(&mysql_result, mysql);
+}
+
+void MySQL_Connection::store_result_cont(short event) {
+	async_exit_status = mysql_store_result_cont(&mysql_result , mysql , mysql_status(event));
+}
+
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 MDB_ASYNC_ST MySQL_Connection::handler(short event) {
@@ -324,6 +345,48 @@ handler_again:
 		case ASYNC_PING_SUCCESSFUL:
 			break;
 		case ASYNC_PING_FAILED:
+			break;
+		case ASYNC_QUERY_START:
+			real_query_start();
+			if (async_exit_status) {
+				next_event(ASYNC_QUERY_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+			}
+			break;
+		case ASYNC_QUERY_CONT:
+			real_query_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_QUERY_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+			}
+			break;
+		case ASYNC_STORE_RESULT_START:
+			if (mysql_errno(mysql)) {
+				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+			}
+			store_result_start();
+			if (async_exit_status) {
+				next_event(ASYNC_STORE_RESULT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+			}
+			break;
+		case ASYNC_STORE_RESULT_CONT:
+			store_result_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_STORE_RESULT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+			}
+			break;
+		case ASYNC_QUERY_END:
+//			if (interr) {i
+//				NEXT_IMMEDIATE(ASYNC_PING_FAILED);
+//			} else {
+//				NEXT_IMMEDIATE(ASYNC_PING_SUCCESSFUL);
+//			}
 			break;
 		case ASYNC_SET_NAMES_START:
 			set_names_start();

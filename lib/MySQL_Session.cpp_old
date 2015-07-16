@@ -1,7 +1,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#define EXPMARIA
+//#define EXPMARIA
 
 extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
@@ -296,7 +296,6 @@ int MySQL_Session::handler() {
 
 
 #ifdef EXPMARIA
-									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 									mybe->server_myds->mysql_real_query.size=pkt.size-5;
 									mybe->server_myds->mysql_real_query.ptr=(char *)malloc(pkt.size-5);
 									memcpy(mybe->server_myds->mysql_real_query.ptr,(char *)pkt.ptr+5,pkt.size-5);
@@ -377,7 +376,6 @@ __get_a_backend:
 	if (status!=FAST_FORWARD && client_myds->DSS==STATE_QUERY_SENT_NET) {
 	// the client has completely sent the query, now we should handle it server side
 	//
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET\n", this);
 		if (mybe && mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET , server_myds==STATE_NOT_INITIALIZED\n", this);
 			// DSS is STATE_NOT_INITIALIZED. It means we are not connected to any server
@@ -436,19 +434,16 @@ __get_a_backend:
 					handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
 				}
 			} else {
-#ifndef EXPMARIA
 				if (client_myds->myconn->options.charset!=mybe->server_myds->myconn->options.charset /* FIXME: this was for debugging only */ /*|| rand()%3==0 */) {
 					handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();
 				} else {
-#endif
 					//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 #ifdef EXPMARIA
-					MySQL_Data_Stream *myds=mybe->server_myds;
-					myds->DSS=STATE_MARIADB_QUERY;
+					mybe->server_myds->DSS=STATE_MARIADB_QUERY;
 					status=PROCESSING_QUERY;
-					myds->myconn->async_state_machine=ASYNC_QUERY_START;
-					myds->myconn->set_query(myds->mysql_real_query.ptr,myds->mysql_real_query.size);
-					myds->myconn->handler(0);
+					mybe->server_myds->myconn->async_state_machine=ASYNC_QUERY_START;
+					mybe->server_myds->myconn->set_query(mybe->server_myds->mysql_real_query.ptr,mybe->server_myds->mysql_real_query.size);
+					mybe->server_myds->myconn->handler(0);
 #else
 					mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
 //					if (client_myds->myconn->processing_prepared_statement) {
@@ -457,9 +452,7 @@ __get_a_backend:
 //					}
 					status=WAITING_SERVER_DATA;
 #endif /* EXPMARIA */
-#ifndef EXPMARIA
 				}
-#endif
 			}
 		}
 							//	}   TRY #1
@@ -530,9 +523,8 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 					/* multi-plexing attempt */
 					//status=NONE;
 					MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
-					mysql_free_result(myconn->mysql_result);
-					myconn->mysql_result=NULL;
-					myds->DSS=STATE_NOT_INITIALIZED;
+
+					myds->DSS=STATE_READY;
 					status=WAITING_CLIENT_DATA;
 					client_myds->DSS=STATE_SLEEP;
 				}
@@ -582,16 +574,8 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 			if (myds->revents) {
 				myconn->handler(myds->revents);
 				if (myconn->async_state_machine==ASYNC_SET_NAMES_SUCCESSFUL) {
-#ifdef EXPMARIA
-					myds->DSS=STATE_MARIADB_QUERY;
-					status=PROCESSING_QUERY;
-					myds->myconn->async_state_machine=ASYNC_QUERY_START;
-					myds->myconn->set_query(myds->mysql_real_query.ptr,myds->mysql_real_query.size);
-					myds->myconn->handler(0);
-#else
 					myds->DSS=STATE_READY;
 					status=WAITING_SERVER_DATA;
-#endif /* EXPMARIA */
 					unsigned int k;
 					PtrSize_t pkt2;
 					for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
@@ -1526,7 +1510,6 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 	unsigned int num_rows;
 	if (result) {
 		// we have a result set, this should be a SELECT statement with result
-		assert(result->current_field==0);
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,num_fields); sid++;
 		for (unsigned int i=0; i<num_fields; i++) {
 			MYSQL_FIELD *field=mysql_fetch_field(result);
