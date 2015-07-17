@@ -15,7 +15,7 @@ from proxysql_tests_config import ProxySQL_Tests_Config
 
 class ProxySQLBaseTest(TestCase):
 
-	DOCKER_COMPOSE_FILE = None
+	SCENARIO = None
 	# TODO(andrei): make it possible to set this to False, and make False
 	# the default value.
 	INTERACTIVE_TEST = True
@@ -25,26 +25,26 @@ class ProxySQLBaseTest(TestCase):
 		"""Start up all the docker services necessary to start this test.
 
 		They are specified in the docker compose file specified in the variable
-		cls.DOCKER_COMPOSE_FILE.
+		cls.SCENARIO.
 		"""
 
 		# We have to perform docker-compose build + docker-compose up,
 		# instead of just doing the latter because of a bug which will give a
 		# 500 internal error for the Docker bug. When this is fixed, we should
 		# remove this first extra step.
-		subprocess.call(["docker-compose", "build"], cwd=cls.DOCKER_COMPOSE_FILE)
-		subprocess.call(["docker-compose", "up", "-d"], cwd=cls.DOCKER_COMPOSE_FILE)
+		subprocess.call(["docker-compose", "build"], cwd=cls.SCENARIO)
+		subprocess.call(["docker-compose", "up", "-d"], cwd=cls.SCENARIO)
 
 	@classmethod
 	def _shutdown_docker_services(cls):
 		"""Shut down all the docker services necessary to start this test.
 
 		They are specified in the docker compose file specified in the variable
-		cls.DOCKER_COMPOSE_FILE.
+		cls.SCENARIO.
 		"""
 
-		subprocess.call(["docker-compose", "stop"], cwd=cls.DOCKER_COMPOSE_FILE)
-		subprocess.call(["docker-compose", "rm", "--force"], cwd=cls.DOCKER_COMPOSE_FILE)
+		subprocess.call(["docker-compose", "stop"], cwd=cls.SCENARIO)
+		subprocess.call(["docker-compose", "rm", "--force"], cwd=cls.SCENARIO)
 
 	@classmethod
 	def _get_proxysql_container(cls):
@@ -183,7 +183,7 @@ class ProxySQLBaseTest(TestCase):
 		cls._shutdown_docker_services()
 
 		try:
-			shutil.rmtree('/tmp/proxysql-tests')
+			shutil.rmtree('/tmp/proxysql-tests/', onerror=cls.onerror)
 		except:
 			pass
 		os.mkdir('/tmp/proxysql-tests')

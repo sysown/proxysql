@@ -6,7 +6,7 @@ from proxysql_base_test import ProxySQLBaseTest
 
 class AuthenticationTest(ProxySQLBaseTest):
 
-	DOCKER_COMPOSE_FILE = "./scenarios/1backend"
+	SCENARIO = "./scenarios/1backend"
 
 	def test_existing_user_with_correct_password_works(self):
 		version1 = ProxySQLBaseTest.run_query_mysql(
