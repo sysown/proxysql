@@ -35,6 +35,7 @@ class Query_Info {
 class MySQL_Session
 {
 	private:
+	std::stack<enum session_status> previous_status;
 //	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
 	bool handler___status_CHANGING_USER_SERVER(PtrSize_t *);
 //	bool handler___status_CHANGING_CHARSET(PtrSize_t *);
@@ -71,6 +72,10 @@ class MySQL_Session
 	void handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();	
 	void handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();	
 
+
+//	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
+
+
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
@@ -80,6 +85,9 @@ class MySQL_Session
 	StatCounters *command_counters;
 	int healthy;
 	bool admin;
+	bool max_connections_reached;
+	int user_max_connections;
+	bool client_authenticated;
 	bool connections_handler;
 	bool stats;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);

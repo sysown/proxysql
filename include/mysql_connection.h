@@ -98,5 +98,10 @@ class MySQL_Connection {
 	void set_query(char *stmt, unsigned long length);
 	MDB_ASYNC_ST handler(short event);
 	void next_event(MDB_ASYNC_ST new_st);
+
+	int async_connect(short event);
+	int async_query(short event, char *stmt, unsigned long length);
+	int async_ping(short event);
+	void async_free_result();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

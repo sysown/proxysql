@@ -38,7 +38,7 @@ class QP_rule_text {
 	char **pta;
 	QP_rule_text(QP_rule_t *QPr) {
 		pta=NULL;
-		pta=(char **)malloc(sizeof(char *)*13);
+		pta=(char **)malloc(sizeof(char *)*15);
 		itostr(pta[0], (long long)QPr->rule_id);
 		itostr(pta[1], (long long)QPr->active);
 		pta[2]=strdup_null(QPr->username);
@@ -50,11 +50,13 @@ class QP_rule_text {
 		pta[8]=strdup_null(QPr->replace_pattern);
 		itostr(pta[9], (long long)QPr->destination_hostgroup);
 		itostr(pta[10], (long long)QPr->cache_ttl);
-		itostr(pta[11], (long long)QPr->apply);
-		itostr(pta[12], (long long)QPr->hits);
+		itostr(pta[11], (long long)QPr->reconnect);
+		itostr(pta[12], (long long)QPr->timeout);
+		itostr(pta[13], (long long)QPr->apply);
+		itostr(pta[14], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
-		for(int i=0; i<13; i++) {
+		for(int i=0; i<15; i++) {
 			free_null(pta[i]);
 		}
 		free(pta);
@@ -285,7 +287,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, bool apply) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, bool apply) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -298,6 +300,8 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->replace_pattern=(replace_pattern ? strdup(replace_pattern) : NULL);
 	newQR->destination_hostgroup=destination_hostgroup;
 	newQR->cache_ttl=cache_ttl;
+	newQR->reconnect=reconnect;
+	newQR->timeout=timeout;
 	newQR->apply=apply;
 	newQR->regex_engine=NULL;
 	newQR->hits=0;
@@ -403,6 +407,8 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"replace_pattern");
 	result->add_column_definition(SQLITE_TEXT,"destination_hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"cache_ttl");
+	result->add_column_definition(SQLITE_TEXT,"reconnect");
+	result->add_column_definition(SQLITE_TEXT,"timeout");
 	result->add_column_definition(SQLITE_TEXT,"apply");
 	result->add_column_definition(SQLITE_TEXT,"hits");
 	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
@@ -435,7 +441,7 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			qr1=*it;
 			if (qr1->active) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
-				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->apply);
+				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->apply);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: \n", qr2->rule_id, qr2->match_pattern);
@@ -494,6 +500,8 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			ret->size=0;
 			ret->destination_hostgroup=-1;
 			ret->cache_ttl=-1;
+			ret->reconnect=-1;
+			ret->timeout=-1;
 			ret->new_query=NULL;
 		}
 		qr->hits++; // this is done without atomic function because it updates only the local variables
@@ -527,13 +535,23 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			flagIN=qr->flagOUT;
 			//sess->query_info.flagOUT=flagIN;
     }
+    if (qr->reconnect >= 0) {
+			// Note: negative reconnect means this rule doesn't change 
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set reconnect: %d. Query will%s be rexecuted if connection is lost\n", qr->rule_id, qr->reconnect, (qr->reconnect == 0 ? " NOT" : "" ));
+      ret->reconnect=qr->reconnect;
+    }
+    if (qr->timeout >= 0) {
+			// Note: negative timeout means this rule doesn't change 
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
+      ret->reconnect=qr->reconnect;
+    }
     if (qr->cache_ttl >= 0) {
 			// Note: negative TTL means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
       ret->cache_ttl=qr->cache_ttl;
     }
     if (qr->destination_hostgroup >= 0) {
-			// Note: negative TTL means this rule doesn't change 
+			// Note: negative hostgroup means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
       ret->destination_hostgroup=qr->destination_hostgroup;
     }

@@ -89,6 +89,9 @@ class MySQL_HostGroups_Manager {
 	void generate_mysql_servers_table();
 
 	public:
+	struct {
+		int client_connections;
+	} status;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 	void rdlock();

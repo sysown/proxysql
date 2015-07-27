@@ -36,7 +36,9 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_INITDB_CONT,
 	ASYNC_INITDB_END,
 	ASYNC_INITDB_SUCCESSFUL,
-	ASYNC_INITDB_FAILED
+	ASYNC_INITDB_FAILED,
+
+	ASYNC_IDLE
 };
 
 // list of possible debugging modules
@@ -657,9 +659,14 @@ GOptionEntry cmd_option_entries[] =
 MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
+__thread int mysql_thread___max_transaction_time;
+__thread int mysql_thread___max_connections;
+__thread int mysql_thread___default_query_delay;
+__thread int mysql_thread___default_query_timeout;
 __thread int mysql_thread___ping_interval_server;
 __thread int mysql_thread___ping_timeout_server;
 __thread int mysql_thread___connect_timeout_server;
+__thread int mysql_thread___connect_timeout_server_max;
 __thread char *mysql_thread___connect_timeout_server_error;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
@@ -668,6 +675,7 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
+__thread bool mysql_thread___default_reconnect;
 
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_history;
@@ -694,9 +702,14 @@ extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
+extern __thread int mysql_thread___max_transaction_time;
+extern __thread int mysql_thread___max_connections;
+extern __thread int mysql_thread___default_query_delay;
+extern __thread int mysql_thread___default_query_timeout;
 extern __thread int mysql_thread___ping_interval_server;
 extern __thread int mysql_thread___ping_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server;
+extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread char *mysql_thread___connect_timeout_server_error;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
@@ -705,6 +718,7 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
+extern __thread bool mysql_thread___default_reconnect;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_history;

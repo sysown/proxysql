@@ -110,6 +110,7 @@ void MySQL_Listeners_Manager::del(unsigned int idx) {
 
 static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server",
+	(char *)"connect_timeout_server_max",
 	(char *)"connect_timeout_server_error",
 	(char *)"default_charset",
 	(char *)"have_compress",
@@ -126,6 +127,10 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_query_interval",
 	(char *)"monitor_query_timeout",
 	(char *)"monitor_timer_cached",
+	(char *)"max_transaction_time",
+	(char *)"max_connections",
+	(char *)"default_query_delay",
+	(char *)"default_query_timeout",
 	(char *)"ping_interval_server",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -135,6 +140,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_version",
 	(char *)"commands_stats",
 	(char *)"servers_stats",
+	(char *)"default_reconnect",
 	(char *)"session_debug",
 	(char *)"stacksize",
 	(char *)"threads",
@@ -158,7 +164,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	shutdown_=0;
 	spinlock_rwlock_init(&rwlock);
 	pthread_attr_init(&attr);
-	variables.connect_timeout_server=10000;
+	variables.connect_timeout_server=1000;
+	variables.connect_timeout_server_max=10000;
 	variables.monitor_history=600000;
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=200;
@@ -171,6 +178,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_query_variables=strdup((char *)"SELECT * FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES");
 	variables.monitor_query_status=strdup((char *)"SELECT * FROM INFORMATION_SCHEMA.GLOBAL_STATUS");
 	variables.monitor_timer_cached=true;
+	variables.max_transaction_time=4*3600*1000;
+	variables.max_connections=10*1000;
+	variables.default_query_delay=0;
+	variables.default_query_timeout=24*3600*1000;
 	variables.ping_interval_server=5000;
 	variables.ping_timeout_server=100;
 	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
@@ -184,6 +195,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.have_compress=true;
 	variables.commands_stats=false;
 	variables.servers_stats=true;
+	variables.default_reconnect=true;
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -193,7 +205,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 
 
 unsigned int MySQL_Threads_Handler::get_global_version() {
-	return __sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0);
+	return __sync_fetch_and_add(&__global_MySQL_Thread_Variables_version,0);
 }
 
 int MySQL_Threads_Handler::listener_add(const char *address, int port) {
@@ -302,11 +314,17 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 		if (!strcasecmp(name,"monitor_timer_cached")) return (int)variables.monitor_timer_cached;
 	}
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
+	if (!strcasecmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
+	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
+	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
+	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
+	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
+	if (!strcasecmp(name,"default_reconnect")) return (int)variables.default_reconnect;
 	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
 	if (!strcasecmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
 	if (!strcasecmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
@@ -372,6 +390,26 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.connect_timeout_server);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"connect_timeout_server_max")) {
+		sprintf(intbuf,"%d",variables.connect_timeout_server_max);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"max_transaction_time")) {
+		sprintf(intbuf,"%d",variables.max_transaction_time);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"max_connections")) {
+		sprintf(intbuf,"%d",variables.max_connections);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"default_query_delay")) {
+		sprintf(intbuf,"%d",variables.default_query_delay);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"default_query_timeout")) {
+		sprintf(intbuf,"%d",variables.default_query_timeout);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"ping_interval_server")) {
 		sprintf(intbuf,"%d",variables.ping_interval_server);
 		return strdup(intbuf);
@@ -409,6 +447,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"default_reconnect")) {
+		return strdup((variables.default_reconnect ? "true" : "false"));
 	}
 	return NULL;
 }	
@@ -467,7 +508,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_history")) {
 			int intv=atoi(value);
-			if (intv > 1000 && intv < 7*24*3600*1000) {
+			if (intv >= 1000 && intv <= 7*24*3600*1000) {
 				variables.monitor_history=intv;
 				return true;
 			} else {
@@ -476,7 +517,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_connect_interval")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv < 7*24*3600*1000) {
+			if (intv >= 100 && intv <= 7*24*3600*1000) {
 				variables.monitor_connect_interval=intv;
 				return true;
 			} else {
@@ -485,7 +526,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_connect_timeout")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv < 600*1000) {
+			if (intv >= 100 && intv <= 600*1000) {
 				variables.monitor_connect_timeout=intv;
 				return true;
 			} else {
@@ -494,7 +535,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_ping_interval")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv < 7*24*3600*1000) {
+			if (intv >= 100 && intv <= 7*24*3600*1000) {
 				variables.monitor_ping_interval=intv;
 				return true;
 			} else {
@@ -503,7 +544,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_ping_timeout")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv < 600*1000) {
+			if (intv >= 100 && intv <= 600*1000) {
 				variables.monitor_ping_timeout=intv;
 				return true;
 			} else {
@@ -512,7 +553,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_query_interval")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv < 7*24*3600*1000) {
+			if (intv >= 100 && intv <= 7*24*3600*1000) {
 				variables.monitor_query_interval=intv;
 				return true;
 			} else {
@@ -521,7 +562,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_query_timeout")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv < 600*1000) {
+			if (intv >= 100 && intv <= 600*1000) {
 				variables.monitor_query_timeout=intv;
 				return true;
 			} else {
@@ -540,9 +581,45 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"max_transaction_time")) {
+		int intv=atoi(value);
+		if (intv >= 1000 && intv <= 20*24*3600*1000) {
+			variables.max_transaction_time=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"max_connections")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 1000*1000) {
+			variables.max_connections=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"default_query_delay")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 3600*1000) {
+			variables.default_query_delay=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"default_query_timeout")) {
+		int intv=atoi(value);
+		if (intv >= 1000 && intv <= 20*24*3600*1000) {
+			variables.default_query_timeout=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"ping_interval_server")) {
 		int intv=atoi(value);
-		if (intv > 1000 && intv < 7*24*3600*1000) {
+		if (intv >= 1000 && intv <= 7*24*3600*1000) {
 			variables.ping_interval_server=intv;
 			return true;
 		} else {
@@ -551,7 +628,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"ping_timeout_server")) {
 		int intv=atoi(value);
-		if (intv > 10 && intv < 600000) {
+		if (intv >= 10 && intv <= 600*1000) {
 			variables.ping_timeout_server=intv;
 			return true;
 		} else {
@@ -560,8 +637,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"connect_timeout_server")) {
 		int intv=atoi(value);
-		if (intv > 10 && intv < 600000) {
+		if (intv >= 10 && intv <= 120*1000) {
 			variables.connect_timeout_server=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"connect_timeout_server_max")) {
+		int intv=atoi(value);
+		if (intv >= 10 && intv <= 3600*1000) {
+			variables.connect_timeout_server_max=intv;
 			return true;
 		} else {
 			return false;
@@ -618,7 +704,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"poll_timeout")) {
 		int intv=atoi(value);
-		if (intv > 10 && intv < 20000) {
+		if (intv >= 10 && intv <= 20000) {
 			variables.poll_timeout=intv;
 			return true;
 		} else {
@@ -627,7 +713,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"poll_timeout_on_failure")) {
 		int intv=atoi(value);
-		if (intv > 10 && intv < 20000) {
+		if (intv >= 10 && intv <= 20000) {
 			variables.poll_timeout_on_failure=intv;
 			return true;
 		} else {
@@ -703,6 +789,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.servers_stats=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"default_reconnect")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.default_reconnect=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.default_reconnect=false;
 			return true;
 		}
 		return false;
@@ -951,9 +1048,9 @@ void MySQL_Thread::run() {
 			sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
 			sess->mybe->server_myds=myds;
 			sess->to_process=1;
-			myds->timeout=curtime+mysql_thread___ping_timeout_server*1000;	// max_timeout
+			myds->wait_until=curtime+mysql_thread___ping_timeout_server*1000;	// max_timeout
 //			sess->status=WAITING_SERVER_DATA;
-			myds->mypolls=&mypolls;
+			//myds->mypolls=&mypolls;
 			mc->last_time_used=curtime;
 			myds->myprot.init(&myds, myds->myconn->userinfo, NULL);
 //			myds->myprot.generate_COM_PING(true,NULL,NULL);
@@ -961,9 +1058,13 @@ void MySQL_Thread::run() {
 //			myds->DSS=STATE_QUERY_SENT_DS;
 			sess->status=PINGING_SERVER;
 			myds->DSS=STATE_MARIADB_PING;
-			myds->myconn->async_state_machine=ASYNC_PING_START;
-			myds->myconn->handler(0);
-			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, curtime);
+
+
+//			myds->myconn->async_ping(0);
+//			myds->myconn->async_state_machine=ASYNC_PING_START;
+//			myds->myconn->handler(0);
+//			mypolls.add(POLLIN|POLLOUT, myds->fd, myds, curtime);
+
 		}
 		processing_idles=true;
 		last_processing_idles=curtime;
@@ -992,7 +1093,18 @@ void MySQL_Thread::run() {
 	}
 
 		for (n = 0; n < mypolls.len; n++) {
+			MySQL_Data_Stream *myds=mypolls.myds[n];
 			mypolls.fds[n].revents=0;
+			if (myds && myds->wait_until) {
+				if (myds->wait_until > curtime) {
+					if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
+						mypolls.poll_timeout= myds->wait_until - curtime;
+					}
+				} else {
+					mypolls.poll_timeout=1000;
+				}
+			}
+			if (myds) myds->revents=0;
 			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER) {
 //				mypolls.myds[n]->set_pollout();
 				if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
@@ -1003,6 +1115,7 @@ void MySQL_Thread::run() {
 					mypolls.myds[n]->set_pollout();
 				}
 			}
+			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 		}
 
 	
@@ -1023,9 +1136,10 @@ void MySQL_Thread::run() {
 		}
 
 		//this is the only portion of code not protected by a global mutex
-		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
+		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
+		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 > (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout )  );
 		// poll is called with a timeout of mypolls.poll_timeout if set , or mysql_thread___poll_timeout
-		rc=poll(mypolls.fds,mypolls.len, ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout ) );
+		rc=poll(mypolls.fds,mypolls.len, ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout ) );
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
 
 		spin_wrlock(&thread_mutex);
@@ -1104,14 +1218,25 @@ void MySQL_Thread::run() {
 		}
 		// iterate through all sessions and process the session logic
 		process_all_sessions();
+
+
 		process_all_sessions_connections_handler();
+
 	}
 }
 
 void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
-				mypolls.last_recv[n]=curtime;
-				myds->revents=mypolls.fds[n].revents;
-				myds->sess->to_process=1;
+				if (mypolls.fds[n].revents) {
+					mypolls.last_recv[n]=curtime;
+					myds->revents=mypolls.fds[n].revents;
+					myds->sess->to_process=1;
+				} else {
+					// no events
+					if (myds->wait_until && curtime > myds->wait_until) {
+						// timeout
+						myds->sess->to_process=1;
+					}
+				}
 				if (myds->myds_type==MYDS_BACKEND && myds->sess->status!=FAST_FORWARD) {
 					return;
 				}
@@ -1167,9 +1292,14 @@ void MySQL_Thread::process_all_sessions() {
 void MySQL_Thread::refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
+	mysql_thread___max_transaction_time=GloMTH->get_variable_int((char *)"max_transaction_time");
+	mysql_thread___max_connections=GloMTH->get_variable_int((char *)"max_connections");
+	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");
+	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
 	mysql_thread___ping_interval_server=GloMTH->get_variable_int((char *)"ping_interval_server");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
+	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");
 	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
 	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
 
@@ -1201,6 +1331,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
+	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
@@ -1230,7 +1361,7 @@ void MySQL_Thread::process_all_sessions_connections_handler() {
 	int rc;
 	for (n=0; n<mysql_sessions_connections_handler->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(n);
-		if (sess->to_process==1) {
+//	//FIX_PING	if (sess->to_process==1) {
 			rc=sess->handler();
 			sess->to_process=0;
 			if (rc==-1) {
@@ -1243,7 +1374,7 @@ void MySQL_Thread::process_all_sessions_connections_handler() {
 			} else {
 				sess->to_process=0;
 			}
-		}
+//		}
 	}
 }
 
@@ -1271,6 +1402,9 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		MySQL_Session *sess=create_new_session_and_client_data_stream(c);
 		//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 		//sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
+		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
+			sess->max_connections_reached=true;
+		}
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL);
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);

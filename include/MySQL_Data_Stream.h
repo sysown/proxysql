@@ -58,7 +58,8 @@ class MySQL_Data_Stream
 	bytes_stats_t bytes_info; // bytes statistics
 	int fd; // file descriptor
 
-	unsigned long long timeout;
+	unsigned long long wait_until;
+	unsigned long long killed_at;
 	int poll_fds_idx;
 	short revents;
 
@@ -140,6 +141,16 @@ class MySQL_Data_Stream
 		myconn=NULL;
 	}
 
+	void return_MySQL_Connection_To_Pool();
+	
+	void destroy_MySQL_Connection_From_Pool() {
+		MySQL_Connection *mc=myconn;
+		detach_connection();
+		unplug_backend();
+		MyHGM->destroy_MyConn_from_pool(mc);
+	}
+
+	void free_mysql_real_query();	
 
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

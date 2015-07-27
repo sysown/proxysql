@@ -98,7 +98,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	mysql_real_query.ptr=NULL;
 	mysql_real_query.size=0;
 
-	timeout=0;
+	wait_until=0;
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
@@ -131,6 +131,8 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	queue_destroy(queueIN);
 	queue_destroy(queueOUT);
 
+	free_mysql_real_query();
+
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
 	if (PSarrayIN) {
@@ -162,15 +164,23 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	delete resultset;
 	}
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
+
+
 	if (fd>0) {
-		if (myconn==NULL || myconn->reusable==false) {
+//	// Changing logic here. The socket should be closed only if it is not a backend
+		if (myds_type==MYDS_FRONTEND) {
+//		if (myconn==NULL || myconn->reusable==false) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p , MYDS:%p , MySQL_Connection %p %s: shutdown socket\n", sess, this, myconn, (myconn ? "not reusable" : "is empty"));
 			shut_hard();
 //		shutdown(fd,SHUT_RDWR);
 //		close(fd);
 		}
 	}
-	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
+	// Commenting the follow line of code and adding an assert. We should ensure that if a myconn exists it should be removed *before*
+	if (myds_type==MYDS_BACKEND || myds_type==MYDS_BACKEND_NOT_CONNECTED) {
+		assert(myconn==NULL);
+	}
+//	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
 		if (ssl) SSL_free(ssl);
 //		if (ssl_ctx) SSL_CTX_free(ssl_ctx);
@@ -336,7 +346,7 @@ void MySQL_Data_Stream::set_pollout() {
 	}
 	//FIXME: moved
 	//_pollfd->revents=0;
-	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p -- Setting poll events %d for FD %d\n", sess, this, _pollfd->events , fd);
+	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p -- Setting poll events %d for FD %d , DSS=%d , myconn=%p\n", sess, this, _pollfd->events , fd, DSS, myconn);
 }
 
 
@@ -777,4 +787,20 @@ void MySQL_Data_Stream::set_net_failure() {
 void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p\n", this->sess, this);
 	DSS=STATE_QUERY_SENT_NET;
+}
+
+void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
+	MySQL_Connection *mc=myconn;
+	mc->last_time_used=sess->thread->curtime;
+	detach_connection();
+	unplug_backend();
+	mc->async_state_machine=ASYNC_IDLE;
+	MyHGM->push_MyConn_to_pool(mc);
+}
+
+void MySQL_Data_Stream::free_mysql_real_query() {
+	if (mysql_real_query.ptr) {
+		free(mysql_real_query.ptr);
+		mysql_real_query.ptr=NULL;
+	}
 }

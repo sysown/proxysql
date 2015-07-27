@@ -42,7 +42,7 @@ class ProxySQL_Poll {
   };
 
   public:
-	int poll_timeout;
+	unsigned int poll_timeout;
 	unsigned long loops;
 	StatCounters *loop_counters;
   unsigned int len;
@@ -250,6 +250,7 @@ class MySQL_Threads_Handler
 		int ping_interval_server;
 		int ping_timeout_server;
 		int connect_timeout_server;
+		int connect_timeout_server_max;
 		char *connect_timeout_server_error;
 		char *default_schema;
 		char *interfaces;
@@ -257,7 +258,12 @@ class MySQL_Threads_Handler
 		uint8_t default_charset;
 		bool servers_stats;
 		bool commands_stats;
+		bool default_reconnect;
 		bool have_compress;
+		int max_transaction_time;
+		int max_connections;
+		int default_query_delay;
+		int default_query_timeout;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */

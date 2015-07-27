@@ -184,6 +184,7 @@ class MyHGC { // MySQL Host Group Container
 
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
+	status.client_connections=0;
 	spinlock_rwlock_init(&rwlock);
 	mydb=new SQLite3DB();
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -247,11 +248,11 @@ bool MySQL_HostGroups_Manager::commit() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 // FIXME: this part is for debugging only, needs to be removed/cleaned
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			long long ptr=atoll(r->fields[0]);
-			fprintf(stderr,"%lld\n", ptr);
-		}
+//		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+//			SQLite3_row *r=*it;
+//			long long ptr=atoll(r->fields[0]);
+//			fprintf(stderr,"%lld\n", ptr);
+//		}
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 
@@ -271,7 +272,7 @@ bool MySQL_HostGroups_Manager::commit() {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[7]);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d , weight=%d, status=%d, mem_pointer=%llu, hostgroup=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), ptr, atoi(r->fields[0]), atoi(r->fields[5]));
-			fprintf(stderr,"%lld\n", ptr);
+			//fprintf(stderr,"%lld\n", ptr);
 			if (ptr==0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Creating new server %s:%d , weight=%d, status=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]) );
 				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]));
@@ -323,7 +324,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+8+16+32);
 			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, mysrvc->max_connections, ptr);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-			fprintf(stderr,"%s\n",query);
+			//fprintf(stderr,"%s\n",query);
 			mydb->execute(query);
 			free(query);
 		}

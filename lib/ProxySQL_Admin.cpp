@@ -39,8 +39,8 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define LINESIZE	2048
 
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, status VARCHAR CHECK (status IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE', weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , PRIMARY KEY (hostgroup_id, hostname, port) )"
-#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, default_schema VARCHAR, schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
-#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
+#define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users ( username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0, default_hostgroup INT NOT NULL DEFAULT 0, default_schema VARCHAR, schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0, transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0, fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0, backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1, frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1, max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000, PRIMARY KEY (username, backend), UNIQUE (username, frontend))"
+#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0, username VARCHAR, schemaname VARCHAR, flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR, negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0, flagOUT INT, replace_pattern VARCHAR, destination_hostgroup INT DEFAULT NULL, cache_ttl INT CHECK(cache_ttl > 0), reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL, timeout INT UNSIGNED, apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
 
 
@@ -1700,7 +1700,7 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		c_split_2(token, ":", &user, &pass);
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
 		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0); // FIXME: seems to work, but it needs extra care. See issue #255 and #256. This is just for admin module
+			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,0); // FIXME: seems to work, but it needs extra care. See issue #255 and #256. This is just for admin module
 		}
 		free(user);
 		free(pass);
@@ -1913,7 +1913,7 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime() {
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11]);
-		fprintf(stderr,"%s\n",query);
+		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
 		free(query);
 	}
@@ -2180,7 +2180,7 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward FROM main.mysql_users WHERE %s=1 AND active=1";
+	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1";
 	char *query=(char *)malloc(strlen(str)+15);
 	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -2198,7 +2198,8 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 				(r->fields[4]==NULL ? (char *)mysql_thread___default_schema : r->fields[4]), //default_schema
 				(strcmp(r->fields[5],"1")==0 ? true : false) , // schema_locked
 				(strcmp(r->fields[6],"1")==0 ? true : false) , // transaction_persistent
-				(strcmp(r->fields[7],"1")==0 ? true : false) // fast_forward
+				(strcmp(r->fields[7],"1")==0 ? true : false), // fast_forward
+				( atoi(r->fields[8])>0 ? atoi(r->fields[8]) : 0)  // max_connections
 			);
 		}
 	}
@@ -2209,6 +2210,53 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 
 
 void ProxySQL_Admin::save_mysql_users_runtime_to_database() {
+/*
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query;
+	query=(char *)"SELECT username, backend, frontend FROM mysql_users WHERE active=1";
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (!resultset) return;
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+	}	
+	if(resultset) delete resultset;
+*/
+	char *qd=(char *)"UPDATE mysql_users SET active=0";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", qd);
+	admindb->execute(qd);
+	account_details_t **ads=NULL;
+	int num_users;
+	int i;
+	char *qf=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,COALESCE((SELECT backend FROM mysql_users WHERE username=\"%s\" AND frontend=1),0),1,%d)";
+	char *qb=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,1,COALESCE((SELECT frontend FROM mysql_users WHERE username=\"%s\" AND backend=1),0),%d)";
+	num_users=GloMyAuth->dump_all_users(&ads);
+	if (num_users==0) return;
+	for (i=0; i<num_users; i++) {
+	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
+		account_details_t *ad=ads[i];
+		if (ads[i]->default_hostgroup >= 0) {
+			char *query;
+			char *q;
+			if (ad->__frontend) {
+				q=qf;
+			} else {
+				q=qb;
+			}
+			query=(char *)malloc(strlen(q)+strlen(ad->username)*2+strlen(ad->password)+strlen(ad->default_schema)+256);
+			sprintf(query, q, ad->username, ad->password, ad->use_ssl, ad->default_hostgroup, ad->default_schema, ad->schema_locked, ad->transaction_persistent, ad->fast_forward, ad->username, ad->max_connections);
+			//fprintf(stderr,"%s\n",query);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+			admindb->execute(query);
+		}
+		free(ad->username);
+		free(ad->password);
+		free(ad->default_schema);
+		free(ad);
+	}
+	free(ads);
 }
 
 void ProxySQL_Admin::save_mysql_servers_runtime_to_database() {
@@ -2223,7 +2271,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database() {
 		char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+16);
 		sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[4], r->fields[3], r->fields[5], r->fields[6]);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-		fprintf(stderr,"%s\n",query);
+		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
 		free(query);
 	}
@@ -2276,7 +2324,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	int affected_rows=0;
 	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, apply FROM main.mysql_query_rules WHERE active=1";
+	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, apply FROM main.mysql_query_rules WHERE active=1";
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -2286,7 +2334,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
-			nqpr=GloQPro->new_query_rule(atoi(r->fields[0]), true, r->fields[1], r->fields[2], atoi(r->fields[3]), r->fields[4], (atoi(r->fields[5])==1 ? true : false), (r->fields[6]==NULL ? -1 : atol(r->fields[6])), r->fields[7], (r->fields[8]==NULL ? -1 : atoi(r->fields[8])), (r->fields[9]==NULL ? -1 : atol(r->fields[9])), (atoi(r->fields[10])==1 ? true : false));
+			nqpr=GloQPro->new_query_rule(atoi(r->fields[0]), true, r->fields[1], r->fields[2], atoi(r->fields[3]), r->fields[4], (atoi(r->fields[5])==1 ? true : false), (r->fields[6]==NULL ? -1 : atol(r->fields[6])), r->fields[7], (r->fields[8]==NULL ? -1 : atoi(r->fields[8])), (r->fields[9]==NULL ? -1 : atol(r->fields[9])), (r->fields[10]==NULL ? -1 : atol(r->fields[10])), (r->fields[11]==NULL ? -1 : atol(r->fields[11])),   (atoi(r->fields[12])==1 ? true : false));
 			GloQPro->insert(nqpr, false);
 		}
 		GloQPro->sort(false);
@@ -2308,7 +2356,7 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 	}
 	const Setting &group = root[(const char *)groupname];
 	int count = group.getLength();
-	fprintf(stderr, "Found %d %s_variables\n",count, prefix);
+	//fprintf(stderr, "Found %d %s_variables\n",count, prefix);
 	int i;
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	char *q=(char *)"INSERT OR REPLACE INTO global_variables VALUES (\"%s-%s\", \"%s\")";
@@ -2327,10 +2375,10 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 				group.lookupValue(n, value_string);
 			}
 		}
-		fprintf(stderr,"%s = %s\n", n, value_string.c_str());
+		//fprintf(stderr,"%s = %s\n", n, value_string.c_str());
 		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
 		sprintf(query,q, prefix, n, value_string.c_str());
-		fprintf(stderr, "%s\n", query);
+		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -2343,11 +2391,11 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 	if (root.exists("mysql_users")==false) return 0;
 	const Setting &mysql_users = root["mysql_users"];
 	int count = mysql_users.getLength();
-	fprintf(stderr, "Found %d users\n",count);
+	//fprintf(stderr, "Found %d users\n",count);
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward) VALUES (\"%s\", \"%s\", %d, %d, \"%s\", %d, %d, %d)";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections) VALUES (\"%s\", \"%s\", %d, %d, \"%s\", %d, %d, %d, %d)";
 	for (i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
@@ -2358,6 +2406,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		int schema_locked=0;
 		int transaction_persistent=0;
 		int fast_forward=0;
+		int max_connections=10000;
 		if (user.lookupValue("username", username)==false) continue;
 		user.lookupValue("password", password);
 		user.lookupValue("hostgroup", default_hostgroup);
@@ -2366,9 +2415,10 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		user.lookupValue("schema_locked", schema_locked);
 		user.lookupValue("transaction_persistent", transaction_persistent);
 		user.lookupValue("fast_forward", fast_forward);
+		user.lookupValue("max_connections", max_connections);
 		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, "information_schema", schema_locked, transaction_persistent, fast_forward);
-		fprintf(stderr, "%s\n", query);
+		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, "information_schema", schema_locked, transaction_persistent, fast_forward, max_connections);
+		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);
 		rows++;
@@ -2382,7 +2432,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 	if (root.exists("mysql_servers")==false) return 0;
 	const Setting &mysql_servers = root["mysql_servers"];
 	int count = mysql_servers.getLength();
-	fprintf(stderr, "Found %d servers\n",count);
+	//fprintf(stderr, "Found %d servers\n",count);
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -2413,7 +2463,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 		server.lookupValue("max_connections", max_connections);
 		char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+128);
 		sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections);
-		fprintf(stderr, "%s\n", query);
+		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);
 		rows++;

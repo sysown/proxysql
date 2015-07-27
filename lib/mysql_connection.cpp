@@ -146,16 +146,19 @@ MySQL_Connection::~MySQL_Connection() {
 		userinfo=NULL;
 	}
 	if (mysql) {
+		async_free_result();
 		mysql_close(mysql);
 		mysql=NULL;
 	}
-	if (myds) { // FIXME: with the use of mysql client library , this part should be gone 
-		myds->shut_hard();
-	} else {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection %p , fd:%d\n", this, fd);
-		shutdown(fd, SHUT_RDWR);
-		close(fd);
-	}
+//	// FIXME: with the use of mysql client library , this part should be gone.
+//	// for now only commenting it to be sure it is not needed 
+//	if (myds) {
+//		myds->shut_hard();
+//	} else {
+//		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection %p , fd:%d\n", this, fd);
+//		shutdown(fd, SHUT_RDWR);
+//		close(fd);
+//	}
 };
 
 uint8_t MySQL_Connection::set_charset(uint8_t _c) {
@@ -220,6 +223,7 @@ bool MySQL_Connection::get_status_prepared_statement() {
 
 // non blocking API
 void MySQL_Connection::connect_start() {
+	PROXY_TRACE();
 	mysql=mysql_init(NULL);
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
@@ -232,52 +236,64 @@ void MySQL_Connection::connect_start() {
 }
 
 void MySQL_Connection::connect_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event));
 }
 
 void MySQL_Connection::ping_start() {
+	PROXY_TRACE();
 	async_exit_status = mysql_ping_start(&interr,mysql);
 }
 
 void MySQL_Connection::ping_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_ping_cont(&interr,mysql, mysql_status(event));
 }
 
 void MySQL_Connection::initdb_start() {
+	PROXY_TRACE();
 	async_exit_status = mysql_select_db_start(&interr,mysql,userinfo->schemaname);
 }
 
 void MySQL_Connection::initdb_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_select_db_cont(&interr,mysql, mysql_status(event));
 }
 
 // FIXME: UTF8 is hardcoded for now, needs to be dynamic
 void MySQL_Connection::set_names_start() {
+	PROXY_TRACE();
 	async_exit_status = mysql_set_character_set_start(&interr,mysql,"UTF8");
 }
 
 void MySQL_Connection::set_names_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_set_character_set_cont(&interr,mysql, mysql_status(event));
 }
 
 void MySQL_Connection::set_query(char *stmt, unsigned long length) {
-	query.ptr=stmt;
 	query.length=length;
+	query.ptr=(char *)malloc(length);
+	memcpy(query.ptr,stmt,length);
 }
 
 void MySQL_Connection::real_query_start() {
+	PROXY_TRACE();
 	async_exit_status = mysql_real_query_start(&interr , mysql, query.ptr, query.length);
 }
 
 void MySQL_Connection::real_query_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_query_cont(&interr ,mysql , mysql_status(event));
 }
 
 void MySQL_Connection::store_result_start() {
+	PROXY_TRACE();
 	async_exit_status = mysql_store_result_start(&mysql_result, mysql);
 }
 
 void MySQL_Connection::store_result_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_store_result_cont(&mysql_result , mysql , mysql_status(event));
 }
 
@@ -289,6 +305,7 @@ MDB_ASYNC_ST MySQL_Connection::handler(short event) {
 		async_state_machine=ASYNC_CONNECT_START;
 	}
 handler_again:
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"async_state_machine=%d\n", async_state_machine);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_START:
 			connect_start();
@@ -382,11 +399,6 @@ handler_again:
 			}
 			break;
 		case ASYNC_QUERY_END:
-//			if (interr) {i
-//				NEXT_IMMEDIATE(ASYNC_PING_FAILED);
-//			} else {
-//				NEXT_IMMEDIATE(ASYNC_PING_SUCCESSFUL);
-//			}
 			break;
 		case ASYNC_SET_NAMES_START:
 			set_names_start();
@@ -480,5 +492,123 @@ void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
     //event_del(ev_mysql);
     //event_assign(ev_mysql, base, fd, wait_event, state_machine_handler, this);
     //event_add(ev_mysql, ptv);
+	proxy_debug(PROXY_DEBUG_NET, 8, "fd=%d, wait_events=%d , old_ST=%d, new_ST=%d\n", fd, wait_events, async_state_machine, new_st);
 	async_state_machine = new_st;
 };
+
+
+int MySQL_Connection::async_connect(short event) {
+	PROXY_TRACE();
+	if (mysql==NULL && async_state_machine!=ASYNC_CONNECT_START) {
+		assert(0);
+	}
+	if (async_state_machine==ASYNC_IDLE) {
+		return 0;
+	}
+	if (async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
+		async_state_machine=ASYNC_IDLE;
+		return 0;
+	}
+	handler(event);
+	switch (async_state_machine) {
+		case ASYNC_CONNECT_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_CONNECT_FAILED:
+			return -1;
+			break;
+		default:
+			return 1;
+	}
+	return 1;
+}
+
+
+
+// Returns:
+// 0 when the query is completed
+// 1 when the query is not completed
+// the calling function should check mysql error in mysql struct
+int MySQL_Connection::async_query(short event, char *stmt, unsigned long length) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	switch (async_state_machine) {
+		case ASYNC_QUERY_END:
+			return 0;
+			break;
+		case ASYNC_IDLE:
+			set_query(stmt,length);
+			async_state_machine=ASYNC_QUERY_START;
+		default:
+			handler(event);
+			break;
+	}
+	
+	if (async_state_machine==ASYNC_QUERY_END) {
+		if (mysql_errno(mysql)) {
+			return -1;
+		} else {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+
+// Returns:
+// 0 when the ping is completed successfully
+// -1 when the ping is completed not successfully
+// 1 when the ping is not completed
+// the calling function should check mysql error in mysql struct
+int MySQL_Connection::async_ping(short event) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	switch (async_state_machine) {
+		case ASYNC_PING_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_PING_FAILED:
+			return -1;
+			break;
+		case ASYNC_IDLE:
+			async_state_machine=ASYNC_PING_START;
+		default:
+			handler(event);
+			break;
+	}
+	
+	// check again
+	switch (async_state_machine) {
+		case ASYNC_PING_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_PING_FAILED:
+			return -1;
+			break;
+		default:
+			return 1;
+			break;
+	}
+	return 1;
+}
+
+void MySQL_Connection::async_free_result() {
+	PROXY_TRACE();
+	assert(mysql);
+	//assert(ret_mysql);
+	//assert(async_state_machine==ASYNC_QUERY_END);
+	if (query.ptr) {
+		free(query.ptr);
+		query.ptr=NULL;
+	}
+	if (mysql_result) {
+		mysql_free_result(mysql_result);
+		mysql_result=NULL;
+    async_state_machine=ASYNC_IDLE;
+	}
+}

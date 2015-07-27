@@ -697,7 +697,7 @@ void * MySQL_Monitor::run() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			proxy_error("%s\n","MySQL_Monitor refreshing variables");
+			//proxy_error("%s\n","MySQL_Monitor refreshing variables");
 		}
 		usleep(1000000);
 	}
