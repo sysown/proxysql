@@ -959,7 +959,7 @@ bool MySQL_Thread::init() {
 	assert(mysql_sessions_connections_handler);
 	for (i=0; i<SESSIONS_FOR_CONNECTIONS_HANDLER;i++) {
 		MySQL_Session *sess=new MySQL_Session();
-		register_session_connection_handler(sess);
+		register_session_connection_handler(sess, false);
 	}
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
@@ -1041,7 +1041,8 @@ void MySQL_Thread::run() {
 			myds->attach_connection(mc);
 			myds->assign_fd_from_mysql_conn();
 			myds->myds_type=MYDS_BACKEND;
-			MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(i);
+			//MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(i);
+			MySQL_Session *sess=new MySQL_Session();
 			myds->sess=sess;
 			myds->init();
 			my_idle_myds[i]=myds;
@@ -1058,7 +1059,8 @@ void MySQL_Thread::run() {
 //			myds->DSS=STATE_QUERY_SENT_DS;
 			sess->status=PINGING_SERVER;
 			myds->DSS=STATE_MARIADB_PING;
-
+			register_session_connection_handler(sess,true);
+			
 
 //			myds->myconn->async_ping(0);
 //			myds->myconn->async_state_machine=ASYNC_PING_START;
@@ -1230,11 +1232,13 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					mypolls.last_recv[n]=curtime;
 					myds->revents=mypolls.fds[n].revents;
 					myds->sess->to_process=1;
+					assert(myds->sess->status!=NONE);
 				} else {
 					// no events
 					if (myds->wait_until && curtime > myds->wait_until) {
 						// timeout
 						myds->sess->to_process=1;
+						assert(myds->sess->status!=NONE);
 					}
 				}
 				if (myds->myds_type==MYDS_BACKEND && myds->sess->status!=FAST_FORWARD) {
@@ -1244,6 +1248,10 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					// only if we aren't using MariaDB Client Library
 					myds->read_from_net();
 					myds->read_pkts();
+				} else {
+					if (mypolls.fds[n].revents) {
+						myds->myconn->handler(mypolls.fds[n].revents);
+					}
 				}
 				if ( (mypolls.fds[n].events & POLLOUT) 
 						&&
@@ -1253,7 +1261,7 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 				}
 
 				myds->check_data_flow();
-
+				
 
 	      if (myds->active==FALSE) {
 					if (myds->sess->client_myds==myds) {
@@ -1361,11 +1369,13 @@ void MySQL_Thread::process_all_sessions_connections_handler() {
 	int rc;
 	for (n=0; n<mysql_sessions_connections_handler->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(n);
-//	//FIX_PING	if (sess->to_process==1) {
+			//FIX_PING
+		if (sess->to_process==1) {
+			assert(sess->status!=NONE);
 			rc=sess->handler();
 			sess->to_process=0;
 			if (rc==-1) {
-				unregister_session_connection_handler(n);
+				unregister_session_connection_handler(n, false);
 				n--;
 				delete sess;
 				//sess=new MySQL_Session();
@@ -1374,22 +1384,30 @@ void MySQL_Thread::process_all_sessions_connections_handler() {
 			} else {
 				sess->to_process=0;
 			}
-//		}
+		}
 	}
 }
 
-void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess) {
+void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
 	if (mysql_sessions_connections_handler==NULL) return;
-	mysql_sessions_connections_handler->add(_sess);
 	_sess->thread=this;
 	_sess->connections_handler=true;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session for connection handler\n", _sess->thread, _sess);
+	if (_new) {
+		mysql_sessions->add(_sess);
+	} else {
+		mysql_sessions_connections_handler->add(_sess);
+	}	
 }
 
-void MySQL_Thread::unregister_session_connection_handler(int idx) {
+void MySQL_Thread::unregister_session_connection_handler(int idx, bool _new) {
 	if (mysql_sessions_connections_handler==NULL) return;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions_connections_handler->index(idx));
-	mysql_sessions_connections_handler->remove_index_fast(idx);
+	if (_new) {
+		mysql_sessions->remove_index_fast(idx);
+	} else {
+		mysql_sessions_connections_handler->remove_index_fast(idx);
+	}
 }
 
 

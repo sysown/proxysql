@@ -120,7 +120,6 @@ void MySQL_Session::operator delete(void *ptr) {
 MySQL_Session::MySQL_Session() {
 	pause=0;
 	pause_until=0;
-	status=NONE;
 	qpo=NULL;
 	command_counters=new StatCounters(15,10,false);
 	healthy=1;
@@ -140,6 +139,7 @@ MySQL_Session::MySQL_Session() {
 	to_process=0;
 	mybe=NULL;
 	mybes= new (true) PtrArray(4,true);
+	set_status(NONE);
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
@@ -349,7 +349,7 @@ int MySQL_Session::handler() {
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 									mybe->server_myds->mysql_real_query.size=pkt.size-5;
 									mybe->server_myds->mysql_real_query.ptr=(char *)malloc(pkt.size-5);
-									mybe->server_myds->wait_until=thread->curtime+mysql_thread___ping_timeout_server*1000;
+									mybe->server_myds->wait_until=thread->curtime+mysql_thread___ping_timeout_server*10000;
 									mybe->server_myds->killed_at=0;
 									//fprintf(stderr,"times: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime); 
 									memcpy(mybe->server_myds->mysql_real_query.ptr,(char *)pkt.ptr+5,pkt.size-5);
@@ -469,13 +469,17 @@ handler_again:
 					if ((myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 						myds->return_MySQL_Connection_To_Pool();
 					}
-					status=NONE;
-					return 0;
+					delete mybe->server_myds;
+					mybe->server_myds=NULL;
+					set_status(NONE);
+					return -1;
 				} else {
 					if (rc==-1) {
 						proxy_error("Detected a broken connection during ping\n");
 						myds->destroy_MySQL_Connection_From_Pool();
 						myds->fd=0;
+						delete mybe->server_myds;
+						mybe->server_myds=NULL;
 						//thread->mypolls.remove_index_fast(myds->poll_fds_idx);
 						return -1;
 					} else {
@@ -493,19 +497,6 @@ handler_again:
 			if (mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until) {
 				// query timed out
 				MySQL_Data_Stream *myds=mybe->server_myds;
-/*
-				char buf[80];
-				sprintf(buf,"Query timeout for connection %lu", myds->myconn->mysql->thread_id);
-				myds->destroy_MySQL_Connection_From_Pool();
-				myds->fd=0;
-				myds->DSS=STATE_NOT_INITIALIZED;
-				status=NONE;
-				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,2000,(char *)"#28000",buf);
-				status=WAITING_CLIENT_DATA;
-				client_myds->DSS=STATE_SLEEP;
-				//wrong_pass=true;
-				return 0;
-*/
 				// FIXME: make sure the connection is established first
 				if (myds->killed_at==0) {
 					myds->killed_at=thread->curtime;
@@ -1286,7 +1277,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		l_free(pkt->size,pkt->ptr);
 		if (client_myds->encrypted==false) {
 			if (client_myds->myconn->userinfo->schemaname==NULL) {
-				client_myds->myconn->userinfo->set_schemaname(mysql_thread___default_schema,strlen(mysql_thread___default_schema));
+				//client_myds->myconn->userinfo->set_schemaname(mysql_thread___default_schema,strlen(mysql_thread___default_schema));
+				client_myds->myconn->userinfo->set_schemaname(default_schema,strlen(default_schema));
 			}
 			int free_users=0;
 			if (admin==false) {

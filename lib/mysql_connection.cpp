@@ -19,12 +19,15 @@ void MySQL_Connection::operator delete(void *ptr) {
 //extern __thread char *mysql_thread___default_schema;
 
 static int
-mysql_status(short event) {
+mysql_status(short event, short cont) {
 	int status= 0;
 	if (event & POLLIN)
 		status|= MYSQL_WAIT_READ;
 	if (event & POLLOUT)
 		status|= MYSQL_WAIT_WRITE;
+//	if (event==0 && cont==true) {
+//		status |= MYSQL_WAIT_TIMEOUT;
+//	}
 //	FIXME: handle timeout
 //	if (event & PROXY_TIMEOUT)
 //		status|= MYSQL_WAIT_TIMEOUT;
@@ -106,9 +109,16 @@ void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
 bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 	if ((schemaname==NULL) || (strncmp(_new,schemaname,l))) {
 		if (schemaname) free(schemaname);
-		schemaname=(char *)malloc(l+1);
-		memcpy(schemaname,_new,l);
-		schemaname[l]=0;
+		if (l) {
+			schemaname=(char *)malloc(l+1);
+			memcpy(schemaname,_new,l);
+			schemaname[l]=0;
+		} else {
+			int k=strlen(mysql_thread___default_schema);
+			schemaname=(char *)malloc(k+1);
+			memcpy(schemaname,mysql_thread___default_schema,k);
+			schemaname[k]=0;
+		}
 		compute_hash();
 		return true;
 	}
@@ -135,6 +145,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.compression_min_length=0;
 	options.server_version=NULL;
 	compression_pkt_id=0;
+	mysql_result=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 
@@ -237,17 +248,19 @@ void MySQL_Connection::connect_start() {
 
 void MySQL_Connection::connect_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event));
+	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event, true));
 }
 
 void MySQL_Connection::ping_start() {
 	PROXY_TRACE();
+	//fprintf(stderr,"ping_start FD %d\n", fd);
 	async_exit_status = mysql_ping_start(&interr,mysql);
 }
 
 void MySQL_Connection::ping_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	async_exit_status = mysql_ping_cont(&interr,mysql, mysql_status(event));
+	//fprintf(stderr,"ping_cont FD %d, event %d\n", fd, event);
+	async_exit_status = mysql_ping_cont(&interr,mysql, mysql_status(event, true));
 }
 
 void MySQL_Connection::initdb_start() {
@@ -257,7 +270,7 @@ void MySQL_Connection::initdb_start() {
 
 void MySQL_Connection::initdb_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	async_exit_status = mysql_select_db_cont(&interr,mysql, mysql_status(event));
+	async_exit_status = mysql_select_db_cont(&interr,mysql, mysql_status(event, true));
 }
 
 // FIXME: UTF8 is hardcoded for now, needs to be dynamic
@@ -268,7 +281,7 @@ void MySQL_Connection::set_names_start() {
 
 void MySQL_Connection::set_names_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	async_exit_status = mysql_set_character_set_cont(&interr,mysql, mysql_status(event));
+	async_exit_status = mysql_set_character_set_cont(&interr,mysql, mysql_status(event, true));
 }
 
 void MySQL_Connection::set_query(char *stmt, unsigned long length) {
@@ -284,7 +297,7 @@ void MySQL_Connection::real_query_start() {
 
 void MySQL_Connection::real_query_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	async_exit_status = mysql_real_query_cont(&interr ,mysql , mysql_status(event));
+	async_exit_status = mysql_real_query_cont(&interr ,mysql , mysql_status(event, true));
 }
 
 void MySQL_Connection::store_result_start() {
@@ -294,7 +307,7 @@ void MySQL_Connection::store_result_start() {
 
 void MySQL_Connection::store_result_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	async_exit_status = mysql_store_result_cont(&mysql_result , mysql , mysql_status(event));
+	async_exit_status = mysql_store_result_cont(&mysql_result , mysql , mysql_status(event, true));
 }
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
@@ -345,6 +358,7 @@ handler_again:
 			}
 			break;
 		case ASYNC_PING_CONT:
+			assert(myds->sess->status==PINGING_SERVER);
 			ping_cont(event);
 			if (async_exit_status) {
 				next_event(ASYNC_PING_CONT);

@@ -457,6 +457,7 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 	userinfo=__userinfo;
 	sess=__sess;
 	current_PreStmt=NULL;
+	prot_status=0;
 }
 
 int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length) {

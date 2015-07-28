@@ -175,8 +175,8 @@ class MySQL_Thread
   void process_all_sessions();
   void refresh_variables();
   void process_all_sessions_connections_handler();
-  void register_session_connection_handler(MySQL_Session *_sess);
-  void unregister_session_connection_handler(int idx);
+  void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
+  void unregister_session_connection_handler(int idx, bool _new=false);
   //void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
   //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
   //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);

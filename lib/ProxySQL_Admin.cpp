@@ -1384,9 +1384,9 @@ bool ProxySQL_Admin::init() {
 		if (GloVars.configfile_open) {
 			if (GloVars.confFile->cfg) { 
  				Read_MySQL_Servers_from_configfile();	
-				Read_MySQL_Users_from_configfile();
 				Read_Global_Variables_from_configfile("admin");
 				Read_Global_Variables_from_configfile("mysql");
+				Read_MySQL_Users_from_configfile();
 				__insert_or_replace_disktable_select_maintable();
 			} else {
 				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {		
@@ -2195,7 +2195,8 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 				usertype, // backend/frontend
 				(strcmp(r->fields[2],"1")==0 ? true : false) , // use_ssl
 				atoi(r->fields[3]), // default_hostgroup
-				(r->fields[4]==NULL ? (char *)mysql_thread___default_schema : r->fields[4]), //default_schema
+				//(r->fields[4]==NULL ? (char *)mysql_thread___default_schema : r->fields[4]), //default_schema
+				(r->fields[4]==NULL ? (char *)"" : r->fields[4]), //default_schema
 				(strcmp(r->fields[5],"1")==0 ? true : false) , // schema_locked
 				(strcmp(r->fields[6],"1")==0 ? true : false) , // transaction_persistent
 				(strcmp(r->fields[7],"1")==0 ? true : false), // fast_forward
@@ -2402,7 +2403,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		std::string password="";
 		int active=1;
 		int default_hostgroup=0;
-		std::string default_schema;
+		std::string default_schema="";
 		int schema_locked=0;
 		int transaction_persistent=0;
 		int fast_forward=0;
@@ -2411,13 +2412,14 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		user.lookupValue("password", password);
 		user.lookupValue("hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
-		//if (user.lookupValue("default_schema", default_schema)==false) default_schema=mysql_thread___default_schema;
+		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
+		user.lookupValue("default_schema", default_schema);
 		user.lookupValue("schema_locked", schema_locked);
 		user.lookupValue("transaction_persistent", transaction_persistent);
 		user.lookupValue("fast_forward", fast_forward);
 		user.lookupValue("max_connections", max_connections);
 		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, "information_schema", schema_locked, transaction_persistent, fast_forward, max_connections);
+		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections);
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);

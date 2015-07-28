@@ -127,7 +127,19 @@ class MySQL_Session
 	~MySQL_Session();
 
 	void set_unhealthy();
-
+	
+	void set_status(enum session_status e) {
+		if (e==NONE) {
+			if (mybe) {
+				if (mybe->server_myds) {
+					assert(mybe->server_myds->myconn==0);
+					if (mybe->server_myds->myconn)
+						assert(mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE);
+				}
+			}
+		}
+		status=e;
+	}
 	//MySQL_Protocol myprot_client;
 	//MySQL_Protocol myprot_server;
 	int handler();

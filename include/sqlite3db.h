@@ -36,14 +36,20 @@ class SQLite3_row {
 //	};
 	void add_fields(sqlite3_stmt *stmt) {
 		int i;
+		int t;
 		for (i=0;i<cnt;i++) {
-			sizes[i]=sqlite3_column_bytes(stmt,i);
-			if (sizes[i]) {
-				const char *c=(char *)sqlite3_column_text(stmt,i);
-				fields[i]=strdup(c);
-			} else {
+			t=sqlite3_column_type(stmt,i);
+			const char *c=(char *)sqlite3_column_text(stmt,i);
+			if (t==SQLITE_NULL) {
+				sizes[i]=0;
 				fields[i]=NULL;
+			} else {
+				sizes[i]=sqlite3_column_bytes(stmt,i);
+				fields[i]=strdup(c);
 			}
+//			} else {
+//				fields[i]=NULL;
+//			}
 			//fields[i]=(sizes[i] ? strdup((char *)sqlite3_column_text(stmt,i)) : NULL);
 		}
 	};
