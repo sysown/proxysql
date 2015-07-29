@@ -458,10 +458,24 @@ void * MySQL_Monitor::monitor_connect() {
 	mysql_thr->refresh_variables();
 	unsigned long long t1;
 	unsigned long long t2;
+	unsigned long long next_loop_at=0;
 	unsigned long long start_time;
 	while (shutdown==false) {
 
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		int i=0;
+		MySQL_Monitor_State_Data **sds=NULL;
+		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
+		unsigned int glover;
 		t1=monotonic_time();
+
+		if (t1 < next_loop_at) {
+			goto __sleep_monitor_connect_loop;
+		}
+		next_loop_at=t1+1000*mysql_thread___monitor_connect_interval;
 
 		struct timeval tv_out;
 		evutil_gettimeofday(&tv_out, NULL);
@@ -471,23 +485,15 @@ void * MySQL_Monitor::monitor_connect() {
 		// create libevent base
 		libevent_base= event_base_new();
 
-		unsigned int glover=GloMTH->get_global_version();
+		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			proxy_error("%s\n", "MySQL_Monitor - CONNECT - refreshing variables");
 		}
 
-		char *error=NULL;
-		int cols=0;
-		int affected_rows=0;
-		SQLite3_result *resultset=NULL;
-		MySQL_Monitor_State_Data **sds=NULL;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-		int i=0;
-		sds=NULL;
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_connect_loop;
@@ -550,10 +556,15 @@ __end_monitor_connect_loop:
 
 		event_base_free(libevent_base);
 
+__sleep_monitor_connect_loop:
 		t2=monotonic_time();
-
-		if (t1+(1000*mysql_thread___monitor_connect_interval)>t2) {
-			usleep(t1+(1000*mysql_thread___monitor_connect_interval)-t2);
+		if (t2<next_loop_at) {
+			unsigned long long st=0;
+			st=next_loop_at-t2;
+			if (st > 500000) {
+				st = 500000;
+			}
+			usleep(st);
 		}
 	}
 	return NULL;
@@ -571,13 +582,27 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long t1;
 	unsigned long long t2;
 	unsigned long long start_time;
+	unsigned long long next_loop_at;
 	//unsigned int t1;
 	//unsigned int t2;
 	//t1=monotonic_time();
 
 	while (shutdown==false) {
 
+		unsigned int glover;
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		MySQL_Monitor_State_Data **sds=NULL;
+		int i=0;
+		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
 		t1=monotonic_time();
+
+		if (t1 < next_loop_at) {
+			goto __sleep_monitor_ping_loop;
+		}
+		next_loop_at=t1+1000*mysql_thread___monitor_ping_interval;
 
 		struct timeval tv_out;
 		evutil_gettimeofday(&tv_out, NULL);
@@ -587,23 +612,15 @@ void * MySQL_Monitor::monitor_ping() {
 		// create libevent base
 		libevent_base= event_base_new();
 
-		unsigned int glover=GloMTH->get_global_version();
+		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
 		}
 
-		char *error=NULL;
-		int cols=0;
-		int affected_rows=0;
-		SQLite3_result *resultset=NULL;
-		MySQL_Monitor_State_Data **sds=NULL;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-		int i=0;
-		sds=NULL;
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_ping_loop;
@@ -674,10 +691,16 @@ __end_monitor_ping_loop:
 
 		event_base_free(libevent_base);
 
-		t2=monotonic_time();
 
-		if (t1+(1000*mysql_thread___monitor_ping_interval)>t2) {
-			usleep(t1+(1000*mysql_thread___monitor_ping_interval)-t2);
+__sleep_monitor_ping_loop:
+		t2=monotonic_time();
+		if (t2<next_loop_at) {
+			unsigned long long st=0;
+			st=next_loop_at-t2;
+			if (st > 500000) {
+				st = 500000;
+			}
+			usleep(st);
 		}
 	}
 	return NULL;
@@ -699,7 +722,7 @@ void * MySQL_Monitor::run() {
 			mysql_thr->refresh_variables();
 			//proxy_error("%s\n","MySQL_Monitor refreshing variables");
 		}
-		usleep(1000000);
+		usleep(500000);
 	}
 	monitor_connect_thread->join();
 	monitor_ping_thread->join();
