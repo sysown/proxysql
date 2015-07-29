@@ -62,7 +62,7 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 #define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
 	l+=strlen(_COMPUTE_HASH_DEL1_);
 	l+=strlen(_COMPUTE_HASH_DEL2_);
-	char *buf=(char *)malloc(l);
+	char *buf=(char *)malloc(l+1);
 	l=0;
 	if (username) {
 		strcpy(buf+l,username);
@@ -108,7 +108,10 @@ void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
 
 bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 	if ((schemaname==NULL) || (strncmp(_new,schemaname,l))) {
-		if (schemaname) free(schemaname);
+		if (schemaname) {
+			free(schemaname);
+			schemaname=NULL;
+		}
 		if (l) {
 			schemaname=(char *)malloc(l+1);
 			memcpy(schemaname,_new,l);

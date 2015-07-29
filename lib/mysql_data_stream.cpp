@@ -559,6 +559,7 @@ int MySQL_Data_Stream::array2buffer() {
 	//unsigned int idx=0;
 	bool cont=true;
 	while (cont) {
+		VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT)==0) return ret;
 		if (queueOUT.partial==0) { // read a new packet
 			//if (PSarrayOUT->len-idx) {
@@ -568,11 +569,14 @@ int MySQL_Data_Stream::array2buffer() {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					queueOUT.pkt.ptr=NULL;
 				}
+		VALGRIND_ENABLE_ERROR_REPORTING;
 				if (myconn->get_status_compression()==true) {
 					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
+		VALGRIND_DISABLE_ERROR_REPORTING;
 					PSarrayOUT->remove_index(0,&queueOUT.pkt);
+		VALGRIND_ENABLE_ERROR_REPORTING;
 					// this is a special case, needed because compression is enabled *after* the first OK
 					if (DSS==STATE_CLIENT_AUTH_OK) {
 						DSS=STATE_SLEEP;
@@ -602,7 +606,9 @@ int MySQL_Data_Stream::array2buffer() {
 			}
 		}
 		int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
+		VALGRIND_DISABLE_ERROR_REPORTING;
 		memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
+		VALGRIND_ENABLE_ERROR_REPORTING;
 		queue_w(queueOUT,b);
 		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
 		queueOUT.partial+=b;

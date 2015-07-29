@@ -29,6 +29,9 @@ class MySQL_Protocol {
 	MySQL_Prepared_Stmt_info *current_PreStmt;
 	uint16_t prot_status;
 	MySQL_Data_Stream *get_myds() { return *myds; }
+	MySQL_Protocol() {
+		prot_status=0;
+	}
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
 	int pkt_handshake_client(unsigned char *, unsigned int);
 	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);

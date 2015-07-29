@@ -1035,19 +1035,25 @@ void MySQL_Thread::run() {
 		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 		for (i=0; i<num_idles; i++) {
 			MySQL_Data_Stream *myds;
-			myds=new MySQL_Data_Stream();
+	//		myds=new MySQL_Data_Stream();
 			MySQL_Connection *mc=my_idle_conns[i];
 //			myds->myconn=mc;
+	//		myds->attach_connection(mc);
+	//		myds->assign_fd_from_mysql_conn();
+	//		myds->myds_type=MYDS_BACKEND;
+			//MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(i);
+			MySQL_Session *sess=new MySQL_Session();
+	//		myds->sess=sess;
+	//		myds->init();
+	//		my_idle_myds[i]=myds;
+			sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
+	//		sess->mybe->server_myds=myds;
+
+			myds=sess->mybe->server_myds;
 			myds->attach_connection(mc);
 			myds->assign_fd_from_mysql_conn();
 			myds->myds_type=MYDS_BACKEND;
-			//MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(i);
-			MySQL_Session *sess=new MySQL_Session();
-			myds->sess=sess;
-			myds->init();
-			my_idle_myds[i]=myds;
-			sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
-			sess->mybe->server_myds=myds;
+
 			sess->to_process=1;
 			myds->wait_until=curtime+mysql_thread___ping_timeout_server*1000;	// max_timeout
 //			sess->status=WAITING_SERVER_DATA;
@@ -1095,7 +1101,8 @@ void MySQL_Thread::run() {
 	}
 
 		for (n = 0; n < mypolls.len; n++) {
-			MySQL_Data_Stream *myds=mypolls.myds[n];
+			MySQL_Data_Stream *myds=NULL;
+			myds=mypolls.myds[n];
 			mypolls.fds[n].revents=0;
 			if (myds && myds->wait_until) {
 				if (myds->wait_until > curtime) {
