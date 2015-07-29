@@ -38,6 +38,7 @@ class MySQL_Connection {
 	char scramble_buff[40];
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
 	int interr;	// integer return
+	my_bool ret_bool;
 	MDB_ASYNC_ST async_state_machine;	// Async state machine
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
@@ -85,6 +86,8 @@ class MySQL_Connection {
 	bool get_status_user_variable();
 	void connect_start();
 	void connect_cont(short event);
+	void change_user_start();
+	void change_user_cont(short event);
 	void ping_start();
 	void ping_cont(short event);
 	void set_names_start();
@@ -100,6 +103,7 @@ class MySQL_Connection {
 	void next_event(MDB_ASYNC_ST new_st);
 
 	int async_connect(short event);
+	int async_change_user(short event);
 	int async_query(short event, char *stmt, unsigned long length);
 	int async_ping(short event);
 	void async_free_result();

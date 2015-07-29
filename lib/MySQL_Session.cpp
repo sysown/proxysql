@@ -493,7 +493,9 @@ handler_again:
 				}
 			}
 			break;
+
 		case PROCESSING_QUERY:
+			//fprintf(stderr,"PROCESSING_QUERY\n");
 			if (mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until) {
 				// query timed out
 				MySQL_Data_Stream *myds=mybe->server_myds;
@@ -518,6 +520,12 @@ handler_again:
 			} else {
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
+				if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
+					if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
+						previous_status.push(PROCESSING_QUERY);
+						NEXT_IMMEDIATE(CHANGING_USER_SERVER);
+					}
+				}
 				status=PROCESSING_QUERY;
 				// we insert it in mypolls only if not already there
 				if (myds->mypolls==NULL) {
@@ -584,6 +592,73 @@ handler_again:
 
 			}
 			break;
+
+		case CHANGING_USER_SERVER:
+			//fprintf(stderr,"CHANGING_USER\n");
+			assert(mybe->server_myds->myconn);
+			{
+				MySQL_Data_Stream *myds=mybe->server_myds;
+				MySQL_Connection *myconn=myds->myconn;
+				myds->DSS=STATE_MARIADB_QUERY;
+				enum session_status st=status;
+				if (myds->mypolls==NULL) {
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+				}
+				int rc=myconn->async_change_user(myds->revents);
+				if (rc==0) {
+					myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+					st=previous_status.top();
+					previous_status.pop();
+					NEXT_IMMEDIATE(st);
+				} else {
+					if (rc==-1) {
+						// the command failed
+						int myerr=mysql_errno(myconn->mysql);
+						if (myerr > 2000) {
+							bool retry_conn=false;
+							// client error, serious
+							proxy_error("Detected a broken connection during change user: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+								retry_conn=true;
+							}
+							myds->destroy_MySQL_Connection_From_Pool();
+							myds->fd=0;
+							if (retry_conn) {
+								myds->DSS=STATE_NOT_INITIALIZED;
+								//previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
+							}
+							return -1;
+						} else {
+							proxy_warning("Error during change user: %d, %s\n", myerr, mysql_error(myconn->mysql));
+								// we won't go back to PROCESSING_QUERY
+							st=previous_status.top();
+							previous_status.pop();
+							char sqlstate[10];
+							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+//							MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+//							GloQPro->delete_QP_out(qpo);
+//							qpo=NULL;
+//							myconn->async_free_result();
+//							myds->DSS=STATE_NOT_INITIALIZED;
+//							myds->free_mysql_real_query();
+							if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+								myds->return_MySQL_Connection_To_Pool();
+							} else {
+								myds->destroy_MySQL_Connection_From_Pool();
+								myds->fd=0;
+								status=WAITING_CLIENT_DATA;
+								client_myds->DSS=STATE_SLEEP;
+							}
+						}
+					} else {
+						// rc==1 , nothing to do for now
+					}
+				}
+			}
+			break;
+
 		case CONNECTING_SERVER:
 			//fprintf(stderr,"CONNECTING_SERVER\n");
 			if (mybe->server_myds->myconn==NULL) {
@@ -763,6 +838,8 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 //		int ms_status = 0;
 		switch (status) {
 			case CONNECTING_SERVER:
+			break;
+		case CHANGING_USER_SERVER:
 			break;
 		case PROCESSING_QUERY:
 			break;

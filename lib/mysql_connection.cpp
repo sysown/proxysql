@@ -251,6 +251,18 @@ void MySQL_Connection::connect_cont(short event) {
 	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event, true));
 }
 
+void MySQL_Connection::change_user_start() {
+	PROXY_TRACE();
+	//fprintf(stderr,"change_user_start FD %d\n", fd);
+	MySQL_Connection_userinfo *_ui=myds->sess->client_myds->myconn->userinfo;
+	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, _ui->password, _ui->schemaname);
+}
+
+void MySQL_Connection::change_user_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
+	async_exit_status = mysql_change_user_cont(&ret_bool, mysql, mysql_status(event, true));
+}
+
 void MySQL_Connection::ping_start() {
 	PROXY_TRACE();
 	//fprintf(stderr,"ping_start FD %d\n", fd);
@@ -348,6 +360,35 @@ handler_again:
 		case ASYNC_CONNECT_SUCCESSFUL:
 			break;
 		case ASYNC_CONNECT_FAILED:
+			break;
+		case ASYNC_CHANGE_USER_START:
+			change_user_start();
+			if (async_exit_status) {
+				next_event(ASYNC_CHANGE_USER_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_END);
+			}
+			break;
+		case ASYNC_CHANGE_USER_CONT:
+			assert(myds->sess->status==CHANGING_USER_SERVER);
+			change_user_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_CHANGE_USER_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_END);
+			}
+			break;
+		case ASYNC_CHANGE_USER_END:
+			if (ret_bool) {
+				fprintf(stderr,"Failed to mysql_change_user()");
+				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_FAILED);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_SUCCESSFUL);
+			}
+			break;
+		case ASYNC_CHANGE_USER_SUCCESSFUL:
+			break;
+		case ASYNC_CHANGE_USER_FAILED:
 			break;
 		case ASYNC_PING_START:
 			ping_start();
@@ -602,6 +643,41 @@ int MySQL_Connection::async_ping(short event) {
 			return 0;
 			break;
 		case ASYNC_PING_FAILED:
+			return -1;
+			break;
+		default:
+			return 1;
+			break;
+	}
+	return 1;
+}
+
+int MySQL_Connection::async_change_user(short event) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	switch (async_state_machine) {
+		case ASYNC_CHANGE_USER_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_CHANGE_USER_FAILED:
+			return -1;
+			break;
+		case ASYNC_IDLE:
+			async_state_machine=ASYNC_CHANGE_USER_START;
+		default:
+			handler(event);
+			break;
+	}
+	
+	// check again
+	switch (async_state_machine) {
+		case ASYNC_CHANGE_USER_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_CHANGE_USER_FAILED:
 			return -1;
 			break;
 		default:

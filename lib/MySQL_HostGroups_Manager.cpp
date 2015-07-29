@@ -529,6 +529,14 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
 				mysrvc->ConnectionsFree->drop_all_connections();
 			}
+			
+			// drop idle connections if beyond max_connection
+			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
+				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
+				delete conn;
+			}
+
+			
 			PtrArray *pa=mysrvc->ConnectionsFree->conns;
 			for (k=0; k<(int)pa->len; k++) {
 				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
