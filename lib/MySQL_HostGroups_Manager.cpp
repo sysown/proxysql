@@ -185,6 +185,11 @@ class MyHGC { // MySQL Host Group Container
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
+	status.myconnpoll_get=0;
+	status.myconnpoll_get_ok=0;
+	status.myconnpoll_get_ping=0;
+	status.myconnpoll_push=0;
+	status.myconnpoll_destroy=0;
 	spinlock_rwlock_init(&rwlock);
 	mydb=new SQLite3DB();
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -391,6 +396,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 //		MySrvC=MyHGC->MySrvC_lookup_with_coordinates(c);
 //	}
 	wrlock();
+	status.myconnpoll_push++;
 	mysrvc=(MySrvC *)c->parent;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
   mysrvc->ConnectionsUsed->remove(c);
@@ -484,6 +490,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn() {
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
+	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	MySrvC *mysrvc=myhgc->get_random_MySrvC();
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
@@ -491,6 +498,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 		//mysrvc->ConnectionsFree->add(conn);
 		conn=mysrvc->ConnectionsFree->get_random_MyConn();
 		mysrvc->ConnectionsUsed->add(conn);
+		status.myconnpoll_get_ok++;
 	}
 //	conn->parent=mysrvc;
 	wrunlock();
@@ -504,6 +512,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 	mysrvc->ConnectionsUsed->remove(c);
 	delete c;
+	status.myconnpoll_destroy++;
 	wrunlock();
 }
 
@@ -552,6 +561,7 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 		}
 	}
 __exit_get_multiple_idle_connections:
+	status.myconnpoll_get_ping+=num_conn_current;
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning %d idle connections\n", num_conn_current);
 	return num_conn_current;

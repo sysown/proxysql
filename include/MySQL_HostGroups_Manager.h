@@ -91,6 +91,11 @@ class MySQL_HostGroups_Manager {
 	public:
 	struct {
 		int client_connections;
+		unsigned long myconnpoll_get;
+		unsigned long myconnpoll_get_ok;
+		unsigned long myconnpoll_get_ping;
+		unsigned long myconnpoll_push;
+		unsigned long myconnpoll_destroy;
 	} status;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
