@@ -543,7 +543,7 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
     if (qr->timeout >= 0) {
 			// Note: negative timeout means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
-      ret->reconnect=qr->reconnect;
+      ret->timeout=qr->timeout;
     }
     if (qr->cache_ttl >= 0) {
 			// Note: negative TTL means this rule doesn't change 

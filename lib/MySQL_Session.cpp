@@ -349,7 +349,12 @@ int MySQL_Session::handler() {
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 									mybe->server_myds->mysql_real_query.size=pkt.size-5;
 									mybe->server_myds->mysql_real_query.ptr=(char *)malloc(pkt.size-5);
-									mybe->server_myds->wait_until=thread->curtime+mysql_thread___ping_timeout_server*10000;
+									mybe->server_myds->wait_until=0;
+									if (qpo) {
+										if (qpo->timeout > 0) {
+											mybe->server_myds->wait_until=thread->curtime+qpo->timeout*1000;
+										}
+									}
 									mybe->server_myds->killed_at=0;
 									//fprintf(stderr,"times: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime); 
 									memcpy(mybe->server_myds->mysql_real_query.ptr,(char *)pkt.ptr+5,pkt.size-5);
@@ -496,11 +501,12 @@ handler_again:
 
 		case PROCESSING_QUERY:
 			//fprintf(stderr,"PROCESSING_QUERY\n");
-			if (mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until) {
+			if (mybe->server_myds->myconn && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until) {
 				// query timed out
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				// FIXME: make sure the connection is established first
 				if (myds->killed_at==0) {
+					myds->wait_until=0;
 					myds->killed_at=thread->curtime;
 					//fprintf(stderr,"Expired: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime);
 					MySQL_Connection_userinfo *ui=client_myds->myconn->userinfo;
