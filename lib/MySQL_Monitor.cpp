@@ -582,7 +582,7 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long t1;
 	unsigned long long t2;
 	unsigned long long start_time;
-	unsigned long long next_loop_at;
+	unsigned long long next_loop_at=0;
 	//unsigned int t1;
 	//unsigned int t2;
 	//t1=monotonic_time();
