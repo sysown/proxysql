@@ -1816,9 +1816,10 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 		//free(l);
 		//free(p);
 	} else { // no result set
-		if (num_fields) {
+		int myerrno=mysql_errno(mysql);
+		if (myerrno==0) {
 			num_rows = mysql_affected_rows(mysql);
-			myprot->generate_pkt_OK(true,NULL,NULL,sid,num_rows,mysql->insert_id,0,mysql->warning_count,mysql->info);
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,num_rows,mysql->insert_id,mysql->status,mysql->warning_count,mysql->info);
 		} else {
 			// error
 			char sqlstate[10];
