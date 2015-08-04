@@ -46,6 +46,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY, hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters ( Command VARCHAR NOT NULL PRIMARY KEY, Total_Time_us INT NOT NULL, Total_cnt INT NOT NULL, cnt_100us INT NOT NULL, cnt_500us INT NOT NULL, cnt_1ms INT NOT NULL, cnt_5ms INT NOT NULL, cnt_10ms INT NOT NULL, cnt_50ms INT NOT NULL, cnt_100ms INT NOT NULL, cnt_500ms INT NOT NULL, cnt_1s INT NOT NULL, cnt_5s INT NOT NULL, cnt_10s INT NOT NULL, cnt_INFs)"
+#define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL, SessionID INTEGER PRIMARY KEY, hostgroup VARCHAR, srv_host VARCHAR, srv_port VARCHAR, info VARCHAR)"
 
 
 
@@ -819,6 +820,11 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	//fprintf(stderr,"%s----\n",query_no_space);
 
 
+	pthread_mutex_lock(&admin_mutex);
+	ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+	SPA->stats___mysql_processlist();
+	pthread_mutex_unlock(&admin_mutex);
+
 	if (sess->stats==false) {
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
@@ -1025,7 +1031,7 @@ void *child_mysql(void *arg) {
 	fds[0].events=POLLIN|POLLOUT;
 
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL);
+	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 
 	unsigned long oldtime=monotonic_time();
 	unsigned long curtime=monotonic_time();
@@ -1344,6 +1350,7 @@ bool ProxySQL_Admin::init() {
 
 	insert_into_tables_defs(tables_defs_stats,"mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_stats,"mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
+	insert_into_tables_defs(tables_defs_stats,"mysql_processlist", STATS_SQLITE_TABLE_MYSQL_PROCESSLIST);
 
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
@@ -1855,6 +1862,28 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 
 
 
+
+void ProxySQL_Admin::stats___mysql_processlist() {
+	if (!GloMTH) return;
+	SQLite3_result * resultset=GloMTH->SQL3_Processlist();
+	if (resultset==NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_processlist");
+	char *a=(char *)"INSERT INTO stats_mysql_processlist VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\", \"%s\")";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<6; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
 
 void ProxySQL_Admin::stats___mysql_commands_counters() {
 	if (!GloQPro) return;

@@ -1312,7 +1312,7 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 }
 
 //bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
@@ -1344,6 +1344,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   //srand(pthread_self());
   //uint32_t thread_id=rand()%100000;
   uint32_t thread_id=__sync_fetch_and_add(&glovars.thread_id,1);
+	if (_thread_id)
+		*_thread_id=thread_id;
   //uint32_t thread_id=pthread_self();
 
   rand_struct rand_st;

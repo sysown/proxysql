@@ -1218,7 +1218,8 @@ void MySQL_Thread::run() {
 				if (mypolls.fds[n].revents) {
 					char c;
 					read(mypolls.fds[n].fd, &c, 1);	// read just one byte , no need for error handling
-					fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
+					proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
+					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
 				}
 			continue;
 			}
@@ -1458,7 +1459,7 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
 		}
-		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL);
+		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
@@ -1569,6 +1570,73 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Session *sess)
 	pta[0]=(char *)status_str.c_str();
 	result->add_row(pta);
 	free(pta);
+	return result;
+}
+
+SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
+	const int colnum=6;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
+  SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"ThreadID");
+	result->add_column_definition(SQLITE_TEXT,"SessionID");
+	result->add_column_definition(SQLITE_TEXT,"hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"srv_host");
+	result->add_column_definition(SQLITE_TEXT,"srv_port");
+	result->add_column_definition(SQLITE_TEXT,"info");
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		//if (thr!=sess->thread)
+		spin_wrlock(&thr->thread_mutex);
+	}
+	signal_all_threads();
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		unsigned int j;
+		for (j=0; j<thr->mysql_sessions->len; j++) {
+			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
+			if (sess->client_myds) {
+				char buf[1024];
+				char **pta=(char **)malloc(sizeof(char *)*colnum);
+				sprintf(buf,"%d", i);
+				pta[0]=strdup(buf);
+				sprintf(buf,"%u", sess->thread_session_id);
+				pta[1]=strdup(buf);
+				sprintf(buf,"%d", sess->current_hostgroup);
+				pta[2]=strdup(buf);
+				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
+					MySQL_Connection *mc=sess->mybe->server_myds->myconn;
+					sprintf(buf,"%s", mc->parent->address);
+					pta[3]=strdup(buf);
+					sprintf(buf,"%d", mc->parent->port);
+					pta[4]=strdup(buf);
+					if (mc->query.length) {
+						pta[5]=(char *)malloc(mc->query.length+1);
+						strncpy(pta[5],mc->query.ptr,mc->query.length);
+						pta[5][mc->query.length]='\0';
+					} else {
+						pta[5]=NULL;
+					}
+				} else {
+					pta[3]=NULL;
+					pta[4]=NULL;
+					pta[5]=NULL;
+				}
+				result->add_row(pta);
+				unsigned int k;
+				for (k=0; k<colnum; k++) {
+					if (pta[k])
+						free(pta[k]);
+				}
+				free(pta);
+			}
+		}
+	}
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		//if(thr!=sess->thread)
+		spin_wrunlock(&thr->thread_mutex);
+	}
 	return result;
 }
 

@@ -120,7 +120,7 @@ class ProxySQL_Admin {
 
 	void stats___mysql_query_rules();
 	void stats___mysql_commands_counters();
-
+	void stats___mysql_processlist();
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
 	int Read_MySQL_Users_from_configfile();

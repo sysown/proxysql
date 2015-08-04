@@ -80,6 +80,7 @@ class MySQL_Session
 	void * operator new(size_t);
 	void operator delete(void *);
 	MySQL_Thread *thread;
+	uint32_t thread_session_id;
 //	enum session_states sess_states;
 	QP_out_t *qpo;
 	StatCounters *command_counters;

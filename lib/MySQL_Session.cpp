@@ -123,6 +123,7 @@ void MySQL_Session::operator delete(void *ptr) {
 
 
 MySQL_Session::MySQL_Session() {
+	thread_session_id=0;
 	pause=0;
 	pause_until=0;
 	qpo=NULL;
