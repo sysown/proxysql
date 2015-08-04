@@ -359,6 +359,17 @@ int MySQL_Session::handler() {
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
 									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
+									pause_until=0;
+									if (mysql_thread___default_query_delay) {
+										pause_until=thread->curtime+mysql_thread___default_query_delay*1000;
+									}
+									if (qpo) {
+										if (qpo->delay > 0) {
+											if (pause_until==0)
+												pause_until=thread->curtime;
+											pause_until+=qpo->delay*1000;
+										}
+									}
 									//if (server_myds!=mybe->server_myds) {
 									//	server_myds=mybe->server_myds;
 									//}
@@ -520,6 +531,9 @@ handler_again:
 
 		case PROCESSING_QUERY:
 			//fprintf(stderr,"PROCESSING_QUERY\n");
+			if (pause_until > thread->curtime) {
+				return 0;
+			}
 			if (mysql_thread___connect_timeout_server_max) {
 				if (mybe->server_myds->max_connect_time==0)
 					mybe->server_myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
@@ -558,6 +572,7 @@ handler_again:
 					}
 				}
 				status=PROCESSING_QUERY;
+				mybe->server_myds->max_connect_time=0;
 				// we insert it in mypolls only if not already there
 				if (myds->mypolls==NULL) {
 					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);

@@ -1120,13 +1120,24 @@ void MySQL_Thread::run() {
 			MySQL_Data_Stream *myds=NULL;
 			myds=mypolls.myds[n];
 			mypolls.fds[n].revents=0;
-			if (myds && myds->wait_until) {
-				if (myds->wait_until > curtime) {
-					if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
-						mypolls.poll_timeout= myds->wait_until - curtime;
+			if (myds) {
+				if (myds->wait_until) {
+					if (myds->wait_until > curtime) {
+						if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
+							mypolls.poll_timeout= myds->wait_until - curtime;
+						}
+//					} else {
+//						mypolls.poll_timeout=1000;
 					}
-				} else {
-					mypolls.poll_timeout=1000;
+				}
+				if (myds->sess) {
+					if (myds->sess->pause_until > 0) {
+						if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
+							mypolls.poll_timeout= myds->sess->pause_until - curtime;
+						}
+//					} else {
+//						mypolls.poll_timeout=1000;
+					}
 				}
 			}
 			if (myds) myds->revents=0;

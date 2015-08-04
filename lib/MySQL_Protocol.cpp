@@ -725,7 +725,7 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
 	char buf1[1000];
 	unsigned long long t1=monotonic_time();
 	//const char *stats=(char *)"Uptime: 1000  Threads: 1  Questions: 34221015  Slow queries: 0  Opens: 757  Flush tables: 1  Open tables: 185  Queries per second avg: 22.289";
-	sprintf(buf1,"Uptime: %ld Threads: %d", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections);
+	sprintf(buf1,"Uptime: %llu Threads: %d", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections);
 	unsigned char statslen=strlen(buf1);
 	mysql_hdr myhdr;
 	myhdr.pkt_id=1;
