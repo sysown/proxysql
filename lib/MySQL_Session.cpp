@@ -597,6 +597,10 @@ handler_again:
 					myds->DSS=STATE_NOT_INITIALIZED;
 					status=WAITING_CLIENT_DATA;
 					client_myds->DSS=STATE_SLEEP;
+					if (mysql_thread___commands_stats==true) {
+						CurrentQuery.end_time=thread->curtime;
+						CurrentQuery.query_parser_update_counters();
+					}
 					myds->free_mysql_real_query();
 					if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 						myds->return_MySQL_Connection_To_Pool();
