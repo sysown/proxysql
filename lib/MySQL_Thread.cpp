@@ -1511,10 +1511,11 @@ SQLite3_result * MySQL_Thread::SQL3_Thread_status(MySQL_Session *sess) {
 	status_str.append(buf);
 	for (unsigned int i=0; i < mypolls.len; i++) {
 		MySQL_Data_Stream *_myds=mypolls.myds[i];
-		if (_myds->myconn && _myds->myconn->parent) {
+		if (_myds && _myds->myconn && _myds->myconn->parent) {
 			sprintf(buf2," = { HG=%d , addr=%s , port=%d }", _myds->myconn->parent->myhgc->hid , _myds->myconn->parent->address , _myds->myconn->parent->port );
 		}
-		sprintf(buf, "myds[%d]: %p = { fd=%d , events=%d , revents=%d } , type=%d , dss=%d , sess=%p , trx=%d , conn=%p%s\n", i, _myds , mypolls.fds[i].fd , mypolls.fds[i].events , mypolls.fds[i].revents , _myds->myds_type , _myds->DSS , _myds->sess , _myds->active_transaction , _myds->myconn, ( (_myds->myconn && _myds->myconn->parent ) ? buf2 : "" ) );
+		if (_myds)
+			sprintf(buf, "myds[%d]: %p = { fd=%d , events=%d , revents=%d } , type=%d , dss=%d , sess=%p , trx=%d , conn=%p%s\n", i, _myds , mypolls.fds[i].fd , mypolls.fds[i].events , mypolls.fds[i].revents , _myds->myds_type , _myds->DSS , _myds->sess , _myds->active_transaction , _myds->myconn, ( (_myds->myconn && _myds->myconn->parent ) ? buf2 : "" ) );
 		status_str.append(buf);
 	}
 	status_str+= "\n";
@@ -1523,13 +1524,15 @@ SQLite3_result * MySQL_Thread::SQL3_Thread_status(MySQL_Session *sess) {
 	status_str.append(buf);
 	for (unsigned int i=0; i < mysql_sessions->len; i++) {
 		MySQL_Session *s=(MySQL_Session *)mysql_sessions->pdata[i];
-		MySQL_Connection_userinfo *ui=s->client_myds->myconn->userinfo;
-		sprintf(buf, "session[%d] = %p : COM counters { %d , %d , %d , %d , %d , %d , %d , %d , %d , %d }\n\tuserinfo={%s,%s} , status=%d , myds={%p,%p} , HG={d:%d,c:%d}\n\tLast query= ", i, s, s->command_counters->sum(_c-0,1), s->command_counters->sum(_c-1,1), s->command_counters->sum(_c-2,1), s->command_counters->sum(_c-3,1), s->command_counters->sum(_c-4,1), s->command_counters->sum(_c-5,1), s->command_counters->sum(_c-6,1), s->command_counters->sum(_c-7,1), s->command_counters->sum(_c-8,1), s->command_counters->sum(_c-9,1), ui->username, ui->schemaname, s->status, s->client_myds, ( s->mybe ? s->mybe->server_myds : NULL ) , s->default_hostgroup, s->current_hostgroup);
-		status_str.append(buf);
-		if (s->CurrentQuery.QueryLength && s->CurrentQuery.MyComQueryCmd!=MYSQL_COM_QUERY___NONE) {
-			status_str.append((char *)s->CurrentQuery.QueryPointer);
+		if (s->client_myds) {
+			MySQL_Connection_userinfo *ui=s->client_myds->myconn->userinfo;
+			sprintf(buf, "session[%d] = %p : COM counters { %d , %d , %d , %d , %d , %d , %d , %d , %d , %d }\n\tuserinfo={%s,%s} , status=%d , myds={%p,%p} , HG={d:%d,c:%d}\n\tLast query= ", i, s, s->command_counters->sum(_c-0,1), s->command_counters->sum(_c-1,1), s->command_counters->sum(_c-2,1), s->command_counters->sum(_c-3,1), s->command_counters->sum(_c-4,1), s->command_counters->sum(_c-5,1), s->command_counters->sum(_c-6,1), s->command_counters->sum(_c-7,1), s->command_counters->sum(_c-8,1), s->command_counters->sum(_c-9,1), ui->username, ui->schemaname, s->status, s->client_myds, ( s->mybe ? s->mybe->server_myds : NULL ) , s->default_hostgroup, s->current_hostgroup);
+			status_str.append(buf);
+			if (s->CurrentQuery.QueryLength && s->CurrentQuery.MyComQueryCmd!=MYSQL_COM_QUERY___NONE) {
+				status_str.append((char *)s->CurrentQuery.QueryPointer);
+			}
+			status_str+= "\n";
 		}
-		status_str+= "\n";
 	}
 
 	pta[3]=(char *)status_str.c_str();
