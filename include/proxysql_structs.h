@@ -17,6 +17,7 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CONNECT_END,
 	ASYNC_CONNECT_SUCCESSFUL,
 	ASYNC_CONNECT_FAILED,
+	ASYNC_CONNECT_TIMEOUT,
 	ASYNC_CHANGE_USER_START,
 	ASYNC_CHANGE_USER_CONT,
 	ASYNC_CHANGE_USER_END,
@@ -670,6 +671,7 @@ __thread int mysql_thread___default_query_delay;
 __thread int mysql_thread___default_query_timeout;
 __thread int mysql_thread___ping_interval_server;
 __thread int mysql_thread___ping_timeout_server;
+__thread int mysql_thread___connect_retries_on_failure;
 __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
 __thread char *mysql_thread___connect_timeout_server_error;
@@ -713,6 +715,7 @@ extern __thread int mysql_thread___default_query_delay;
 extern __thread int mysql_thread___default_query_timeout;
 extern __thread int mysql_thread___ping_interval_server;
 extern __thread int mysql_thread___ping_timeout_server;
+extern __thread int mysql_thread___connect_retries_on_failure;
 extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread char *mysql_thread___connect_timeout_server_error;

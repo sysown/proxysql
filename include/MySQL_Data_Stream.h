@@ -49,6 +49,7 @@ class MySQL_Data_Stream
 	//int listener;
 	MySQL_Connection *myconn;
 	MySQL_Protocol myprot;
+	int connect_retries_on_failure;
 	enum mysql_data_stream_status DSS;
 	enum MySQL_DS_type myds_type;
 	MySQL_Session *sess;  // pointer to the session using this data stream
@@ -60,6 +61,7 @@ class MySQL_Data_Stream
 
 	unsigned long long wait_until;
 	unsigned long long killed_at;
+	unsigned long long max_connect_time;
 	int poll_fds_idx;
 	short revents;
 
@@ -149,8 +151,14 @@ class MySQL_Data_Stream
 		unplug_backend();
 		MyHGM->destroy_MyConn_from_pool(mc);
 	}
-
 	void free_mysql_real_query();	
+
+	void destroy_MySQL_Connection() {
+		MySQL_Connection *mc=myconn;
+		detach_connection();
+		unplug_backend();
+		delete mc;
+	}
 
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

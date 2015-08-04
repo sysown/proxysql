@@ -722,9 +722,11 @@ void MySQL_Protocol::generate_server_handshake() {
 bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigned int *len) {
 // FIXME : this function generates a not useful string. It is a placeholder for now
 
-	const char *stats=(char *)"Uptime: 1000  Threads: 1  Questions: 34221015  Slow queries: 0  Opens: 757  Flush tables: 1  Open tables: 185  Queries per second avg: 22.289";
-
-	unsigned char statslen=strlen(stats);
+	char buf1[1000];
+	unsigned long long t1=monotonic_time();
+	//const char *stats=(char *)"Uptime: 1000  Threads: 1  Questions: 34221015  Slow queries: 0  Opens: 757  Flush tables: 1  Open tables: 185  Queries per second avg: 22.289";
+	sprintf(buf1,"Uptime: %ld Threads: %d", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections);
+	unsigned char statslen=strlen(buf1);
 	mysql_hdr myhdr;
 	myhdr.pkt_id=1;
 	//myhdr.pkt_length=statslen+1;
@@ -738,7 +740,7 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
   //Copy4B(_ptr, &myhdr);
   int l=sizeof(mysql_hdr);
 	//_ptr[l++]=statslen;
-	memcpy(_ptr+l,stats,statslen);	
+	memcpy(_ptr+l,buf1,statslen);
 
 	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }

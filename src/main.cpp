@@ -158,7 +158,7 @@ int main(int argc, const char * argv[]) {
 #else
 	glovars.has_debug=false;
 #endif /* DEBUG */
-
+	GloVars.global.start_time=monotonic_time();
 	__thr_sfp=l_mem_init();
 
 	{

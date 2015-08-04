@@ -30,6 +30,7 @@ class ProxySQL_GlobalVariables {
 	char *datadir;
 	char *admindb;
 	struct  {
+		unsigned long long start_time;
 		bool gdbg;
 		bool nostart;
 		bool use_proxysql_mem;

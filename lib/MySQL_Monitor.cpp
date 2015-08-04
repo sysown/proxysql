@@ -489,7 +489,7 @@ void * MySQL_Monitor::monitor_connect() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			proxy_error("%s\n", "MySQL_Monitor - CONNECT - refreshing variables");
+			//proxy_error("%s\n", "MySQL_Monitor - CONNECT - refreshing variables");
 		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
@@ -616,7 +616,7 @@ void * MySQL_Monitor::monitor_ping() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
+			//proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
 		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);

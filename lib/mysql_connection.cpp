@@ -331,6 +331,7 @@ MDB_ASYNC_ST MySQL_Connection::handler(short event) {
 	if (mysql==NULL) {
 		// it is the first time handler() is being called
 		async_state_machine=ASYNC_CONNECT_START;
+		myds->wait_until=myds->sess->thread->curtime+mysql_thread___connect_timeout_server*1000;
 	}
 handler_again:
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"async_state_machine=%d\n", async_state_machine);
@@ -346,6 +347,9 @@ handler_again:
 		case ASYNC_CONNECT_CONT:
 			connect_cont(event);
 			if (async_exit_status) {
+					if (myds->sess->thread->curtime >= myds->wait_until) {
+						NEXT_IMMEDIATE(ASYNC_CONNECT_TIMEOUT);
+					}
       	next_event(ASYNC_CONNECT_CONT);
 			} else {
 				NEXT_IMMEDIATE(ASYNC_CONNECT_END);
@@ -354,7 +358,7 @@ handler_again:
 			break;
 		case ASYNC_CONNECT_END:
 			if (!ret_mysql) {
-				fprintf(stderr,"Failed to mysql_real_connect()");
+				fprintf(stderr,"Failed to mysql_real_connect(), %d,  %s\n", mysql_errno(mysql), mysql_error(mysql));
     		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
     		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
@@ -363,6 +367,9 @@ handler_again:
 		case ASYNC_CONNECT_SUCCESSFUL:
 			break;
 		case ASYNC_CONNECT_FAILED:
+			break;
+		case ASYNC_CONNECT_TIMEOUT:
+			fprintf(stderr,"Connect timeout: %llu - %llu = %llu\n",  myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			break;
 		case ASYNC_CHANGE_USER_START:
 			change_user_start();
@@ -575,6 +582,9 @@ int MySQL_Connection::async_connect(short event) {
 			break;
 		case ASYNC_CONNECT_FAILED:
 			return -1;
+			break;
+		case ASYNC_CONNECT_TIMEOUT:
+			return -2;
 			break;
 		default:
 			return 1;

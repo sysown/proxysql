@@ -249,6 +249,7 @@ class MySQL_Threads_Handler
 		bool monitor_timer_cached;
 		int ping_interval_server;
 		int ping_timeout_server;
+		int connect_retries_on_failure;
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		char *connect_timeout_server_error;
