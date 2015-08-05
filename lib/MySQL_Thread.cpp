@@ -1582,7 +1582,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Session *sess)
 }
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
-	const int colnum=12;
+	const int colnum=14;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
   SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"ThreadID");
@@ -1592,6 +1592,8 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"cli_host");
 	result->add_column_definition(SQLITE_TEXT,"cli_port");
 	result->add_column_definition(SQLITE_TEXT,"hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"l_srv_host");
+	result->add_column_definition(SQLITE_TEXT,"l_srv_port");
 	result->add_column_definition(SQLITE_TEXT,"srv_host");
 	result->add_column_definition(SQLITE_TEXT,"srv_port");
 	result->add_column_definition(SQLITE_TEXT,"command");
@@ -1632,45 +1634,69 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				pta[6]=strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 					MySQL_Connection *mc=sess->mybe->server_myds->myconn;
-					sprintf(buf,"%s", mc->parent->address);
-					pta[7]=strdup(buf);
-					sprintf(buf,"%d", mc->parent->port);
-					pta[8]=strdup(buf);
-					if (mc->query.length) {
-						pta[11]=(char *)malloc(mc->query.length+1);
-						strncpy(pta[11],mc->query.ptr,mc->query.length);
-						pta[11][mc->query.length]='\0';
+
+
+					struct sockaddr addr;
+					socklen_t addr_len=sizeof(struct sockaddr);
+					memset(&addr,0,addr_len);
+					int rc;
+					rc=getsockname(mc->fd, &addr, &addr_len);
+					if (rc==0) {
+						if (addr.sa_family==AF_INET) {
+							struct sockaddr_in * ipv4addr=(struct sockaddr_in *)&addr;
+							pta[7]=strdup(inet_ntoa(ipv4addr->sin_addr));
+							sprintf(buf,"%d", htons(ipv4addr->sin_port));
+							pta[8]=strdup(buf);
+						} else {
+							pta[7]=strdup("localhost");
+							pta[8]=NULL;
+						}
 					} else {
-						pta[11]=NULL;
+						pta[7]=NULL;
+						pta[8]=NULL;
+					}
+
+					sprintf(buf,"%s", mc->parent->address);
+					pta[9]=strdup(buf);
+					sprintf(buf,"%d", mc->parent->port);
+					pta[10]=strdup(buf);
+					if (mc->query.length) {
+						pta[13]=(char *)malloc(mc->query.length+1);
+						strncpy(pta[13],mc->query.ptr,mc->query.length);
+						pta[13][mc->query.length]='\0';
+					} else {
+						pta[13]=NULL;
 					}
 				} else {
 					pta[7]=NULL;
 					pta[8]=NULL;
-					pta[11]=NULL;
+					pta[9]=NULL;
+					pta[10]=NULL;
+					pta[13]=NULL;
 				}
 				switch (sess->status) {
 					case CONNECTING_SERVER:
-						pta[9]=strdup("Connect");
+						pta[11]=strdup("Connect");
 						break;
 					case PROCESSING_QUERY:
 						if (sess->pause_until > sess->thread->curtime) {
-							pta[9]=strdup("Delay");
+							pta[11]=strdup("Delay");
 						} else {
-							pta[9]=strdup("Query");
+							pta[11]=strdup("Query");
 						}
 						break;
 					case WAITING_CLIENT_DATA:
-						pta[9]=strdup("Sleep");
+						pta[11]=strdup("Sleep");
 						break;
 					case CHANGING_USER_SERVER:
-						pta[9]=strdup("Change user");
+						pta[11]=strdup("Change user");
 						break;
 					case CHANGING_SCHEMA:
-						pta[9]=strdup("InitDB");
+						pta[11]=strdup("InitDB");
 						break;
 					default:
 						sprintf(buf,"%d", sess->status);
-						pta[9]=strdup(buf);
+						pta[11]=strdup(buf);
 						break;
 				}
 				int idx=sess->client_myds->poll_fds_idx;
@@ -1678,7 +1704,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				unsigned long long last_recv=sess->thread->mypolls.last_recv[idx];
 				unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
 				sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
-				pta[10]=strdup(buf);
+				pta[12]=strdup(buf);
 
 				result->add_row(pta);
 				unsigned int k;
