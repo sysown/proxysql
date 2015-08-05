@@ -826,7 +826,7 @@ handler_again:
 					case 0:
 						myds->myds_type=MYDS_BACKEND;
 						myds->DSS=STATE_READY;
-						status=WAITING_SERVER_DATA;
+						status=WAITING_CLIENT_DATA;
 						st=previous_status.top();
 						previous_status.pop();
 						NEXT_IMMEDIATE(st);
@@ -1035,11 +1035,12 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 */
 			break;
 		case CHANGING_SCHEMA:
+/*
 			if (myds->revents) {
 				myconn->handler(myds->revents);
 				if (myconn->async_state_machine==ASYNC_INITDB_SUCCESSFUL) {
 					myds->DSS=STATE_READY;
-					status=WAITING_SERVER_DATA;
+					status=WAITING_CLIENT_DATA;
 					unsigned int k;
 					PtrSize_t pkt2;
 					for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
@@ -1054,6 +1055,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 					return -1;
 				}
 			}
+*/
 			break;
 		case CHANGING_CHARSET:
 			if (myds->revents) {
@@ -1067,7 +1069,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 					myds->myconn->handler(0);
 #else
 					myds->DSS=STATE_READY;
-					status=WAITING_SERVER_DATA;
+					status=WAITING_CLIENT_DATA;
 #endif /* EXPMARIA */
 					unsigned int k;
 					PtrSize_t pkt2;

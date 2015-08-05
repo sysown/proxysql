@@ -1669,7 +1669,8 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						pta[9]=strdup("InitDB");
 						break;
 					default:
-						pta[9]=strdup("");
+						sprintf(buf,"%d", sess->status);
+						pta[9]=strdup(buf);
 						break;
 				}
 				int idx=sess->client_myds->poll_fds_idx;

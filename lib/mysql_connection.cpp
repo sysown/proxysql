@@ -744,6 +744,7 @@ void MySQL_Connection::async_free_result() {
 	if (query.ptr) {
 		free(query.ptr);
 		query.ptr=NULL;
+		query.length=0;
 	}
 	if (mysql_result) {
 		mysql_free_result(mysql_result);
