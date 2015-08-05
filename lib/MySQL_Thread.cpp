@@ -1580,7 +1580,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Session *sess)
 }
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
-	const int colnum=8;
+	const int colnum=10;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
   SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"ThreadID");
@@ -1590,6 +1590,8 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"srv_host");
 	result->add_column_definition(SQLITE_TEXT,"srv_port");
+	result->add_column_definition(SQLITE_TEXT,"command");
+	result->add_column_definition(SQLITE_TEXT,"time_ms");
 	result->add_column_definition(SQLITE_TEXT,"info");
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -1628,17 +1630,38 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					sprintf(buf,"%d", mc->parent->port);
 					pta[6]=strdup(buf);
 					if (mc->query.length) {
-						pta[7]=(char *)malloc(mc->query.length+1);
-						strncpy(pta[7],mc->query.ptr,mc->query.length);
-						pta[7][mc->query.length]='\0';
+						pta[9]=(char *)malloc(mc->query.length+1);
+						strncpy(pta[9],mc->query.ptr,mc->query.length);
+						pta[9][mc->query.length]='\0';
 					} else {
-						pta[7]=NULL;
+						pta[9]=NULL;
 					}
 				} else {
 					pta[5]=NULL;
 					pta[6]=NULL;
-					pta[7]=NULL;
+					pta[9]=NULL;
 				}
+				switch (sess->status) {
+					case CONNECTING_SERVER:
+						pta[7]=strdup("Connect");
+						break;
+					case PROCESSING_QUERY:
+						pta[7]=strdup("Query");
+						break;
+					case WAITING_CLIENT_DATA:
+						pta[7]=strdup("Sleep");
+						break;
+					default:
+						pta[7]=strdup("");
+						break;
+				}
+				int idx=sess->client_myds->poll_fds_idx;
+				unsigned long long last_sent=sess->thread->mypolls.last_sent[idx];
+				unsigned long long last_recv=sess->thread->mypolls.last_recv[idx];
+				unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
+				sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
+				pta[8]=strdup(buf);
+
 				result->add_row(pta);
 				unsigned int k;
 				for (k=0; k<colnum; k++) {
