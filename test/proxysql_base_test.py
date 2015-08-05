@@ -19,6 +19,8 @@ class ProxySQLBaseTest(TestCase):
 	# TODO(andrei): make it possible to set this to False, and make False
 	# the default value.
 	INTERACTIVE_TEST = True
+	# Custom, per-test, config overrides
+	CONFIG_OVERRIDES = {}
 
 	@classmethod
 	def _startup_docker_services(cls):
@@ -150,7 +152,7 @@ class ProxySQLBaseTest(TestCase):
 		`mysql_servers` table, which contains a list of which servers go into
 		which hostgroup.
 		"""
-		config = ProxySQL_Tests_Config()
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
 		proxysql_container = cls._get_proxysql_container()
 		mysql_containers = cls._get_mysql_containers()
 		environment_variables = cls._get_environment_variables_from_container(
@@ -229,7 +231,7 @@ class ProxySQLBaseTest(TestCase):
 							username=None, password=None, port=None):
 		"""Run a query against the ProxySQL proxy and optionally return its
 		results as a set of rows."""
-		config = ProxySQL_Tests_Config()
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
 		username = username or config.get('ProxySQL', 'username')
 		password = password or config.get('ProxySQL', 'password')
 		port = port or int(config.get('ProxySQL', 'port'))
@@ -257,7 +259,7 @@ class ProxySQLBaseTest(TestCase):
 		TODO(andrei): revisit db assumption once stats databases from ProxySQL
 		are accessible via the MySQL interface.
 		"""
-		config = ProxySQL_Tests_Config() 
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES) 
 
 		return cls.run_query_proxysql(
 			query,
@@ -312,7 +314,7 @@ class ProxySQLBaseTest(TestCase):
 			if exposed_port['PrivatePort'] == 3306:
 				mysql_port = exposed_port['PublicPort']
 
-		config = ProxySQL_Tests_Config()
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
 		hostname = config.get('ProxySQL', 'hostname')
 		username = username or config.get('ProxySQL', 'username')
 		password = password or config.get('ProxySQL', 'password')
@@ -342,7 +344,7 @@ class ProxySQLBaseTest(TestCase):
 		"""
 
 		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
-		config = ProxySQL_Tests_Config()
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
 		hostname = config.get('ProxySQL', 'hostname')
 		username = username or config.get('ProxySQL', 'username')
 		password = password or config.get('ProxySQL', 'password')
@@ -425,7 +427,8 @@ class ProxySQLBaseTest(TestCase):
 		monitor the ProxySQL daemon in order to check that it's up.
 
 		This special thread will do exactly that."""
-		cls.ping_thread = ProxySQL_Ping_Thread(ProxySQL_Tests_Config())
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
+		cls.ping_thread = ProxySQL_Ping_Thread(config)
 		cls.ping_thread.start()
 
 	@classmethod
