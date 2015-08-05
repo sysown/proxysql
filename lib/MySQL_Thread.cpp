@@ -1582,11 +1582,13 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Session *sess)
 }
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
-	const int colnum=10;
+	const int colnum=12;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
   SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"ThreadID");
 	result->add_column_definition(SQLITE_TEXT,"SessionID");
+	result->add_column_definition(SQLITE_TEXT,"user");
+	result->add_column_definition(SQLITE_TEXT,"db");
 	result->add_column_definition(SQLITE_TEXT,"cli_host");
 	result->add_column_definition(SQLITE_TEXT,"cli_port");
 	result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -1614,51 +1616,54 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				pta[0]=strdup(buf);
 				sprintf(buf,"%u", sess->thread_session_id);
 				pta[1]=strdup(buf);
+				MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+				pta[2]=strdup(ui->username);
+				pta[3]=strdup(ui->schemaname);
 				if (sess->client_myds->client_addr->sa_family==AF_INET) {
 					struct sockaddr_in * ipv4addr=(struct sockaddr_in *)sess->client_myds->client_addr;
-					pta[2]=strdup(inet_ntoa(ipv4addr->sin_addr));
+					pta[4]=strdup(inet_ntoa(ipv4addr->sin_addr));
 					sprintf(buf,"%d", htons(ipv4addr->sin_port));
-					pta[3]=strdup(buf);
+					pta[5]=strdup(buf);
 				} else {
-					pta[2]=strdup("localhost");
-					pta[3]=NULL;
+					pta[4]=strdup("localhost");
+					pta[5]=NULL;
 				}
 				sprintf(buf,"%d", sess->current_hostgroup);
-				pta[4]=strdup(buf);
+				pta[6]=strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 					MySQL_Connection *mc=sess->mybe->server_myds->myconn;
 					sprintf(buf,"%s", mc->parent->address);
-					pta[5]=strdup(buf);
+					pta[7]=strdup(buf);
 					sprintf(buf,"%d", mc->parent->port);
-					pta[6]=strdup(buf);
+					pta[8]=strdup(buf);
 					if (mc->query.length) {
-						pta[9]=(char *)malloc(mc->query.length+1);
-						strncpy(pta[9],mc->query.ptr,mc->query.length);
-						pta[9][mc->query.length]='\0';
+						pta[11]=(char *)malloc(mc->query.length+1);
+						strncpy(pta[11],mc->query.ptr,mc->query.length);
+						pta[11][mc->query.length]='\0';
 					} else {
-						pta[9]=NULL;
+						pta[11]=NULL;
 					}
 				} else {
-					pta[5]=NULL;
-					pta[6]=NULL;
-					pta[9]=NULL;
+					pta[7]=NULL;
+					pta[8]=NULL;
+					pta[11]=NULL;
 				}
 				switch (sess->status) {
 					case CONNECTING_SERVER:
-						pta[7]=strdup("Connect");
+						pta[9]=strdup("Connect");
 						break;
 					case PROCESSING_QUERY:
 						if (sess->pause_until > sess->thread->curtime) {
-							pta[7]=strdup("Delay");
+							pta[9]=strdup("Delay");
 						} else {
-							pta[7]=strdup("Query");
+							pta[9]=strdup("Query");
 						}
 						break;
 					case WAITING_CLIENT_DATA:
-						pta[7]=strdup("Sleep");
+						pta[9]=strdup("Sleep");
 						break;
 					default:
-						pta[7]=strdup("");
+						pta[9]=strdup("");
 						break;
 				}
 				int idx=sess->client_myds->poll_fds_idx;
@@ -1666,7 +1671,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				unsigned long long last_recv=sess->thread->mypolls.last_recv[idx];
 				unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
 				sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
-				pta[8]=strdup(buf);
+				pta[10]=strdup(buf);
 
 				result->add_row(pta);
 				unsigned int k;
