@@ -59,6 +59,9 @@ class MySQL_Data_Stream
 	bytes_stats_t bytes_info; // bytes statistics
 	int fd; // file descriptor
 
+	struct sockaddr *client_addr;
+	socklen_t client_addrlen;
+
 	unsigned long long wait_until;
 	unsigned long long killed_at;
 	unsigned long long max_connect_time;

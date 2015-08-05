@@ -1449,7 +1449,10 @@ void MySQL_Thread::unregister_session_connection_handler(int idx, bool _new) {
 
 void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n) {
 	int c;
-	c=accept(myds->fd, NULL, NULL);
+	struct sockaddr *addr=(struct sockaddr *)malloc(sizeof(struct sockaddr));
+	socklen_t addrlen=sizeof(struct sockaddr);
+	memset(addr, 0, sizeof(struct sockaddr));
+	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
 		// create a new client connection
 		mypolls.fds[n].revents=0;
@@ -1459,11 +1462,14 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
 		}
+		sess->client_myds->client_addrlen=addrlen;
+		sess->client_myds->client_addr=addr;
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
 	} else {
+		free(addr);
 		// if we arrive here, accept() failed
 		// because multiple threads try to handle the same incoming connection, this is OK
 	}
@@ -1574,11 +1580,13 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Session *sess)
 }
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
-	const int colnum=6;
+	const int colnum=8;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
   SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"ThreadID");
 	result->add_column_definition(SQLITE_TEXT,"SessionID");
+	result->add_column_definition(SQLITE_TEXT,"cli_host");
+	result->add_column_definition(SQLITE_TEXT,"cli_port");
 	result->add_column_definition(SQLITE_TEXT,"hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"srv_host");
 	result->add_column_definition(SQLITE_TEXT,"srv_port");
@@ -1602,25 +1610,34 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				pta[0]=strdup(buf);
 				sprintf(buf,"%u", sess->thread_session_id);
 				pta[1]=strdup(buf);
+				if (sess->client_myds->client_addr->sa_family==AF_INET) {
+					struct sockaddr_in * ipv4addr=(struct sockaddr_in *)sess->client_myds->client_addr;
+					pta[2]=strdup(inet_ntoa(ipv4addr->sin_addr));
+					sprintf(buf,"%d", htons(ipv4addr->sin_port));
+					pta[3]=strdup(buf);
+				} else {
+					pta[2]=strdup("localhost");
+					pta[3]=NULL;
+				}
 				sprintf(buf,"%d", sess->current_hostgroup);
-				pta[2]=strdup(buf);
+				pta[4]=strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 					MySQL_Connection *mc=sess->mybe->server_myds->myconn;
 					sprintf(buf,"%s", mc->parent->address);
-					pta[3]=strdup(buf);
+					pta[5]=strdup(buf);
 					sprintf(buf,"%d", mc->parent->port);
-					pta[4]=strdup(buf);
+					pta[6]=strdup(buf);
 					if (mc->query.length) {
-						pta[5]=(char *)malloc(mc->query.length+1);
-						strncpy(pta[5],mc->query.ptr,mc->query.length);
-						pta[5][mc->query.length]='\0';
+						pta[7]=(char *)malloc(mc->query.length+1);
+						strncpy(pta[7],mc->query.ptr,mc->query.length);
+						pta[7][mc->query.length]='\0';
 					} else {
-						pta[5]=NULL;
+						pta[7]=NULL;
 					}
 				} else {
-					pta[3]=NULL;
-					pta[4]=NULL;
 					pta[5]=NULL;
+					pta[6]=NULL;
+					pta[7]=NULL;
 				}
 				result->add_row(pta);
 				unsigned int k;

@@ -94,6 +94,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	bytes_info.bytes_sent=0;
 	pkts_recv=0;
 	pkts_sent=0;
+	client_addr=NULL;
 
 	mysql_real_query.ptr=NULL;
 	mysql_real_query.size=0;
@@ -132,6 +133,10 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 
 	queue_destroy(queueIN);
 	queue_destroy(queueOUT);
+	if (client_addr) {
+		free(client_addr);
+		client_addr=NULL;
+	}
 
 	free_mysql_real_query();
 
