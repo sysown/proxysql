@@ -280,7 +280,8 @@ void MySQL_Connection::ping_cont(short event) {
 
 void MySQL_Connection::initdb_start() {
 	PROXY_TRACE();
-	async_exit_status = mysql_select_db_start(&interr,mysql,userinfo->schemaname);
+	MySQL_Connection_userinfo *client_ui=myds->sess->client_myds->myconn->userinfo;
+	async_exit_status = mysql_select_db_start(&interr,mysql,client_ui->schemaname);
 }
 
 void MySQL_Connection::initdb_cont(short event) {
@@ -683,7 +684,7 @@ int MySQL_Connection::async_change_user(short event) {
 			handler(event);
 			break;
 	}
-	
+
 	// check again
 	switch (async_state_machine) {
 		case ASYNC_CHANGE_USER_SUCCESSFUL:
@@ -691,6 +692,41 @@ int MySQL_Connection::async_change_user(short event) {
 			return 0;
 			break;
 		case ASYNC_CHANGE_USER_FAILED:
+			return -1;
+			break;
+		default:
+			return 1;
+			break;
+	}
+	return 1;
+}
+
+int MySQL_Connection::async_select_db(short event) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	switch (async_state_machine) {
+		case ASYNC_INITDB_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_INITDB_FAILED:
+			return -1;
+			break;
+		case ASYNC_IDLE:
+			async_state_machine=ASYNC_INITDB_START;
+		default:
+			handler(event);
+			break;
+	}
+
+	// check again
+	switch (async_state_machine) {
+		case ASYNC_INITDB_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_INITDB_FAILED:
 			return -1;
 			break;
 		default:

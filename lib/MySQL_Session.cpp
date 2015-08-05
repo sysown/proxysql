@@ -571,6 +571,10 @@ handler_again:
 						previous_status.push(PROCESSING_QUERY);
 						NEXT_IMMEDIATE(CHANGING_USER_SERVER);
 					}
+					if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
+						previous_status.push(PROCESSING_QUERY);
+						NEXT_IMMEDIATE(CHANGING_SCHEMA);
+					}
 				}
 				status=PROCESSING_QUERY;
 				mybe->server_myds->max_connect_time=0;
@@ -707,6 +711,62 @@ handler_again:
 								myds->destroy_MySQL_Connection_From_Pool();
 								myds->fd=0;
 //							}
+							status=WAITING_CLIENT_DATA;
+							client_myds->DSS=STATE_SLEEP;
+						}
+					} else {
+						// rc==1 , nothing to do for now
+					}
+				}
+			}
+			break;
+
+		case CHANGING_SCHEMA:
+			//fprintf(stderr,"CHANGING_SCHEMA\n");
+			assert(mybe->server_myds->myconn);
+			{
+				MySQL_Data_Stream *myds=mybe->server_myds;
+				MySQL_Connection *myconn=myds->myconn;
+				myds->DSS=STATE_MARIADB_QUERY;
+				enum session_status st=status;
+				if (myds->mypolls==NULL) {
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+				}
+				int rc=myconn->async_select_db(myds->revents);
+				if (rc==0) {
+					myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+					st=previous_status.top();
+					previous_status.pop();
+					NEXT_IMMEDIATE(st);
+				} else {
+					if (rc==-1) {
+						// the command failed
+						int myerr=mysql_errno(myconn->mysql);
+						if (myerr > 2000) {
+							bool retry_conn=false;
+							// client error, serious
+							proxy_error("Detected a broken connection during INIT_DB: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+								retry_conn=true;
+							}
+							myds->destroy_MySQL_Connection_From_Pool();
+							myds->fd=0;
+							if (retry_conn) {
+								myds->DSS=STATE_NOT_INITIALIZED;
+								//previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
+							}
+							return -1;
+						} else {
+							proxy_warning("Error during INIT_DB: %d, %s\n", myerr, mysql_error(myconn->mysql));
+								// we won't go back to PROCESSING_QUERY
+							st=previous_status.top();
+							previous_status.pop();
+							char sqlstate[10];
+							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+								myds->destroy_MySQL_Connection_From_Pool();
+								myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
 						}

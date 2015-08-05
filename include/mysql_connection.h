@@ -104,6 +104,7 @@ class MySQL_Connection {
 
 	int async_connect(short event);
 	int async_change_user(short event);
+	int async_select_db(short event);
 	int async_query(short event, char *stmt, unsigned long length);
 	int async_ping(short event);
 	void async_free_result();

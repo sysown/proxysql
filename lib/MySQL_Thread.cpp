@@ -1662,6 +1662,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case WAITING_CLIENT_DATA:
 						pta[9]=strdup("Sleep");
 						break;
+					case CHANGING_USER_SERVER:
+						pta[9]=strdup("Change user");
+						break;
+					case CHANGING_SCHEMA:
+						pta[9]=strdup("InitDB");
+						break;
 					default:
 						pta[9]=strdup("");
 						break;
