@@ -1178,6 +1178,8 @@ void MySQL_Thread::run() {
 		rc=poll(mypolls.fds,mypolls.len, ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout ) );
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
 
+		curtime=monotonic_time();
+
 		spin_wrlock(&thread_mutex);
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 		
@@ -1646,7 +1648,11 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						pta[7]=strdup("Connect");
 						break;
 					case PROCESSING_QUERY:
-						pta[7]=strdup("Query");
+						if (sess->pause_until > sess->thread->curtime) {
+							pta[7]=strdup("Delay");
+						} else {
+							pta[7]=strdup("Query");
+						}
 						break;
 					case WAITING_CLIENT_DATA:
 						pta[7]=strdup("Sleep");

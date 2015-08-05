@@ -820,11 +820,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	//fprintf(stderr,"%s----\n",query_no_space);
 
 
-	pthread_mutex_lock(&admin_mutex);
-	ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-	SPA->stats___mysql_processlist();
-	pthread_mutex_unlock(&admin_mutex);
-
 	if (sess->stats==false) {
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
@@ -834,6 +829,15 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
 			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);	
+			goto __run_query;
+		}
+
+
+		if (strstr(query_no_space,"stats_mysql_processlist")) {
+			pthread_mutex_lock(&admin_mutex);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->stats___mysql_processlist();
+			pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
 	}
