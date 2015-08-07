@@ -108,5 +108,6 @@ class MySQL_Connection {
 	int async_query(short event, char *stmt, unsigned long length);
 	int async_ping(short event);
 	void async_free_result();
+	bool IsActiveTransaction();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

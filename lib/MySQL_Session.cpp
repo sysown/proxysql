@@ -502,7 +502,8 @@ handler_again:
 //				}
 				if (rc==0) {
 					myconn->async_state_machine=ASYNC_IDLE;
-					if ((myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+					//if ((myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+					if ((myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
 						myds->return_MySQL_Connection_To_Pool();
 					}
 					delete mybe->server_myds;
@@ -599,7 +600,6 @@ handler_again:
 					GloQPro->delete_QP_out(qpo);
 					qpo=NULL;
 					myconn->async_free_result();
-					myds->DSS=STATE_NOT_INITIALIZED;
 					status=WAITING_CLIENT_DATA;
 					client_myds->DSS=STATE_SLEEP;
 					if (mysql_thread___commands_stats==true) {
@@ -607,8 +607,13 @@ handler_again:
 						CurrentQuery.query_parser_update_counters();
 					}
 					myds->free_mysql_real_query();
-					if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+						myds->DSS=STATE_NOT_INITIALIZED;
 						myds->return_MySQL_Connection_To_Pool();
+					} else {
+						myconn->async_state_machine=ASYNC_IDLE;
+						myds->DSS=STATE_MARIADB_GENERIC;
 					}
 				} else {
 					if (rc==-1) {
@@ -618,7 +623,8 @@ handler_again:
 							bool retry_conn=false;
 							// client error, serious
 							proxy_error("Detected a broken connection during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
-							if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
 								retry_conn=true;
 							}
 							myds->destroy_MySQL_Connection_From_Pool();
@@ -636,12 +642,17 @@ handler_again:
 							GloQPro->delete_QP_out(qpo);
 							qpo=NULL;
 							myconn->async_free_result();
-							myds->DSS=STATE_NOT_INITIALIZED;
+							//myds->DSS=STATE_NOT_INITIALIZED;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
 							myds->free_mysql_real_query();
-							if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+								myds->DSS=STATE_NOT_INITIALIZED;
 								myds->return_MySQL_Connection_To_Pool();
+							} else {
+								myconn->async_state_machine=ASYNC_IDLE;
+								myds->DSS=STATE_MARIADB_GENERIC;
 							}
 						}
 					} else {
@@ -680,7 +691,8 @@ handler_again:
 							bool retry_conn=false;
 							// client error, serious
 							proxy_error("Detected a broken connection during change user: %d, %s\n", myerr, mysql_error(myconn->mysql));
-							if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
 								retry_conn=true;
 							}
 							myds->destroy_MySQL_Connection_From_Pool();
@@ -746,7 +758,8 @@ handler_again:
 							bool retry_conn=false;
 							// client error, serious
 							proxy_error("Detected a broken connection during INIT_DB: %d, %s\n", myerr, mysql_error(myconn->mysql));
-							if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
 								retry_conn=true;
 							}
 							myds->destroy_MySQL_Connection_From_Pool();

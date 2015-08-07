@@ -133,6 +133,7 @@ enum mysql_data_stream_status {
 	STATE_MARIADB_SET_NAMES,
 	STATE_MARIADB_INITDB,
 	STATE_MARIADB_QUERY,
+	STATE_MARIADB_GENERIC,	// generic state, perhaps will replace all others
 	STATE_MARIADB_END,  // dummy state
 
 	STATE_END

@@ -754,3 +754,11 @@ void MySQL_Connection::async_free_result() {
     async_state_machine=ASYNC_IDLE;
 	}
 }
+
+bool MySQL_Connection::IsActiveTransaction() {
+	bool ret=false;
+	if (mysql) {
+		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
+	}
+	return ret;
+}
