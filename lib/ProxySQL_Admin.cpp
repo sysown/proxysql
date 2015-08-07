@@ -672,6 +672,34 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
+			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM CONFIG") && !strncasecmp("LOAD MYSQL QUERY RULES FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					int rows=0;
+					rows=SPA->Read_MySQL_Query_Rules_from_configfile();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
+			return false;
+		}
+
+		if (
 			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM MEMORY") && !strncasecmp("SAVE MYSQL QUERY RULES FROM MEMORY",query_no_space, query_no_space_length))
 			||
 			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM MEM") && !strncasecmp("SAVE MYSQL QUERY RULES FROM MEM",query_no_space, query_no_space_length))
@@ -1398,11 +1426,13 @@ bool ProxySQL_Admin::init() {
 				Read_Global_Variables_from_configfile("admin");
 				Read_Global_Variables_from_configfile("mysql");
 				Read_MySQL_Users_from_configfile();
+				Read_MySQL_Query_Rules_from_configfile();
 				__insert_or_replace_disktable_select_maintable();
 			} else {
 				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {		
  					Read_MySQL_Servers_from_configfile();	
 					Read_MySQL_Users_from_configfile();
+					Read_MySQL_Query_Rules_from_configfile();
 					Read_Global_Variables_from_configfile("admin");
 					Read_Global_Variables_from_configfile("mysql");
 					__insert_or_replace_disktable_select_maintable();
@@ -1937,15 +1967,34 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime() {
 	SQLite3_result * resultset=GloQPro->get_current_query_rules();
 	if (resultset==NULL) return;
 	admindb->execute("DELETE FROM mysql_query_rules");
-	char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	//char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	char *a=(char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, apply) VALUES (%s, %s, \"%s\", \"%s\", %s, \"%s\", %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
-		for (int i=0; i<12; i++) {
-			arg_len+=strlen(r->fields[i]);
+		for (int i=0; i<15; i++) {
+			arg_len+=strlen(r->fields[i]+4);
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11]);
+		char *buf1=(char *)strlen(r->fields[8])+8;
+		if (r->fields[8]) {
+			sprintf(buf1,"\"%s\"",r->fields[8]);
+		} else {
+			sprintf(buf1,"NULL");
+		}
+		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],
+			( strcmp(r->fields[4],"-1")==0 ? "NULL" : r->fields[4] ), // flagIN
+			r->fields[5], // match_pattern
+			r->fields[6], // negate
+			( strcmp(r->fields[7],"-1")==0 ? "NULL" : r->fields[7] ), // flagOUT
+			buf1, // replace_pattern
+			( strcmp(r->fields[9],"-1")==0 ? "NULL" : r->fields[9] ), // destination_hostgroup
+			( strcmp(r->fields[10],"-1")==0 ? "NULL" : r->fields[10] ), // cache_ttl
+			( strcmp(r->fields[11],"-1")==0 ? "NULL" : r->fields[11] ), // reconnect
+			( strcmp(r->fields[12],"-1")==0 ? "NULL" : r->fields[12] ), // timeout
+			( strcmp(r->fields[13],"-1")==0 ? "NULL" : r->fields[13] ), // delay
+			( strcmp(r->fields[14],"-1")==0 ? "NULL" : r->fields[14] ) // apply
+		);
 		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
 		free(query);
@@ -2455,6 +2504,113 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections);
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
+		free(query);
+		rows++;
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg->getRoot();
+	if (root.exists("mysql_query_rules")==false) return 0;
+	const Setting &mysql_query_rules = root["mysql_query_rules"];
+	int count = mysql_query_rules.getLength();
+	//fprintf(stderr, "Found %d users\n",count);
+	int i;
+	int rows=0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, apply) VALUES (%d, %d, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %d)";
+	for (i=0; i< count; i++) {
+		const Setting &rule = mysql_query_rules[i];
+		int rule_id;
+		int active=1;
+		bool username_exists=false;
+		std::string username;
+		bool schemaname_exists=false;
+		std::string schemaname;
+		int flagIN=0;
+		bool match_pattern_exists=false;
+		std::string match_pattern;
+		int negate_match_pattern=0;
+		int flagOUT=-1;
+		bool replace_pattern_exists=false;
+		std::string replace_pattern;
+		int destination_hostgroup=-1;
+		int cache_ttl=-1;
+		int reconnect=-1;
+		int timeout=-1;
+		int delay=-1;
+		int apply=0;
+		if (rule.lookupValue("rule_id", rule_id)==false) continue;
+		rule.lookupValue("active", active);
+		if (rule.lookupValue("username", username)) username_exists=true;
+		if (rule.lookupValue("schemaname", schemaname)) schemaname_exists=true;
+		rule.lookupValue("flagIN", flagIN);
+		if (rule.lookupValue("match_pattern", match_pattern)) match_pattern_exists=true;
+		rule.lookupValue("negate_match_pattern", negate_match_pattern);
+		rule.lookupValue("flagOUT", flagOUT);
+		if (rule.lookupValue("replace_pattern", replace_pattern)) replace_pattern_exists=true;
+		rule.lookupValue("destination_hostgroup", destination_hostgroup);
+		rule.lookupValue("cache_ttl", cache_ttl);
+		rule.lookupValue("reconnect", reconnect);
+		rule.lookupValue("timeout", timeout);
+		rule.lookupValue("delay", delay);
+		rule.lookupValue("apply", apply);
+		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
+		int query_len=0;
+		query_len+=strlen(q) +
+			strlen(std::to_string(rule_id).c_str()) +
+			strlen(std::to_string(active).c_str()) +
+			( username_exists ? strlen(username.c_str()) : 0 ) + 4 +
+			( schemaname_exists ? strlen(schemaname.c_str()) : 0 ) + 4 +
+			strlen(std::to_string(flagIN).c_str()) + 4 +
+			( match_pattern_exists ? strlen(match_pattern.c_str()) : 0 ) + 4 +
+			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
+			strlen(std::to_string(flagOUT).c_str()) + 4 +
+			( replace_pattern_exists ? strlen(replace_pattern.c_str()) : 0 ) + 4 +
+			strlen(std::to_string(destination_hostgroup).c_str()) + 4 +
+			strlen(std::to_string(cache_ttl).c_str()) + 4 +
+			strlen(std::to_string(reconnect).c_str()) + 4 +
+			strlen(std::to_string(timeout).c_str()) + 4 +
+			strlen(std::to_string(delay).c_str()) + 4 +
+			strlen(std::to_string(apply).c_str()) + 4 +
+			40;
+		char *query=(char *)malloc(query_len);
+		if (username_exists)
+			username="\"" + username + "\"";
+		else
+			username = "NULL";
+		if (schemaname_exists)
+			schemaname="\"" + schemaname + "\"";
+		else
+			schemaname = "NULL";
+		if (match_pattern_exists)
+			match_pattern="\"" + match_pattern + "\"";
+		else
+			match_pattern = "NULL";
+		if (replace_pattern_exists)
+			replace_pattern="\"" + replace_pattern + "\"";
+		else
+			replace_pattern = "NULL";
+		sprintf(query, q,
+			rule_id, active,
+			username.c_str(),
+			schemaname.c_str(),
+			( flagIN >= 0 ? std::to_string(flagIN).c_str() : "NULL") ,
+			match_pattern.c_str(),
+			( negate_match_pattern == 0 ? 0 : 1) ,
+			( flagOUT >= 0 ? std::to_string(flagOUT).c_str() : "NULL") ,
+			replace_pattern.c_str(),
+			( destination_hostgroup >= 0 ? std::to_string(destination_hostgroup).c_str() : "NULL") ,
+			( cache_ttl >= 0 ? std::to_string(cache_ttl).c_str() : "NULL") ,
+			( reconnect >= 0 ? std::to_string(reconnect).c_str() : "NULL") ,
+			( timeout >= 0 ? std::to_string(timeout).c_str() : "NULL") ,
+			( delay >= 0 ? std::to_string(delay).c_str() : "NULL") ,
+			( apply == 0 ? 0 : 1)
+			);
+		//fprintf(stderr, "%s\n", query);
+		admindb->execute(query);
 		free(query);
 		rows++;
 	}

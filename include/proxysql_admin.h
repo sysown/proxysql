@@ -124,6 +124,7 @@ class ProxySQL_Admin {
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
 	int Read_MySQL_Users_from_configfile();
+	int Read_MySQL_Query_Rules_from_configfile();
 	int Read_MySQL_Servers_from_configfile();
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

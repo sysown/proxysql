@@ -96,6 +96,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	pkts_sent=0;
 	client_addr=NULL;
 
+	sess=NULL;
 	mysql_real_query.ptr=NULL;
 	mysql_real_query.size=0;
 

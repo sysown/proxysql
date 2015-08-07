@@ -395,7 +395,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(13);
+	SQLite3_result *result=new SQLite3_result(16);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -464,13 +464,13 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 6, "query rule %d has no matching flagIN\n", qr->rule_id);
 			continue;
 		}
-		if (qr->username) {
+		if (qr->username && strlen(qr->username)) {
 			if (strcmp(qr->username,sess->client_myds->myconn->userinfo->username)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching username\n", qr->rule_id);
 				continue;
 			}
 		}
-		if (qr->schemaname) {
+		if (qr->schemaname && strlen(qr->schemaname)) {
 			if (strcmp(qr->schemaname,sess->client_myds->myconn->userinfo->schemaname)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching schemaname\n", qr->rule_id);
 				continue;
