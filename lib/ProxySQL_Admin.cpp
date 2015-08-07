@@ -287,6 +287,14 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+	if (query_no_space_length==strlen("PROXYSQL FLUSH LOGS") && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL FLUSH LOGS command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->flush_error_log();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+
 	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL KILL command\n");
 		exit(EXIT_SUCCESS);
@@ -2669,4 +2677,23 @@ extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func() {
 
 extern "C" void destroy_Admin(ProxySQL_Admin * pa) {
 	delete pa;
+}
+
+void ProxySQL_Admin::flush_error_log() {
+	int outfd=0;
+	int errfd=0;
+	outfd=open(GloVars.errorlog, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+	if (outfd>0) {
+		dup2(outfd, STDOUT_FILENO);
+		close(outfd);
+	} else {
+		proxy_error("[ERROR]: impossible to open file\n");
+	}
+	errfd=open(GloVars.errorlog, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+	if (errfd>0) {
+		dup2(errfd, STDERR_FILENO);
+		close(errfd);
+	} else {
+		proxy_error("[ERROR]: impossible to open file\n");
+	}
 }

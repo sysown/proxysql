@@ -29,6 +29,7 @@ class ProxySQL_GlobalVariables {
 	char *config_file;
 	char *datadir;
 	char *admindb;
+	char *errorlog;
 	struct  {
 		unsigned long long start_time;
 		bool gdbg;

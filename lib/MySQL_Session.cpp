@@ -40,8 +40,10 @@ static void * kill_query_thread(void *arg) {
 	}
 	MYSQL *ret;
 	if (ka->port) {
+		proxy_error("[WARNING]: KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
 		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
 	} else {
+		proxy_error("[WARNING]: KILL QUERY %lu on localhost\n", ka->id);
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
@@ -599,6 +601,12 @@ handler_again:
 						if (qpo->timeout > 0) {
 							mybe->server_myds->wait_until=thread->curtime+qpo->timeout*1000;
 						}
+					}
+					if (mysql_thread___default_query_timeout) {
+						if (mybe->server_myds->wait_until==0) {
+							mybe->server_myds->wait_until=thread->curtime;
+						}
+						mybe->server_myds->wait_until+=mysql_thread___default_query_timeout*1000;
 					}
 				}
 				int rc=myconn->async_query(myds->revents, myds->mysql_real_query.ptr,myds->mysql_real_query.size);

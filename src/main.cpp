@@ -239,6 +239,9 @@ int main(int argc, const char * argv[]) {
 	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
 	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
 
+	GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
+	sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
+
 	if (GloVars.__cmd_proxysql_initial==true) {
 		std::cerr << "Renaming database file " << GloVars.admindb << endl;
 		char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
@@ -273,13 +276,15 @@ __start_label:
 	MyHGM=new MySQL_HostGroups_Manager();
 
 	GloMTH=new MySQL_Threads_Handler();
-	GloMTH->print_version();
 
 {
 	GloAdmin = new ProxySQL_Admin();
-	GloAdmin->print_version();
 	GloAdmin->init();
+	GloAdmin->flush_error_log();
+	GloAdmin->print_version();
 }
+
+	GloMTH->print_version();
 
 	if (GloVars.configfile_open) {
 		GloVars.confFile->CloseFile();
