@@ -250,8 +250,10 @@ class MySQL_Threads_Handler
 		int ping_interval_server;
 		int ping_timeout_server;
 		int connect_retries_on_failure;
+		int connect_retries_delay;
 		int connect_timeout_server;
 		int connect_timeout_server_max;
+		bool sessions_sort;
 		char *connect_timeout_server_error;
 		char *default_schema;
 		char *interfaces;

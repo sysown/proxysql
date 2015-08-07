@@ -110,6 +110,7 @@ void MySQL_Listeners_Manager::del(unsigned int idx) {
 
 static char * mysql_thread_variables_names[]= {
 	(char *)"connect_retries_on_failure",
+	(char *)"connect_retries_delay",
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
 	(char *)"connect_timeout_server_error",
@@ -139,6 +140,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+	(char *)"sessions_sort",
 	(char *)"commands_stats",
 	(char *)"servers_stats",
 	(char *)"default_reconnect",
@@ -168,6 +170,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connect_retries_on_failure=5;
 	variables.connect_timeout_server=1000;
 	variables.connect_timeout_server_max=10000;
+	variables.connect_retries_delay=1;
 	variables.monitor_history=600000;
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=200;
@@ -195,7 +198,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
-	variables.commands_stats=false;
+	variables.commands_stats=true;
+	variables.sessions_sort=true;
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
 #ifdef DEBUG
@@ -318,6 +322,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"connect_retries_on_failure")) return (int)variables.connect_retries_on_failure;
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
 	if (!strcasecmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
+	if (!strcasecmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
 	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
 	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
@@ -326,6 +331,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
+	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
 	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcasecmp(name,"default_reconnect")) return (int)variables.default_reconnect;
 	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
@@ -401,6 +407,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.connect_timeout_server_max);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"connect_retries_delay")) {
+		sprintf(intbuf,"%d",variables.connect_retries_delay);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"max_transaction_time")) {
 		sprintf(intbuf,"%d",variables.max_transaction_time);
 		return strdup(intbuf);
@@ -451,6 +461,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"commands_stats")) {
 		return strdup((variables.commands_stats ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"sessions_sort")) {
+		return strdup((variables.sessions_sort ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
@@ -669,6 +682,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"connect_retries_delay")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 10000) {
+			variables.connect_retries_delay=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"connect_timeout_server_error")) {
 		if (vallen) {
 			free(variables.connect_timeout_server_error);
@@ -794,6 +816,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.commands_stats=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"sessions_sort")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.sessions_sort=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.sessions_sort=false;
 			return true;
 		}
 		return false;
@@ -1312,6 +1345,26 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 void MySQL_Thread::process_all_sessions() {
 	unsigned int n;
 	int rc;
+	bool sess_sort=mysql_thread___sessions_sort;
+	if (sess_sort && mysql_sessions->len > 3) {
+		unsigned int a=0;
+		for (n=0; n<mysql_sessions->len; n++) {
+			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+			if (sess->mybe && sess->mybe->server_myds) {
+				if (sess->mybe->server_myds->max_connect_time) {
+					MySQL_Session *sess2=(MySQL_Session *)mysql_sessions->index(a);
+					if (sess2->mybe && sess2->mybe->server_myds && sess2->mybe->server_myds->max_connect_time && sess2->mybe->server_myds->max_connect_time <= sess->mybe->server_myds->max_connect_time) {
+						// do nothing
+					} else {
+						void *p=mysql_sessions->pdata[a];
+						mysql_sessions->pdata[a]=mysql_sessions->pdata[n];
+						mysql_sessions->pdata[n]=p;
+						a++;
+					}
+				}
+			}
+		}
+	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
 		if (sess->healthy==0) {
@@ -1346,6 +1399,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
 	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");
+	mysql_thread___connect_retries_delay=GloMTH->get_variable_int((char *)"connect_retries_delay");
 	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
 	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
 
@@ -1376,6 +1430,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
+	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 #ifdef DEBUG

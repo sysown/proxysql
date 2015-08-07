@@ -813,7 +813,7 @@ handler_again:
 				handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 			}	
 			if (mybe->server_myds->myconn==NULL) {
-				pause_until=thread->curtime+100*1000;
+				pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
 				goto __exit_DSS__STATE_NOT_INITIALIZED;
 			} else {
 				MySQL_Data_Stream *myds=mybe->server_myds;

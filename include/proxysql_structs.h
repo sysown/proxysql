@@ -673,6 +673,7 @@ __thread int mysql_thread___default_query_timeout;
 __thread int mysql_thread___ping_interval_server;
 __thread int mysql_thread___ping_timeout_server;
 __thread int mysql_thread___connect_retries_on_failure;
+__thread int mysql_thread___connect_retries_delay;
 __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
 __thread char *mysql_thread___connect_timeout_server_error;
@@ -684,6 +685,7 @@ __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
 __thread bool mysql_thread___default_reconnect;
+__thread bool mysql_thread___sessions_sort;
 
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_history;
@@ -717,6 +719,7 @@ extern __thread int mysql_thread___default_query_timeout;
 extern __thread int mysql_thread___ping_interval_server;
 extern __thread int mysql_thread___ping_timeout_server;
 extern __thread int mysql_thread___connect_retries_on_failure;
+extern __thread int mysql_thread___connect_retries_delay;
 extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread char *mysql_thread___connect_timeout_server_error;
@@ -728,6 +731,7 @@ extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
 extern __thread bool mysql_thread___default_reconnect;
+extern __thread bool mysql_thread___sessions_sort;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_history;
