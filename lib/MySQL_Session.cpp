@@ -405,14 +405,23 @@ int MySQL_Session::handler() {
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(&pkt);
-								break;
 							case _MYSQL_COM_STMT_EXECUTE:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(&pkt);
-								break;
 							case _MYSQL_COM_STMT_CLOSE:
-								mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+								l_free(pkt.size,pkt.ptr);
+								client_myds->setDSS_STATE_QUERY_SENT_NET();
+								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+								client_myds->DSS=STATE_SLEEP;
+								status=WAITING_CLIENT_DATA;
 								break;
+//							case _MYSQL_COM_STMT_PREPARE:
+//								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(&pkt);
+//								break;
+//							case _MYSQL_COM_STMT_EXECUTE:
+//								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(&pkt);
+//								break;
+//							case _MYSQL_COM_STMT_CLOSE:
+//								mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+//								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 								l_free(pkt.size,pkt.ptr);
