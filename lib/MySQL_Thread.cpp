@@ -187,8 +187,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.max_connections=10*1000;
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
-	variables.ping_interval_server=5000;
-	variables.ping_timeout_server=100;
+	variables.ping_interval_server=10000;
+	variables.ping_timeout_server=200;
 	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.default_charset=33;
@@ -955,8 +955,8 @@ MySQL_Thread::~MySQL_Thread() {
 
 	if (my_idle_conns)
 		free(my_idle_conns);
-	if (my_idle_myds)
-		free(my_idle_myds);
+	//if (my_idle_myds)
+	//	free(my_idle_myds);
 	GloQPro->end_thread();
 
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
@@ -1013,8 +1013,8 @@ bool MySQL_Thread::init() {
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	memset(my_idle_conns,0,sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
-	my_idle_myds=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
-	memset(my_idle_myds,0,sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
+	//my_idle_myds=(MySQL_Data_Stream **)malloc(sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
+	//memset(my_idle_myds,0,sizeof(MySQL_Data_Stream *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	GloQPro->init_thread();
 	refresh_variables();
 	i=pipe(pipefd);
@@ -1079,7 +1079,7 @@ void MySQL_Thread::run() {
 	while (shutdown==0) {
 
 	int num_idles;
-	if (processing_idles==false &&  (last_processing_idles < curtime-mysql_thread___ping_interval_server*1000) ) {
+	if (processing_idles==false &&  (last_processing_idles < curtime-mysql_thread___ping_interval_server*1000/10) ) {
 		int i;
 		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 		for (i=0; i<num_idles; i++) {
@@ -1127,7 +1127,7 @@ void MySQL_Thread::run() {
 		last_processing_idles=curtime;
 	}
 
-	if (processing_idles==true &&	(last_processing_idles < curtime-10*mysql_thread___ping_timeout_server*1000)) {
+	if (processing_idles==true &&	(last_processing_idles < curtime-3*mysql_thread___ping_timeout_server*1000)) {
 		processing_idles=false;
 /*
 		int i;
@@ -1446,7 +1446,7 @@ MySQL_Thread::MySQL_Thread() {
 	mypolls.fds=NULL;
 	mypolls.myds=NULL;
 	my_idle_conns=NULL;
-	my_idle_myds=NULL;
+	//my_idle_myds=NULL;
 	mysql_sessions=NULL;
 	processing_idles=false;
 	last_processing_idles=0;

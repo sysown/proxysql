@@ -139,7 +139,7 @@ class MySQL_Thread
 
 	private:
   MySQL_Connection **my_idle_conns;
-  MySQL_Data_Stream **my_idle_myds;
+  //MySQL_Data_Stream **my_idle_myds;
   bool processing_idles;
   unsigned long long last_processing_idles;
   PtrArray *mysql_sessions_connections_handler;
