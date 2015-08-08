@@ -635,6 +635,25 @@ handler_again:
 				} else {
 					if (rc==-1) {
 						// the query failed
+						if (myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+							// the query failed because the server is offline hard
+							if (mysql_thread___connect_timeout_server_max) {
+								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
+							}
+							bool retry_conn=false;
+							proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+								retry_conn=true;
+							}
+							myds->destroy_MySQL_Connection_From_Pool();
+							myds->fd=0;
+							if (retry_conn) {
+								myds->DSS=STATE_NOT_INITIALIZED;
+								previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
+							}
+							return -1;
+						}
 						int myerr=mysql_errno(myconn->mysql);
 						if (myerr > 2000) {
 							bool retry_conn=false;

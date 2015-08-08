@@ -247,17 +247,19 @@ bool MySQL_HostGroups_Manager::commit() {
 	SQLite3_result *resultset=NULL;
   char *query=NULL;
 	wrlock();
-	query=(char *)"SELECT mem_pointer FROM mysql_servers t1 LEFT OUTER JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE t2.hostgroup_id IS NULL";
+	query=(char *)"SELECT mem_pointer, t1.hostgroup_id, t1.hostname, t1.port FROM mysql_servers t1 LEFT OUTER JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE t2.hostgroup_id IS NULL";
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-// FIXME: this part is for debugging only, needs to be removed/cleaned
-//		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-//			SQLite3_row *r=*it;
-//			long long ptr=atoll(r->fields[0]);
-//			fprintf(stderr,"%lld\n", ptr);
-//		}
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			long long ptr=atoll(r->fields[0]);
+			proxy_error("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
+			MySrvC *mysrvc=(MySrvC *)ptr;
+			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
+			mysrvc->ConnectionsFree->drop_all_connections();
+		}
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 

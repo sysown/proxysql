@@ -605,6 +605,8 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	if (parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD)
+		return -1;
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
 			return 0;
