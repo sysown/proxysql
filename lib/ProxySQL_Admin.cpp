@@ -244,6 +244,24 @@ class admin_main_loop_listeners {
 };
 
 static admin_main_loop_listeners S_amll;
+
+
+
+bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+	uint32_t id=atoi(query_no_space+16);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
+	bool rc=GloMTH->kill_session(id);
+	ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+	if (rc) {
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+	} else {
+		char buf[1024];
+		sprintf(buf,"Unknown thread id: %u", id);
+		SPA->send_MySQL_ERR(&sess->client_myds->myprot, buf);
+	}
+	return false;
+}
+
 /*
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
@@ -866,6 +884,11 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
 			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);	
+			goto __run_query;
+		}
+		if ((query_no_space_length>16) && ( (!strncasecmp("KILL CONNECTION ", query_no_space, 16)) || (!strncasecmp("KILL CONNECTION ", query_no_space, 16))) ) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received KILL CONNECTION command\n");
+			run_query=admin_handler_command_kill_connection(query_no_space, query_no_space_length, sess, pa);
 			goto __run_query;
 		}
 

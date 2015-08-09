@@ -308,6 +308,7 @@ class MySQL_Threads_Handler
 	void start_listeners();
 	void signal_all_threads(unsigned char _c=0);
 	SQLite3_result * SQL3_Processlist();
+	bool kill_session(uint32_t _thread_session_id);
 };
 
 

@@ -1398,11 +1398,19 @@ void MySQL_Thread::process_all_sessions() {
 				if (sess->pause <= curtime ) sess->pause=0;
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
-					if (rc==-1) {
+					if (rc==-1 || sess->killed==true) {
 						unregister_session(n);
 						n--;
 						delete sess;
 					}
+				}
+			} else {
+				if (sess->killed==true) {
+					// this is a special cause, if killed the session needs to be executed no matter if paused
+					sess->handler();
+					unregister_session(n);
+					n--;
+					delete sess;
 				}
 			}
 		}
@@ -1826,3 +1834,30 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	}
 }
 
+bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
+	bool ret=false;
+	unsigned int i;
+	signal_all_threads(1);
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		spin_wrlock(&thr->thread_mutex);
+	}
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		unsigned int j;
+		for (j=0; j<thr->mysql_sessions->len; j++) {
+			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
+			if (sess->thread_session_id==_thread_session_id) {
+				sess->killed=true;
+				ret=true;
+				goto __exit_kill_session;
+			}
+		}
+	}
+__exit_kill_session:
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		spin_wrunlock(&thr->thread_mutex);
+	}
+	return ret;
+}

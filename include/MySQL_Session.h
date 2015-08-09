@@ -85,6 +85,7 @@ class MySQL_Session
 	QP_out_t *qpo;
 	StatCounters *command_counters;
 	int healthy;
+	bool killed;
 	bool admin;
 	bool max_connections_reached;
 	int user_max_connections;

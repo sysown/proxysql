@@ -40,10 +40,10 @@ static void * kill_query_thread(void *arg) {
 	}
 	MYSQL *ret;
 	if (ka->port) {
-		proxy_error("[WARNING]: KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+		proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
 		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
 	} else {
-		proxy_error("[WARNING]: KILL QUERY %lu on localhost\n", ka->id);
+		proxy_warning("KILL QUERY %lu on localhost\n", ka->id);
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
@@ -131,6 +131,7 @@ MySQL_Session::MySQL_Session() {
 	qpo=NULL;
 	command_counters=new StatCounters(15,10,false);
 	healthy=1;
+	killed=false;
 	admin=false;
 	connections_handler=false;
 	max_connections_reached=false;
@@ -553,22 +554,27 @@ handler_again:
 			} else {
 				mybe->server_myds->max_connect_time=0;
 			}
-			if (mybe->server_myds->myconn && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until) {
+			if (
+				(mybe->server_myds->myconn && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
 				// query timed out
+				||
+				(killed==true) // session was killed by admin
+			) {
 				MySQL_Data_Stream *myds=mybe->server_myds;
-				// FIXME: make sure the connection is established first
-				if (myds->killed_at==0) {
-					myds->wait_until=0;
-					myds->killed_at=thread->curtime;
-					//fprintf(stderr,"Expired: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime);
-					MySQL_Connection_userinfo *ui=client_myds->myconn->userinfo;
-					KillArgs *ka = new KillArgs(ui->username, ui->password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id);
-					pthread_attr_t attr;
-					pthread_attr_init(&attr);
-					pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-					pthread_attr_setstacksize (&attr, 128*1024);
-					pthread_t pt;
-					pthread_create(&pt, &attr, &kill_query_thread, ka);
+				if (myds->myconn && myds->myconn->mysql) {
+					if (myds->killed_at==0) {
+						myds->wait_until=0;
+						myds->killed_at=thread->curtime;
+						//fprintf(stderr,"Expired: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime);
+						MySQL_Connection_userinfo *ui=client_myds->myconn->userinfo;
+						KillArgs *ka = new KillArgs(ui->username, ui->password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id);
+						pthread_attr_t attr;
+						pthread_attr_init(&attr);
+						pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+						pthread_attr_setstacksize (&attr, 128*1024);
+						pthread_t pt;
+						pthread_create(&pt, &attr, &kill_query_thread, ka);
+					}
 				}
 			}
 			if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {

@@ -255,7 +255,7 @@ bool MySQL_HostGroups_Manager::commit() {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[0]);
-			proxy_error("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
+			proxy_warning("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
 			MySrvC *mysrvc=(MySrvC *)ptr;
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 			mysrvc->ConnectionsFree->drop_all_connections();
