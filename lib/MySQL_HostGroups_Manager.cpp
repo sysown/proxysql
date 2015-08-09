@@ -9,7 +9,7 @@
 
 
 
-
+extern MySQL_Threads_Handler *GloMTH;
 
 
 class MySrvConnList;
@@ -317,6 +317,9 @@ bool MySQL_HostGroups_Manager::commit() {
 	generate_mysql_servers_table();
 
 	wrunlock();
+	if (GloMTH) {
+		GloMTH->signal_all_threads(1);
+	}
 	return true;
 }
 

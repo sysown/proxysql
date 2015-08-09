@@ -1804,6 +1804,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	unsigned int i;
 	unsigned char c=_c;
+	if (mysql_threads==0) return;
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 		int fd=thr->pipefd[1];
