@@ -152,6 +152,7 @@ MySQL_Session::MySQL_Session() {
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
+	transaction_persistent_hostgroup=-1;
 	transaction_persistent=false;
 	active_transactions=0;
 }
@@ -306,7 +307,9 @@ int MySQL_Session::handler() {
 				switch (client_myds->DSS) {
 					case STATE_SLEEP:
 						command_counters->incr(thread->curtime/1000000);
-						current_hostgroup=default_hostgroup;
+						if (transaction_persistent_hostgroup==-1) {
+							current_hostgroup=default_hostgroup;
+						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n");
 						//unsigned char c;
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
@@ -634,9 +637,15 @@ handler_again:
 					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
 						myds->DSS=STATE_NOT_INITIALIZED;
 						myds->return_MySQL_Connection_To_Pool();
+						if (transaction_persistent==true) {
+							transaction_persistent_hostgroup=-1;
+						}
 					} else {
 						myconn->async_state_machine=ASYNC_IDLE;
 						myds->DSS=STATE_MARIADB_GENERIC;
+						if (transaction_persistent==true) {
+							transaction_persistent_hostgroup=current_hostgroup;
+						}
 					}
 				} else {
 					if (rc==-1) {
@@ -1833,7 +1842,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 	}
-	if ( qpo->destination_hostgroup >= 0 ) current_hostgroup=qpo->destination_hostgroup;
+	if ( qpo->destination_hostgroup >= 0 ) {
+		if (transaction_persistent_hostgroup == -1) {
+			current_hostgroup=qpo->destination_hostgroup;
+		}
+	}
 	return false;
 }
 

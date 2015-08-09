@@ -102,6 +102,7 @@ class MySQL_Session
 	char * default_schema;
 	bool schema_locked;
 	bool transaction_persistent;
+	int transaction_persistent_hostgroup;
 	bool session_fast_forward;
 	int to_process;
 	int pending_connect;
