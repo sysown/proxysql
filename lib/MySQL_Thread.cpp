@@ -1696,8 +1696,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				sprintf(buf,"%u", sess->thread_session_id);
 				pta[1]=strdup(buf);
 				MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
-				pta[2]=strdup(ui->username);
-				pta[3]=strdup(ui->schemaname);
+				pta[2]=NULL;
+				pta[3]=NULL;
+				if (ui) {
+					if (ui->username) {
+						pta[2]=strdup(ui->username);
+					} else {
+						pta[2]=strdup("unauthenticated user");
+					}
+					if (ui->schemaname) {
+						pta[3]=strdup(ui->schemaname);
+					}
+				}
 				if (sess->client_myds->client_addr->sa_family==AF_INET) {
 					struct sockaddr_in * ipv4addr=(struct sockaddr_in *)sess->client_myds->client_addr;
 					pta[4]=strdup(inet_ntoa(ipv4addr->sin_addr));
