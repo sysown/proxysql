@@ -361,7 +361,7 @@ handler_again:
 			break;
 		case ASYNC_CONNECT_END:
 			if (!ret_mysql) {
-				fprintf(stderr,"Failed to mysql_real_connect(), %d,  %s\n", mysql_errno(mysql), mysql_error(mysql));
+				proxy_error("Failed to mysql_real_connect() on %s:%d , %d: %s\n", parent->address, parent->port, mysql_errno(mysql), mysql_error(mysql));
     		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
     		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
@@ -372,7 +372,7 @@ handler_again:
 		case ASYNC_CONNECT_FAILED:
 			break;
 		case ASYNC_CONNECT_TIMEOUT:
-			fprintf(stderr,"Connect timeout: %llu - %llu = %llu\n",  myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
+			proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			break;
 		case ASYNC_CHANGE_USER_START:
 			change_user_start();
