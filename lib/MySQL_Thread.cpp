@@ -1267,10 +1267,16 @@ void MySQL_Thread::run() {
 			MySQL_Data_Stream *myds=mypolls.myds[n];
 			if (myds==NULL) {
 				if (mypolls.fds[n].revents) {
-					char c;
+					unsigned char c;
 					read(mypolls.fds[n].fd, &c, 1);	// read just one byte , no need for error handling
 					proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
 					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
+					if (c) {
+						// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
+						spin_wrunlock(&thread_mutex);
+						usleep(c*1000);
+						spin_wrlock(&thread_mutex);
+					}
 				}
 			continue;
 			}
@@ -1672,12 +1678,11 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"time_ms");
 	result->add_column_definition(SQLITE_TEXT,"info");
 	unsigned int i;
+	signal_all_threads(1);
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-		//if (thr!=sess->thread)
 		spin_wrlock(&thr->thread_mutex);
 	}
-	signal_all_threads();
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 		unsigned int j;
@@ -1796,9 +1801,9 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	return result;
 }
 
-void MySQL_Threads_Handler::signal_all_threads() {
+void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	unsigned int i;
-	char c;
+	unsigned char c=_c;
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 		int fd=thr->pipefd[1];

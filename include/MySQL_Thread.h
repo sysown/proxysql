@@ -306,7 +306,7 @@ class MySQL_Threads_Handler
 	int listener_del(const char *iface);
 	int listener_del(const char *address, int port);
 	void start_listeners();
-	void signal_all_threads();
+	void signal_all_threads(unsigned char _c=0);
 	SQLite3_result * SQL3_Processlist();
 };
 
