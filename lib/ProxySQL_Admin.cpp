@@ -872,7 +872,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		bool stats_mysql_processlist=false;
 		bool stats_mysql_connection_pool=false;
 		if (strstr(query_no_space,"stats_mysql_processlist"))
-			stats_mysql_processlist;
+			stats_mysql_processlist=true;
 		if (strstr(query_no_space,"stats_mysql_connection_pool"))
 			stats_mysql_connection_pool=true;
 		if (stats_mysql_processlist || stats_mysql_connection_pool) {
