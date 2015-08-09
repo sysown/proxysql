@@ -552,6 +552,13 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 			for (k=0; k<(int)pa->len; k++) {
 				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
 				if (mc->last_time_used < _max_last_time_used) {
+					if (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
+						// the idle connection are more than mysql_thread___free_connections_pct of max_connections
+						// we will drop this connection instead of pinging it
+						mc=(MySQL_Connection *)pa->remove_index_fast(k);
+						delete mc;
+						continue;
+					}
 					mc=(MySQL_Connection *)pa->remove_index_fast(k);
 					mysrvc->ConnectionsUsed->add(mc);
 					k--;

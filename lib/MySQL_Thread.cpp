@@ -115,6 +115,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server_max",
 	(char *)"connect_timeout_server_error",
 	(char *)"default_charset",
+	(char *)"free_connections_pct",
 	(char *)"have_compress",
 	(char *)"interfaces",
 	(char *)"monitor_history",
@@ -170,6 +171,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connect_retries_on_failure=5;
 	variables.connect_timeout_server=1000;
 	variables.connect_timeout_server_max=10000;
+	variables.free_connections_pct=10;
 	variables.connect_retries_delay=1;
 	variables.monitor_history=600000;
 	variables.monitor_connect_interval=120000;
@@ -327,6 +329,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
 	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
 	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
+	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
@@ -405,6 +408,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"connect_timeout_server_max")) {
 		sprintf(intbuf,"%d",variables.connect_timeout_server_max);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"free_connections_pct")) {
+		sprintf(intbuf,"%d",variables.free_connections_pct);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"connect_retries_delay")) {
@@ -605,6 +612,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 20*24*3600*1000) {
 			variables.max_transaction_time=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"free_connections_pct")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 100) {
+			variables.free_connections_pct=intv;
 			return true;
 		} else {
 			return false;
@@ -1399,6 +1415,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
 	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");
+	mysql_thread___free_connections_pct=GloMTH->get_variable_int((char *)"free_connections_pct");
 	mysql_thread___connect_retries_delay=GloMTH->get_variable_int((char *)"connect_retries_delay");
 	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
 	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
