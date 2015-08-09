@@ -569,3 +569,68 @@ __exit_get_multiple_idle_connections:
 	return num_conn_current;
 }
 
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
+  const int colnum=6;
+  proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
+  SQLite3_result *result=new SQLite3_result(colnum);
+  result->add_column_definition(SQLITE_TEXT,"hostgroup");
+  result->add_column_definition(SQLITE_TEXT,"srv_host");
+  result->add_column_definition(SQLITE_TEXT,"srv_port");
+  result->add_column_definition(SQLITE_TEXT,"status");
+  result->add_column_definition(SQLITE_TEXT,"ConnUsed");
+  result->add_column_definition(SQLITE_TEXT,"ConnFree");
+
+	wrlock();
+	int i,j, k;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
+				mysrvc->ConnectionsFree->drop_all_connections();
+			}
+			// drop idle connections if beyond max_connection
+			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
+				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
+				delete conn;
+			}
+			char buf[1024];
+			char **pta=(char **)malloc(sizeof(char *)*colnum);
+			sprintf(buf,"%d", (int)myhgc->hid);
+			pta[0]=strdup(buf);
+			pta[1]=strdup(mysrvc->address);
+			sprintf(buf,"%d", mysrvc->port);
+			pta[2]=strdup(buf);
+			switch (mysrvc->status) {
+				case 0:
+					pta[3]=strdup("ONLINE");
+					break;
+				case 1:
+					pta[3]=strdup("SHUNNED");
+					break;
+				case 2:
+					pta[3]=strdup("OFFLINE_SOFT");
+					break;
+				case 3:
+					pta[3]=strdup("OFFLINE_HARD");
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			sprintf(buf,"%u", mysrvc->ConnectionsUsed->conns->len);
+			pta[4]=strdup(buf);
+			sprintf(buf,"%u", mysrvc->ConnectionsFree->conns->len);
+			pta[5]=strdup(buf);
+			result->add_row(pta);
+			for (k=0; k<colnum; k++) {
+				if (pta[k])
+					free(pta[k]);
+			}
+			free(pta);
+		}
+	}
+	wrunlock();
+	return result;
+}
