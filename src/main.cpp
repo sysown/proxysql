@@ -54,83 +54,17 @@ MySQL_Threads_Handler *GloMTH;
 MySQL_Monitor *GloMyMon;
 std::thread *MyMon_thread;
 
-/*
-typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
-
-
-struct _proxysql_mysql_thread_t {
-	MySQL_Thread *worker;
-	pthread_t thread_id;
-};
-*/
-//static proxysql_mysql_thread_t *mysql_threads;
-
-#define NUM_THREADS	8
-
-
-
-
-
-static unsigned int g_seed;
-
-
-inline void fast_srand( int seed ) {
-g_seed = seed;
-}
-inline int fastrand() {
-    g_seed = (214013*g_seed+2531011);
-    return (g_seed>>16)&0x7FFF;
-}
-
-static char _s[128];
-
-void gen_random_stdstring(string *s, const int len) {
-	//char *_s=(char *)alloca(len+1);
-    static const char alphanum[] =
-        "0123456789"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz";
-    for (int i = 0; i < len; ++i) {
-        _s[i] = alphanum[fastrand() % (sizeof(alphanum) - 1)];
-    }
-    _s[len] = '\0';
-	*s=string(_s);
-    //return s;
-}
-
-
-
-char * gen_random_string(const int len) {
-    char *s=(char *)malloc(len+1);
-    static const char alphanum[] =
-        "0123456789"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz";
-
-    for (int i = 0; i < len; ++i) {
-        s[i] = alphanum[fastrand() % (sizeof(alphanum) - 1)];
-    }
-
-    s[len] = 0;
-    return s;
-}
-
-
 
 void * mysql_worker_thread_func(void *arg) {
 
 	__thr_sfp=l_mem_init();
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
-	//MySQL_Thread *worker = new MySQL_Thread;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
 	__sync_fetch_and_sub(&load_,1);
-//	if (__sync_fetch_and_sub(&load_,1)==(NUM_THREADS+1)) {
-//		worker->print_version();
-//	}
 	do { usleep(50); } while (load_);
 
 	worker->run();
@@ -145,8 +79,6 @@ void * mysql_shared_query_cache_funct(void *arg) {
 	return NULL;
 }
 
-
-#include <dlfcn.h>
 
 
 int main(int argc, const char * argv[]) {
@@ -258,16 +190,6 @@ int main(int argc, const char * argv[]) {
 
 	GloVars.process_opts_post();
 
-/*
-	//if (GloVars.confFile->OpenFile("proxysql.cnf2") == true) {
-	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
-		// open config file
-	} else {
-		std::cerr << "[Warning]: Cannot open config file " << GloVars.config_file << endl;
-		//exit(EXIT_FAILURE);
-	}
-*/
-
 __start_label:
 
 	GloQC=NULL;
@@ -275,7 +197,7 @@ __start_label:
 	GloMTH=NULL;
 	GloMyAuth=NULL;
 	GloMyMon=NULL;
-//	MyHGH=new MySQL_HostGroups_Handler();
+
 	MyHGM=new MySQL_HostGroups_Manager();
 
 	GloMTH=new MySQL_Threads_Handler();
@@ -303,7 +225,6 @@ __start_label:
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
 
-	//mysql_threads=NULL;
 
 	if (glovars.shutdown) {
 		goto __shutdown;
@@ -318,23 +239,6 @@ __start_label:
   GloQPro->print_version();
 }
 	GloAdmin->init_mysql_query_rules();
-
-/*
-	GModule * __mysql_auth = g_module_open("../lib/Standard_MySQL_Authentication.so", G_MODULE_BIND_LAZY);
-	if (!__mysql_auth) {
-		cerr << "Cannot load library: " << g_module_error() << '\n';
-		return 1;
-	}
-	rc= g_module_symbol(__mysql_auth, "create_MySQL_Authentication", (void **)&create_MySQL_Authentication);
-	if (rc==FALSE) {
-		cerr << "Cannot load symbol create: " << g_module_error() << '\n';
-		return 1;
-	}
-*/
-
-
-
-
 
 	//parse all the arguments and the config file
   //main_opts(cmd_option_entries, &argc, &argv, &__cmd_proxysql_config_file);
@@ -362,18 +266,13 @@ __start_label:
 
 
 	for (i=0; i<GloMTH->num_threads; i++) {
-		//pthread_create(&mysql_threads[i].thread_id, &attr, mysql_worker_thread_func , &mysql_threads[i]);
 		GloMTH->create_thread(i,mysql_worker_thread_func);
-		//pthread_create(&mysql_threads[i].thread_id, &attr, mysql_worker_thread_func , &mysql_threads[i]);
 	}
 
 	
-	//SQC = new Shared_Query_Cache(DEFAULT_SQC_size);
 	GloQC = new Query_Cache();
 	GloQC->print_version();
 	pthread_create(&GloQC->purge_thread_id, NULL, mysql_shared_query_cache_funct , NULL);
-	//void *(*__f)(void *) = (void* (*)(void*))&SQC->purgeHash_thread;
-	//pthread_create(&SQC_purge_thread_id, NULL, &SQC->purgeHash_thread , NULL);
 
 
 
@@ -410,8 +309,6 @@ __start_label:
 
 	GloMTH->start_listeners();
 
-	//sleep(10);
-
 	// start MySQL_Monitor
 	GloMyMon = new MySQL_Monitor();
 	MyMon_thread = new std::thread(&MySQL_Monitor::run,GloMyMon);
@@ -427,20 +324,6 @@ __shutdown:
 	if (GloMTH) {
 		GloMTH->shutdown_threads();
 	}
-/*
-	if (mysql_threads) {
-
-		for (i=0; i<NUM_THREADS; i++) {
-			mysql_threads[i].worker->shutdown=1;
-		}
-
-		for (i=0; i<NUM_THREADS; i++) {
-			pthread_join(mysql_threads[i].thread_id,NULL);
-		}
-		free(mysql_threads);
-		mysql_threads=NULL;
-	}
-*/
 	if (GloQC) {
 		GloQC->shutdown=1;
 	}
