@@ -171,6 +171,7 @@ int main(int argc, const char * argv[]) {
 		}
 	}
 
+/*
 	SSL_library_init();
 	SSL_METHOD *ssl_method;
 	OpenSSL_add_all_algorithms();
@@ -194,6 +195,7 @@ int main(int argc, const char * argv[]) {
 		fprintf(stderr, "Private key does not match the public certificate\n");
 		abort();
 	}
+*/
 
 
 
