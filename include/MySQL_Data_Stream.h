@@ -90,6 +90,15 @@ class MySQL_Data_Stream
 
 	bool net_failure;
 
+	struct {
+		PtrSize_t pkt;
+		unsigned int partial;
+	} CompPktIN;
+	struct {
+		PtrSize_t pkt;
+		unsigned int partial;
+	} CompPktOUT;
+
 	PtrSize_t multi_pkt;
 	uint8_t pkt_sid;
 

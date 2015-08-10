@@ -126,6 +126,12 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl=NULL;
 	net_failure=false;
 //	ssl_ctx=NULL;
+	CompPktIN.pkt.ptr=NULL;
+	CompPktIN.pkt.size=0;
+	CompPktIN.partial=0;
+	CompPktOUT.pkt.ptr=NULL;
+	CompPktOUT.pkt.size=0;
+	CompPktOUT.partial=0;
 	multi_pkt.ptr=NULL;
 	multi_pkt.size=0;
 }
@@ -199,6 +205,16 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		l_free(multi_pkt.size,multi_pkt.ptr);
 		multi_pkt.ptr=NULL;
 		multi_pkt.size=0;
+	}
+	if (CompPktIN.pkt.ptr) {
+		l_free(CompPktIN.pkt.size,CompPktIN.pkt.ptr);
+		CompPktIN.pkt.ptr=NULL;
+		CompPktIN.pkt.size=0;
+	}
+	if (CompPktOUT.pkt.ptr) {
+		l_free(CompPktOUT.pkt.size,CompPktOUT.pkt.ptr);
+		CompPktOUT.pkt.ptr=NULL;
+		CompPktOUT.pkt.size=0;
 	}
 }
 
@@ -487,13 +503,47 @@ int MySQL_Data_Stream::buffer2array() {
 				datalength=queueIN.pkt.size-7;
 			}
 			while (progress<datalength) {
-				mysql_hdr _a;
-				memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
-				unsigned int size=_a.pkt_length+sizeof(mysql_hdr);
-				unsigned char *ptrP=(unsigned char *)l_alloc(size);
-				memcpy(ptrP,_ptr+progress,size);
-				progress+=size;
-				PSarrayIN->add(ptrP,size);
+				if (CompPktIN.partial==0) {
+					mysql_hdr _a;
+					assert(datalength >= progress + sizeof(mysql_hdr)); // FIXME: this is a too optimistic assumption
+					memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+					CompPktIN.pkt.size=_a.pkt_length+sizeof(mysql_hdr);
+					CompPktIN.pkt.ptr=(unsigned char *)l_alloc(CompPktIN.pkt.size);
+					if ((datalength-progress) >= CompPktIN.pkt.size) {
+						// we can copy the whole packet
+						memcpy(CompPktIN.pkt.ptr, _ptr+progress, CompPktIN.pkt.size);
+						CompPktIN.partial=0; // stays 0
+						progress+=CompPktIN.pkt.size;
+						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
+						CompPktIN.pkt.ptr=NULL; // sanity
+					} else {
+						// not enough data for the whole packet
+						memcpy(CompPktIN.pkt.ptr, _ptr+progress, (datalength-progress));
+						CompPktIN.partial+=(datalength-progress);
+						progress=datalength; // we reached the end
+					}
+				} else {
+					if ((datalength-progress) >= (CompPktIN.pkt.size-CompPktIN.partial)) {
+						// we can copy till the end of the packet
+						memcpy((char *)CompPktIN.pkt.ptr + CompPktIN.partial , _ptr+progress, CompPktIN.pkt.size - CompPktIN.partial);
+						CompPktIN.partial=0;
+						progress+= CompPktIN.pkt.size - CompPktIN.partial;
+						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
+						CompPktIN.pkt.ptr=NULL; // sanity
+					} else {
+						// not enough data for the whole packet
+						memcpy((char *)CompPktIN.pkt.ptr + CompPktIN.partial , _ptr+progress , (datalength-progress));
+						CompPktIN.partial+=(datalength-progress);
+						progress=datalength; // we reached the end
+					}
+				}
+//				mysql_hdr _a;
+//				memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+//				unsigned int size=_a.pkt_length+sizeof(mysql_hdr);
+//				unsigned char *ptrP=(unsigned char *)l_alloc(size);
+//				memcpy(ptrP,_ptr+progress,size);
+//				progress+=size;
+//				PSarrayIN->add(ptrP,size);
 			}
 			if (payload_length) {
 				l_free(destLen,dest);
@@ -537,36 +587,82 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			total_size-=p->size;
 		}
 	}
-	uLong sourceLen=total_size;
-	Bytef *source=(Bytef *)l_alloc(total_size);
-	uLongf destLen=total_size*120/100+12;
-	Bytef *dest=(Bytef *)malloc(destLen);
-	i=0;
-	total_size=0;
-	while (total_size<sourceLen) {
-		//p=PSarrayOUT->index(i);
+	if (total_size <= MAX_COMPRESSED_PACKET_SIZE) {
+		// this worked in the past . it applies for small packets
+		uLong sourceLen=total_size;
+		Bytef *source=(Bytef *)l_alloc(total_size);
+		uLongf destLen=total_size*120/100+12;
+		Bytef *dest=(Bytef *)malloc(destLen);
+		i=0;
+		total_size=0;
+		while (total_size<sourceLen) {
+			//p=PSarrayOUT->index(i);
+			PtrSize_t p2;
+			PSarrayOUT->remove_index(0,&p2);
+			memcpy(source+total_size,p2.ptr,p2.size);
+			//i++;
+			total_size+=p2.size;
+			l_free(p2.size,p2.ptr);
+		}
+		//PSarrayOUT->remove_index_range(0,i);
+		int rc=compress(dest, &destLen, source, sourceLen);
+		assert(rc==Z_OK);
+		l_free(total_size, source);
+		queueOUT.pkt.size=destLen+7;
+		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
+		mysql_hdr hdr;
+		hdr.pkt_length=destLen;
+		hdr.pkt_id=++myconn->compression_pkt_id;
+		//hdr.pkt_id=1;
+		memcpy((unsigned char *)queueOUT.pkt.ptr,&hdr,sizeof(mysql_hdr));
+		hdr.pkt_length=total_size;
+		memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);
+		memcpy((unsigned char *)queueOUT.pkt.ptr+7,dest,destLen);
+		free(dest);
+	} else {
+		// if we reach here, it means we have one single packet larger than MAX_COMPRESSED_PACKET_SIZE
 		PtrSize_t p2;
 		PSarrayOUT->remove_index(0,&p2);
-		memcpy(source+total_size,p2.ptr,p2.size);
-		//i++;
-		total_size+=p2.size;
+
+		unsigned int len1=MAX_COMPRESSED_PACKET_SIZE/2;
+		unsigned int len2=p2.size-len1;
+		uLongf destLen1;
+		uLongf destLen2;
+		Bytef *dest1;
+		Bytef *dest2;
+		int rc;
+
+		mysql_hdr hdr;
+
+		destLen1=len1*120/100+12;
+		dest1=(Bytef *)malloc(destLen1+7);
+		destLen2=len2*120/100+12;
+		dest2=(Bytef *)malloc(destLen2+7);
+		rc=compress(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1);
+		assert(rc==Z_OK);
+		rc=compress(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2);
+		assert(rc==Z_OK);
+
+		hdr.pkt_length=destLen1;
+		hdr.pkt_id=++myconn->compression_pkt_id;
+		memcpy(dest1,&hdr,sizeof(mysql_hdr));
+		hdr.pkt_length=len1;
+		memcpy((char *)dest1+sizeof(mysql_hdr),&hdr,3);
+
+		hdr.pkt_length=destLen2;
+		hdr.pkt_id=++myconn->compression_pkt_id;
+		memcpy(dest2,&hdr,sizeof(mysql_hdr));
+		hdr.pkt_length=len2;
+		memcpy((char *)dest2+sizeof(mysql_hdr),&hdr,3);
+
+		queueOUT.pkt.size=destLen1+destLen2+7+7;
+		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
+		memcpy(queueOUT.pkt.ptr,dest1,destLen1+7);
+		memcpy(queueOUT.pkt.ptr+destLen1+7,dest2,destLen2+7);
+		free(dest1);
+		free(dest2);
 		l_free(p2.size,p2.ptr);
 	}
-	//PSarrayOUT->remove_index_range(0,i);
-	int rc=compress(dest, &destLen, source, sourceLen);
-	assert(rc==Z_OK);
-	l_free(total_size, source);
-	queueOUT.pkt.size=destLen+7;
-	queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
-	mysql_hdr hdr;
-	hdr.pkt_length=destLen;
-	hdr.pkt_id=++myconn->compression_pkt_id;
-	//hdr.pkt_id=1;
-	memcpy((unsigned char *)queueOUT.pkt.ptr,&hdr,sizeof(mysql_hdr));
-	hdr.pkt_length=total_size;
-	memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);
-	memcpy((unsigned char *)queueOUT.pkt.ptr+7,dest,destLen);
-	free(dest);
 }
 
 
