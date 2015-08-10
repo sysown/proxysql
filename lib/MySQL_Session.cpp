@@ -333,6 +333,7 @@ __get_pkts_from_client:
 							memcpy(client_myds->multi_pkt.ptr, tmp_pkt.ptr, tmp_pkt.size);
 							memcpy((char *)client_myds->multi_pkt.ptr + tmp_pkt.size , (char *)pkt.ptr+sizeof(mysql_hdr) , pkt.size-sizeof(mysql_hdr)); // the header is not copied
 							l_free(tmp_pkt.size , tmp_pkt.ptr);
+							l_free(pkt.size , pkt.ptr);
 						}
 						if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // there are more packets
 							goto __get_pkts_from_client;
@@ -2077,13 +2078,13 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 //			l[i]=result->rows[r]->sizes[i];
 //			p[i]=result->rows[r]->fields[i];
 //		}
-			myprot->generate_pkt_row(true,NULL,&pkt_length,sid,num_fields,lengths,row); sid++;
+			sid=myprot->generate_pkt_row2(&pkt_length,sid,num_fields,lengths,row); sid++;
 			client_myds->resultset_length+=pkt_length;
 		}
 		myds->DSS=STATE_ROW;
 		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,2); sid++;
 		client_myds->resultset_length+=pkt_length;
-		if (qpo && qpo->cache_ttl>0 && mysql_error(mysql)==0) {
+		if (qpo && qpo->cache_ttl>0 && mysql_errno(mysql)==0) {
 			client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
 			unsigned char *aa=client_myds->resultset2buffer(false);
 			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);	

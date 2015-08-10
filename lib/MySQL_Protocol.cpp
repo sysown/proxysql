@@ -1138,6 +1138,69 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
+uint8_t MySQL_Protocol::generate_pkt_row2(unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
+	int col=0;
+	unsigned int rowlen=0;
+	uint8_t pkt_sid=sequence_id;
+	for (col=0; col<colnums; col++) {
+		rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
+	}
+	PtrSize_t pkt;
+	pkt.size=rowlen+sizeof(mysql_hdr);
+	pkt.ptr=l_alloc(pkt.size);
+	int l=sizeof(mysql_hdr);
+	for (col=0; col<colnums; col++) {
+		if (fieldstxt[col]) {
+			char length_prefix;
+			uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
+			l+=write_encoded_length_and_string((unsigned char *)pkt.ptr+l,fieldslen[col],length_len, length_prefix, fieldstxt[col]);
+		} else {
+			char *_ptr=(char *)pkt.ptr;
+			_ptr[l]=0xfb;
+			l++;
+		}
+	}
+	if (pkt.size < (0xFFFFFF+sizeof(mysql_hdr))) {
+		mysql_hdr myhdr;
+		myhdr.pkt_id=pkt_sid;
+		myhdr.pkt_length=rowlen;
+		memcpy(pkt.ptr, &myhdr, sizeof(mysql_hdr));
+		(*myds)->PSarrayOUT->add(pkt.ptr,pkt.size);
+	} else {
+		unsigned int left=pkt.size;
+		unsigned int copied=0;
+		while (left>=(0xFFFFFF+sizeof(mysql_hdr))) {
+			PtrSize_t pkt2;
+			pkt2.size=0xFFFFFF+sizeof(mysql_hdr);
+			pkt2.ptr=l_alloc(pkt2.size);
+			memcpy((char *)pkt2.ptr+sizeof(mysql_hdr), (char *)pkt.ptr+sizeof(mysql_hdr)+copied, 0xFFFFFF);
+			mysql_hdr myhdr;
+			myhdr.pkt_id=pkt_sid;
+			pkt_sid++;
+			myhdr.pkt_length=0xFFFFFF;
+			memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
+			(*myds)->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+			copied+=0xFFFFFF;
+			left-=0xFFFFFF;
+		}
+		PtrSize_t pkt2;
+		pkt2.size=left;
+		pkt2.ptr=l_alloc(pkt2.size);
+		memcpy((char *)pkt2.ptr+sizeof(mysql_hdr), (char *)pkt.ptr+sizeof(mysql_hdr)+copied, left-sizeof(mysql_hdr));
+		mysql_hdr myhdr;
+		myhdr.pkt_id=pkt_sid;
+		myhdr.pkt_length=left-sizeof(mysql_hdr);
+		memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
+		(*myds)->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+	}
+	if (len) { *len=pkt.size+(pkt_sid-sequence_id)*sizeof(mysql_hdr); }
+	if (pkt.size >= (0xFFFFFF+sizeof(mysql_hdr))) {
+		l_free(pkt.size,pkt.ptr);
+	}
+	return pkt_sid;
+}
+
+
 //bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsigned int *len) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating response handshake pkt\n");
