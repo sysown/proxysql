@@ -40,6 +40,31 @@ void ProxySQL_Main_init_SSL_module() {
 }
 */
 
+/*
+void example_listern() {
+// few examples tests to demonstrate the ability to add and remove listeners at runtime
+	GloMTH->listener_add((char *)"0.0.0.0:6033");
+	sleep(3);
+	GloMTH->listener_add((char *)"127.0.0.1:5033");
+	sleep(3);
+	GloMTH->listener_add((char *)"127.0.0.2:5033");
+	sleep(3);
+	GloMTH->listener_add((char *)"/tmp/proxysql.sock");
+	for (int t=0; t<10; t++) {
+		GloMTH->listener_add((char *)"127.0.0.1",7000+t);
+		sleep(3);
+	}
+
+	GloMTH->listener_del((char *)"0.0.0.0:6033");
+	sleep(3);
+	GloMTH->listener_del((char *)"127.0.0.1:5033");
+	sleep(3);
+	GloMTH->listener_del((char *)"127.0.0.2:5033");
+	sleep(3);
+	GloMTH->listener_del((char *)"/tmp/proxysql.sock");
+}
+*/
+
 
 
 
@@ -257,15 +282,7 @@ void ProxySQL_Main_shutdown_all_modules() {
 	delete MyHGM;
 }
 
-
-
-
-
-
-int main(int argc, const char * argv[]) {
-
-	//unsigned int i;
-{
+void ProxySQL_Main_init() {
 #ifdef DEBUG
 	glovars.has_debug=true;
 #else
@@ -289,14 +306,10 @@ int main(int argc, const char * argv[]) {
 
 
 
-	ProxySQL_Main_process_global_variables(argc, argv);
 
-__start_label:
-
+void ProxySQL_Main_init_phase2___not_started() {
 	ProxySQL_Main_init_main_modules();
-
 	ProxySQL_Main_init_Admin_module();
-
 	GloMTH->print_version();
 
 	if (GloVars.configfile_open) {
@@ -308,71 +321,52 @@ __start_label:
 	if (GloVars.global.nostart) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
+}
 
 
-	if (glovars.shutdown) {
-		goto __shutdown;
-	}
-
+void ProxySQL_Main_init_phase3___start_all() {
 	// load all mysql servers to GloHGH
 	GloAdmin->init_mysql_servers();
-
 	ProxySQL_Main_init_Query_module();
-
-	//parse all the arguments and the config file
-  //main_opts(cmd_option_entries, &argc, &argv, &__cmd_proxysql_config_file);
-
-
-//  main_opts(&argc, (gchar ***)&argv);
-
-
-	// start admin thread
-
-	// wait for admin thread to exit
-
-	// read sqlite config file
-
-	// daemonize if needed
-	// fork if needed
-
-	// start all services
-
-
-
 	ProxySQL_Main_init_MySQL_Threads_Handler_module();
-
 	ProxySQL_Main_init_Query_Cache_module();
 
 	do { /* nothing */ } while (load_ != 1);
 	load_ = 0;
 
-/*
- * few examples tests to demonstrate the ability to add and remove listeners at runtime
-	GloMTH->listener_add((char *)"0.0.0.0:6033");
-	sleep(3);
-	GloMTH->listener_add((char *)"127.0.0.1:5033");
-	sleep(3);
-	GloMTH->listener_add((char *)"127.0.0.2:5033");
-	sleep(3);
-	GloMTH->listener_add((char *)"/tmp/proxysql.sock");
-	for (int t=0; t<10; t++) {
-		GloMTH->listener_add((char *)"127.0.0.1",7000+t);
-		sleep(3);
+	GloMTH->start_listeners();
+	ProxySQL_Main_init_MySQL_Monitor_module();
+}
+
+
+
+void ProxySQL_Main_init_phase4___shutdown() {
+	ProxySQL_Main_join_all_threads();
+
+	if (GloVars.global.nostart) {
+		pthread_mutex_unlock(&GloVars.global.start_mutex);
 	}
 
-	GloMTH->listener_del((char *)"0.0.0.0:6033");
-	sleep(3);
-	GloMTH->listener_del((char *)"127.0.0.1:5033");
-	sleep(3);
-	GloMTH->listener_del((char *)"127.0.0.2:5033");
-	sleep(3);
-	GloMTH->listener_del((char *)"/tmp/proxysql.sock");
-*/
+	ProxySQL_Main_shutdown_all_modules();
+}
 
 
-	GloMTH->start_listeners();
 
-	ProxySQL_Main_init_MySQL_Monitor_module();
+int main(int argc, const char * argv[]) {
+
+	ProxySQL_Main_init();
+	ProxySQL_Main_process_global_variables(argc, argv);
+
+__start_label:
+
+	ProxySQL_Main_init_phase2___not_started();
+
+	if (glovars.shutdown) {
+		goto __shutdown;
+	}
+
+	ProxySQL_Main_init_phase3___start_all();
+
 
 	while (glovars.shutdown==0) {
 		sleep(1);   // FIXME: TERRIBLE UGLY
@@ -380,17 +374,9 @@ __start_label:
 		
 __shutdown:
 
-	ProxySQL_Main_join_all_threads();
-
-	//if (GloVars.__cmd_proxysql_nostart) {
-	if (GloVars.global.nostart) {
-		pthread_mutex_unlock(&GloVars.global.start_mutex);
-	}
-
-	ProxySQL_Main_shutdown_all_modules();
+	ProxySQL_Main_init_phase4___shutdown();
 
 	if (glovars.reload) {
-		//sleep(1);
 		if (glovars.reload==2) {
 			GloVars.global.nostart=true;
 		}
@@ -400,8 +386,6 @@ __shutdown:
 	}
 
 	l_mem_destroy(__thr_sfp);
-
-
 	return 0;
 }
 
