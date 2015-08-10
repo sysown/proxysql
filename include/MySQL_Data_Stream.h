@@ -90,6 +90,9 @@ class MySQL_Data_Stream
 
 	bool net_failure;
 
+	PtrSize_t multi_pkt;
+	uint8_t pkt_sid;
+
 	struct {
 		char *ptr;
 		unsigned int size;

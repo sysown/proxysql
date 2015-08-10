@@ -126,6 +126,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl=NULL;
 	net_failure=false;
 //	ssl_ctx=NULL;
+	multi_pkt.ptr=NULL;
+	multi_pkt.size=0;
 }
 
 
@@ -192,6 +194,11 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (encrypted) {
 		if (ssl) SSL_free(ssl);
 //		if (ssl_ctx) SSL_CTX_free(ssl_ctx);
+	}
+	if (multi_pkt.ptr) {
+		l_free(multi_pkt.size,multi_pkt.ptr);
+		multi_pkt.ptr=NULL;
+		multi_pkt.size=0;
 	}
 }
 
@@ -429,6 +436,7 @@ int MySQL_Data_Stream::buffer2array() {
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
 			memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
+			pkt_sid=queueIN.hdr.pkt_id;
 			queue_r(queueIN,sizeof(mysql_hdr));
 			queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr);
 			queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
