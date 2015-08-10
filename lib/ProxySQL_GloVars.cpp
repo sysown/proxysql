@@ -135,9 +135,14 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 
 	if (config_file==NULL) {
 		config_file=(char *)"proxysql.cnf";
-		//if (!g_file_test(config_file,(GFileTest)(G_FILE_TEST_EXISTS|G_FILE_TEST_IS_REGULAR))) {
 		if (Proxy_file_regular(config_file)==false) {
-			config_file=(char *)"/etc/proxysql.cnf";
+			config_file=(char *)"proxysql.cfg";
+			if (Proxy_file_regular(config_file)==false) {
+				config_file=(char *)"/etc/proxysql.cnf";
+				if (Proxy_file_regular(config_file)==false) {
+					config_file=(char *)"/etc/proxysql.cfg";
+				}
+			}
 		}
 	}
 #ifdef DEBUG

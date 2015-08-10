@@ -657,8 +657,8 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 
 		queueOUT.pkt.size=destLen1+destLen2+7+7;
 		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
-		memcpy(queueOUT.pkt.ptr,dest1,destLen1+7);
-		memcpy(queueOUT.pkt.ptr+destLen1+7,dest2,destLen2+7);
+		memcpy((char *)queueOUT.pkt.ptr,dest1,destLen1+7);
+		memcpy((char *)queueOUT.pkt.ptr+destLen1+7,dest2,destLen2+7);
 		free(dest1);
 		free(dest2);
 		l_free(p2.size,p2.ptr);

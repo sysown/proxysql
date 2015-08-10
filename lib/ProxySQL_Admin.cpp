@@ -18,6 +18,14 @@
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 
+char *s_strdup(char *s) {
+	char *ret=NULL;
+	if (s) {
+		ret=strdup(s);
+	}
+	return ret;
+}
+
 static volatile int load_main_=0;
 static volatile bool nostart_=false;
 
@@ -1349,8 +1357,10 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.admin_credentials=strdup("admin:admin");
 	variables.stats_credentials=strdup("stats:stats");
 	variables.mysql_ifaces=strdup("127.0.0.1:6032");
-	variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
-	variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
+	variables.telnet_admin_ifaces=NULL;
+	variables.telnet_stats_ifaces=NULL;
+	//variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
+	//variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
@@ -1664,9 +1674,11 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 					char *val=GloMTH->get_variable(r->fields[0]);
 					char q[1000];
 					if (val) {
-						proxy_error("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
-						db->execute(q);
+						if (strcmp(val,r->fields[1])) {
+							proxy_error("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
+							db->execute(q);
+						}
 						free(val);
 					} else {
 						proxy_error("Impossible to set not existing variable %s with value \"%s\". Deleting\n", r->fields[0],r->fields[1]);
@@ -1750,11 +1762,11 @@ char **ProxySQL_Admin::get_variables_list() {
 char * ProxySQL_Admin::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
-	if (!strcasecmp(name,"admin_credentials")) return strdup(variables.admin_credentials);
-	if (!strcasecmp(name,"stats_credentials")) return strdup(variables.stats_credentials);
-	if (!strcasecmp(name,"mysql_ifaces")) return strdup(variables.mysql_ifaces);
-	if (!strcasecmp(name,"telnet_admin_ifaces")) return strdup(variables.telnet_admin_ifaces);
-	if (!strcasecmp(name,"telnet_stats_ifaces")) return strdup(variables.telnet_stats_ifaces);
+	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
+	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
+	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
+	if (!strcasecmp(name,"telnet_admin_ifaces")) return s_strdup(variables.telnet_admin_ifaces);
+	if (!strcasecmp(name,"telnet_stats_ifaces")) return s_strdup(variables.telnet_stats_ifaces);
 	if (!strcasecmp(name,"refresh_interval")) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
@@ -1869,7 +1881,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
-			free(variables.mysql_ifaces);
+			if (variables.mysql_ifaces)
+				free(variables.mysql_ifaces);
 			variables.mysql_ifaces=strdup(value);
 			if (update_creds && variables.mysql_ifaces) {
 				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
@@ -1883,7 +1896,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.telnet_admin_ifaces==NULL) || strcasecmp(variables.telnet_admin_ifaces,value) ) update_creds=true;
-			free(variables.telnet_admin_ifaces);
+			if (variables.telnet_admin_ifaces)
+				free(variables.telnet_admin_ifaces);
 			variables.telnet_admin_ifaces=strdup(value);
 			if (update_creds && variables.telnet_admin_ifaces) {
 				S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
@@ -1897,7 +1911,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.telnet_stats_ifaces==NULL) || strcasecmp(variables.telnet_stats_ifaces,value) ) update_creds=true;
-			free(variables.telnet_stats_ifaces);
+			if (variables.telnet_stats_ifaces)
+				free(variables.telnet_stats_ifaces);
 			variables.telnet_stats_ifaces=strdup(value);
 			if (update_creds && variables.telnet_stats_ifaces) {
 				S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);

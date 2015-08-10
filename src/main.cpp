@@ -210,7 +210,7 @@ int main(int argc, const char * argv[]) {
 	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
 		GloVars.configfile_open=true;
 	}
-
+	char *t=get_current_dir_name();
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
 		// datadir was not specified , try to read config file
 		if (GloVars.configfile_open==true) {
@@ -223,20 +223,21 @@ int main(int argc, const char * argv[]) {
 				if (rc==true) {
 					GloVars.datadir=strdup(datadir.c_str());
 				} else {
-					GloVars.datadir=(char *)"/var/run/proxysql";
+					GloVars.datadir=strdup(t);
 				}
 			} else {
-			// datadir was not specified in config file
-			GloVars.datadir=(char *)"/var/run/proxysql";
+				// datadir was not specified in config file
+				GloVars.datadir=strdup(t);
 			}
 		} else {
 			// config file not readable
-			GloVars.datadir=(char *)"/var/run/proxysql";
-			std::cerr << "[Warning]: Cannot open config file " << GloVars.config_file << ". Using default datadir " << GloVars.datadir << endl;
+			GloVars.datadir=strdup(t);
+			std::cerr << "[Warning]: Cannot open config file " << GloVars.config_file << ". Using default datadir in current working directory " << GloVars.datadir << endl;
 		}
 	} else {
 		GloVars.datadir=GloVars.__cmd_proxysql_datadir;
 	}
+	free(t);
 
 	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
 	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
