@@ -910,11 +910,15 @@ proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, 
 void MySQL_Threads_Handler::shutdown_threads() {
 	unsigned int i;
 	shutdown_=1;
-	for (i=0; i<num_threads; i++) {
-		mysql_threads[i].worker->shutdown=1;
-	}
-	for (i=0; i<num_threads; i++) {
-		pthread_join(mysql_threads[i].thread_id,NULL);
+	if (mysql_threads) {
+		for (i=0; i<num_threads; i++) {
+			if (mysql_threads[i].worker)
+				mysql_threads[i].worker->shutdown=1;
+		}
+		for (i=0; i<num_threads; i++) {
+			if (mysql_threads[i].worker)
+				pthread_join(mysql_threads[i].thread_id,NULL);
+		}
 	}
 }
 
