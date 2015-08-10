@@ -18,20 +18,6 @@ static inline unsigned long long debug_monotonic_time() {
 	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
-void crash_handler(int sig) {
-#ifdef DEBUG
-	malloc_stats_print(NULL, NULL, "");
-#endif
-	void *arr[20];
-	size_t s;
-
-	s = backtrace(arr, 20);
-
-	fprintf(stderr, "Error: signal %d:\n", sig);
-	backtrace_symbols_fd(arr, s, STDERR_FILENO);
-	exit(EXIT_FAILURE);
-}
-
 
 #define DEBUG_MSG_MAXSIZE	1024
 

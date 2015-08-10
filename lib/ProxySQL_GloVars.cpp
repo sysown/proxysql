@@ -12,6 +12,19 @@ static void term_handler(int sig) {
   __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 }
 
+void crash_handler(int sig) {
+#ifdef DEBUG
+	malloc_stats_print(NULL, NULL, "");
+#endif
+	void *arr[20];
+	size_t s;
+
+	s = backtrace(arr, 20);
+
+	fprintf(stderr, "Error: signal %d:\n", sig);
+	backtrace_symbols_fd(arr, s, STDERR_FILENO);
+	exit(EXIT_FAILURE);
+}
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
@@ -62,7 +75,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 
 	confFile=new ProxySQL_ConfigFile();
 	signal(SIGTERM, term_handler);
-
+	signal(SIGSEGV, crash_handler);
+	signal(SIGABRT, crash_handler);
+	signal(SIGPIPE, SIG_IGN);
 };
 
 
