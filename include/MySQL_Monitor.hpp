@@ -6,53 +6,13 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT "CREATE TABLE mysql_server_connect (\
-  hostname VARCHAR NOT NULL,\
-  port INT NOT NULL DEFAULT 3306,\
-  time_since INT NOT NULL DEFAULT 0,\
-  time_until INT NOT NULL DEFAULT 0,\
-  connect_success_count INT NOT NULL DEFAULT 0,\
-  connect_success_first INT NOT NULL DEFAULT 0,\
-  connect_success_last INT NOT NULL DEFAULT 0,\
-	connect_success_time_min INT NOT NULL DEFAULT 0,\
-	connect_success_time_max INT NOT NULL DEFAULT 0,\
-	connect_success_time_total INT NOT NULL DEFAULT 0,\
-  connect_failure_count INT NOT NULL DEFAULT 0,\
-  connect_failure_first INT NOT NULL DEFAULT 0,\
-  connect_failure_last INT NOT NULL DEFAULT 0,\
-  PRIMARY KEY (hostname, port))"
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT "CREATE TABLE mysql_server_connect (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_since INT NOT NULL DEFAULT 0 , time_until INT NOT NULL DEFAULT 0 , connect_success_count INT NOT NULL DEFAULT 0 , connect_success_first INT NOT NULL DEFAULT 0 , connect_success_last INT NOT NULL DEFAULT 0 , connect_success_time_min INT NOT NULL DEFAULT 0 , connect_success_time_max INT NOT NULL DEFAULT 0 , connect_success_time_total INT NOT NULL DEFAULT 0 , connect_failure_count INT NOT NULL DEFAULT 0 , connect_failure_first INT NOT NULL DEFAULT 0 , connect_failure_last INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port))"
 
-#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING "CREATE TABLE mysql_server_ping (\
-  hostname VARCHAR NOT NULL,\
-  port INT NOT NULL DEFAULT 3306,\
-  time_since INT NOT NULL DEFAULT 0,\
-  time_until INT NOT NULL DEFAULT 0,\
-  ping_success_count INT NOT NULL DEFAULT 0,\
-  ping_success_first INT NOT NULL DEFAULT 0,\
-  ping_success_last INT NOT NULL DEFAULT 0,\
-	ping_success_time_min INT NOT NULL DEFAULT 0,\
-	ping_success_time_max INT NOT NULL DEFAULT 0,\
-	ping_success_time_total INT NOT NULL DEFAULT 0,\
-  ping_failure_count INT NOT NULL DEFAULT 0,\
-  ping_failure_first INT NOT NULL DEFAULT 0,\
-  ping_failure_last INT NOT NULL DEFAULT 0,\
-  PRIMARY KEY (hostname, port))"
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING "CREATE TABLE mysql_server_ping (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_since INT NOT NULL DEFAULT 0 , time_until INT NOT NULL DEFAULT 0 , ping_success_count INT NOT NULL DEFAULT 0 , ping_success_first INT NOT NULL DEFAULT 0, ping_success_last INT NOT NULL DEFAULT 0 , ping_success_time_min INT NOT NULL DEFAULT 0 , ping_success_time_max INT NOT NULL DEFAULT 0 , ping_success_time_total INT NOT NULL DEFAULT 0 , ping_failure_count INT NOT NULL DEFAULT 0 , ping_failure_first INT NOT NULL DEFAULT 0 , ping_failure_last INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port))"
 
-#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT_LOG "CREATE TABLE mysql_server_connect_log (\
-  hostname VARCHAR NOT NULL,\
-  port INT NOT NULL DEFAULT 3306,\
-	time_start INT NOT NULL DEFAULT 0,\
-	connect_success_time INT DEFAULT 0,\
-	connect_error VARCHAR,\
-	PRIMARY KEY (hostname, port, time_start))"
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT_LOG "CREATE TABLE mysql_server_connect_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start INT NOT NULL DEFAULT 0 , connect_success_time INT DEFAULT 0 , connect_error VARCHAR , PRIMARY KEY (hostname, port, time_start))"
 
-#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING_LOG "CREATE TABLE mysql_server_ping_log (\
-  hostname VARCHAR NOT NULL,\
-  port INT NOT NULL DEFAULT 3306,\
-	time_start INT NOT NULL DEFAULT 0,\
-	ping_success_time INT DEFAULT 0,\
-	ping_error VARCHAR,\
-	PRIMARY KEY (hostname, port, time_start))"
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING_LOG "CREATE TABLE mysql_server_ping_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start INT NOT NULL DEFAULT 0 , ping_success_time INT DEFAULT 0 , ping_error VARCHAR , PRIMARY KEY (hostname, port, time_start))"
 
 
 class MySQL_Monitor_Connection_Pool;
