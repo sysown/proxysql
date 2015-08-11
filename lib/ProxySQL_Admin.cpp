@@ -1308,18 +1308,19 @@ __end_while_pool:
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
 			}
-			for (j=0; j<S_amll.ifaces_telnet_admin->ifaces->len; j++) {
-				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_admin->ifaces->index(j);
-				c_split_2(sn, ":" , &add, &port);
-				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
-				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=1; socket_names[nfds]=strdup(sn); nfds++; }
-			}
-			for (j=0; j<S_amll.ifaces_telnet_stats->ifaces->len; j++) {
-				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_stats->ifaces->index(j);
-				c_split_2(sn, ":" , &add, &port);
-				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
-				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=2; socket_names[nfds]=strdup(sn); nfds++; }
-			}
+//	FIXME: disabling this part until telnet modules will be implemented
+//			for (j=0; j<S_amll.ifaces_telnet_admin->ifaces->len; j++) {
+//				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_admin->ifaces->index(j);
+//				c_split_2(sn, ":" , &add, &port);
+//				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
+//				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=1; socket_names[nfds]=strdup(sn); nfds++; }
+//			}
+//			for (j=0; j<S_amll.ifaces_telnet_stats->ifaces->len; j++) {
+//				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_stats->ifaces->index(j);
+//				c_split_2(sn, ":" , &add, &port);
+//				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
+//				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=2; socket_names[nfds]=strdup(sn); nfds++; }
+//			}
 			S_amll.wrunlock();	
 		}
 		
@@ -1356,7 +1357,11 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	spinlock_rwlock_init(&rwlock);
 	variables.admin_credentials=strdup("admin:admin");
 	variables.stats_credentials=strdup("stats:stats");
-	variables.mysql_ifaces=strdup("127.0.0.1:6032");
+	if (GloVars.__cmd_proxysql_admin_socket) {
+		variables.mysql_ifaces=strdup(GloVars.__cmd_proxysql_admin_socket);
+	} else {
+		variables.mysql_ifaces=strdup("127.0.0.1:6032");
+	}
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;
 	//variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");

@@ -499,7 +499,7 @@ struct _global_variables_t {
 	char *proxy_errorlog;
 	char *proxy_debuglog;
 	char *proxy_configfile;
-	int proxy_restart_on_error;
+	bool proxy_restart_on_error;
 	int proxy_restart_delay;
 	int http_start;
 	//GHashTable *usernames;

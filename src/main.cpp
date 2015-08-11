@@ -435,7 +435,7 @@ bool ProxySQL_daemonize_phase2() {
 	/* Send OK to parent process */
 	daemon_retval_send(0);
 	GloAdmin->flush_error_log();
-	proxy_error("Starting ProxySQL\n");
+	daemon_log(LOG_INFO, "Starting ProxySQL\n");
 	daemon_log(LOG_INFO, "Sucessfully started");
 
 	return true;
@@ -444,7 +444,7 @@ bool ProxySQL_daemonize_phase2() {
 bool ProxySQL_daemonize_phase3() {
 	int rc;
 	int status;
-	proxy_error("Angel process started ProxySQL process %d\n", pid);
+	daemon_log(LOG_INFO, "Angel process started ProxySQL process %d\n", pid);
 	rc=waitpid(pid, &status, 0);
 	if (rc==-1) {
 		perror("waitpid");
@@ -455,14 +455,14 @@ bool ProxySQL_daemonize_phase3() {
 	if (rc) { // client exit()ed
 		rc=WEXITSTATUS(status);
 		if (rc==0) {
-			proxy_error("Shutdown angel process\n");
+			daemon_log(LOG_INFO, "Shutdown angel process\n");
 			exit(EXIT_SUCCESS);
 		} else {
-			proxy_error("ProxySQL exited with code %d . Restarting!\n", rc);
+			daemon_log(LOG_INFO, "ProxySQL exited with code %d . Restarting!\n", rc);
 			return false;;
 		}
 	} else {
-		proxy_error("ProxySQL crashed. Restarting!\n");
+		daemon_log(LOG_INFO, "ProxySQL crashed. Restarting!\n");
 		return false;
 	}
 	return true;
@@ -483,7 +483,7 @@ int main(int argc, const char * argv[]) {
 		if ((pid = daemon_fork()) < 0) {
 			/* Exit on error */
 			daemon_retval_done();
-			return EXIT_FAILURE;
+			exit(EXIT_FAILURE);
 
 		} else if (pid) { /* The parent */
 
@@ -498,18 +498,17 @@ int main(int argc, const char * argv[]) {
 		}
 
 	laststart=0;
-//	if (glovars.proxy_restart_on_error) {
-	if (true) {
+	if (glovars.proxy_restart_on_error) {
 gotofork:
 		if (laststart) {
-			proxy_error("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+			daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
 			sleep(glovars.proxy_restart_delay);
 		}
 		laststart=time(NULL);
 		pid = fork();
 		if (pid < 0) {
-			proxy_error("[FATAL]: Error in fork()\n");
-			return EXIT_FAILURE;
+			daemon_log(LOG_INFO, "[FATAL]: Error in fork()\n");
+		exit(EXIT_FAILURE);
 		}
 
 		if (pid) {
