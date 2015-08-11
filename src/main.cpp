@@ -6,10 +6,27 @@
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
 
+
+#include <libdaemon/dfork.h>
+#include <libdaemon/dsignal.h>
+#include <libdaemon/dlog.h>
+#include <libdaemon/dpid.h>
+#include <libdaemon/dexec.h>
+
 // MariaDB client library redefines dlerror(), see https://mariadb.atlassian.net/browse/CONC-101
 #ifdef dlerror
 #undef dlerror
 #endif
+
+
+time_t laststart;
+pid_t pid;
+
+static const char * proxysql_pid_file() {
+	static char fn[512];
+	snprintf(fn, sizeof(fn), "%s", daemon_pid_file_ident);
+	return fn;
+}
 
 
 /*
@@ -169,6 +186,9 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
 	sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
 
+	GloVars.pid=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.pid")+2);
+	sprintf(GloVars.pid,"%s/%s",GloVars.datadir, (char *)"proxysql.pid");
+
 	if (GloVars.__cmd_proxysql_initial==true) {
 		std::cerr << "Renaming database file " << GloVars.admindb << endl;
 		char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
@@ -194,7 +214,7 @@ void ProxySQL_Main_init_main_modules() {
 void ProxySQL_Main_init_Admin_module() {
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->init();
-	GloAdmin->flush_error_log();
+//	GloAdmin->flush_error_log();
 	GloAdmin->print_version();
 }
 
@@ -284,6 +304,7 @@ void ProxySQL_Main_shutdown_all_modules() {
 
 void ProxySQL_Main_init() {
 #ifdef DEBUG
+	GloVars.global.gdbg=false;
 	glovars.has_debug=true;
 #else
 	glovars.has_debug=false;
@@ -351,11 +372,158 @@ void ProxySQL_Main_init_phase4___shutdown() {
 }
 
 
+void ProxySQL_daemonize_phase1(char *argv0) {
+	int rc;
+	daemon_pid_file_ident=GloVars.pid;
+	daemon_log_ident=daemon_ident_from_argv0(argv0);
+	rc=chdir(GloVars.datadir);
+	if (rc) {
+		daemon_log(LOG_ERR, "Could not chdir into datadir: %s . Error: %s", GloVars.datadir, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	daemon_pid_file_proc=proxysql_pid_file;
+	pid=daemon_pid_file_is_running();
+	if (pid>=0) {
+		daemon_log(LOG_ERR, "Daemon already running on PID file %u", pid);
+		exit(EXIT_FAILURE);
+	}
+	if (daemon_retval_init() < 0) {
+		daemon_log(LOG_ERR, "Failed to create pipe.");
+		exit(EXIT_FAILURE);
+	}
+}
+
+
+void ProxySQL_daemonize_wait_daemon() {
+	int ret;
+	/* Wait for 20 seconds for the return value passed from the daemon process */
+	if ((ret = daemon_retval_wait(20)) < 0) {
+		daemon_log(LOG_ERR, "Could not recieve return value from daemon process: %s", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	if (ret) {
+		daemon_log(LOG_ERR, "Daemon returned %i as return value.", ret);
+	}
+	exit(ret);
+}
+
+
+bool ProxySQL_daemonize_phase2() {
+	int rc;
+	/* Close FDs */
+	if (daemon_close_all(-1) < 0) {
+		daemon_log(LOG_ERR, "Failed to close all file descriptors: %s", strerror(errno));
+
+		/* Send the error condition to the parent process */
+		daemon_retval_send(1);
+		return false;
+	}
+
+	rc=chdir(GloVars.datadir);
+	if (rc) {
+		daemon_log(LOG_ERR, "Could not chdir into datadir: %s . Error: %s", GloVars.datadir, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	/* Create the PID file */
+	if (daemon_pid_file_create() < 0) {
+		daemon_log(LOG_ERR, "Could not create PID file (%s).", strerror(errno));
+		daemon_retval_send(2);
+		return false;
+	}
+
+	/* Send OK to parent process */
+	daemon_retval_send(0);
+	GloAdmin->flush_error_log();
+	proxy_error("Starting ProxySQL\n");
+	daemon_log(LOG_INFO, "Sucessfully started");
+
+	return true;
+}
+
+bool ProxySQL_daemonize_phase3() {
+	int rc;
+	int status;
+	proxy_error("Angel process started ProxySQL process %d\n", pid);
+	rc=waitpid(pid, &status, 0);
+	if (rc==-1) {
+		perror("waitpid");
+		//proxy_error("[FATAL]: waitpid: %s\n", perror("waitpid"));
+		exit(EXIT_FAILURE);
+	}
+	rc=WIFEXITED(status);
+	if (rc) { // client exit()ed
+		rc=WEXITSTATUS(status);
+		if (rc==0) {
+			proxy_error("Shutdown angel process\n");
+			exit(EXIT_SUCCESS);
+		} else {
+			proxy_error("ProxySQL exited with code %d . Restarting!\n", rc);
+			return false;;
+		}
+	} else {
+		proxy_error("ProxySQL crashed. Restarting!\n");
+		return false;
+	}
+	return true;
+}
+
 
 int main(int argc, const char * argv[]) {
 
 	ProxySQL_Main_init();
 	ProxySQL_Main_process_global_variables(argc, argv);
+
+
+	if (GloVars.global.foreground==false) {
+
+		ProxySQL_daemonize_phase1((char *)argv[0]);
+
+	/* Do the fork */
+		if ((pid = daemon_fork()) < 0) {
+			/* Exit on error */
+			daemon_retval_done();
+			return EXIT_FAILURE;
+
+		} else if (pid) { /* The parent */
+
+			ProxySQL_daemonize_wait_daemon();
+
+		} else { /* The daemon */
+
+			if (ProxySQL_daemonize_phase2()==false) {
+				goto finish;
+			}
+
+		}
+
+	laststart=0;
+//	if (glovars.proxy_restart_on_error) {
+	if (true) {
+gotofork:
+		if (laststart) {
+			proxy_error("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+			sleep(glovars.proxy_restart_delay);
+		}
+		laststart=time(NULL);
+		pid = fork();
+		if (pid < 0) {
+			proxy_error("[FATAL]: Error in fork()\n");
+			return EXIT_FAILURE;
+		}
+
+		if (pid) {
+
+			if (ProxySQL_daemonize_phase3()==false) {
+				goto gotofork;
+			}
+
+		}
+	}
+
+
+
+	}
 
 __start_label:
 
@@ -384,6 +552,12 @@ __shutdown:
 		glovars.shutdown=0;
 		goto __start_label;
 	}
+
+finish:
+	daemon_log(LOG_INFO, "Exiting...");
+	daemon_retval_send(255);
+	daemon_signal_done();
+	daemon_pid_file_remove();
 
 	l_mem_destroy(__thr_sfp);
 	return 0;
