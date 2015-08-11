@@ -562,7 +562,7 @@ __shutdown:
 
 finish:
 	//daemon_log(LOG_INFO, "Exiting...");
-	proxy_info("Exiting...");
+	proxy_info("Exiting...\n");
 	daemon_retval_send(255);
 	daemon_signal_done();
 	daemon_pid_file_remove();

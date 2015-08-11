@@ -276,7 +276,7 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  */
 bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
 	if (query_no_space_length==strlen("PROXYSQL START") && !strncasecmp("PROXYSQL START",query_no_space, query_no_space_length)) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL START command\n");
+		proxy_info("Received PROXYSQL START command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		bool rc=false;
 		if (nostart_) {
@@ -287,35 +287,35 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Starting ProxySQL following PROXYSQL START command\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		} else {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "ProxySQL was already started when received PROXYSQL START command\n");
+			proxy_warning("ProxySQL was already started when received PROXYSQL START command\n");
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL already started");
 		}
 		return false;
 	}
 
 	if (query_no_space_length==strlen("PROXYSQL RESTART") && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL RESTART command\n");
+		proxy_info("Received PROXYSQL RESTART command\n");
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=1;
 		return false;
 	}
 
 	if (query_no_space_length==strlen("PROXYSQL STOP") && !strncasecmp("PROXYSQL STOP",query_no_space, query_no_space_length)) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL STOP command\n");
+		proxy_info("Received PROXYSQL STOP command\n");
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=2;
 		return false;
 	}
 
 	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN") && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL SHUTDOWN command\n");
+		proxy_info("Received PROXYSQL SHUTDOWN command\n");
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=0;
 		return false;
 	}
 
 	if (query_no_space_length==strlen("PROXYSQL FLUSH LOGS") && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL FLUSH LOGS command\n");
+		proxy_info("Received PROXYSQL FLUSH LOGS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SPA->flush_error_log();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
@@ -323,7 +323,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 
 	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL KILL command\n");
+		proxy_info("Received PROXYSQL KILL command\n");
 		exit(EXIT_SUCCESS);
 	}
 	return true;
@@ -344,7 +344,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD DEBUG FROM DISK") && !strncasecmp("LOAD DEBUG FROM DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 			*ql=strlen(*q)+1;
@@ -358,7 +358,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE DEBUG TO DISK") && !strncasecmp("SAVE DEBUG TO DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
 			*ql=strlen(*q)+1;
@@ -374,7 +374,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD DEBUG TO RUN") && !strncasecmp("LOAD DEBUG TO RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			int rc=SPA->load_debug_to_runtime();
 			if (rc) {
@@ -396,7 +396,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE DEBUG FROM RUN") && !strncasecmp("SAVE DEBUG FROM RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_debug_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved debug levels from RUNTIME\n");
@@ -416,7 +416,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL USERS FROM DISK") && !strncasecmp("LOAD MYSQL USERS FROM DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 			*ql=strlen(*q)+1;
@@ -430,7 +430,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL USERS TO DISK") && !strncasecmp("SAVE MYSQL USERS TO DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 			*ql=strlen(*q)+1;
@@ -446,7 +446,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL USERS TO RUN") && !strncasecmp("LOAD MYSQL USERS TO RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->init_users();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users to RUNTIME\n");
@@ -457,7 +457,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL USERS FROM CONFIG") && !strncasecmp("LOAD MYSQL USERS FROM CONFIG",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
 				if (GloVars.confFile->OpenFile(NULL)==true) {
@@ -491,7 +491,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL USERS FROM RUN") && !strncasecmp("SAVE MYSQL USERS FROM RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_mysql_users_runtime_to_database();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
@@ -509,7 +509,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM DISK") && !strncasecmp("LOAD MYSQL VARIABLES FROM DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
 			*ql=strlen(*q)+1;
@@ -523,7 +523,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL VARIABLES TO DISK") && !strncasecmp("SAVE MYSQL VARIABLES TO DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
 			*ql=strlen(*q)+1;
@@ -539,7 +539,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO RUN") && !strncasecmp("LOAD MYSQL VARIABLES TO RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->load_mysql_variables_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
@@ -550,7 +550,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
 				if (GloVars.confFile->OpenFile(NULL)==true) {
@@ -584,7 +584,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM RUN") && !strncasecmp("SAVE MYSQL VARIABLES FROM RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_mysql_variables_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql variables from RUNTIME\n");
@@ -603,7 +603,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM DISK") && !strncasecmp("LOAD MYSQL SERVERS FROM DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_servers__from_disk_to_memory();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to MEMORY\n");
@@ -618,7 +618,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO DISK") && !strncasecmp("SAVE MYSQL SERVERS TO DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_servers__from_memory_to_disk();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers to DISK\n");
@@ -635,7 +635,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO RUN") && !strncasecmp("LOAD MYSQL SERVERS TO RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->load_mysql_servers_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
@@ -646,7 +646,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM CONFIG") && !strncasecmp("LOAD MYSQL SERVERS FROM CONFIG",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
 				if (GloVars.confFile->OpenFile(NULL)==true) {
@@ -680,7 +680,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM RUN") && !strncasecmp("SAVE MYSQL SERVERS FROM RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_mysql_servers_runtime_to_database();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
@@ -698,7 +698,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM DISK") && !strncasecmp("LOAD MYSQL QUERY RULES FROM DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_query_rules__from_disk_to_memory();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to MEMORY\n");
@@ -709,7 +709,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM CONFIG") && !strncasecmp("LOAD MYSQL QUERY RULES FROM CONFIG",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
 				if (GloVars.confFile->OpenFile(NULL)==true) {
@@ -741,7 +741,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES TO DISK") && !strncasecmp("SAVE MYSQL QUERY RULES TO DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_query_rules__from_memory_to_disk();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules to DISK\n");
@@ -758,7 +758,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO RUN") && !strncasecmp("LOAD MYSQL QUERY RULES TO RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			char *err=SPA->load_mysql_query_rules_to_runtime();
 			if (err==NULL) {
@@ -779,7 +779,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM RUN") && !strncasecmp("SAVE MYSQL QUERY RULES FROM RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_mysql_query_rules_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules from RUNTIME\n");
@@ -811,7 +811,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO DISK") && !strncasecmp("SAVE ADMIN VARIABLES TO DISK",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'admin-%'");
 			*ql=strlen(*q)+1;
@@ -827,7 +827,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO RUN") && !strncasecmp("LOAD ADMIN VARIABLES TO RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->load_admin_variables_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
@@ -844,7 +844,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			||
 			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM RUN") && !strncasecmp("SAVE ADMIN VARIABLES FROM RUN",query_no_space, query_no_space_length))
 		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_admin_variables_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved admin variables from RUNTIME\n");
@@ -2764,13 +2764,13 @@ void ProxySQL_Admin::flush_error_log() {
 		dup2(outfd, STDOUT_FILENO);
 		close(outfd);
 	} else {
-		proxy_error("[ERROR]: impossible to open file\n");
+		proxy_error("Impossible to open file\n");
 	}
 	errfd=open(GloVars.errorlog, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 	if (errfd>0) {
 		dup2(errfd, STDERR_FILENO);
 		close(errfd);
 	} else {
-		proxy_error("[ERROR]: impossible to open file\n");
+		proxy_error("Impossible to open file\n");
 	}
 }
