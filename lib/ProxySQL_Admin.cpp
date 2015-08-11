@@ -51,6 +51,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0, match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
+#define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
@@ -935,9 +936,24 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 
+
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW CHARSET") && !strncasecmp("SHOW CHARSET",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT Charset, Collation AS 'Default collation' FROM mysql_collations WHERE `Default`='Yes'");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW COLLATION") && !strncasecmp("SHOW COLLATION",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT * FROM mysql_collations");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -1422,6 +1438,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -1430,6 +1447,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -1444,6 +1462,8 @@ bool ProxySQL_Admin::init() {
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);
 	check_and_build_standard_tables(statsdb, tables_defs_stats);
+
+	dump_mysql_collations();
 
 	__attach_db(admindb, configdb, (char *)"disk");
 	__attach_db(admindb, statsdb, (char *)"stats");
@@ -1580,6 +1600,22 @@ bool ProxySQL_Admin::is_command(std::string s) {
 	}
 	return true;
 };
+
+
+void ProxySQL_Admin::dump_mysql_collations() {
+	const CHARSET_INFO * c = compiled_charsets;
+	char buf[1024];
+	char *query=(char *)"INSERT INTO mysql_collations VALUES (%d, \"%s\", \"%s\", \"\")";
+	admindb->execute("DELETE FROM mysql_collations");
+	do {
+		sprintf(buf,query,c->nr, c->name, c->csname);
+		admindb->execute(buf);
+		++c;
+	} while (c[0].nr != 0);
+	admindb->execute("INSERT OR REPLACE INTO mysql_collations SELECT Id, Collation, Charset, 'Yes' FROM mysql_collations JOIN (SELECT MIN(Id) minid FROM mysql_collations GROUP BY Charset) t ON t.minid=mysql_collations.Id");
+	admindb->execute("DELETE FROM disk.mysql_collations");
+	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
+}
 
 void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
 //	int i;
