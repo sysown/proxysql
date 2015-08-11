@@ -324,6 +324,7 @@ bool MySQL_HostGroups_Manager::commit() {
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
+	proxy_info("New mysql_servers table\n");
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
@@ -333,6 +334,25 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 			char *q=(char *)"INSERT INTO mysql_servers VALUES(%d,\"%s\",%d,%d,%d,%u,%u,%llu)";
 			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+8+16+32);
 			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, mysrvc->max_connections, ptr);
+			char *st;
+			switch (mysrvc->status) {
+				case 0:
+					st=(char *)"ONLINE";
+					break;
+				case 1:
+					st=(char *)"SHUNNED";
+					break;
+				case 2:
+					st=(char *)"OFFLINE_SOFT";
+					break;
+				case 3:
+					st=(char *)"OFFLINE_HARD";
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 			//fprintf(stderr,"%s\n",query);
 			mydb->execute(query);
