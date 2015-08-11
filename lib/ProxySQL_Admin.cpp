@@ -17,6 +17,10 @@
 #include "SpookyV2.h"
 //#define MYSQL_THREAD_IMPLEMENTATION
 
+#define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
+#define SELECT_VERSION_COMMENT_LEN 32
+#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
+#define SELECT_DB_USER_LEN 33
 
 char *s_strdup(char *s) {
 	char *ret=NULL;
@@ -929,6 +933,30 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		run_query=false;
 		goto __run_query;
+	}
+
+
+
+	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
+		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT '(ProxySQL Admin Module)'");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+	}
+
+	if (query_no_space_length==SELECT_DB_USER_LEN) {
+		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
+			char *query2=(char *)malloc(strlen(query)+strlen(sess->client_myds->myconn->userinfo->username)+10);
+			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+			query=l_strdup(query2);
+			query_length=strlen(query2)+1;
+			free(query2);
+			goto __run_query;
+		}
 	}
 
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
