@@ -71,6 +71,30 @@ extern int gdbg;
 	} while(0)
 #endif
 
+#ifdef DEBUG
+#define proxy_info(fmt, ...) \
+	do { \
+		time_t __timer; \
+		char __buffer[25]; \
+		struct tm *__tm_info; \
+		time(&__timer); \
+		__tm_info = localtime(&__timer); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+		proxy_error_func("%s %s:%d:%s(): [INFO] " fmt, __buffer, __FILE__, __LINE__, __func__ , ## __VA_ARGS__); \
+	} while(0)
+#else
+#define proxy_info(fmt, ...) \
+	do { \
+		time_t __timer; \
+		char __buffer[25]; \
+		struct tm *__tm_info; \
+		time(&__timer); \
+		__tm_info = localtime(&__timer); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+    proxy_error_func("%s [INFO] " fmt , __buffer , ## __VA_ARGS__); \
+	} while(0)
+#endif
+
 //void proxy_debug_func(enum debug_module, int, const char *, ...);
 //void proxy_debug_func(enum debug_module, int, int, const char *, int, const char *, const char *, ...);
 //void proxy_error_func(const char *, ...);

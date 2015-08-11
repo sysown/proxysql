@@ -6,7 +6,7 @@
 
 
 static void term_handler(int sig) {
-  proxy_error("Received TERM signal: shutdown in progress...\n");
+  proxy_warning("Received TERM signal: shutdown in progress...\n");
 #ifdef DEBUG
 #endif
   __sync_bool_compare_and_swap(&glovars.shutdown,0,1);

@@ -398,7 +398,7 @@ void ProxySQL_daemonize_wait_daemon() {
 	int ret;
 	/* Wait for 20 seconds for the return value passed from the daemon process */
 	if ((ret = daemon_retval_wait(20)) < 0) {
-		daemon_log(LOG_ERR, "Could not recieve return value from daemon process: %s", strerror(errno));
+		daemon_log(LOG_ERR, "Could not receive return value from daemon process: %s", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
@@ -435,8 +435,10 @@ bool ProxySQL_daemonize_phase2() {
 	/* Send OK to parent process */
 	daemon_retval_send(0);
 	GloAdmin->flush_error_log();
-	daemon_log(LOG_INFO, "Starting ProxySQL\n");
-	daemon_log(LOG_INFO, "Sucessfully started");
+	//daemon_log(LOG_INFO, "Starting ProxySQL\n");
+	//daemon_log(LOG_INFO, "Sucessfully started");
+	proxy_info("Starting ProxySQL\n");
+	proxy_info("Sucessfully started\n");
 
 	return true;
 }
@@ -444,7 +446,8 @@ bool ProxySQL_daemonize_phase2() {
 bool ProxySQL_daemonize_phase3() {
 	int rc;
 	int status;
-	daemon_log(LOG_INFO, "Angel process started ProxySQL process %d\n", pid);
+	//daemon_log(LOG_INFO, "Angel process started ProxySQL process %d\n", pid);
+	proxy_info("Angel process started ProxySQL process %d\n", pid);
 	rc=waitpid(pid, &status, 0);
 	if (rc==-1) {
 		perror("waitpid");
@@ -455,14 +458,17 @@ bool ProxySQL_daemonize_phase3() {
 	if (rc) { // client exit()ed
 		rc=WEXITSTATUS(status);
 		if (rc==0) {
-			daemon_log(LOG_INFO, "Shutdown angel process\n");
+			//daemon_log(LOG_INFO, "Shutdown angel process\n");
+			proxy_info("Shutdown angel process\n");
 			exit(EXIT_SUCCESS);
 		} else {
-			daemon_log(LOG_INFO, "ProxySQL exited with code %d . Restarting!\n", rc);
-			return false;;
+			//daemon_log(LOG_INFO, "ProxySQL exited with code %d . Restarting!\n", rc);
+			proxy_error("ProxySQL exited with code %d . Restarting!\n", rc);
+			return false;
 		}
 	} else {
-		daemon_log(LOG_INFO, "ProxySQL crashed. Restarting!\n");
+		//daemon_log(LOG_INFO, "ProxySQL crashed. Restarting!\n");
+		proxy_error("ProxySQL crashed. Restarting!\n");
 		return false;
 	}
 	return true;
@@ -501,14 +507,16 @@ int main(int argc, const char * argv[]) {
 	if (glovars.proxy_restart_on_error) {
 gotofork:
 		if (laststart) {
-			daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+			//daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+			proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
 			sleep(glovars.proxy_restart_delay);
 		}
 		laststart=time(NULL);
 		pid = fork();
 		if (pid < 0) {
-			daemon_log(LOG_INFO, "[FATAL]: Error in fork()\n");
-		exit(EXIT_FAILURE);
+			//daemon_log(LOG_INFO, "[FATAL]: Error in fork()\n");
+			proxy_error("[FATAL]: Error in fork()\n");
+			exit(EXIT_FAILURE);
 		}
 
 		if (pid) {
@@ -553,7 +561,8 @@ __shutdown:
 	}
 
 finish:
-	daemon_log(LOG_INFO, "Exiting...");
+	//daemon_log(LOG_INFO, "Exiting...");
+	proxy_info("Exiting...");
 	daemon_retval_send(255);
 	daemon_signal_done();
 	daemon_pid_file_remove();

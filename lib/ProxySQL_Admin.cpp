@@ -2756,6 +2756,7 @@ extern "C" void destroy_Admin(ProxySQL_Admin * pa) {
 }
 
 void ProxySQL_Admin::flush_error_log() {
+	if (GloVars.global.foreground==true) return;
 	int outfd=0;
 	int errfd=0;
 	outfd=open(GloVars.errorlog, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
