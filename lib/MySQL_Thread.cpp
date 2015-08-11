@@ -8,6 +8,29 @@ extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 
 
+const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
+	const CHARSET_INFO * c = compiled_charsets;
+	do {
+		if (c->nr == nr) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
+CHARSET_INFO * proxysql_find_charset_name(const char *name) {
+	CHARSET_INFO *c = (CHARSET_INFO *)compiled_charsets;
+	do {
+		if (!strcasecmp(c->csname, name)) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -395,8 +418,12 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 	}
 	if (!strcasecmp(name,"default_charset")) {
-		sprintf(intbuf,"%d",variables.default_charset);
-		return strdup(intbuf);
+		const CHARSET_INFO *c = proxysql_find_charset_nr(variables.default_charset);
+		if (!c) {
+			proxy_error("Not existing charset number %u\n");
+			assert(c);
+		}
+		return strdup(c->csname);
 	}
 	if (!strcasecmp(name,"connect_retries_on_failure")) {
 		sprintf(intbuf,"%d",variables.connect_retries_on_failure);
@@ -775,10 +802,14 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 	}
 	if (!strcasecmp(name,"default_charset")) {
-		int intv=atoi(value);
-		if (intv > 0 && intv < 256) {
-			variables.default_charset=intv;
-			return true;
+		if (vallen) {
+			CHARSET_INFO * c=proxysql_find_charset_name(value);
+			if (c) {
+				variables.default_charset=c->nr;
+				return true;
+			} else {
+				return false;
+			}
 		} else {
 			return false;
 		}
