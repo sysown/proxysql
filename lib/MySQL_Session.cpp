@@ -8,6 +8,8 @@
 
 #define EXPMARIA
 
+extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
+
 extern MySQL_Authentication *GloMyAuth;
 
 class KillArgs {
@@ -253,6 +255,40 @@ void MySQL_Session::writeout() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
 
+bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
+		PtrSize_t pkt_2;
+		pkt_2.size=PROXYSQL_VERSION_COMMENT_LEN;
+		pkt_2.ptr=l_alloc(pkt_2.size);
+		memcpy(pkt_2.ptr,PROXYSQL_VERSION_COMMENT,pkt_2.size);
+		status=WAITING_CLIENT_DATA;
+		client_myds->DSS=STATE_SLEEP;
+		client_myds->PSarrayOUT->add(pkt_2.ptr,pkt_2.size);
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
+	if ( (pkt->size < 25) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
+		char *name=strndup((char *)pkt->ptr+15,pkt->size-15);
+		const CHARSET_INFO * c = proxysql_find_charset_name(name);
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		if (!c) {
+			char *m=(char *)"Unknown character set: '%s'";
+			char *errmsg=(char *)malloc(strlen(name)+strlen(m));
+			sprintf(errmsg,m,name);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"#42000",errmsg);
+			free(errmsg);
+		} else {
+			client_myds->myconn->set_charset(c->nr);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+		}
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+		free(name);
+		return true;
+	}
+	return false;
+}
 
 int MySQL_Session::handler() {
 	bool wrong_pass=false;
@@ -377,6 +413,7 @@ __get_pkts_from_client:
 								}
 #endif /* DEBUG */							
 								if (admin==false) {
+									bool rc_break=false;
 									if (session_fast_forward==false) {
 										if (mysql_thread___commands_stats==true) {
 											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
@@ -387,6 +424,11 @@ __get_pkts_from_client:
 											//client_myds->myprot.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
 										}
 									}
+									rc_break=handler_special_queries(&pkt);
+									if (rc_break==true) {
+										break;
+									}
+/*
 									//if (strncmp((char *)"select @@version_comment limit 1",(char *)pkt.ptr+5,pkt.size-5)==0) {
 									if (pkt.size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt.ptr+5,pkt.size-5)==0) {
 										PtrSize_t pkt_2;
@@ -400,9 +442,10 @@ __get_pkts_from_client:
 										l_free(pkt.size,pkt.ptr);
 										break;
 									}
+*/
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,false);
 									if (qpo) {
-										bool rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
+										rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
 										if (rc_break==true) { break; }
 									}
 									mybe=find_or_create_backend(current_hostgroup);
@@ -639,6 +682,10 @@ handler_again:
 						NEXT_IMMEDIATE(CHANGING_SCHEMA);
 					}
 				}
+				if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
+					previous_status.push(PROCESSING_QUERY);
+					NEXT_IMMEDIATE(CHANGING_CHARSET);
+				}
 				status=PROCESSING_QUERY;
 				mybe->server_myds->max_connect_time=0;
 				// we insert it in mypolls only if not already there
@@ -816,6 +863,62 @@ handler_again:
 								myds->destroy_MySQL_Connection_From_Pool();
 								myds->fd=0;
 //							}
+							status=WAITING_CLIENT_DATA;
+							client_myds->DSS=STATE_SLEEP;
+						}
+					} else {
+						// rc==1 , nothing to do for now
+					}
+				}
+			}
+			break;
+
+		case CHANGING_CHARSET:
+			//fprintf(stderr,"CHANGING_SCHEMA\n");
+			assert(mybe->server_myds->myconn);
+			{
+				MySQL_Data_Stream *myds=mybe->server_myds;
+				MySQL_Connection *myconn=myds->myconn;
+				myds->DSS=STATE_MARIADB_QUERY;
+				enum session_status st=status;
+				if (myds->mypolls==NULL) {
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+				}
+				int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
+				if (rc==0) {
+					st=previous_status.top();
+					previous_status.pop();
+					NEXT_IMMEDIATE(st);
+				} else {
+					if (rc==-1) {
+						// the command failed
+						int myerr=mysql_errno(myconn->mysql);
+						if (myerr > 2000) {
+							bool retry_conn=false;
+							// client error, serious
+							proxy_error("Detected a broken connection during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+								retry_conn=true;
+							}
+							myds->destroy_MySQL_Connection_From_Pool();
+							myds->fd=0;
+							if (retry_conn) {
+								myds->DSS=STATE_NOT_INITIALIZED;
+								//previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
+							}
+							return -1;
+						} else {
+							proxy_warning("Error during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
+								// we won't go back to PROCESSING_QUERY
+							st=previous_status.top();
+							previous_status.pop();
+							char sqlstate[10];
+							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+								myds->destroy_MySQL_Connection_From_Pool();
+								myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
 						}
@@ -1164,6 +1267,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 */
 			break;
 		case CHANGING_CHARSET:
+/*
 			if (myds->revents) {
 				myconn->handler(myds->revents);
 				if (myconn->async_state_machine==ASYNC_SET_NAMES_SUCCESSFUL) {
@@ -1176,7 +1280,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 #else
 					myds->DSS=STATE_READY;
 					status=WAITING_CLIENT_DATA;
-#endif /* EXPMARIA */
+#endif // EXPMARIA
 					unsigned int k;
 					PtrSize_t pkt2;
 					for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
@@ -1191,6 +1295,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 					return -1;
 				}
 			}
+*/
 			break;
 		default:
 			assert(0);

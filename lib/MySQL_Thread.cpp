@@ -420,7 +420,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"default_charset")) {
 		const CHARSET_INFO *c = proxysql_find_charset_nr(variables.default_charset);
 		if (!c) {
-			proxy_error("Not existing charset number %u\n");
+			proxy_error("Not existing charset number %u\n", variables.default_charset);
 			assert(c);
 		}
 		return strdup(c->csname);

@@ -2,6 +2,9 @@
 #include "cpp.h"
 #include "SpookyV2.h"
 
+extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
+
+
 // Bug https://mariadb.atlassian.net/browse/CONC-136
 //int STDCALL mysql_select_db_start(int *ret, MYSQL *mysql, const char *db);
 //int STDCALL mysql_select_db_cont(int *ret, MYSQL *mysql, int ready_status);
@@ -243,6 +246,12 @@ void MySQL_Connection::connect_start() {
 	mysql=mysql_init(NULL);
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+	const CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
+	if (!c) {
+		proxy_error("Not existing charset number %u\n", mysql_thread___default_charset);
+		assert(0);
+	}
+	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	if (parent->port) {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, 0);
 	} else {
@@ -294,7 +303,12 @@ void MySQL_Connection::initdb_cont(short event) {
 // FIXME: UTF8 is hardcoded for now, needs to be dynamic
 void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
-	async_exit_status = mysql_set_character_set_start(&interr,mysql,"UTF8");
+	const CHARSET_INFO * c = proxysql_find_charset_nr(options.charset);
+	if (!c) {
+		proxy_error("Not existing charset number %u\n", options.charset);
+		assert(0);
+	}
+	async_exit_status = mysql_set_character_set_start(&interr,mysql, c->csname);
 }
 
 void MySQL_Connection::set_names_cont(short event) {
@@ -731,6 +745,42 @@ int MySQL_Connection::async_select_db(short event) {
 			return 0;
 			break;
 		case ASYNC_INITDB_FAILED:
+			return -1;
+			break;
+		default:
+			return 1;
+			break;
+	}
+	return 1;
+}
+
+int MySQL_Connection::async_set_names(short event, uint8_t c) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	switch (async_state_machine) {
+		case ASYNC_SET_NAMES_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_SET_NAMES_FAILED:
+			return -1;
+			break;
+		case ASYNC_IDLE:
+			set_charset(c);
+			async_state_machine=ASYNC_SET_NAMES_START;
+		default:
+			handler(event);
+			break;
+	}
+
+	// check again
+	switch (async_state_machine) {
+		case ASYNC_SET_NAMES_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_SET_NAMES_FAILED:
 			return -1;
 			break;
 		default:

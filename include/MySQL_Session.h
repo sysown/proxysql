@@ -72,6 +72,7 @@ class MySQL_Session
 	void handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();	
 	void handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();	
 
+	bool handler_special_queries(PtrSize_t *);
 
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
