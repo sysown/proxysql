@@ -1166,8 +1166,7 @@ void MySQL_Thread::run() {
 			sess->status=PINGING_SERVER;
 			myds->DSS=STATE_MARIADB_PING;
 			register_session_connection_handler(sess,true);
-			
-
+			sess->handler();
 //			myds->myconn->async_ping(0);
 //			myds->myconn->async_state_machine=ASYNC_PING_START;
 //			myds->myconn->handler(0);
