@@ -457,6 +457,7 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 	userinfo=__userinfo;
 	sess=__sess;
 	current_PreStmt=NULL;
+//	prot_status=0;
 }
 
 int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length) {
@@ -490,7 +491,7 @@ int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL);
+	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
 	if (password==NULL) {
 		ret=PKT_ERROR;
 	} else {
@@ -721,9 +722,11 @@ void MySQL_Protocol::generate_server_handshake() {
 bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigned int *len) {
 // FIXME : this function generates a not useful string. It is a placeholder for now
 
-	const char *stats=(char *)"Uptime: 1000  Threads: 1  Questions: 34221015  Slow queries: 0  Opens: 757  Flush tables: 1  Open tables: 185  Queries per second avg: 22.289";
-
-	unsigned char statslen=strlen(stats);
+	char buf1[1000];
+	unsigned long long t1=monotonic_time();
+	//const char *stats=(char *)"Uptime: 1000  Threads: 1  Questions: 34221015  Slow queries: 0  Opens: 757  Flush tables: 1  Open tables: 185  Queries per second avg: 22.289";
+	sprintf(buf1,"Uptime: %llu Threads: %d", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections);
+	unsigned char statslen=strlen(buf1);
 	mysql_hdr myhdr;
 	myhdr.pkt_id=1;
 	//myhdr.pkt_length=statslen+1;
@@ -737,7 +740,7 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
   //Copy4B(_ptr, &myhdr);
   int l=sizeof(mysql_hdr);
 	//_ptr[l++]=statslen;
-	memcpy(_ptr+l,stats,statslen);	
+	memcpy(_ptr+l,buf1,statslen);
 
 	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
@@ -896,27 +899,27 @@ bool MySQL_Protocol::generate_COM_QUIT(bool send, void **ptr, unsigned int *len)
 }
 
 //bool MySQL_Protocol::generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, char *schema) {
-bool MySQL_Protocol::generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema) {
-	uint32_t schema_len=strlen(schema);
-	mysql_hdr myhdr;
-	myhdr.pkt_id=0;
-	myhdr.pkt_length=1+schema_len;
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(_ptr, &myhdr);
-  int l=sizeof(mysql_hdr);
-	_ptr[l]=0x02; l++;
-	memcpy(_ptr+l, schema, schema_len);
-	
-	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-#ifdef DEBUG
-	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-#endif
-	return true;
-}
+//bool MySQL_Protocol::generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema) {
+//	uint32_t schema_len=strlen(schema);
+//	mysql_hdr myhdr;
+//	myhdr.pkt_id=0;
+//	myhdr.pkt_length=1+schema_len;
+//  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+//  unsigned char *_ptr=(unsigned char *)l_alloc(size);
+//  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+//  //Copy4B(_ptr, &myhdr);
+//	int l=sizeof(mysql_hdr);
+//	_ptr[l]=0x02; l++;
+//	memcpy(_ptr+l, schema, schema_len);
+//	
+//	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
+//	if (len) { *len=size; }
+//	if (ptr) { *ptr=(void *)_ptr; }
+//#ifdef DEBUG
+//	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+//#endif
+//	return true;
+//}
 
 bool MySQL_Protocol::generate_COM_QUERY(bool send, void **ptr, unsigned int *len, char *query) {
 	uint32_t query_len=strlen(query);
@@ -941,25 +944,25 @@ bool MySQL_Protocol::generate_COM_QUERY(bool send, void **ptr, unsigned int *len
 }
 
 //bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len) {
-	mysql_hdr myhdr;
-	myhdr.pkt_id=0;
-	myhdr.pkt_length=1;
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(_ptr, &myhdr);
-  int l=sizeof(mysql_hdr);
-	_ptr[l]=0x0e; l++;
-	
-	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-#ifdef DEBUG
-	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-#endif
-	return true;
-}
+//bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len) {
+//	mysql_hdr myhdr;
+//	myhdr.pkt_id=0;
+//	myhdr.pkt_length=1;
+//  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+//  unsigned char *_ptr=(unsigned char *)l_alloc(size);
+//  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+//  //Copy4B(_ptr, &myhdr);
+//  int l=sizeof(mysql_hdr);
+//	_ptr[l]=0x0e; l++;
+//	
+//	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
+//	if (len) { *len=size; }
+//	if (ptr) { *ptr=(void *)_ptr; }
+//#ifdef DEBUG
+//	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+//#endif
+//	return true;
+//}
 
 //bool MySQL_Protocol::generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_COM_RESET_CONNECTION(bool send, void **ptr, unsigned int *len) {
@@ -1102,7 +1105,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 }
 
 
-bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, int *fieldslen, char **fieldstxt) {
+bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
 	int col=0;
 	int rowlen=0;
 	for (col=0; col<colnums; col++) {
@@ -1134,6 +1137,69 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 #endif
 	return true;
 }
+
+uint8_t MySQL_Protocol::generate_pkt_row2(unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
+	int col=0;
+	unsigned int rowlen=0;
+	uint8_t pkt_sid=sequence_id;
+	for (col=0; col<colnums; col++) {
+		rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
+	}
+	PtrSize_t pkt;
+	pkt.size=rowlen+sizeof(mysql_hdr);
+	pkt.ptr=l_alloc(pkt.size);
+	int l=sizeof(mysql_hdr);
+	for (col=0; col<colnums; col++) {
+		if (fieldstxt[col]) {
+			char length_prefix;
+			uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
+			l+=write_encoded_length_and_string((unsigned char *)pkt.ptr+l,fieldslen[col],length_len, length_prefix, fieldstxt[col]);
+		} else {
+			char *_ptr=(char *)pkt.ptr;
+			_ptr[l]=0xfb;
+			l++;
+		}
+	}
+	if (pkt.size < (0xFFFFFF+sizeof(mysql_hdr))) {
+		mysql_hdr myhdr;
+		myhdr.pkt_id=pkt_sid;
+		myhdr.pkt_length=rowlen;
+		memcpy(pkt.ptr, &myhdr, sizeof(mysql_hdr));
+		(*myds)->PSarrayOUT->add(pkt.ptr,pkt.size);
+	} else {
+		unsigned int left=pkt.size;
+		unsigned int copied=0;
+		while (left>=(0xFFFFFF+sizeof(mysql_hdr))) {
+			PtrSize_t pkt2;
+			pkt2.size=0xFFFFFF+sizeof(mysql_hdr);
+			pkt2.ptr=l_alloc(pkt2.size);
+			memcpy((char *)pkt2.ptr+sizeof(mysql_hdr), (char *)pkt.ptr+sizeof(mysql_hdr)+copied, 0xFFFFFF);
+			mysql_hdr myhdr;
+			myhdr.pkt_id=pkt_sid;
+			pkt_sid++;
+			myhdr.pkt_length=0xFFFFFF;
+			memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
+			(*myds)->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+			copied+=0xFFFFFF;
+			left-=0xFFFFFF;
+		}
+		PtrSize_t pkt2;
+		pkt2.size=left;
+		pkt2.ptr=l_alloc(pkt2.size);
+		memcpy((char *)pkt2.ptr+sizeof(mysql_hdr), (char *)pkt.ptr+sizeof(mysql_hdr)+copied, left-sizeof(mysql_hdr));
+		mysql_hdr myhdr;
+		myhdr.pkt_id=pkt_sid;
+		myhdr.pkt_length=left-sizeof(mysql_hdr);
+		memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
+		(*myds)->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+	}
+	if (len) { *len=pkt.size+(pkt_sid-sequence_id)*sizeof(mysql_hdr); }
+	if (pkt.size >= (0xFFFFFF+sizeof(mysql_hdr))) {
+		l_free(pkt.size,pkt.ptr);
+	}
+	return pkt_sid;
+}
+
 
 //bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsigned int *len) {
@@ -1309,7 +1375,7 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 }
 
 //bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len) {
+bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
@@ -1341,6 +1407,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   //srand(pthread_self());
   //uint32_t thread_id=rand()%100000;
   uint32_t thread_id=__sync_fetch_and_add(&glovars.thread_id,1);
+	if (_thread_id)
+		*_thread_id=thread_id;
   //uint32_t thread_id=pthread_self();
 
   rand_struct rand_st;
@@ -1581,7 +1649,7 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	memcpy(pass, pkt, 20);
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL);
+	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
 	if (password==NULL) {
 		ret=false;
@@ -1628,7 +1696,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL);
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
@@ -1740,13 +1808,15 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	bool schema_locked;
 	bool transaction_persistent;
 	bool fast_forward;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward);
+	int max_connections;
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections);
 	//assert(default_hostgroup>=0);
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->default_schema=default_schema; // just the pointer is passed
 	(*myds)->sess->schema_locked=schema_locked;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
 	(*myds)->sess->session_fast_forward=fast_forward;
+	(*myds)->sess->user_max_connections=max_connections;
 	if (password==NULL) {
 		ret=false;
 	} else {

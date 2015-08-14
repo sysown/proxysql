@@ -11,6 +11,42 @@
 
 enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
 
+enum MDB_ASYNC_ST { // MariaDB Async State Machine
+	ASYNC_CONNECT_START,
+	ASYNC_CONNECT_CONT,
+	ASYNC_CONNECT_END,
+	ASYNC_CONNECT_SUCCESSFUL,
+	ASYNC_CONNECT_FAILED,
+	ASYNC_CONNECT_TIMEOUT,
+	ASYNC_CHANGE_USER_START,
+	ASYNC_CHANGE_USER_CONT,
+	ASYNC_CHANGE_USER_END,
+	ASYNC_CHANGE_USER_SUCCESSFUL,
+	ASYNC_CHANGE_USER_FAILED,
+	ASYNC_PING_START,
+	ASYNC_PING_CONT,
+	ASYNC_PING_END,
+	ASYNC_PING_SUCCESSFUL,
+	ASYNC_PING_FAILED,
+	ASYNC_SET_NAMES_START,
+	ASYNC_SET_NAMES_CONT,
+	ASYNC_SET_NAMES_END,
+	ASYNC_SET_NAMES_SUCCESSFUL,
+	ASYNC_SET_NAMES_FAILED,
+	ASYNC_QUERY_START,
+	ASYNC_QUERY_CONT,
+	ASYNC_QUERY_END,
+	ASYNC_STORE_RESULT_START,
+	ASYNC_STORE_RESULT_CONT,
+	ASYNC_INITDB_START,
+	ASYNC_INITDB_CONT,
+	ASYNC_INITDB_END,
+	ASYNC_INITDB_SUCCESSFUL,
+	ASYNC_INITDB_FAILED,
+
+	ASYNC_IDLE
+};
+
 // list of possible debugging modules
 enum debug_module {
 	PROXY_DEBUG_GENERIC,
@@ -47,8 +83,8 @@ enum MySQL_DS_type {
 	MYDS_LISTENER,
 	MYDS_BACKEND,
 	MYDS_BACKEND_NOT_CONNECTED,
-	MYDS_BACKEND_PAUSE_CONNECT,
-	MYDS_BACKEND_FAILED_CONNECT,
+//	MYDS_BACKEND_PAUSE_CONNECT,
+//	MYDS_BACKEND_FAILED_CONNECT,
 	MYDS_FRONTEND,
 };
 
@@ -56,8 +92,10 @@ enum MySQL_DS_type {
 enum session_status {
 	CONNECTING_CLIENT,
 	CONNECTING_SERVER,
+	PINGING_SERVER,
 	WAITING_CLIENT_DATA,
 	WAITING_SERVER_DATA,
+	PROCESSING_QUERY,
 	CHANGING_SCHEMA,
 	CHANGING_CHARSET,
 	CHANGING_USER_CLIENT,
@@ -74,11 +112,12 @@ enum mysql_data_stream_status {
 	STATE_CLIENT_AUTH_OK,
 	STATE_SSL_INIT,
 	STATE_SLEEP,
+	STATE_SLEEP_MULTI_PACKET,
 	STATE_CLIENT_COM_QUERY,
 	STATE_READY,
 	STATE_QUERY_SENT_DS,
 	STATE_QUERY_SENT_NET,
-	STATE_PING_SENT_NET,
+//	STATE_PING_SENT_NET,
 	STATE_COLUMN_COUNT,
 	STATE_COLUMN_DEFINITION,
 	STATE_ROW,
@@ -88,6 +127,15 @@ enum mysql_data_stream_status {
 	STATE_ERR,
 
 	STATE_READING_COM_STMT_PREPARE_RESPONSE,
+
+	STATE_MARIADB_BEGIN,  // dummy state
+	STATE_MARIADB_CONNECTING,  // using MariaDB Client Library
+	STATE_MARIADB_PING,
+	STATE_MARIADB_SET_NAMES,
+	STATE_MARIADB_INITDB,
+	STATE_MARIADB_QUERY,
+	STATE_MARIADB_GENERIC,	// generic state, perhaps will replace all others
+	STATE_MARIADB_END,  // dummy state
 
 	STATE_END
 /*
@@ -451,7 +499,7 @@ struct _global_variables_t {
 	char *proxy_errorlog;
 	char *proxy_debuglog;
 	char *proxy_configfile;
-	int proxy_restart_on_error;
+	bool proxy_restart_on_error;
 	int proxy_restart_delay;
 	int http_start;
 	//GHashTable *usernames;
@@ -619,9 +667,17 @@ GOptionEntry cmd_option_entries[] =
 MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
+__thread int mysql_thread___max_transaction_time;
+__thread int mysql_thread___max_connections;
+__thread int mysql_thread___default_query_delay;
+__thread int mysql_thread___default_query_timeout;
+__thread int mysql_thread___free_connections_pct;
 __thread int mysql_thread___ping_interval_server;
 __thread int mysql_thread___ping_timeout_server;
+__thread int mysql_thread___connect_retries_on_failure;
+__thread int mysql_thread___connect_retries_delay;
 __thread int mysql_thread___connect_timeout_server;
+__thread int mysql_thread___connect_timeout_server_max;
 __thread char *mysql_thread___connect_timeout_server_error;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
@@ -630,6 +686,8 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
+__thread bool mysql_thread___default_reconnect;
+__thread bool mysql_thread___sessions_sort;
 
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_history;
@@ -656,9 +714,17 @@ extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
+extern __thread int mysql_thread___max_transaction_time;
+extern __thread int mysql_thread___max_connections;
+extern __thread int mysql_thread___default_query_delay;
+extern __thread int mysql_thread___default_query_timeout;
+extern __thread int mysql_thread___free_connections_pct;
 extern __thread int mysql_thread___ping_interval_server;
 extern __thread int mysql_thread___ping_timeout_server;
+extern __thread int mysql_thread___connect_retries_on_failure;
+extern __thread int mysql_thread___connect_retries_delay;
 extern __thread int mysql_thread___connect_timeout_server;
+extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread char *mysql_thread___connect_timeout_server_error;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
@@ -667,6 +733,8 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
+extern __thread bool mysql_thread___default_reconnect;
+extern __thread bool mysql_thread___sessions_sort;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_history;

@@ -23,6 +23,16 @@ static MySQL_Monitor *GloMyMon;
 
 #define NEXT_IMMEDIATE(new_st) do { ST= new_st; goto again; } while (0)
 
+#define SAFE_SQLITE3_STEP(_stmt) do {\
+	do {\
+		rc=sqlite3_step(_stmt);\
+		if (rc!=SQLITE_DONE) {\
+			assert(rc==SQLITE_LOCKED);\
+			usleep(100);\
+		}\
+	} while (rc!=SQLITE_DONE);\
+} while (0)
+
 static void state_machine_handler(int fd, short event, void *arg);
 
 
@@ -96,24 +106,18 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYSQL *my) {
 	size++;
 	std::map<char *, std::list<MYSQL *>* >::iterator it;
-	//std::map<std::pair<char *, int>, std::list<MYSQL *>* >::iterator it;
 	char * buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
 	it = my_connections.find(buf);
-	//it = my_connections.find(std::make_pair(hostname,port));
 	std::list<MYSQL *> *lst=NULL;
 	if (it==my_connections.end()) {
 		lst=new std::list<MYSQL *>;
-		//my_connections.insert(std::pair<std::pair<char *,int>(hostname,port), std::list<MYSQL *>*>(lst));
 		my_connections.insert(my_connections.begin(), std::pair<char *,std::list<MYSQL *>*>(buf,lst));
 	} else {
 		free(buf);
 		lst=it->second;
 	}
 	lst->push_back(my);
-	if (lst->size()%1000==0) {
-		fprintf(stderr,"list size=%lu\n", lst->size());
-	}
 }
 
 enum MySQL_Monitor_State_Data_Task_Type {
@@ -132,7 +136,6 @@ class MySQL_Monitor_State_Data {
 	int port;
 	struct event *ev_mysql;
 	MYSQL *mysql;
-//	MYSQL *mysql_ptr;
 	struct event_base *base;
 	MYSQL_RES *result;
 	MYSQL *ret;
@@ -157,9 +160,6 @@ class MySQL_Monitor_State_Data {
 			free(hostname);
 		}
 		assert(mysql==NULL); // if mysql is not NULL, there is a bug
-		//if (mysql) {
-		//	mysql_close(mysql);
-		//}
 		if (mysql_error_msg) {
 			free(mysql_error_msg);
 		}
@@ -173,7 +173,6 @@ class MySQL_Monitor_State_Data {
 	int handler(int fd, short event) {
 		int status;
 again:
-		//fprintf(stderr, "Status: %s %d %d\n", hostname, port, ST);
 		switch (ST) {
 			case 0:
 				mysql=mysql_init(NULL);
@@ -284,7 +283,6 @@ again:
 					evutil_gettimeofday(&tv_out, NULL);
 				}
 				t2=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				//fprintf(stderr, "Connect time: %lluus\n", t2-t1);
 				NEXT_IMMEDIATE(50); // TEMP
 				status= mysql_close_start(mysql);
 				if (status)
@@ -331,8 +329,6 @@ again:
 		else
 			fd= -1;
 		if (status & MYSQL_WAIT_TIMEOUT) {
-			//tv.tv_sec= mysql_get_timeout_value(mysql);
-			//tv.tv_usec= 0;
 			tv.tv_sec= 0;
 			tv.tv_usec= 10000;
 			ptv= &tv;
@@ -348,17 +344,8 @@ again:
 		event_assign(ev_mysql, base, fd, wait_event, state_machine_handler, this);
 		event_add(ev_mysql, ptv);
 		ST= new_st;
-		//fprintf(stderr,"FD:%d %d\n", fd, (ptv ? tv.tv_sec : 0));	
 	}
 };
-
-
-
-//static void
-//next_event(int new_st, int status, MySQL_Monitor_State_Data *sd)
-//{
-//}
-
 
 
 static void
@@ -403,7 +390,6 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	// define monitoring tables
 	tables_defs_monitor=new std::vector<table_def_t *>;
-	//insert_into_tables_defs(tables_defs_monitor,"mysql_servers", MONITOR_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT);	
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_ping", MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING);
@@ -421,8 +407,6 @@ MySQL_Monitor::~MySQL_Monitor() {
 	delete tables_defs_monitor;
 	delete monitordb;
 	delete admindb;
-	//delete mysql_thr;
-	fprintf(stderr,"MySQL_Monitor destroyed\n");
 };
 
 
@@ -474,10 +458,24 @@ void * MySQL_Monitor::monitor_connect() {
 	mysql_thr->refresh_variables();
 	unsigned long long t1;
 	unsigned long long t2;
+	unsigned long long next_loop_at=0;
 	unsigned long long start_time;
 	while (shutdown==false) {
 
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		int i=0;
+		MySQL_Monitor_State_Data **sds=NULL;
+		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
+		unsigned int glover;
 		t1=monotonic_time();
+
+		if (t1 < next_loop_at) {
+			goto __sleep_monitor_connect_loop;
+		}
+		next_loop_at=t1+1000*mysql_thread___monitor_connect_interval;
 
 		struct timeval tv_out;
 		evutil_gettimeofday(&tv_out, NULL);
@@ -487,23 +485,15 @@ void * MySQL_Monitor::monitor_connect() {
 		// create libevent base
 		libevent_base= event_base_new();
 
-		unsigned int glover=GloMTH->get_global_version();
+		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			fprintf(stderr,"MySQL_Monitor - CONNECT - refreshing variables\n");
+			//proxy_error("%s\n", "MySQL_Monitor - CONNECT - refreshing variables");
 		}
 
-		char *error=NULL;
-		int cols=0;
-		int affected_rows=0;
-		SQLite3_result *resultset=NULL;
-		MySQL_Monitor_State_Data **sds=NULL;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-		int i=0;
-		sds=NULL;
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_connect_loop;
@@ -514,14 +504,10 @@ void * MySQL_Monitor::monitor_connect() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				//fprintf(stderr,"Host:%s, port:%s\n", r->fields[0], r->fields[1]);
 				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
 				sds[i]->task_id=MON_CONNECT;
 				connect__num_active_connections++;
 				total_connect__num_active_connections++;
-				if (total_connect__num_active_connections%1000==0) {
-					fprintf(stderr,"total conns: %d\n", total_connect__num_active_connections);
-				}
 				state_machine_handler(-1,-1,sds[i]);
 				i++;
 			}
@@ -541,21 +527,13 @@ __end_monitor_connect_loop:
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 1, start_time-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			do {
-				rc=sqlite3_step(statement);
-				if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-					fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-					assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-					usleep(1000);
-				}
-			} while (rc!=SQLITE_DONE);
+			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
 
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
-			//fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 			assert(rc==SQLITE_OK);
 			while (i>0) {
 				i--;
@@ -565,14 +543,7 @@ __end_monitor_connect_loop:
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				do {
-					rc=sqlite3_step(statement);
-					if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-						fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-						assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-						usleep(1000);
-					}
-				} while (rc!=SQLITE_DONE);
+				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 				delete mmsd;
@@ -585,14 +556,16 @@ __end_monitor_connect_loop:
 
 		event_base_free(libevent_base);
 
+__sleep_monitor_connect_loop:
 		t2=monotonic_time();
-
-		//fprintf(stderr,"%llu %llu %llu\n", t1, t2, mysql_thread___monitor_connect_interval); 
-		if (t1+(1000*mysql_thread___monitor_connect_interval)>t2) {
-			usleep(t1+(1000*mysql_thread___monitor_connect_interval)-t2);
+		if (t2<next_loop_at) {
+			unsigned long long st=0;
+			st=next_loop_at-t2;
+			if (st > 500000) {
+				st = 500000;
+			}
+			usleep(st);
 		}
-		//fprintf(stderr,"MySQL_Monitor - CONNECT\n");
-		//usleep(1000);
 	}
 	return NULL;
 }
@@ -609,13 +582,27 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long t1;
 	unsigned long long t2;
 	unsigned long long start_time;
+	unsigned long long next_loop_at=0;
 	//unsigned int t1;
 	//unsigned int t2;
 	//t1=monotonic_time();
 
 	while (shutdown==false) {
 
+		unsigned int glover;
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		MySQL_Monitor_State_Data **sds=NULL;
+		int i=0;
+		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
 		t1=monotonic_time();
+
+		if (t1 < next_loop_at) {
+			goto __sleep_monitor_ping_loop;
+		}
+		next_loop_at=t1+1000*mysql_thread___monitor_ping_interval;
 
 		struct timeval tv_out;
 		evutil_gettimeofday(&tv_out, NULL);
@@ -625,23 +612,15 @@ void * MySQL_Monitor::monitor_ping() {
 		// create libevent base
 		libevent_base= event_base_new();
 
-		unsigned int glover=GloMTH->get_global_version();
+		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			fprintf(stderr,"MySQL_Monitor - PING - refreshing variables\n");
+			//proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
 		}
 
-		char *error=NULL;
-		int cols=0;
-		int affected_rows=0;
-		SQLite3_result *resultset=NULL;
-		MySQL_Monitor_State_Data **sds=NULL;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-		int i=0;
-		sds=NULL;
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_ping_loop;
@@ -652,14 +631,10 @@ void * MySQL_Monitor::monitor_ping() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				//fprintf(stderr,"Host:%s, port:%s\n", r->fields[0], r->fields[1]);
 				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
 				sds[i]->task_id=MON_PING;
 				ping__num_active_connections++;
 				total_ping__num_active_connections++;
-				if (total_ping__num_active_connections%1000==0) {
-					fprintf(stderr,"total conns: %d\n", total_ping__num_active_connections);
-				}
 				MySQL_Monitor_State_Data *_mmsd=sds[i];
 				_mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(_mmsd->hostname, _mmsd->port);
 				if (_mmsd->mysql==NULL) {
@@ -686,21 +661,13 @@ __end_monitor_ping_loop:
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 1, start_time-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			do {
-				rc=sqlite3_step(statement);
-				if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-					fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-					assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-					usleep(1000);
-				}
-			} while (rc!=SQLITE_DONE);
+			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
 
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
-			//fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
 			assert(rc==SQLITE_OK);
 			while (i>0) {
 				i--;
@@ -710,14 +677,7 @@ __end_monitor_ping_loop:
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				do {
-					rc=sqlite3_step(statement);
-					if (rc!=SQLITE_DONE) { // the execution of the prepared statement failed
-						fprintf(stderr,"%d %s\n",rc, sqlite3_errmsg(mondb));
-						assert(rc==SQLITE_LOCKED); // it is possible that the table was locked because in use, in this case we retry
-						usleep(1000);
-					}
-				} while (rc!=SQLITE_DONE);
+				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 				delete mmsd;
@@ -731,14 +691,17 @@ __end_monitor_ping_loop:
 
 		event_base_free(libevent_base);
 
-		t2=monotonic_time();
 
-		//fprintf(stderr,"%llu %llu %llu\n", t1, t2, mysql_thread___monitor_connect_interval); 
-		if (t1+(1000*mysql_thread___monitor_ping_interval)>t2) {
-			usleep(t1+(1000*mysql_thread___monitor_ping_interval)-t2);
+__sleep_monitor_ping_loop:
+		t2=monotonic_time();
+		if (t2<next_loop_at) {
+			unsigned long long st=0;
+			st=next_loop_at-t2;
+			if (st > 500000) {
+				st = 500000;
+			}
+			usleep(st);
 		}
-		//fprintf(stderr,"MySQL_Monitor - PING\n");
-		//usleep(1000000);
 	}
 	return NULL;
 }
@@ -757,10 +720,9 @@ void * MySQL_Monitor::run() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			fprintf(stderr,"MySQL_Monitor refreshing variables\n");
+			//proxy_error("%s\n","MySQL_Monitor refreshing variables");
 		}
-		fprintf(stderr,"MySQL_Monitor\n");
-		usleep(1000000);
+		usleep(500000);
 	}
 	monitor_connect_thread->join();
 	monitor_ping_thread->join();

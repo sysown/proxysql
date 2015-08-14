@@ -36,14 +36,20 @@ class SQLite3_row {
 //	};
 	void add_fields(sqlite3_stmt *stmt) {
 		int i;
+		int t;
 		for (i=0;i<cnt;i++) {
-			sizes[i]=sqlite3_column_bytes(stmt,i);
-			if (sizes[i]) {
-				const char *c=(char *)sqlite3_column_text(stmt,i);
-				fields[i]=strdup(c);
-			} else {
+			t=sqlite3_column_type(stmt,i);
+			const char *c=(char *)sqlite3_column_text(stmt,i);
+			if (t==SQLITE_NULL) {
+				sizes[i]=0;
 				fields[i]=NULL;
+			} else {
+				sizes[i]=sqlite3_column_bytes(stmt,i);
+				fields[i]=strdup(c);
 			}
+//			} else {
+//				fields[i]=NULL;
+//			}
 			//fields[i]=(sizes[i] ? strdup((char *)sqlite3_column_text(stmt,i)) : NULL);
 		}
 	};
@@ -141,6 +147,7 @@ class SQLite3DB {
 	int open(char *, int);
 	bool execute(const char *);
 	bool execute_statement(const char *, char **, int *, int *, SQLite3_result **);
+	int return_one_int(const char *);
 	int check_table_structure(char *table_name, char *table_def);
 	bool build_table(char *table_name, char *table_def, bool dropit);
 	bool check_and_build_table(char *table_name, char *table_def);

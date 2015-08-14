@@ -42,7 +42,7 @@ class ProxySQL_Poll {
   };
 
   public:
-	int poll_timeout;
+	unsigned int poll_timeout;
 	unsigned long loops;
 	StatCounters *loop_counters;
   unsigned int len;
@@ -139,7 +139,7 @@ class MySQL_Thread
 
 	private:
   MySQL_Connection **my_idle_conns;
-  MySQL_Data_Stream **my_idle_myds;
+  //MySQL_Data_Stream **my_idle_myds;
   bool processing_idles;
   unsigned long long last_processing_idles;
   PtrArray *mysql_sessions_connections_handler;
@@ -175,11 +175,11 @@ class MySQL_Thread
   void process_all_sessions();
   void refresh_variables();
   void process_all_sessions_connections_handler();
-  void register_session_connection_handler(MySQL_Session *_sess);
-  void unregister_session_connection_handler(int idx);
-  void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
-  void myds_backend_pause_connect(MySQL_Data_Stream *myds);
-  void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
+  void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
+  void unregister_session_connection_handler(int idx, bool _new=false);
+  //void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
+  //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
+  //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
   SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
 };
@@ -249,7 +249,12 @@ class MySQL_Threads_Handler
 		bool monitor_timer_cached;
 		int ping_interval_server;
 		int ping_timeout_server;
+		int connect_retries_on_failure;
+		int connect_retries_delay;
 		int connect_timeout_server;
+		int connect_timeout_server_max;
+		int free_connections_pct;
+		bool sessions_sort;
 		char *connect_timeout_server_error;
 		char *default_schema;
 		char *interfaces;
@@ -257,7 +262,12 @@ class MySQL_Threads_Handler
 		uint8_t default_charset;
 		bool servers_stats;
 		bool commands_stats;
+		bool default_reconnect;
 		bool have_compress;
+		int max_transaction_time;
+		int max_connections;
+		int default_query_delay;
+		int default_query_timeout;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
@@ -296,7 +306,9 @@ class MySQL_Threads_Handler
 	int listener_del(const char *iface);
 	int listener_del(const char *address, int port);
 	void start_listeners();
-	void signal_all_threads();
+	void signal_all_threads(unsigned char _c=0);
+	SQLite3_result * SQL3_Processlist();
+	bool kill_session(uint32_t _thread_session_id);
 };
 
 

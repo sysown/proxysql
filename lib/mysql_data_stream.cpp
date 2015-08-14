@@ -94,8 +94,15 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	bytes_info.bytes_sent=0;
 	pkts_recv=0;
 	pkts_sent=0;
+	client_addr=NULL;
 
-	timeout=0;
+	sess=NULL;
+	mysql_real_query.ptr=NULL;
+	mysql_real_query.size=0;
+
+	connect_retries_on_failure=0;
+	max_connect_time=0;
+	wait_until=0;
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
@@ -119,6 +126,14 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl=NULL;
 	net_failure=false;
 //	ssl_ctx=NULL;
+	CompPktIN.pkt.ptr=NULL;
+	CompPktIN.pkt.size=0;
+	CompPktIN.partial=0;
+	CompPktOUT.pkt.ptr=NULL;
+	CompPktOUT.pkt.size=0;
+	CompPktOUT.partial=0;
+	multi_pkt.ptr=NULL;
+	multi_pkt.size=0;
 }
 
 
@@ -127,6 +142,12 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 
 	queue_destroy(queueIN);
 	queue_destroy(queueOUT);
+	if (client_addr) {
+		free(client_addr);
+		client_addr=NULL;
+	}
+
+	free_mysql_real_query();
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
@@ -159,18 +180,41 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	delete resultset;
 	}
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
+
+
 	if (fd>0) {
-		if (myconn==NULL || myconn->reusable==false) {
+//	// Changing logic here. The socket should be closed only if it is not a backend
+		if (myds_type==MYDS_FRONTEND) {
+//		if (myconn==NULL || myconn->reusable==false) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p , MYDS:%p , MySQL_Connection %p %s: shutdown socket\n", sess, this, myconn, (myconn ? "not reusable" : "is empty"));
 			shut_hard();
 //		shutdown(fd,SHUT_RDWR);
 //		close(fd);
 		}
 	}
-	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
+	// Commenting the follow line of code and adding an assert. We should ensure that if a myconn exists it should be removed *before*
+	if (myds_type==MYDS_BACKEND || myds_type==MYDS_BACKEND_NOT_CONNECTED) {
+		assert(myconn==NULL);
+	}
+//	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
 		if (ssl) SSL_free(ssl);
 //		if (ssl_ctx) SSL_CTX_free(ssl_ctx);
+	}
+	if (multi_pkt.ptr) {
+		l_free(multi_pkt.size,multi_pkt.ptr);
+		multi_pkt.ptr=NULL;
+		multi_pkt.size=0;
+	}
+	if (CompPktIN.pkt.ptr) {
+		l_free(CompPktIN.pkt.size,CompPktIN.pkt.ptr);
+		CompPktIN.pkt.ptr=NULL;
+		CompPktIN.pkt.size=0;
+	}
+	if (CompPktOUT.pkt.ptr) {
+		l_free(CompPktOUT.pkt.size,CompPktOUT.pkt.ptr);
+		CompPktOUT.pkt.ptr=NULL;
+		CompPktOUT.pkt.size=0;
 	}
 }
 
@@ -255,7 +299,8 @@ int MySQL_Data_Stream::read_from_net() {
 	//proxy_error("read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
 	if (r < 1) {
 		if (encrypted==false) {
-			if (r==0 || (r==-1 && errno != EINTR && errno != EAGAIN)) {
+			int myds_errno=errno;
+			if (r==0 || (r==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
 				shut_soft();
 			}
 		} else {
@@ -321,14 +366,18 @@ void MySQL_Data_Stream::set_pollout() {
 	//_pollfd=&sess->thread->mypolls.fds[poll_fds_idx];
 	//_pollfd=sess->thread->get_pollfd(poll_fds_idx);
 	//if (buflen || PSarrayOUT->len) {
-	if (available_data_out() || queueOUT.partial) {
-		_pollfd->events = POLLIN | POLLOUT;
+	if (DSS > STATE_MARIADB_BEGIN && DSS < STATE_MARIADB_END) {
+		_pollfd->events = myconn->wait_events;
 	} else {
-		_pollfd->events = POLLIN;
+		if (available_data_out() || queueOUT.partial) {
+			_pollfd->events = POLLIN | POLLOUT;
+		} else {
+			_pollfd->events = POLLIN;
+		}
 	}
 	//FIXME: moved
 	//_pollfd->revents=0;
-	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p -- Setting poll events %d for FD %d\n", sess, this, _pollfd->events , fd);
+	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p -- Setting poll events %d for FD %d , DSS=%d , myconn=%p\n", sess, this, _pollfd->events , fd, DSS, myconn);
 }
 
 
@@ -403,6 +452,7 @@ int MySQL_Data_Stream::buffer2array() {
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
 			memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
+			pkt_sid=queueIN.hdr.pkt_id;
 			queue_r(queueIN,sizeof(mysql_hdr));
 			queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr);
 			queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
@@ -453,13 +503,47 @@ int MySQL_Data_Stream::buffer2array() {
 				datalength=queueIN.pkt.size-7;
 			}
 			while (progress<datalength) {
-				mysql_hdr _a;
-				memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
-				unsigned int size=_a.pkt_length+sizeof(mysql_hdr);
-				unsigned char *ptrP=(unsigned char *)l_alloc(size);
-				memcpy(ptrP,_ptr+progress,size);
-				progress+=size;
-				PSarrayIN->add(ptrP,size);
+				if (CompPktIN.partial==0) {
+					mysql_hdr _a;
+					assert(datalength >= progress + sizeof(mysql_hdr)); // FIXME: this is a too optimistic assumption
+					memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+					CompPktIN.pkt.size=_a.pkt_length+sizeof(mysql_hdr);
+					CompPktIN.pkt.ptr=(unsigned char *)l_alloc(CompPktIN.pkt.size);
+					if ((datalength-progress) >= CompPktIN.pkt.size) {
+						// we can copy the whole packet
+						memcpy(CompPktIN.pkt.ptr, _ptr+progress, CompPktIN.pkt.size);
+						CompPktIN.partial=0; // stays 0
+						progress+=CompPktIN.pkt.size;
+						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
+						CompPktIN.pkt.ptr=NULL; // sanity
+					} else {
+						// not enough data for the whole packet
+						memcpy(CompPktIN.pkt.ptr, _ptr+progress, (datalength-progress));
+						CompPktIN.partial+=(datalength-progress);
+						progress=datalength; // we reached the end
+					}
+				} else {
+					if ((datalength-progress) >= (CompPktIN.pkt.size-CompPktIN.partial)) {
+						// we can copy till the end of the packet
+						memcpy((char *)CompPktIN.pkt.ptr + CompPktIN.partial , _ptr+progress, CompPktIN.pkt.size - CompPktIN.partial);
+						CompPktIN.partial=0;
+						progress+= CompPktIN.pkt.size - CompPktIN.partial;
+						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
+						CompPktIN.pkt.ptr=NULL; // sanity
+					} else {
+						// not enough data for the whole packet
+						memcpy((char *)CompPktIN.pkt.ptr + CompPktIN.partial , _ptr+progress , (datalength-progress));
+						CompPktIN.partial+=(datalength-progress);
+						progress=datalength; // we reached the end
+					}
+				}
+//				mysql_hdr _a;
+//				memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+//				unsigned int size=_a.pkt_length+sizeof(mysql_hdr);
+//				unsigned char *ptrP=(unsigned char *)l_alloc(size);
+//				memcpy(ptrP,_ptr+progress,size);
+//				progress+=size;
+//				PSarrayIN->add(ptrP,size);
 			}
 			if (payload_length) {
 				l_free(destLen,dest);
@@ -503,36 +587,82 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			total_size-=p->size;
 		}
 	}
-	uLong sourceLen=total_size;
-	Bytef *source=(Bytef *)l_alloc(total_size);
-	uLongf destLen=total_size*120/100+12;
-	Bytef *dest=(Bytef *)malloc(destLen);
-	i=0;
-	total_size=0;
-	while (total_size<sourceLen) {
-		//p=PSarrayOUT->index(i);
+	if (total_size <= MAX_COMPRESSED_PACKET_SIZE) {
+		// this worked in the past . it applies for small packets
+		uLong sourceLen=total_size;
+		Bytef *source=(Bytef *)l_alloc(total_size);
+		uLongf destLen=total_size*120/100+12;
+		Bytef *dest=(Bytef *)malloc(destLen);
+		i=0;
+		total_size=0;
+		while (total_size<sourceLen) {
+			//p=PSarrayOUT->index(i);
+			PtrSize_t p2;
+			PSarrayOUT->remove_index(0,&p2);
+			memcpy(source+total_size,p2.ptr,p2.size);
+			//i++;
+			total_size+=p2.size;
+			l_free(p2.size,p2.ptr);
+		}
+		//PSarrayOUT->remove_index_range(0,i);
+		int rc=compress(dest, &destLen, source, sourceLen);
+		assert(rc==Z_OK);
+		l_free(total_size, source);
+		queueOUT.pkt.size=destLen+7;
+		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
+		mysql_hdr hdr;
+		hdr.pkt_length=destLen;
+		hdr.pkt_id=++myconn->compression_pkt_id;
+		//hdr.pkt_id=1;
+		memcpy((unsigned char *)queueOUT.pkt.ptr,&hdr,sizeof(mysql_hdr));
+		hdr.pkt_length=total_size;
+		memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);
+		memcpy((unsigned char *)queueOUT.pkt.ptr+7,dest,destLen);
+		free(dest);
+	} else {
+		// if we reach here, it means we have one single packet larger than MAX_COMPRESSED_PACKET_SIZE
 		PtrSize_t p2;
 		PSarrayOUT->remove_index(0,&p2);
-		memcpy(source+total_size,p2.ptr,p2.size);
-		//i++;
-		total_size+=p2.size;
+
+		unsigned int len1=MAX_COMPRESSED_PACKET_SIZE/2;
+		unsigned int len2=p2.size-len1;
+		uLongf destLen1;
+		uLongf destLen2;
+		Bytef *dest1;
+		Bytef *dest2;
+		int rc;
+
+		mysql_hdr hdr;
+
+		destLen1=len1*120/100+12;
+		dest1=(Bytef *)malloc(destLen1+7);
+		destLen2=len2*120/100+12;
+		dest2=(Bytef *)malloc(destLen2+7);
+		rc=compress(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1);
+		assert(rc==Z_OK);
+		rc=compress(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2);
+		assert(rc==Z_OK);
+
+		hdr.pkt_length=destLen1;
+		hdr.pkt_id=++myconn->compression_pkt_id;
+		memcpy(dest1,&hdr,sizeof(mysql_hdr));
+		hdr.pkt_length=len1;
+		memcpy((char *)dest1+sizeof(mysql_hdr),&hdr,3);
+
+		hdr.pkt_length=destLen2;
+		hdr.pkt_id=++myconn->compression_pkt_id;
+		memcpy(dest2,&hdr,sizeof(mysql_hdr));
+		hdr.pkt_length=len2;
+		memcpy((char *)dest2+sizeof(mysql_hdr),&hdr,3);
+
+		queueOUT.pkt.size=destLen1+destLen2+7+7;
+		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
+		memcpy((char *)queueOUT.pkt.ptr,dest1,destLen1+7);
+		memcpy((char *)queueOUT.pkt.ptr+destLen1+7,dest2,destLen2+7);
+		free(dest1);
+		free(dest2);
 		l_free(p2.size,p2.ptr);
 	}
-	//PSarrayOUT->remove_index_range(0,i);
-	int rc=compress(dest, &destLen, source, sourceLen);
-	assert(rc==Z_OK);
-	l_free(total_size, source);
-	queueOUT.pkt.size=destLen+7;
-	queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
-	mysql_hdr hdr;
-	hdr.pkt_length=destLen;
-	hdr.pkt_id=++myconn->compression_pkt_id;
-	//hdr.pkt_id=1;
-	memcpy((unsigned char *)queueOUT.pkt.ptr,&hdr,sizeof(mysql_hdr));
-	hdr.pkt_length=total_size;
-	memcpy((unsigned char *)queueOUT.pkt.ptr+4,&hdr,3);
-	memcpy((unsigned char *)queueOUT.pkt.ptr+7,dest,destLen);
-	free(dest);
 }
 
 
@@ -541,6 +671,7 @@ int MySQL_Data_Stream::array2buffer() {
 	//unsigned int idx=0;
 	bool cont=true;
 	while (cont) {
+		VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT)==0) return ret;
 		if (queueOUT.partial==0) { // read a new packet
 			//if (PSarrayOUT->len-idx) {
@@ -550,11 +681,14 @@ int MySQL_Data_Stream::array2buffer() {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					queueOUT.pkt.ptr=NULL;
 				}
+		VALGRIND_ENABLE_ERROR_REPORTING;
 				if (myconn->get_status_compression()==true) {
 					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
+		VALGRIND_DISABLE_ERROR_REPORTING;
 					PSarrayOUT->remove_index(0,&queueOUT.pkt);
+		VALGRIND_ENABLE_ERROR_REPORTING;
 					// this is a special case, needed because compression is enabled *after* the first OK
 					if (DSS==STATE_CLIENT_AUTH_OK) {
 						DSS=STATE_SLEEP;
@@ -584,7 +718,9 @@ int MySQL_Data_Stream::array2buffer() {
 			}
 		}
 		int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
+		VALGRIND_DISABLE_ERROR_REPORTING;
 		memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
+		VALGRIND_ENABLE_ERROR_REPORTING;
 		queue_w(queueOUT,b);
 		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
 		queueOUT.partial+=b;
@@ -769,4 +905,20 @@ void MySQL_Data_Stream::set_net_failure() {
 void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p\n", this->sess, this);
 	DSS=STATE_QUERY_SENT_NET;
+}
+
+void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
+	MySQL_Connection *mc=myconn;
+	mc->last_time_used=sess->thread->curtime;
+	detach_connection();
+	unplug_backend();
+	mc->async_state_machine=ASYNC_IDLE;
+	MyHGM->push_MyConn_to_pool(mc);
+}
+
+void MySQL_Data_Stream::free_mysql_real_query() {
+	if (mysql_real_query.ptr) {
+		free(mysql_real_query.ptr);
+		mysql_real_query.ptr=NULL;
+	}
 }

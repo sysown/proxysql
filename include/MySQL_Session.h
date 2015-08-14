@@ -17,6 +17,7 @@ class MySQL_Session_userinfo {
 */
 class Query_Info {
 	public:
+	MySQL_Session *sess;
 	unsigned long long start_time;
 	unsigned long long end_time;
 	void *QueryParserArgs;
@@ -35,15 +36,16 @@ class Query_Info {
 class MySQL_Session
 {
 	private:
-	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
+	std::stack<enum session_status> previous_status;
+//	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
 	bool handler___status_CHANGING_USER_SERVER(PtrSize_t *);
-	bool handler___status_CHANGING_CHARSET(PtrSize_t *);
+//	bool handler___status_CHANGING_CHARSET(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *);
-	void handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *);
+//	void handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t *);
-	void handler___status_CONNECTING_SERVER___STATE_NOT_CONNECTED(PtrSize_t *);
-	void handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
+	//void handler___status_CONNECTING_SERVER___STATE_NOT_CONNECTED(PtrSize_t *);
+	//void handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
@@ -71,15 +73,25 @@ class MySQL_Session
 	void handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();	
 	void handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();	
 
+	bool handler_special_queries(PtrSize_t *);
+
+//	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
+
+
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
 	MySQL_Thread *thread;
+	uint32_t thread_session_id;
 //	enum session_states sess_states;
 	QP_out_t *qpo;
 	StatCounters *command_counters;
 	int healthy;
+	bool killed;
 	bool admin;
+	bool max_connections_reached;
+	int user_max_connections;
+	bool client_authenticated;
 	bool connections_handler;
 	bool stats;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
@@ -92,6 +104,7 @@ class MySQL_Session
 	char * default_schema;
 	bool schema_locked;
 	bool transaction_persistent;
+	int transaction_persistent_hostgroup;
 	bool session_fast_forward;
 	int to_process;
 	int pending_connect;
@@ -119,7 +132,19 @@ class MySQL_Session
 	~MySQL_Session();
 
 	void set_unhealthy();
-
+	
+	void set_status(enum session_status e) {
+		if (e==NONE) {
+			if (mybe) {
+				if (mybe->server_myds) {
+					assert(mybe->server_myds->myconn==0);
+					if (mybe->server_myds->myconn)
+						assert(mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE);
+				}
+			}
+		}
+		status=e;
+	}
 	//MySQL_Protocol myprot_client;
 	//MySQL_Protocol myprot_server;
 	int handler();
@@ -129,6 +154,7 @@ class MySQL_Session
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, MySQL_Protocol *myprot);
 	SQLite3_result * SQL3_Session_status();
 
 	void reset_all_backends();

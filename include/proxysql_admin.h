@@ -37,6 +37,7 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 	} variables;
 
+	void dump_mysql_collations();
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
@@ -52,7 +53,7 @@ class ProxySQL_Admin {
 	void __delete_disktable();
 	void __insert_or_replace_disktable_select_maintable();
 //	void __attach_configdb_to_admindb();
-	void __attach_db_to_admindb(SQLite3DB *db, char *alias);
+	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
 
 	void __add_active_users(enum cred_username_type usertype);
@@ -119,11 +120,17 @@ class ProxySQL_Admin {
 
 
 	void stats___mysql_query_rules();
+	void stats___mysql_query_digests();
+	void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
-
+	void stats___mysql_processlist();
+	void stats___mysql_connection_pool();
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
 	int Read_MySQL_Users_from_configfile();
+	int Read_MySQL_Query_Rules_from_configfile();
 	int Read_MySQL_Servers_from_configfile();
+
+	void flush_error_log();
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

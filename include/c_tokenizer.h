@@ -23,6 +23,7 @@ extern "C" {
 tokenizer_t tokenizer( const char* s, const char* delimiters, int empties );
 const char* free_tokenizer( tokenizer_t* tokenizer );
 const char* tokenize( tokenizer_t* tokenizer );
+char * mysql_query_digest(char *s, int len);
 
 void c_split_2(const char *in, const char *del, char **out1, char **out2);
 #ifdef __cplusplus

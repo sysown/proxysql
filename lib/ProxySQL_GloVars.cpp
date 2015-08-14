@@ -6,12 +6,25 @@
 
 
 static void term_handler(int sig) {
-  proxy_error("Received TERM signal: shutdown in progress...\n");
+  proxy_warning("Received TERM signal: shutdown in progress...\n");
 #ifdef DEBUG
 #endif
   __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 }
 
+void crash_handler(int sig) {
+#ifdef DEBUG
+	malloc_stats_print(NULL, NULL, "");
+#endif
+	void *arr[20];
+	size_t s;
+
+	s = backtrace(arr, 20);
+
+	fprintf(stderr, "Error: signal %d:\n", sig);
+	backtrace_symbols_fd(arr, s, STDERR_FILENO);
+	exit(EXIT_FAILURE);
+}
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
@@ -53,8 +66,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #endif /* DEBUG */
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
+	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
-	opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
+//	opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
@@ -62,7 +76,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 
 	confFile=new ProxySQL_ConfigFile();
 	signal(SIGTERM, term_handler);
-
+	signal(SIGSEGV, crash_handler);
+	signal(SIGABRT, crash_handler);
+	signal(SIGPIPE, SIG_IGN);
 };
 
 
@@ -88,6 +104,13 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	if (opt->isSet("-d")) {
 		opt->get("-d")->getInt(GloVars.__cmd_proxysql_gdbg);	
 		global.gdbg=true;
+	}
+
+	if (opt->isSet("-e")) {
+		glovars.proxy_restart_on_error=false;
+	} else {
+		glovars.proxy_restart_on_error=true;
+		glovars.proxy_restart_delay=1;
 	}
 
 	if (opt->isSet("-c")) {
@@ -120,9 +143,14 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 
 	if (config_file==NULL) {
 		config_file=(char *)"proxysql.cnf";
-		//if (!g_file_test(config_file,(GFileTest)(G_FILE_TEST_EXISTS|G_FILE_TEST_IS_REGULAR))) {
 		if (Proxy_file_regular(config_file)==false) {
-			config_file=(char *)"/etc/proxysql.cnf";
+			config_file=(char *)"proxysql.cfg";
+			if (Proxy_file_regular(config_file)==false) {
+				config_file=(char *)"/etc/proxysql.cnf";
+				if (Proxy_file_regular(config_file)==false) {
+					config_file=(char *)"/etc/proxysql.cfg";
+				}
+			}
 		}
 	}
 #ifdef DEBUG

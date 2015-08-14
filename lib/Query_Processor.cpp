@@ -8,6 +8,7 @@
 #include "../deps/libinjection/libinjection.h"
 #include "../deps/libinjection/libinjection_sqli.h"
 
+#include "SpookyV2.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -38,7 +39,7 @@ class QP_rule_text {
 	char **pta;
 	QP_rule_text(QP_rule_t *QPr) {
 		pta=NULL;
-		pta=(char **)malloc(sizeof(char *)*13);
+		pta=(char **)malloc(sizeof(char *)*16);
 		itostr(pta[0], (long long)QPr->rule_id);
 		itostr(pta[1], (long long)QPr->active);
 		pta[2]=strdup_null(QPr->username);
@@ -50,23 +51,138 @@ class QP_rule_text {
 		pta[8]=strdup_null(QPr->replace_pattern);
 		itostr(pta[9], (long long)QPr->destination_hostgroup);
 		itostr(pta[10], (long long)QPr->cache_ttl);
-		itostr(pta[11], (long long)QPr->apply);
-		itostr(pta[12], (long long)QPr->hits);
+		itostr(pta[11], (long long)QPr->reconnect);
+		itostr(pta[12], (long long)QPr->timeout);
+		itostr(pta[13], (long long)QPr->delay);
+		itostr(pta[14], (long long)QPr->apply);
+		itostr(pta[15], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
-		for(int i=0; i<13; i++) {
+		for(int i=0; i<16; i++) {
 			free_null(pta[i]);
 		}
 		free(pta);
 	}
 };
 
-
 struct __SQP_query_parser_t {
 	sfilter sf;
+	uint64_t digest;
+	char *digest_text;
+	uint64_t digest_total;
 };
 
 typedef struct __SQP_query_parser_t SQP_par_t;
+
+class QP_query_digest_stats {
+	public:
+	uint64_t digest;
+	char *digest_text;
+	char *username;
+	char *schemaname;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned int count_star;
+	unsigned long long sum_time;
+	unsigned long long min_time;
+	unsigned long long max_time;
+	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt) {
+		digest=d;
+		digest_text=strdup(dt);
+		username=strdup(u);
+		schemaname=strdup(s);
+		count_star=0;
+		first_seen=0;
+		last_seen=0;
+		sum_time=0;
+		min_time=0;
+		max_time=0;
+	}
+	void add_time(unsigned long long t, unsigned long long n) {
+		count_star++;
+		sum_time+=t;
+		if (t < min_time || min_time==0) {
+			min_time = t;
+		}
+		if (t > max_time) {
+			max_time = t;
+		}
+		if (first_seen==0) {
+			first_seen=n;
+		}
+		last_seen=n;
+	}
+	~QP_query_digest_stats() {
+		if (digest_text) {
+			free(digest_text);
+			digest_text=NULL;
+		}
+		if (username) {
+			free(username);
+			username=NULL;
+		}
+		if (schemaname) {
+			free(schemaname);
+			schemaname=NULL;
+		}
+	}
+	char **get_row() {
+		char buf[128];
+		char **pta=(char **)malloc(sizeof(char *)*10);
+		assert(username);
+		pta[0]=strdup(username);
+		assert(schemaname);
+		pta[1]=strdup(schemaname);
+
+		uint32_t d32[2];
+		memcpy(&d32,&digest,sizeof(digest));
+		sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		pta[2]=strdup(buf);
+
+		assert(digest_text);
+		pta[3]=strdup(digest_text);
+		sprintf(buf,"%u",count_star);
+		pta[4]=strdup(buf);
+
+		time_t __now;
+    //char __buffer[25];
+//    struct tm *__tm_info;
+    time(&__now);
+		
+		unsigned long long curtime=monotonic_time();
+
+		time_t seen_time;
+
+		seen_time= __now - (curtime - first_seen)/1000000;
+//    __tm_info = localtime(&seen_time);
+//    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+		sprintf(buf,"%ld", seen_time);
+		pta[5]=strdup(buf);
+
+		seen_time= __now - (curtime - last_seen)/1000000;
+//    __tm_info = localtime(&seen_time);
+//    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+		sprintf(buf,"%ld", seen_time);
+		pta[6]=strdup(buf);
+
+		sprintf(buf,"%llu",sum_time);
+		pta[7]=strdup(buf);
+		sprintf(buf,"%llu",min_time);
+		pta[8]=strdup(buf);
+		sprintf(buf,"%llu",max_time);
+		pta[9]=strdup(buf);
+		return pta;
+	}
+	void free_row(char **pta) {
+		int i;
+		for (i=0;i<10;i++) {
+			assert(pta[i]);
+			free(pta[i]);
+		}
+		free(pta);
+	}
+};
+
 
 //static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];
 
@@ -201,6 +317,7 @@ Query_Processor::Query_Processor() {
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
 	spinlock_rwlock_init(&rwlock);
+	spinlock_rwlock_init(&digest_rwlock);
 	version=0;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) commands_counters[i]=new Command_Counter(i);
 
@@ -285,7 +402,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, bool apply) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int delay, bool apply) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -298,6 +415,9 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->replace_pattern=(replace_pattern ? strdup(replace_pattern) : NULL);
 	newQR->destination_hostgroup=destination_hostgroup;
 	newQR->cache_ttl=cache_ttl;
+	newQR->reconnect=reconnect;
+	newQR->timeout=timeout;
+	newQR->delay=delay;
 	newQR->apply=apply;
 	newQR->regex_engine=NULL;
 	newQR->hits=0;
@@ -389,7 +509,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(13);
+	SQLite3_result *result=new SQLite3_result(16);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -403,6 +523,9 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"replace_pattern");
 	result->add_column_definition(SQLITE_TEXT,"destination_hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"cache_ttl");
+	result->add_column_definition(SQLITE_TEXT,"reconnect");
+	result->add_column_definition(SQLITE_TEXT,"timeout");
+	result->add_column_definition(SQLITE_TEXT,"delay");
 	result->add_column_definition(SQLITE_TEXT,"apply");
 	result->add_column_definition(SQLITE_TEXT,"hits");
 	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
@@ -415,6 +538,56 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	spin_rdunlock(&rwlock);
 	return result;
 }
+
+SQLite3_result * Query_Processor::get_query_digests() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
+	SQLite3_result *result=new SQLite3_result(10);
+	spin_rdlock(&digest_rwlock);
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"usernname");
+	result->add_column_definition(SQLITE_TEXT,"digest");
+	result->add_column_definition(SQLITE_TEXT,"digest_text");
+	result->add_column_definition(SQLITE_TEXT,"count_star");
+	result->add_column_definition(SQLITE_TEXT,"first_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_seen");
+	result->add_column_definition(SQLITE_TEXT,"sum_time");
+	result->add_column_definition(SQLITE_TEXT,"min_time");
+	result->add_column_definition(SQLITE_TEXT,"max_time");
+	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+		char **pta=qds->get_row();
+		result->add_row(pta);
+		qds->free_row(pta);
+	}
+	spin_rdunlock(&digest_rwlock);
+	return result;
+}
+
+SQLite3_result * Query_Processor::get_query_digests_reset() {
+	SQLite3_result *result=new SQLite3_result(10);
+	spin_wrlock(&digest_rwlock);
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"usernname");
+	result->add_column_definition(SQLITE_TEXT,"digest");
+	result->add_column_definition(SQLITE_TEXT,"digest_text");
+	result->add_column_definition(SQLITE_TEXT,"count_star");
+	result->add_column_definition(SQLITE_TEXT,"first_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_seen");
+	result->add_column_definition(SQLITE_TEXT,"sum_time");
+	result->add_column_definition(SQLITE_TEXT,"min_time");
+	result->add_column_definition(SQLITE_TEXT,"max_time");
+	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+		char **pta=qds->get_row();
+		result->add_row(pta);
+		qds->free_row(pta);
+		delete qds;
+	}
+	digest_bt_map.erase(digest_bt_map.begin(),digest_bt_map.end());
+	spin_wrunlock(&digest_rwlock);
+	return result;
+}
+
 
 
 QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
@@ -435,7 +608,7 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			qr1=*it;
 			if (qr1->active) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
-				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->apply);
+				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->delay, qr1->apply);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: \n", qr2->rule_id, qr2->match_pattern);
@@ -455,13 +628,13 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 6, "query rule %d has no matching flagIN\n", qr->rule_id);
 			continue;
 		}
-		if (qr->username) {
+		if (qr->username && strlen(qr->username)) {
 			if (strcmp(qr->username,sess->client_myds->myconn->userinfo->username)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching username\n", qr->rule_id);
 				continue;
 			}
 		}
-		if (qr->schemaname) {
+		if (qr->schemaname && strlen(qr->schemaname)) {
 			if (strcmp(qr->schemaname,sess->client_myds->myconn->userinfo->schemaname)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching schemaname\n", qr->rule_id);
 				continue;
@@ -494,6 +667,9 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			ret->size=0;
 			ret->destination_hostgroup=-1;
 			ret->cache_ttl=-1;
+			ret->reconnect=-1;
+			ret->timeout=-1;
+			ret->delay=-1;
 			ret->new_query=NULL;
 		}
 		qr->hits++; // this is done without atomic function because it updates only the local variables
@@ -527,13 +703,28 @@ QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, 
 			flagIN=qr->flagOUT;
 			//sess->query_info.flagOUT=flagIN;
     }
+    if (qr->reconnect >= 0) {
+			// Note: negative reconnect means this rule doesn't change 
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set reconnect: %d. Query will%s be rexecuted if connection is lost\n", qr->rule_id, qr->reconnect, (qr->reconnect == 0 ? " NOT" : "" ));
+      ret->reconnect=qr->reconnect;
+    }
+    if (qr->timeout >= 0) {
+			// Note: negative timeout means this rule doesn't change 
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
+      ret->timeout=qr->timeout;
+    }
+    if (qr->delay >= 0) {
+			// Note: negative delay means this rule doesn't change 
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
+      ret->delay=qr->delay;
+    }
     if (qr->cache_ttl >= 0) {
 			// Note: negative TTL means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
       ret->cache_ttl=qr->cache_ttl;
     }
     if (qr->destination_hostgroup >= 0) {
-			// Note: negative TTL means this rule doesn't change 
+			// Note: negative hostgroup means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
       ret->destination_hostgroup=qr->destination_hostgroup;
     }
@@ -596,6 +787,10 @@ void Query_Processor::update_query_processor_stats() {
 void * Query_Processor::query_parser_init(char *query, int query_length, int flags) {
 	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
 	libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
+	qp->digest_text=NULL;
+	qp->digest_text=mysql_query_digest(query, query_length);
+	qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
+
 	return (void *)qp;
 };
 
@@ -605,12 +800,53 @@ enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(void *ar
 	return ret;
 }
 
-unsigned long long Query_Processor::query_parser_update_counters(enum MYSQL_COM_QUERY_command c, unsigned long long t) {
+unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, void *p, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
+
+	SQP_par_t *qp=(SQP_par_t *)p;
+
+	uint64_t hash2;
+	SpookyHash *myhash=new SpookyHash();
+	myhash->Init(19,3);
+	assert(sess);
+	assert(sess->client_myds);
+	assert(sess->client_myds->myconn);
+	assert(sess->client_myds->myconn->userinfo);
+	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+	assert(ui->username);
+	assert(ui->schemaname);
+	myhash->Update(ui->username,strlen(ui->username));
+	myhash->Update(&qp->digest,sizeof(qp->digest));
+	myhash->Update(ui->schemaname,strlen(ui->schemaname));
+	myhash->Final(&qp->digest_total,&hash2);
+	delete myhash;
+
+	update_query_digest(qp, ui, t, sess->thread->curtime);
+
 	return ret;
 }
 
+void Query_Processor::update_query_digest(void *p, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
+	SQP_par_t *qp=(SQP_par_t *)p;
+	spin_wrlock(&digest_rwlock);
+
+	QP_query_digest_stats *qds;	
+
+	btree::btree_map<uint64_t, void *>::iterator it;
+	it=digest_bt_map.find(qp->digest_total);
+	if (it != digest_bt_map.end()) {
+		// found
+		qds=(QP_query_digest_stats *)it->second;
+		qds->add_time(t,n);
+	} else {
+		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text);
+		qds->add_time(t,n);
+		digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
+	}
+
+	spin_wrunlock(&digest_rwlock);
+}
 
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
@@ -726,5 +962,9 @@ char * Query_Processor::query_parser_first_comment(void *args) { return NULL; }
 
 void Query_Processor::query_parser_free(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
+	if (qp->digest_text) {
+		free(qp->digest_text);
+		qp->digest_text=NULL;
+	}
 	free(qp);	
 };

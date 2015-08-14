@@ -33,7 +33,20 @@ class MySQL_Connection {
 	unsigned long long inserted_into_pool;
 	public:
 	int fd;
+	short wait_events;
+	unsigned long long timeout;
 	char scramble_buff[40];
+	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
+	int interr;	// integer return
+	my_bool ret_bool;
+	MDB_ASYNC_ST async_state_machine;	// Async state machine
+	MYSQL *mysql;
+	MYSQL *ret_mysql;
+	MYSQL_RES *mysql_result;
+	struct {
+		char *ptr;
+		unsigned long length;
+	} query;
 	struct {
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
@@ -71,5 +84,31 @@ class MySQL_Connection {
 	bool get_status_compression();
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
+	void connect_start();
+	void connect_cont(short event);
+	void change_user_start();
+	void change_user_cont(short event);
+	void ping_start();
+	void ping_cont(short event);
+	void set_names_start();
+	void set_names_cont(short event);
+	void real_query_start();
+	void real_query_cont(short event);
+	void store_result_start();
+	void store_result_cont(short event);
+	void initdb_start();
+	void initdb_cont(short event);
+	void set_query(char *stmt, unsigned long length);
+	MDB_ASYNC_ST handler(short event);
+	void next_event(MDB_ASYNC_ST new_st);
+
+	int async_connect(short event);
+	int async_change_user(short event);
+	int async_select_db(short event);
+	int async_set_names(short event, uint8_t nr);
+	int async_query(short event, char *stmt, unsigned long length);
+	int async_ping(short event);
+	void async_free_result();
+	bool IsActiveTransaction();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

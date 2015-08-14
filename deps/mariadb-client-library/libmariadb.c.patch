@@ -1,15 +1,17 @@
-@@ -2192,6 +2192,14 @@
+@@ -2192,6 +2192,16 @@
      my_free(mysql->options.extension->ssl_crlpath, MYF(MY_ALLOW_ZERO_PTR));
      if(hash_inited(&mysql->options.extension->connect_attrs))
        hash_free(&mysql->options.extension->connect_attrs);
 +    {
-+      struct mysql_async_context *ctxt;
-+      if ((ctxt = mysql->options.extension->async_context) != 0)
-+      {
-+        my_context_destroy(&ctxt->async_context);
-+        my_free((gptr)ctxt, MYF(0));
-+      }
-+    }
++			struct mysql_async_context *ctxt;
++			if ((ctxt = mysql->options.extension->async_context) != 0) {
++				if (ctxt->active==0) {
++					my_context_destroy(&ctxt->async_context);
++					my_free((gptr)ctxt, MYF(0));
++					mysql->options.extension->async_context=NULL;
++				}
++			}
++		}
    }
    my_free((gptr)mysql->options.extension, MYF(MY_ALLOW_ZERO_PTR));
    /* clear all pointer */

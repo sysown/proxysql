@@ -1,5 +1,6 @@
 #ifdef __cplusplus
 #include <string>
+#include <stack>
 #include "btree_map.h"
 #ifndef EZOPTION
 //#include "ezOptionParser.hpp"
