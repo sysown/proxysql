@@ -120,6 +120,8 @@ class ProxySQL_Admin {
 
 
 	void stats___mysql_query_rules();
+	void stats___mysql_query_digests();
+	void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();
 	void stats___mysql_connection_pool();

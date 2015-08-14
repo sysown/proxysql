@@ -4,6 +4,8 @@
 #include "cpp.h"
 
 
+typedef btree::btree_map<uint64_t, void *> BtMap_query_digest;
+
 enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_ALTER_TABLE,
 	MYSQL_COM_QUERY_ANALYZE_TABLE,
@@ -147,6 +149,9 @@ class Query_Processor {
 	private:
 	enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args);
 
+	rwlock_t digest_rwlock;
+	BtMap_query_digest digest_bt_map;
+
 	protected:
 	rwlock_t rwlock;
 	std::vector<QP_rule_t *> rules;
@@ -184,9 +189,13 @@ class Query_Processor {
 	char * query_parser_first_comment(void *args);
 	void query_parser_free(void *args);
 
-	unsigned long long query_parser_update_counters(enum MYSQL_COM_QUERY_command c, unsigned long long t);
+	void update_query_digest(void *p, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);
+
+	unsigned long long query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, void *p, unsigned long long t);
 
 	SQLite3_result * get_stats_commands_counters();
+	SQLite3_result * get_query_digests();
+	SQLite3_result * get_query_digests_reset();
 };
 
 

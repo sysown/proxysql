@@ -62,7 +62,9 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , db VARCHAR , cli_host VARCHAR , cli_port VARCHAR , hostgroup VARCHAR , l_srv_host VARCHAR , l_srv_port VARCHAR , srv_host VARCHAR , srv_port VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR)"
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL "CREATE TABLE stats_mysql_connection_pool (hostgroup VARCHAR , srv_host VARCHAR , srv_port VARCHAR , status VARCHAR , ConnUsed INT , ConnFree INT)"
 
+#define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST "CREATE TABLE stats_mysql_query_digest (schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY(schemaname, username, digest))"
 
+#define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_mysql_query_digest_reset (schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY(schemaname, username, digest))"
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
@@ -907,15 +909,21 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 		bool stats_mysql_processlist=false;
 		bool stats_mysql_connection_pool=false;
+		bool stats_mysql_query_digests_reset=false;
+
 		if (strstr(query_no_space,"stats_mysql_processlist"))
 			stats_mysql_processlist=true;
+		if (strstr(query_no_space,"stats_mysql_query_digests_reset"))
+			stats_mysql_query_digests_reset=true;
 		if (strstr(query_no_space,"stats_mysql_connection_pool"))
 			stats_mysql_connection_pool=true;
-		if (stats_mysql_processlist || stats_mysql_connection_pool) {
+		if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digests_reset) {
 			pthread_mutex_lock(&admin_mutex);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			if (stats_mysql_processlist)
 				SPA->stats___mysql_processlist();
+			if (stats_mysql_query_digests_reset)
+				SPA->stats___mysql_query_digests_reset();
 			if (stats_mysql_connection_pool)
 				SPA->stats___mysql_connection_pool();
 			pthread_mutex_unlock(&admin_mutex);
@@ -934,6 +942,17 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		run_query=false;
 		goto __run_query;
 	}
+
+
+//	if (!strncasecmp("RESET MYSQL QUERY DIGEST", query_no_space, strlen("RESET MYSQL QUERY DIGEST"))) {
+//		proxy_info("Received %s command\n", query_no_space);
+//		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+//		GloQPro->reset_query_digest();
+//		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Setting mysql query digests\n");
+//		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+//		run_query=false;
+//		goto __run_query;
+//	}
 
 
 
@@ -1177,6 +1196,7 @@ void *child_mysql(void *arg) {
 				ProxySQL_Admin *SPA=(ProxySQL_Admin *)GloAdmin;
 				pthread_mutex_lock(&admin_mutex);
 				SPA->stats___mysql_query_rules();
+				SPA->stats___mysql_query_digests();
 				SPA->stats___mysql_commands_counters();
 				pthread_mutex_unlock(&admin_mutex);
 			}
@@ -1485,6 +1505,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
 	insert_into_tables_defs(tables_defs_stats,"mysql_processlist", STATS_SQLITE_TABLE_MYSQL_PROCESSLIST);
 	insert_into_tables_defs(tables_defs_stats,"mysql_connection_pool", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
 
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
@@ -2104,6 +2126,50 @@ void ProxySQL_Admin::stats___mysql_query_rules() {
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,r->fields[0],r->fields[1]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___mysql_query_digests() {
+	if (!GloQPro) return;
+	SQLite3_result * resultset=GloQPro->get_query_digests();
+	if (resultset==NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_query_digest");
+	char *a=(char *)"INSERT INTO stats_mysql_query_digest VALUES (\"%s\",\"%s\",\"%s\",\"%s\",%s,%s,%s,%s,%s,%s)";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<10; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___mysql_query_digests_reset() {
+	if (!GloQPro) return;
+	SQLite3_result * resultset=GloQPro->get_query_digests_reset();
+	if (resultset==NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_query_digest_reset");
+	char *a=(char *)"INSERT INTO stats_mysql_query_digest_reset VALUES (\"%s\",\"%s\",\"%s\",\"%s\",%s,%s,%s,%s,%s,%s)";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<10; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9]);
 		statsdb->execute(query);
 		free(query);
 	}

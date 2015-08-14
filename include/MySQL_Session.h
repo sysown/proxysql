@@ -17,6 +17,7 @@ class MySQL_Session_userinfo {
 */
 class Query_Info {
 	public:
+	MySQL_Session *sess;
 	unsigned long long start_time;
 	unsigned long long end_time;
 	void *QueryParserArgs;

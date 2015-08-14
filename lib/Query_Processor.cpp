@@ -8,6 +8,7 @@
 #include "../deps/libinjection/libinjection.h"
 #include "../deps/libinjection/libinjection_sqli.h"
 
+#include "SpookyV2.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -64,12 +65,124 @@ class QP_rule_text {
 	}
 };
 
-
 struct __SQP_query_parser_t {
 	sfilter sf;
+	uint64_t digest;
+	char *digest_text;
+	uint64_t digest_total;
 };
 
 typedef struct __SQP_query_parser_t SQP_par_t;
+
+class QP_query_digest_stats {
+	public:
+	uint64_t digest;
+	char *digest_text;
+	char *username;
+	char *schemaname;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned int count_star;
+	unsigned long long sum_time;
+	unsigned long long min_time;
+	unsigned long long max_time;
+	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt) {
+		digest=d;
+		digest_text=strdup(dt);
+		username=strdup(u);
+		schemaname=strdup(s);
+		count_star=0;
+		first_seen=0;
+		last_seen=0;
+		sum_time=0;
+		min_time=0;
+		max_time=0;
+	}
+	void add_time(unsigned long long t, unsigned long long n) {
+		count_star++;
+		sum_time+=t;
+		if (t < min_time || min_time==0) {
+			min_time = t;
+		}
+		if (t > max_time) {
+			max_time = t;
+		}
+		if (first_seen==0) {
+			first_seen=n;
+		}
+		last_seen=n;
+	}
+	~QP_query_digest_stats() {
+		if (digest_text) {
+			free(digest_text);
+			digest_text=NULL;
+		}
+		if (username) {
+			free(username);
+			username=NULL;
+		}
+		if (schemaname) {
+			free(schemaname);
+			schemaname=NULL;
+		}
+	}
+	char **get_row() {
+		char buf[128];
+		char **pta=(char **)malloc(sizeof(char *)*10);
+		assert(username);
+		pta[0]=strdup(username);
+		assert(schemaname);
+		pta[1]=strdup(schemaname);
+
+		uint32_t d32[2];
+		memcpy(&d32,&digest,sizeof(digest));
+		sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		pta[2]=strdup(buf);
+
+		assert(digest_text);
+		pta[3]=strdup(digest_text);
+		sprintf(buf,"%u",count_star);
+		pta[4]=strdup(buf);
+
+		time_t __now;
+    //char __buffer[25];
+//    struct tm *__tm_info;
+    time(&__now);
+		
+		unsigned long long curtime=monotonic_time();
+
+		time_t seen_time;
+
+		seen_time= __now - (curtime - first_seen)/1000000;
+//    __tm_info = localtime(&seen_time);
+//    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+		sprintf(buf,"%ld", seen_time);
+		pta[5]=strdup(buf);
+
+		seen_time= __now - (curtime - last_seen)/1000000;
+//    __tm_info = localtime(&seen_time);
+//    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+		sprintf(buf,"%ld", seen_time);
+		pta[6]=strdup(buf);
+
+		sprintf(buf,"%llu",sum_time);
+		pta[7]=strdup(buf);
+		sprintf(buf,"%llu",min_time);
+		pta[8]=strdup(buf);
+		sprintf(buf,"%llu",max_time);
+		pta[9]=strdup(buf);
+		return pta;
+	}
+	void free_row(char **pta) {
+		int i;
+		for (i=0;i<10;i++) {
+			assert(pta[i]);
+			free(pta[i]);
+		}
+		free(pta);
+	}
+};
+
 
 //static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];
 
@@ -204,6 +317,7 @@ Query_Processor::Query_Processor() {
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
 	spinlock_rwlock_init(&rwlock);
+	spinlock_rwlock_init(&digest_rwlock);
 	version=0;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) commands_counters[i]=new Command_Counter(i);
 
@@ -425,6 +539,56 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	return result;
 }
 
+SQLite3_result * Query_Processor::get_query_digests() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
+	SQLite3_result *result=new SQLite3_result(10);
+	spin_rdlock(&digest_rwlock);
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"usernname");
+	result->add_column_definition(SQLITE_TEXT,"digest");
+	result->add_column_definition(SQLITE_TEXT,"digest_text");
+	result->add_column_definition(SQLITE_TEXT,"count_star");
+	result->add_column_definition(SQLITE_TEXT,"first_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_seen");
+	result->add_column_definition(SQLITE_TEXT,"sum_time");
+	result->add_column_definition(SQLITE_TEXT,"min_time");
+	result->add_column_definition(SQLITE_TEXT,"max_time");
+	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+		char **pta=qds->get_row();
+		result->add_row(pta);
+		qds->free_row(pta);
+	}
+	spin_rdunlock(&digest_rwlock);
+	return result;
+}
+
+SQLite3_result * Query_Processor::get_query_digests_reset() {
+	SQLite3_result *result=new SQLite3_result(10);
+	spin_wrlock(&digest_rwlock);
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"usernname");
+	result->add_column_definition(SQLITE_TEXT,"digest");
+	result->add_column_definition(SQLITE_TEXT,"digest_text");
+	result->add_column_definition(SQLITE_TEXT,"count_star");
+	result->add_column_definition(SQLITE_TEXT,"first_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_seen");
+	result->add_column_definition(SQLITE_TEXT,"sum_time");
+	result->add_column_definition(SQLITE_TEXT,"min_time");
+	result->add_column_definition(SQLITE_TEXT,"max_time");
+	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+		char **pta=qds->get_row();
+		result->add_row(pta);
+		qds->free_row(pta);
+		delete qds;
+	}
+	digest_bt_map.erase(digest_bt_map.begin(),digest_bt_map.end());
+	spin_wrunlock(&digest_rwlock);
+	return result;
+}
+
+
 
 QP_out_t * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
 	QP_out_t *ret=NULL;
@@ -623,6 +787,10 @@ void Query_Processor::update_query_processor_stats() {
 void * Query_Processor::query_parser_init(char *query, int query_length, int flags) {
 	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
 	libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
+	qp->digest_text=NULL;
+	qp->digest_text=mysql_query_digest(query, query_length);
+	qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
+
 	return (void *)qp;
 };
 
@@ -632,12 +800,53 @@ enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(void *ar
 	return ret;
 }
 
-unsigned long long Query_Processor::query_parser_update_counters(enum MYSQL_COM_QUERY_command c, unsigned long long t) {
+unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, void *p, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
+
+	SQP_par_t *qp=(SQP_par_t *)p;
+
+	uint64_t hash2;
+	SpookyHash *myhash=new SpookyHash();
+	myhash->Init(19,3);
+	assert(sess);
+	assert(sess->client_myds);
+	assert(sess->client_myds->myconn);
+	assert(sess->client_myds->myconn->userinfo);
+	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+	assert(ui->username);
+	assert(ui->schemaname);
+	myhash->Update(ui->username,strlen(ui->username));
+	myhash->Update(&qp->digest,sizeof(qp->digest));
+	myhash->Update(ui->schemaname,strlen(ui->schemaname));
+	myhash->Final(&qp->digest_total,&hash2);
+	delete myhash;
+
+	update_query_digest(qp, ui, t, sess->thread->curtime);
+
 	return ret;
 }
 
+void Query_Processor::update_query_digest(void *p, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
+	SQP_par_t *qp=(SQP_par_t *)p;
+	spin_wrlock(&digest_rwlock);
+
+	QP_query_digest_stats *qds;	
+
+	btree::btree_map<uint64_t, void *>::iterator it;
+	it=digest_bt_map.find(qp->digest_total);
+	if (it != digest_bt_map.end()) {
+		// found
+		qds=(QP_query_digest_stats *)it->second;
+		qds->add_time(t,n);
+	} else {
+		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text);
+		qds->add_time(t,n);
+		digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
+	}
+
+	spin_wrunlock(&digest_rwlock);
+}
 
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
@@ -753,5 +962,9 @@ char * Query_Processor::query_parser_first_comment(void *args) { return NULL; }
 
 void Query_Processor::query_parser_free(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
+	if (qp->digest_text) {
+		free(qp->digest_text);
+		qp->digest_text=NULL;
+	}
 	free(qp);	
 };
