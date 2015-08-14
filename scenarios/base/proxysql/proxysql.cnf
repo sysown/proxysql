@@ -1,0 +1,24 @@
+datadir="/tmp"
+
+admin_variables =
+{
+	admin_credentials="admin:admin"
+	mysql_ifaces="0.0.0.0:6032"
+	refresh_interval=2000
+	debug=true
+}
+
+mysql_users = 
+(
+	{
+		username = "root"
+		password = "root"
+		default_hostgroup = 0
+	},
+
+	{
+		username = "john"
+		password = "doe"
+		default_hostgroup = 0
+	}
+)

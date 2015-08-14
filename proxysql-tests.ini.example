@@ -1,0 +1,23 @@
+[ProxySQL]
+hostname=127.0.0.1
+username=root
+password=root
+port=6033
+admin_username=admin
+admin_password=admin
+admin_port=6032
+
+[Email]
+smtp_server=smtp.gmail.com
+smtp_port=587
+username=proxysql.tests
+password=
+from=ProxySQL Tests <proxysql.tests@gmail.com>
+to=Andrei-Adnan Ismail <iandrei@gmail.com>
+
+[Ping]
+ping_command=SELECT @@version_comment LIMIT 1
+db=information_schema
+connect_timeout=30
+ping_interval=60
+failed_connections_before_alert=3
