@@ -4,6 +4,8 @@
 #include "cpp.h"
 #include "MySQL_Thread.h"
 
+#define PROXYSQL_LISTEN_LEN 1024
+
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -82,7 +84,7 @@ int MySQL_Listeners_Manager::add(const char *iface) {
 	}
 	char *address=NULL; char *port=NULL;
 	c_split_2(iface, ":" , &address, &port);
-	int s = ( atoi(port) ? listen_on_port(address, atoi(port), 50) : listen_on_unix(address, 50));
+	int s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
 	if (s==-1) return s;
 	ioctl_FIONBIO(s,1);
 	iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
