@@ -909,20 +909,25 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 		bool stats_mysql_processlist=false;
 		bool stats_mysql_connection_pool=false;
-		bool stats_mysql_query_digests_reset=false;
+		bool stats_mysql_query_digest=false;
+		bool stats_mysql_query_digest_reset=false;
 
 		if (strstr(query_no_space,"stats_mysql_processlist"))
 			stats_mysql_processlist=true;
-		if (strstr(query_no_space,"stats_mysql_query_digests_reset"))
-			stats_mysql_query_digests_reset=true;
+		if (strstr(query_no_space,"stats_mysql_query_digest"))
+			stats_mysql_query_digest=true;
+		if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
+			stats_mysql_query_digest_reset=true;
 		if (strstr(query_no_space,"stats_mysql_connection_pool"))
 			stats_mysql_connection_pool=true;
-		if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digests_reset) {
+		if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 			pthread_mutex_lock(&admin_mutex);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			if (stats_mysql_processlist)
 				SPA->stats___mysql_processlist();
-			if (stats_mysql_query_digests_reset)
+			if (stats_mysql_query_digest)
+				SPA->stats___mysql_query_digests();
+			if (stats_mysql_query_digest_reset)
 				SPA->stats___mysql_query_digests_reset();
 			if (stats_mysql_connection_pool)
 				SPA->stats___mysql_connection_pool();
@@ -1196,7 +1201,7 @@ void *child_mysql(void *arg) {
 				ProxySQL_Admin *SPA=(ProxySQL_Admin *)GloAdmin;
 				pthread_mutex_lock(&admin_mutex);
 				SPA->stats___mysql_query_rules();
-				SPA->stats___mysql_query_digests();
+				//SPA->stats___mysql_query_digests();
 				SPA->stats___mysql_commands_counters();
 				pthread_mutex_unlock(&admin_mutex);
 			}
@@ -1501,10 +1506,10 @@ bool ProxySQL_Admin::init() {
 #endif /* DEBUG */
 
 
-	insert_into_tables_defs(tables_defs_stats,"mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
-	insert_into_tables_defs(tables_defs_stats,"mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
-	insert_into_tables_defs(tables_defs_stats,"mysql_processlist", STATS_SQLITE_TABLE_MYSQL_PROCESSLIST);
-	insert_into_tables_defs(tables_defs_stats,"mysql_connection_pool", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_processlist", STATS_SQLITE_TABLE_MYSQL_PROCESSLIST);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_connection_pool", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
 
@@ -1513,12 +1518,12 @@ bool ProxySQL_Admin::init() {
 	check_and_build_standard_tables(configdb, tables_defs_config);
 	check_and_build_standard_tables(statsdb, tables_defs_stats);
 
-	dump_mysql_collations();
-
 	__attach_db(admindb, configdb, (char *)"disk");
 	__attach_db(admindb, statsdb, (char *)"stats");
 	__attach_db(admindb, monitordb, (char *)"monitor");
 	__attach_db(statsdb, monitordb, (char *)"monitor");
+
+	dump_mysql_collations();
 
 #ifdef DEBUG	
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
