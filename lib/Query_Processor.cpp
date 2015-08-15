@@ -153,13 +153,13 @@ class QP_query_digest_stats {
 
 		time_t seen_time;
 
-		seen_time= __now - (curtime - first_seen)/1000000;
+		seen_time= __now - curtime/1000000 + first_seen/1000000;
 //    __tm_info = localtime(&seen_time);
 //    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
 		sprintf(buf,"%ld", seen_time);
 		pta[5]=strdup(buf);
 
-		seen_time= __now - (curtime - last_seen)/1000000;
+		seen_time= __now - curtime/1000000 + last_seen/1000000;
 //    __tm_info = localtime(&seen_time);
 //    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
 		sprintf(buf,"%ld", seen_time);
