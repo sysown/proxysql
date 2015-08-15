@@ -246,6 +246,8 @@ void MySQL_Connection::connect_start() {
 	mysql=mysql_init(NULL);
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+	unsigned int timeout= 1;
+	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
 	const CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
 	if (!c) {
 		proxy_error("Not existing charset number %u\n", mysql_thread___default_charset);
@@ -362,7 +364,9 @@ handler_again:
 			}
 			break;
 		case ASYNC_CONNECT_CONT:
-			connect_cont(event);
+			it (event) {
+				connect_cont(event);
+			}
 			if (async_exit_status) {
 					if (myds->sess->thread->curtime >= myds->wait_until) {
 						NEXT_IMMEDIATE(ASYNC_CONNECT_TIMEOUT);
