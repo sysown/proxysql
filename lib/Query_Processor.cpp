@@ -129,10 +129,10 @@ class QP_query_digest_stats {
 	char **get_row() {
 		char buf[128];
 		char **pta=(char **)malloc(sizeof(char *)*10);
-		assert(username);
-		pta[0]=strdup(username);
 		assert(schemaname);
-		pta[1]=strdup(schemaname);
+		pta[0]=strdup(schemaname);
+		assert(username);
+		pta[1]=strdup(username);
 
 		uint32_t d32[2];
 		memcpy(&d32,&digest,sizeof(digest));
