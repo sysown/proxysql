@@ -705,7 +705,8 @@ handler_again:
 						if (mybe->server_myds->wait_until==0) {
 							mybe->server_myds->wait_until=thread->curtime;
 						}
-						mybe->server_myds->wait_until+=mysql_thread___default_query_timeout*1000;
+						unsigned long long def_query_timeout=mysql_thread___default_query_timeout;
+						mybe->server_myds->wait_until+=def_query_timeout*1000;
 					}
 				}
 				int rc=myconn->async_query(myds->revents, myds->mysql_real_query.ptr,myds->mysql_real_query.size);

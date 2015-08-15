@@ -364,7 +364,7 @@ handler_again:
 			}
 			break;
 		case ASYNC_CONNECT_CONT:
-			it (event) {
+			if (event) {
 				connect_cont(event);
 			}
 			if (async_exit_status) {
