@@ -541,7 +541,18 @@ __get_pkts_from_client:
 						break;
 					default:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
-						assert(0); // FIXME: this should become close connection
+						{
+							char buf[256];
+							if (client_myds->client_addr->sa_family==AF_INET) {
+								struct sockaddr_in * ipv4addr=(struct sockaddr_in *)client_myds->client_addr;
+								sprintf(buf,"%s:%d", inet_ntoa(ipv4addr->sin_addr), htons(ipv4addr->sin_port));
+							} else {
+								sprintf(buf,"localhost");
+							}
+						proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+						}
+						return -1;
+						break;
 			}
 				
 				break;
