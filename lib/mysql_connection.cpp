@@ -589,16 +589,19 @@ int MySQL_Connection::async_connect(short event) {
 		assert(0);
 	}
 	if (async_state_machine==ASYNC_IDLE) {
+		myds->wait_until=0;
 		return 0;
 	}
 	if (async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
 		async_state_machine=ASYNC_IDLE;
+		myds->wait_until=0;
 		return 0;
 	}
 	handler(event);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_SUCCESSFUL:
 			async_state_machine=ASYNC_IDLE;
+			myds->wait_until=0;
 			return 0;
 			break;
 		case ASYNC_CONNECT_FAILED:

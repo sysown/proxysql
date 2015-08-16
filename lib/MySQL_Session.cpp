@@ -452,6 +452,7 @@ __get_pkts_from_client:
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
 									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
+									mybe->server_myds->wait_until=0;
 									pause_until=0;
 									if (mysql_thread___default_query_delay) {
 										pause_until=thread->curtime+mysql_thread___default_query_delay*1000;
