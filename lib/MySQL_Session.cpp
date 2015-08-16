@@ -2176,7 +2176,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 		}
 		myds->DSS=STATE_COLUMN_DEFINITION;
 		num_rows=mysql_num_rows(result);
-		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->status); sid++;
+		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->server_status); sid++;
 		client_myds->resultset_length+=pkt_length;
 		//char **p=(char **)malloc(sizeof(char*)*num_fields);
 		//int *l=(int *)malloc(sizeof(int*)*num_fields);
@@ -2193,7 +2193,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 			client_myds->resultset_length+=pkt_length;
 		}
 		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->status); sid++;
+		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->server_status); sid++;
 		client_myds->resultset_length+=pkt_length;
 		if (qpo && qpo->cache_ttl>0 && mysql_errno(mysql)==0) {
 			client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
@@ -2211,7 +2211,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
 			num_rows = mysql_affected_rows(mysql);
-			myprot->generate_pkt_OK(true,NULL,NULL,sid,num_rows,mysql->insert_id,mysql->status,mysql->warning_count,mysql->info);
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,num_rows,mysql->insert_id,mysql->server_status,mysql->warning_count,mysql->info);
 		} else {
 			// error
 			char sqlstate[10];
