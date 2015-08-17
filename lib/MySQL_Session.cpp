@@ -91,7 +91,8 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	if (mysql_thread___commands_stats || mysql_thread___query_digests) {
 		init(_p, len, mysql_header);
 		query_parser_init();
-		query_parser_command_type();
+		if (mysql_thread___commands_stats)
+			query_parser_command_type();
 	}
 }
 
