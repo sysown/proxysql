@@ -865,7 +865,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 }
 
 
-void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length) {
+void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin) {
 	bool refresh=false;
 	bool stats_mysql_processlist=false;
 	bool stats_mysql_connection_pool=false;
@@ -881,8 +881,10 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_query_digest_reset=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_connection_pool"))
 		{ stats_mysql_connection_pool=true; refresh=true; }
-	if (strstr(query_no_space,"global_variables"))
-		{ dump_global_variables=true; refresh=true; }
+	if (admin) {
+		if (strstr(query_no_space,"global_variables"))
+			{ dump_global_variables=true; refresh=true; }
+	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
 		pthread_mutex_lock(&admin_mutex);
@@ -895,9 +897,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_query_digests_reset();
 		if (stats_mysql_connection_pool)
 			stats___mysql_connection_pool();
-		if (dump_global_variables) {
-			flush_admin_variables___runtime_to_database(admindb, false, false, false);
-			flush_mysql_variables___runtime_to_database(admindb, false, false, false);
+		if (admin) {
+			if (dump_global_variables) {
+				flush_admin_variables___runtime_to_database(admindb, false, false, false);
+				flush_mysql_variables___runtime_to_database(admindb, false, false, false);
+			}
 		}
 		pthread_mutex_unlock(&admin_mutex);
 	}
@@ -929,7 +933,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 	{
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length);
+		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length,!sess->stats);
 	}
 
 

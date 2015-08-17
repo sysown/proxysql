@@ -132,6 +132,6 @@ class ProxySQL_Admin {
 	int Read_MySQL_Servers_from_configfile();
 
 	void flush_error_log();
-	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length);
+	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
