@@ -99,6 +99,9 @@ void Query_Info::end() {
 	end_time=sess->thread->curtime;
 	query_parser_update_counters();
 	query_parser_free();
+	if ((end_time-start_time) > (unsigned int)mysql_thread___long_query_time*1000) {
+		__sync_add_and_fetch(&sess->thread->status_variables.queries_slow,1);
+	}
 }
 
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
@@ -415,6 +418,7 @@ __get_pkts_from_client:
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
+								__sync_add_and_fetch(&thread->status_variables.queries,1);
 #ifdef DEBUG
 								if (mysql_thread___session_debug) {
 									if ((pkt.size>9) && strncasecmp("dbg ",(const char *)pkt.ptr+sizeof(mysql_hdr)+1,4)==0) {

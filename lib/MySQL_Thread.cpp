@@ -159,6 +159,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"max_connections",
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
+	(char *)"long_query_time",
 	(char *)"ping_interval_server",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -215,6 +216,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.max_connections=10*1000;
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
+	variables.long_query_time=1000;
 	variables.ping_interval_server=10000;
 	variables.ping_timeout_server=200;
 	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
@@ -356,6 +358,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
 	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
 	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
+	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
 	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
@@ -464,6 +467,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"default_query_timeout")) {
 		sprintf(intbuf,"%d",variables.default_query_timeout);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"long_query_time")) {
+		sprintf(intbuf,"%d",variables.long_query_time);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"ping_interval_server")) {
@@ -683,6 +690,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 20*24*3600*1000) {
 			variables.default_query_timeout=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"long_query_time")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 20*24*3600*1000) {
+			variables.long_query_time=intv;
 			return true;
 		} else {
 			return false;
@@ -1481,6 +1497,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___max_connections=GloMTH->get_variable_int((char *)"max_connections");
 	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
+	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___ping_interval_server=GloMTH->get_variable_int((char *)"ping_interval_server");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
@@ -1543,6 +1560,9 @@ MySQL_Thread::MySQL_Thread() {
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___connect_timeout_server_error=NULL;
 	mysql_thread___server_version=NULL;
+
+	status_variables.queries=0;
+	status_variables.queries_slow=0;
 }
 
 
@@ -1918,4 +1938,24 @@ __exit_kill_session:
 		spin_wrunlock(&thr->thread_mutex);
 	}
 	return ret;
+}
+
+unsigned long long MySQL_Threads_Handler::get_total_queries() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		q+=__sync_fetch_and_add(&thr->status_variables.queries,0);
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_slow_queries() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		q+=__sync_fetch_and_add(&thr->status_variables.queries_slow,0);
+	}
+	return q;
 }

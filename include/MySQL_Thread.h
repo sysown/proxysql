@@ -157,7 +157,11 @@ class MySQL_Thread
 	pthread_t thread_id;
 	int shutdown;
 	PtrArray *mysql_sessions;
-	
+
+	struct {
+		unsigned long long queries;
+		unsigned long long queries_slow;
+	} status_variables;
 
 
   rwlock_t thread_mutex;
@@ -269,6 +273,7 @@ class MySQL_Threads_Handler
 		int max_connections;
 		int default_query_delay;
 		int default_query_timeout;
+		int long_query_time;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
@@ -310,6 +315,8 @@ class MySQL_Threads_Handler
 	void signal_all_threads(unsigned char _c=0);
 	SQLite3_result * SQL3_Processlist();
 	bool kill_session(uint32_t _thread_session_id);
+	unsigned long long get_total_queries();
+	unsigned long long get_slow_queries();
 };
 
 
