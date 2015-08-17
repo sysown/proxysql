@@ -31,6 +31,8 @@ class Query_Info {
 	enum MYSQL_COM_QUERY_command query_parser_command_type(); 
 	void query_parser_free(); 
 	unsigned long long query_parser_update_counters();
+	void begin(unsigned char *_p, int len, bool mysql_header=false);
+	void end();
 };
 
 class MySQL_Session
