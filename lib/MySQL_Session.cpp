@@ -87,9 +87,9 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	QueryPointer=NULL;
 	QueryLength=0;
 	QueryParserArgs=NULL;
-	if (mysql_thread___commands_stats) {
+	start_time=sess->thread->curtime;
+	if (mysql_thread___commands_stats || mysql_thread___query_digests) {
 		init(_p, len, mysql_header);
-		start_time=sess->thread->curtime;
 		query_parser_init();
 		query_parser_command_type();
 	}
@@ -106,7 +106,6 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryPointer=(unsigned char *)l_alloc(QueryLength+1);
 	memcpy(QueryPointer,(mysql_header ? _p+5 : _p),QueryLength);	
 	QueryPointer[QueryLength]=0;
-	//QueryPointer=(mysql_header ? _p+5 : _p);
 	QueryParserArgs=NULL;
 	MyComQueryCmd=MYSQL_COM_QUERY_UNKNOWN;
 }
@@ -121,8 +120,10 @@ enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
 }
 
 void Query_Info::query_parser_free() {
-	GloQPro->query_parser_free(QueryParserArgs);
-	QueryParserArgs=NULL;
+	if (QueryParserArgs) {
+		GloQPro->query_parser_free(QueryParserArgs);
+		QueryParserArgs=NULL;
+	}
 }
 
 unsigned long long Query_Info::query_parser_update_counters() {

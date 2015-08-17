@@ -262,6 +262,7 @@ class MySQL_Threads_Handler
 		uint8_t default_charset;
 		bool servers_stats;
 		bool commands_stats;
+		bool query_digests;
 		bool default_reconnect;
 		bool have_compress;
 		int max_transaction_time;

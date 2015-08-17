@@ -786,11 +786,13 @@ void Query_Processor::update_query_processor_stats() {
 
 void * Query_Processor::query_parser_init(char *query, int query_length, int flags) {
 	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
-	libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
+	if (mysql_thread___commands_stats)
+		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
-	qp->digest_text=mysql_query_digest(query, query_length);
-	qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
-
+	if (mysql_thread___query_digests) {
+		qp->digest_text=mysql_query_digest(query, query_length);
+		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
+	}
 	return (void *)qp;
 };
 
@@ -806,24 +808,25 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 
 	SQP_par_t *qp=(SQP_par_t *)p;
 
-	uint64_t hash2;
-	SpookyHash *myhash=new SpookyHash();
-	myhash->Init(19,3);
-	assert(sess);
-	assert(sess->client_myds);
-	assert(sess->client_myds->myconn);
-	assert(sess->client_myds->myconn->userinfo);
-	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
-	assert(ui->username);
-	assert(ui->schemaname);
-	myhash->Update(ui->username,strlen(ui->username));
-	myhash->Update(&qp->digest,sizeof(qp->digest));
-	myhash->Update(ui->schemaname,strlen(ui->schemaname));
-	myhash->Final(&qp->digest_total,&hash2);
-	delete myhash;
-
-	update_query_digest(qp, ui, t, sess->thread->curtime);
-
+	if (qp->digest_text) {
+		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
+		uint64_t hash2;
+		SpookyHash *myhash=new SpookyHash();
+		myhash->Init(19,3);
+		assert(sess);
+		assert(sess->client_myds);
+		assert(sess->client_myds->myconn);
+		assert(sess->client_myds->myconn->userinfo);
+		MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+		assert(ui->username);
+		assert(ui->schemaname);
+		myhash->Update(ui->username,strlen(ui->username));
+		myhash->Update(&qp->digest,sizeof(qp->digest));
+		myhash->Update(ui->schemaname,strlen(ui->schemaname));
+		myhash->Final(&qp->digest_total,&hash2);
+		delete myhash;
+		update_query_digest(qp, ui, t, sess->thread->curtime);
+	}
 	return ret;
 }
 

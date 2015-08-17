@@ -686,6 +686,7 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
+__thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
 
@@ -733,6 +734,7 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
+extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
 
