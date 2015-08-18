@@ -309,6 +309,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==strlen("PROXYSQL STOP") && !strncasecmp("PROXYSQL STOP",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL STOP command\n");
+		GloMTH->signal_all_threads(10);
+		GloMTH->stop_listeners();
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=2;
 		return false;

@@ -286,7 +286,7 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 		}
 		for (i=0;i<num_threads;i++) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-			while(!__sync_fetch_and_add(&thr->mypolls.pending_listener_del,0));
+			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_del,0));
 		}
 		MLM->del(idx);
 		shutdown(fd,SHUT_RDWR);
@@ -1003,6 +1003,17 @@ void MySQL_Threads_Handler::start_listeners() {
 	free_tokenizer( &tok );
 }
 
+void MySQL_Threads_Handler::stop_listeners() {
+	if (variables.interfaces==NULL || strlen(variables.interfaces)==0)
+		return;
+	tokenizer_t tok = tokenizer( variables.interfaces, ";", TOKENIZER_NO_EMPTIES );
+	const char* token;
+	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
+		listener_del((char *)token);
+	}
+	free_tokenizer( &tok );
+}
+
 MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.connect_timeout_server_error) free(variables.connect_timeout_server_error);
 	if (variables.default_schema) free(variables.default_schema);
@@ -1289,17 +1300,17 @@ void MySQL_Thread::run() {
 		}	
 
 
-		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
-			poll_listener_del(n);
-			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
-		}
-
 		//this is the only portion of code not protected by a global mutex
 		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
 		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 > (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout )  );
 		// poll is called with a timeout of mypolls.poll_timeout if set , or mysql_thread___poll_timeout
 		rc=poll(mypolls.fds,mypolls.len, ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout ) );
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
+
+		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
+			poll_listener_del(n);
+			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
+		}
 
 		curtime=monotonic_time();
 
