@@ -4,14 +4,15 @@ v0.3.0-beta1
 * using libdaemon to daemonize the ProxySQL process
 * added angel process that is able to monitor and restart ProxySQL
 * added separate error log
-* using MariaDB client library + libevent for connecting and querying backend MySQL servers
+* integrated MariaDB client library
+* using libevent for connecting and querying backend MySQL servers in Monitor module
+* added transaction awareness within the Proxy
 * added a per-user:
   * max_connection value that limits the number of connections from the same user
   * transaction_persistent flag that keeps transactions within the same hostgroup for a certain user 
 * add debug build target (make debug will now build a binary with vs. make)
 * introduce support for packets larger than 16 MB (the maximal single packet size from MySQL binary protocol)
 * handling in-memory stats database locking errors gracefully by retrying (this leads to less errors when gathering stats under load)
-* added SHOW PROCESSLIST command for admin interface that aggregates running queries from all backends
 * added possibility of killing a query from a remote backend server
 * implemented LOAD MYSQL QUERY RULES FROM CONFIG
 * implemented SAVE MYSQL USERS FROM RUNTIME
