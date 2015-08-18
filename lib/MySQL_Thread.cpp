@@ -1981,7 +1981,7 @@ unsigned long long MySQL_Threads_Handler::get_total_queries() {
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
-		if (mysql_threads && mysql_threads[i]) {
+		if (mysql_threads) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.queries,0);
@@ -1994,7 +1994,7 @@ unsigned long long MySQL_Threads_Handler::get_slow_queries() {
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
-		if (mysql_threads && mysql_threads[i]) {
+		if (mysql_threads) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_slow,0);
