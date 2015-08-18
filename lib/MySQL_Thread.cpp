@@ -668,7 +668,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"wait_timeout")) {
 		int intv=atoi(value);
-		if (intv >= 1000 && intv <= 20*24*3600*1000) {
+		if (intv >= 0 && intv <= 20*24*3600*1000) {
 			variables.wait_timeout=intv;
 			return true;
 		} else {
@@ -1315,6 +1315,12 @@ void MySQL_Thread::run() {
 //			}
 		}	
 
+		if (mysql_thread___wait_timeout==0) {
+			// we should be going into PAUSE mode
+			if (mypolls.poll_timeout==0 || mypolls.poll_timeout > 100000) {
+				mypolls.poll_timeout=100000;
+			}
+		}
 
 		//this is the only portion of code not protected by a global mutex
 		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );

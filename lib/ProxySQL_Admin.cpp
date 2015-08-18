@@ -35,6 +35,8 @@ static volatile bool nostart_=false;
 
 static int __admin_refresh_interval=0;
 
+static bool proxysql_mysql_paused=false;
+static int old_wait_timeout;
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
@@ -313,6 +315,55 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloMTH->stop_listeners();
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=2;
+		return false;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL PAUSE") && !strncasecmp("PROXYSQL PAUSE",query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL PAUSE command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (nostart_) {
+			if (__sync_fetch_and_add(&GloVars.global.nostart,0)) {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module not running, impossible to pause");
+				return false;
+			}
+		}
+		if (proxysql_mysql_paused==false) {
+			old_wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
+			GloMTH->set_variable((char *)"wait_timeout",(char *)"0");
+			GloMTH->commit();
+			// to speed up this process we first change wait_timeout to 0
+			// MySQL_thread will call poll() with a maximum timeout of 100ms
+			GloMTH->signal_all_threads(0);
+			GloMTH->stop_listeners();
+			proxysql_mysql_paused=true;
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is already paused, impossible to pause");
+		}
+		return false;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL RESUME") && !strncasecmp("PROXYSQL RESUME",query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL RESUME command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (nostart_) {
+			if (__sync_fetch_and_add(&GloVars.global.nostart,0)) {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module not running, impossible to resume");
+				return false;
+			}
+		}
+		if (proxysql_mysql_paused==true) {
+			// to speed up the process we add the listeners while poll() is called with a maximum timeout of of 100ms
+			GloMTH->start_listeners();
+			char buf[32];
+			sprintf(buf,"%d",old_wait_timeout);
+			GloMTH->set_variable((char *)"wait_timeout",buf);
+			GloMTH->commit();
+			proxysql_mysql_paused=false;
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is not paused, impossible to resume");
+		}
 		return false;
 	}
 
@@ -947,7 +998,9 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	if (sess->stats==false) {
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
+			pthread_mutex_lock(&admin_mutex);
 			run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
+			pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) { 
