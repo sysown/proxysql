@@ -210,6 +210,7 @@ class iface_info {
 	~iface_info() {
 		free(iface);
 		free(address);
+		close(fd);
 	}
 };
 
