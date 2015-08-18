@@ -173,7 +173,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 		} else {
 			// config file not readable
 			GloVars.datadir=strdup(t);
-			std::cerr << "[Warning]: Cannot open any deault config file . Using default datadir in current working directory " << GloVars.datadir << endl;
+			std::cerr << "[Warning]: Cannot open any default config file . Using default datadir in current working directory " << GloVars.datadir << endl;
 		}
 	} else {
 		GloVars.datadir=GloVars.__cmd_proxysql_datadir;

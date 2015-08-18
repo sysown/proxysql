@@ -21,7 +21,8 @@ MySQL_Backend::~MySQL_Backend() {
 
 void MySQL_Backend::reset() {
 	if (server_myds && server_myds->myconn) {
-		if (server_myds->DSS==STATE_READY && server_myds->myconn->reusable==true && ((server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+		//if (server_myds->DSS==STATE_READY && server_myds->myconn->reusable==true && ((server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+		if (server_myds->DSS==STATE_READY && server_myds->myconn->reusable==true && ((server_myds->myconn->IsActiveTransaction()==false))) {
 			server_myds->myconn->last_time_used=server_myds->sess->thread->curtime;
 			server_myds->return_MySQL_Connection_To_Pool();
 			//MyHGM->push_MyConn_to_pool(server_myds->myconn);

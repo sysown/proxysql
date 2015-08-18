@@ -865,6 +865,48 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 }
 
 
+void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin) {
+	bool refresh=false;
+	bool stats_mysql_processlist=false;
+	bool stats_mysql_connection_pool=false;
+	bool stats_mysql_query_digest=false;
+	bool stats_mysql_query_digest_reset=false;
+	bool dump_global_variables=false;
+
+	if (strstr(query_no_space,"stats_mysql_processlist"))
+		{ stats_mysql_processlist=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_query_digest"))
+		{ stats_mysql_query_digest=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
+		{ stats_mysql_query_digest_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_connection_pool"))
+		{ stats_mysql_connection_pool=true; refresh=true; }
+	if (admin) {
+		if (strstr(query_no_space,"global_variables"))
+			{ dump_global_variables=true; refresh=true; }
+	}
+//	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
+	if (refresh==true) {
+		pthread_mutex_lock(&admin_mutex);
+		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (stats_mysql_processlist)
+			stats___mysql_processlist();
+		if (stats_mysql_query_digest)
+			stats___mysql_query_digests();
+		if (stats_mysql_query_digest_reset)
+			stats___mysql_query_digests_reset();
+		if (stats_mysql_connection_pool)
+			stats___mysql_connection_pool();
+		if (admin) {
+			if (dump_global_variables) {
+				flush_admin_variables___runtime_to_database(admindb, false, false, false);
+				flush_mysql_variables___runtime_to_database(admindb, false, false, false);
+			}
+		}
+		pthread_mutex_unlock(&admin_mutex);
+	}
+}
+
 
 void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *pkt) {
 
@@ -889,6 +931,11 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	unsigned int query_no_space_length=remove_spaces(query_no_space);
 	//fprintf(stderr,"%s----\n",query_no_space);
 
+	{
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length,!sess->stats);
+	}
+
 
 	if (sess->stats==false) {
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
@@ -907,33 +954,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			goto __run_query;
 		}
 
-		bool stats_mysql_processlist=false;
-		bool stats_mysql_connection_pool=false;
-		bool stats_mysql_query_digest=false;
-		bool stats_mysql_query_digest_reset=false;
-
-		if (strstr(query_no_space,"stats_mysql_processlist"))
-			stats_mysql_processlist=true;
-		if (strstr(query_no_space,"stats_mysql_query_digest"))
-			stats_mysql_query_digest=true;
-		if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
-			stats_mysql_query_digest_reset=true;
-		if (strstr(query_no_space,"stats_mysql_connection_pool"))
-			stats_mysql_connection_pool=true;
-		if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
-			pthread_mutex_lock(&admin_mutex);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			if (stats_mysql_processlist)
-				SPA->stats___mysql_processlist();
-			if (stats_mysql_query_digest)
-				SPA->stats___mysql_query_digests();
-			if (stats_mysql_query_digest_reset)
-				SPA->stats___mysql_query_digests_reset();
-			if (stats_mysql_connection_pool)
-				SPA->stats___mysql_connection_pool();
-			pthread_mutex_unlock(&admin_mutex);
-//			goto __run_query;
-		}
 	}
 
 	// FIXME: this should be removed, it is just a POC for issue #253 . What is important is the call to GloMTH->signal_all_threads();
@@ -1374,7 +1394,7 @@ __end_while_pool:
 			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
 				c_split_2(sn, ":" , &add, &port);
-				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
+				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
 			}
 //	FIXME: disabling this part until telnet modules will be implemented

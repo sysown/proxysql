@@ -82,12 +82,34 @@ Query_Info::~Query_Info() {
 	}
 }
 
+void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
+	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
+	QueryPointer=NULL;
+	QueryLength=0;
+	QueryParserArgs=NULL;
+	start_time=sess->thread->curtime;
+	if (mysql_thread___commands_stats || mysql_thread___query_digests) {
+		init(_p, len, mysql_header);
+		query_parser_init();
+		if (mysql_thread___commands_stats)
+			query_parser_command_type();
+	}
+}
+
+void Query_Info::end() {
+	end_time=sess->thread->curtime;
+	query_parser_update_counters();
+	query_parser_free();
+	if ((end_time-start_time) > (unsigned int)mysql_thread___long_query_time*1000) {
+		__sync_add_and_fetch(&sess->thread->status_variables.queries_slow,1);
+	}
+}
+
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=(mysql_header ? len-5 : len);
 	QueryPointer=(unsigned char *)l_alloc(QueryLength+1);
 	memcpy(QueryPointer,(mysql_header ? _p+5 : _p),QueryLength);	
 	QueryPointer[QueryLength]=0;
-	//QueryPointer=(mysql_header ? _p+5 : _p);
 	QueryParserArgs=NULL;
 	MyComQueryCmd=MYSQL_COM_QUERY_UNKNOWN;
 }
@@ -102,12 +124,14 @@ enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
 }
 
 void Query_Info::query_parser_free() {
-	GloQPro->query_parser_free(QueryParserArgs);
-	QueryParserArgs=NULL;
+	if (QueryParserArgs) {
+		GloQPro->query_parser_free(QueryParserArgs);
+		QueryParserArgs=NULL;
+	}
 }
 
 unsigned long long Query_Info::query_parser_update_counters() {
-	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0;
+	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	l_free(QueryLength+1,QueryPointer);
@@ -395,21 +419,24 @@ __get_pkts_from_client:
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
+								__sync_add_and_fetch(&thread->status_variables.queries,1);
 #ifdef DEBUG
 								if (mysql_thread___session_debug) {
 									if ((pkt.size>9) && strncasecmp("dbg ",(const char *)pkt.ptr+sizeof(mysql_hdr)+1,4)==0) {
-										if (mysql_thread___commands_stats==true) {
-											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
-											CurrentQuery.start_time=thread->curtime;
-											CurrentQuery.query_parser_init();
-											CurrentQuery.query_parser_command_type();
-										}
+											CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,true);
+//										if (mysql_thread___commands_stats==true) {
+//											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
+//											CurrentQuery.start_time=thread->curtime;
+//											CurrentQuery.query_parser_init();
+//											CurrentQuery.query_parser_command_type();
+//										}
 										handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_debug(&pkt);
-										if (mysql_thread___commands_stats==true) {
-											CurrentQuery.end_time=thread->curtime;
-											CurrentQuery.query_parser_update_counters();
-											CurrentQuery.query_parser_free();
-										}
+											CurrentQuery.end();
+//										if (mysql_thread___commands_stats==true) {
+//											CurrentQuery.end_time=thread->curtime;
+//											CurrentQuery.query_parser_update_counters();
+//											CurrentQuery.query_parser_free();
+//										}
 										break;
 									}
 								}
@@ -417,13 +444,14 @@ __get_pkts_from_client:
 								if (admin==false) {
 									bool rc_break=false;
 									if (session_fast_forward==false) {
-										if (mysql_thread___commands_stats==true) {
-											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
-											CurrentQuery.start_time=thread->curtime;
-											CurrentQuery.query_parser_init();
-											CurrentQuery.query_parser_command_type();
-											//client_myds->myprot.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
-										}
+										CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,true);
+//										if (mysql_thread___commands_stats==true) {
+//											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
+//											CurrentQuery.start_time=thread->curtime;
+//											CurrentQuery.query_parser_init();
+//											CurrentQuery.query_parser_command_type();
+//											//client_myds->myprot.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
+//										}
 									}
 									rc_break=handler_special_queries(&pkt);
 									if (rc_break==true) {
@@ -452,6 +480,7 @@ __get_pkts_from_client:
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
 									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
+									mybe->server_myds->wait_until=0;
 									pause_until=0;
 									if (mysql_thread___default_query_delay) {
 										pause_until=thread->curtime+mysql_thread___default_query_delay*1000;
@@ -541,7 +570,18 @@ __get_pkts_from_client:
 						break;
 					default:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
-						assert(0); // FIXME: this should become close connection
+						{
+							char buf[256];
+							if (client_myds->client_addr->sa_family==AF_INET) {
+								struct sockaddr_in * ipv4addr=(struct sockaddr_in *)client_myds->client_addr;
+								sprintf(buf,"%s:%d", inet_ntoa(ipv4addr->sin_addr), htons(ipv4addr->sin_port));
+							} else {
+								sprintf(buf,"localhost");
+							}
+						proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+						}
+						return -1;
+						break;
 			}
 				
 				break;
@@ -705,7 +745,8 @@ handler_again:
 						if (mybe->server_myds->wait_until==0) {
 							mybe->server_myds->wait_until=thread->curtime;
 						}
-						mybe->server_myds->wait_until+=mysql_thread___default_query_timeout*1000;
+						unsigned long long def_query_timeout=mysql_thread___default_query_timeout;
+						mybe->server_myds->wait_until+=def_query_timeout*1000;
 					}
 				}
 				int rc=myconn->async_query(myds->revents, myds->mysql_real_query.ptr,myds->mysql_real_query.size);
@@ -718,11 +759,12 @@ handler_again:
 					myconn->async_free_result();
 					status=WAITING_CLIENT_DATA;
 					client_myds->DSS=STATE_SLEEP;
-					if (mysql_thread___commands_stats==true) {
-						CurrentQuery.end_time=thread->curtime;
-						CurrentQuery.query_parser_update_counters();
-						CurrentQuery.query_parser_free();
-					}
+					CurrentQuery.end();
+//					if (mysql_thread___commands_stats==true) {
+//						CurrentQuery.end_time=thread->curtime;
+//						CurrentQuery.query_parser_update_counters();
+//						CurrentQuery.query_parser_free();
+//					}
 					myds->free_mysql_real_query();
 					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
@@ -1504,11 +1546,12 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
-		if (mysql_thread___commands_stats==true) {
-			CurrentQuery.end_time=thread->curtime;
-			CurrentQuery.query_parser_update_counters();
-			CurrentQuery.query_parser_free();
-		}
+		CurrentQuery.end();
+//		if (mysql_thread___commands_stats==true) {
+//			CurrentQuery.end_time=thread->curtime;
+//			CurrentQuery.query_parser_update_counters();
+//			CurrentQuery.query_parser_free();
+//		}
 	} else {
 		// this should be a result set
 		if (qpo && qpo->cache_ttl>0) {
@@ -1661,11 +1704,12 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 			GloQPro->delete_QP_out(qpo);
 			qpo=NULL;
 		}
-		if (mysql_thread___commands_stats==true) {
-			CurrentQuery.end_time=thread->curtime;
-			CurrentQuery.query_parser_update_counters();
-			CurrentQuery.query_parser_free();
-		}
+		CurrentQuery.end();
+//		if (mysql_thread___commands_stats==true) {
+//			CurrentQuery.end_time=thread->curtime;
+//			CurrentQuery.query_parser_update_counters();
+//			CurrentQuery.query_parser_free();
+//		}
 	}
 } else {
 	if (mybe->server_myds->myconn->processing_prepared_statement_prepare==true) {
@@ -1984,11 +2028,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;
-			if (mysql_thread___commands_stats==true) {
-				CurrentQuery.end_time=thread->curtime;
-				CurrentQuery.query_parser_update_counters();
-				CurrentQuery.query_parser_free();
-			}
+			CurrentQuery.end();
+//			if (mysql_thread___commands_stats==true) {
+//				CurrentQuery.end_time=thread->curtime;
+//				CurrentQuery.query_parser_update_counters();
+//				CurrentQuery.query_parser_free();
+//			}
 			GloQPro->delete_QP_out(qpo);
 			qpo=NULL;
 			return true;
@@ -2175,7 +2220,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 		}
 		myds->DSS=STATE_COLUMN_DEFINITION;
 		num_rows=mysql_num_rows(result);
-		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,0); sid++;
+		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->server_status); sid++;
 		client_myds->resultset_length+=pkt_length;
 		//char **p=(char **)malloc(sizeof(char*)*num_fields);
 		//int *l=(int *)malloc(sizeof(int*)*num_fields);
@@ -2192,7 +2237,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 			client_myds->resultset_length+=pkt_length;
 		}
 		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,2); sid++;
+		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->server_status); sid++;
 		client_myds->resultset_length+=pkt_length;
 		if (qpo && qpo->cache_ttl>0 && mysql_errno(mysql)==0) {
 			client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
@@ -2210,7 +2255,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
 			num_rows = mysql_affected_rows(mysql);
-			myprot->generate_pkt_OK(true,NULL,NULL,sid,num_rows,mysql->insert_id,mysql->status,mysql->warning_count,mysql->info);
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,num_rows,mysql->insert_id,mysql->server_status,mysql->warning_count,mysql->info);
 		} else {
 			// error
 			char sqlstate[10];
