@@ -874,7 +874,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_query_digest_reset=false;
 	bool dump_global_variables=false;
 
-	if (strstr(query_no_space,"stats_mysql_processlist"))
+	if (strcasestr(query_no_space,"processlist"))
+		// This will match the following usecases:
+		// SHOW PROCESSLIST
+		// SHOW FULL PROCESSLIST
+		// SELECT * FROM stats_mysql_processlist
 		{ stats_mysql_processlist=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest"))
 		{ stats_mysql_query_digest=true; refresh=true; }
