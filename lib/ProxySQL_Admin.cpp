@@ -311,10 +311,19 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==strlen("PROXYSQL STOP") && !strncasecmp("PROXYSQL STOP",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL STOP command\n");
-		GloMTH->signal_all_threads(10);
+		// to speed up this process we first change wait_timeout to 0
+		// MySQL_thread will call poll() with a maximum timeout of 100ms
+		old_wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
+		GloMTH->set_variable((char *)"wait_timeout",(char *)"0");
+		GloMTH->commit();
+		GloMTH->signal_all_threads(0);
 		GloMTH->stop_listeners();
-		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		char buf[32];
+		sprintf(buf,"%d",old_wait_timeout);
+		GloMTH->set_variable((char *)"wait_timeout",buf);
+		GloMTH->commit();
 		glovars.reload=2;
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		return false;
 	}
 
