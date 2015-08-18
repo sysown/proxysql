@@ -333,6 +333,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received PROXYSQL KILL command\n");
 		exit(EXIT_SUCCESS);
 	}
+
 	return true;
 }
 
@@ -913,7 +914,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	char *error=NULL;
 	int cols;
 	int affected_rows;
-	bool run_query=true;
+	bool run_query=true, run_stats=false;
 	SQLite3_result *resultset=NULL;
 	char *strA=NULL;
 	char *strB=NULL;
@@ -1120,6 +1121,14 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	if (query_no_space_length==strlen("SHOW PROCESSLIST") && !strncasecmp("SHOW PROCESSLIST",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT * FROM stats_mysql_processlist");
+		query_length=strlen(query)+1;
+		run_stats=true;
+		goto __run_query;
+	}
+
 __end_show_commands:
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
@@ -1148,7 +1157,7 @@ __end_show_commands:
 __run_query:
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (sess->stats==false) {
+		if (sess->stats==false && run_stats==false) {
 			SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		} else {
 			SPA->statsdb->execute("PRAGMA query_only = ON");
