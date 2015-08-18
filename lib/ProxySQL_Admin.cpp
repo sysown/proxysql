@@ -914,7 +914,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	char *error=NULL;
 	int cols;
 	int affected_rows;
-	bool run_query=true, run_stats=false;
+	bool run_query=true;
 	SQLite3_result *resultset=NULL;
 	char *strA=NULL;
 	char *strB=NULL;
@@ -1125,7 +1125,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM stats_mysql_processlist");
 		query_length=strlen(query)+1;
-		run_stats=true;
 		goto __run_query;
 	}
 
@@ -1157,7 +1156,7 @@ __end_show_commands:
 __run_query:
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (sess->stats==false && run_stats==false) {
+		if (sess->stats==false) {
 			SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		} else {
 			SPA->statsdb->execute("PRAGMA query_only = ON");
