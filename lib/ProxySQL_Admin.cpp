@@ -333,6 +333,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received PROXYSQL KILL command\n");
 		exit(EXIT_SUCCESS);
 	}
+
 	return true;
 }
 
@@ -873,7 +874,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_query_digest_reset=false;
 	bool dump_global_variables=false;
 
-	if (strstr(query_no_space,"stats_mysql_processlist"))
+	if (strcasestr(query_no_space,"processlist"))
+		// This will match the following usecases:
+		// SHOW PROCESSLIST
+		// SHOW FULL PROCESSLIST
+		// SELECT * FROM stats_mysql_processlist
 		{ stats_mysql_processlist=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest"))
 		{ stats_mysql_query_digest=true; refresh=true; }
@@ -1116,6 +1121,20 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	if (query_no_space_length==strlen("SHOW DATABASES") && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("PRAGMA DATABASE_LIST");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW FULL PROCESSLIST") && !strncasecmp("SHOW FULL PROCESSLIST",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT * FROM stats_mysql_processlist");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW PROCESSLIST") && !strncasecmp("SHOW PROCESSLIST",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT SessionID, user, db, hostgroup, command, time_ms, SUBSTR(info,0,100) info FROM stats_mysql_processlist;");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
