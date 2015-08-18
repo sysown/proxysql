@@ -158,6 +158,8 @@ class MySQL_Session
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, MySQL_Protocol *myprot);
 	SQLite3_result * SQL3_Session_status();
+	unsigned int NumActiveTransactions();
+	unsigned long long IdleTime();
 
 	void reset_all_backends();
 	void writeout();

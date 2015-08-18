@@ -2401,3 +2401,28 @@ void MySQL_Session::destroy_MySQL_Connection(MySQL_Data_Stream *myds) {
 	MyHGM->destroy_MyConn_from_pool(myconn);
 }
 */
+
+unsigned int MySQL_Session::NumActiveTransactions() {
+	unsigned int ret=0;
+	if (mybes==0) return ret;
+	MySQL_Backend *_mybe;
+	unsigned int i;
+	for (i=0; i < mybes->len; i++) {
+		_mybe=(MySQL_Backend *)mybes->index(i);
+		if (_mybe->server_myds)
+			if (_mybe->server_myds->myconn)
+				if (_mybe->server_myds->myconn->IsActiveTransaction())
+					ret++;
+	}
+	return ret;
+}
+
+unsigned long long MySQL_Session::IdleTime() {
+		if (client_myds==0) return 0;
+		if (status!=WAITING_CLIENT_DATA) return 0;
+		int idx=client_myds->poll_fds_idx;
+		unsigned long long last_sent=thread->mypolls.last_sent[idx];
+		unsigned long long last_recv=thread->mypolls.last_recv[idx];
+		unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
+    return thread->curtime - last_time;
+}

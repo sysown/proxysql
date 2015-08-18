@@ -156,6 +156,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_query_timeout",
 	(char *)"monitor_timer_cached",
 	(char *)"max_transaction_time",
+	(char *)"wait_timeout",
 	(char *)"max_connections",
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
@@ -213,6 +214,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_query_status=strdup((char *)"SELECT * FROM INFORMATION_SCHEMA.GLOBAL_STATUS");
 	variables.monitor_timer_cached=true;
 	variables.max_transaction_time=4*3600*1000;
+	variables.wait_timeout=8*3600*1000;
 	variables.max_connections=10*1000;
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
@@ -355,6 +357,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
 	if (!strcasecmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
 	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
+	if (!strcasecmp(name,"wait_timeout")) return (int)variables.wait_timeout;
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
 	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
 	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
@@ -455,6 +458,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"max_transaction_time")) {
 		sprintf(intbuf,"%d",variables.max_transaction_time);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"wait_timeout")) {
+		sprintf(intbuf,"%d",variables.wait_timeout);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"max_connections")) {
@@ -654,6 +661,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 20*24*3600*1000) {
 			variables.max_transaction_time=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"wait_timeout")) {
+		int intv=atoi(value);
+		if (intv >= 1000 && intv <= 20*24*3600*1000) {
+			variables.wait_timeout=intv;
 			return true;
 		} else {
 			return false;
@@ -1473,6 +1489,15 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+		unsigned long long sess_time = sess->IdleTime();
+		unsigned int numTrx = sess->NumActiveTransactions();
+		if (numTrx) {
+			// the session has idle transactions, kill it
+			if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
+		} else {
+			// the session is idle, kill it
+			if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+		}
 		if (sess->healthy==0) {
 			unregister_session(n);
 			n--;
@@ -1505,6 +1530,7 @@ void MySQL_Thread::refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
 	mysql_thread___max_transaction_time=GloMTH->get_variable_int((char *)"max_transaction_time");
+	mysql_thread___wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
 	mysql_thread___max_connections=GloMTH->get_variable_int((char *)"max_connections");
 	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
