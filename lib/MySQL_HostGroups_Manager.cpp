@@ -455,7 +455,12 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
   mysrvc->ConnectionsUsed->remove(c);
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
-		mysrvc->ConnectionsFree->add(c);
+		if (c->async_state_machine==ASYNC_IDLE) {
+			mysrvc->ConnectionsFree->add(c);
+		} else {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+			delete c;
+		}
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 		delete c;
