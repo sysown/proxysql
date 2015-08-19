@@ -109,6 +109,8 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	status=_status;
 	compression=_compression;
 	max_connections=_max_connections;
+	connect_OK=0;
+	connect_ERR=0;
 	//charset=_charset;
 	myhgc=NULL;
 	ConnectionsUsed=new MySrvConnList(this);
@@ -602,7 +604,7 @@ __exit_get_multiple_idle_connections:
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
-  const int colnum=6;
+  const int colnum=8;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -611,6 +613,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
   result->add_column_definition(SQLITE_TEXT,"status");
   result->add_column_definition(SQLITE_TEXT,"ConnUsed");
   result->add_column_definition(SQLITE_TEXT,"ConnFree");
+  result->add_column_definition(SQLITE_TEXT,"ConnOK");
+  result->add_column_definition(SQLITE_TEXT,"ConnERR");
 
 	wrlock();
 	int i,j, k;
@@ -655,6 +659,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			pta[4]=strdup(buf);
 			sprintf(buf,"%u", mysrvc->ConnectionsFree->conns->len);
 			pta[5]=strdup(buf);
+			sprintf(buf,"%u", mysrvc->connect_OK);
+			pta[6]=strdup(buf);
+			sprintf(buf,"%u", mysrvc->connect_ERR);
+			pta[7]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])

@@ -45,6 +45,8 @@ class MySrvC {	// MySQL Server Container
 	enum MySerStatus status;
 	unsigned int compression;
 	unsigned int max_connections;
+	unsigned int connect_OK;
+	unsigned int connect_ERR;
 	//uint8_t charset;
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
