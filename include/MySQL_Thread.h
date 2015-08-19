@@ -254,6 +254,8 @@ class MySQL_Threads_Handler
 		bool monitor_timer_cached;
 		int ping_interval_server;
 		int ping_timeout_server;
+		int shun_on_failures;
+		int shun_recovery_time;
 		int connect_retries_on_failure;
 		int connect_retries_delay;
 		int connect_timeout_server;
