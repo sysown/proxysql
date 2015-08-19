@@ -1342,6 +1342,7 @@ bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
 	return false;
 }
 
+/*
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_SERVER_DATA - STATE_QUERY_SENT\n");
 	unsigned char c;
@@ -1349,7 +1350,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 	if (mybe->server_myds->myconn->processing_prepared_statement_prepare==false && mybe->server_myds->myconn->processing_prepared_statement_execute==false) {
 	if (c==0 || c==0xff) {
 		mybe->server_myds->DSS=STATE_READY;
-		/* multi-plexing attempt */
+		// multi-plexing attempt
 		if (c==0) {
 			mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size);
 			if ((mybe->server_myds->myconn->reusable==true) && ((mybe->server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
@@ -1361,7 +1362,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 //				mybe->server_myds->unplug_backend();
 			}
 		}
-		/* multi-plexing attempt */	
+		// multi-plexing attempt
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
@@ -1435,6 +1436,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrS
 		}
 	}
 }
+*/
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *pkt) {
 	unsigned char c;
@@ -1463,6 +1465,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STM
 	client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
 }
 
+/*
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *pkt) {
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
@@ -1476,8 +1479,8 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *
 		client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
 	}
 }
-
-
+*/
+/*
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t *pkt) {
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
@@ -1495,7 +1498,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 		client_myds->DSS=STATE_SLEEP;
 
 
-		/* multi-plexing attempt */
+		// multi-plexing attempt
 		if (c==0xfe) {
 			mybe->server_myds->myprot.process_pkt_EOF((unsigned char *)pkt->ptr,pkt->size);
 			//fprintf(stderr,"hid=%d status=%d\n", mybe->hostgroup_id, server_myds->myprot.prot_status);
@@ -1508,7 +1511,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 //				mybe->server_myds->unplug_backend();
 			}
 		}
-		/* multi-plexing attempt */	
+		// multi-plexing attempt
 
 		if (qpo) {
 			if (qpo->cache_ttl>0) { // Fixed bug #145
@@ -1565,7 +1568,7 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t 
 	}
 }
 }
-
+*/
 
 void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	// FIXME: no support for SSL yet
