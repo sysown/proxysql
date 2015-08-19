@@ -1418,36 +1418,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	writeout();
 
-	if (mybe && mybe->server_myds) {
-		if (mybe->server_myds->net_failure) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p , MYDS:%p , myds_type=%d, DSS=%d , myconn:%p\n" , this, mybe->server_myds , mybe->server_myds->myds_type , mybe->server_myds->DSS, mybe->server_myds->myconn);
-			if (( mybe->server_myds->DSS==STATE_READY || mybe->server_myds->DSS==STATE_QUERY_SENT_DS ) && mybe->server_myds->myds_type==MYDS_BACKEND) {
-				//mybe->server_myds->myconn=NULL;
-				mybe->server_myds->detach_connection();
-				mybe->server_myds->DSS=STATE_NOT_INITIALIZED;
-				mybe->server_myds->move_from_OUT_to_OUTpending();
-				if (mybe->server_myds->myconn) {
-					MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
-					//mybe->server_myds->myconn=NULL;
-					mybe->server_myds->detach_connection();
-				}
-				if (mybe->server_myds->fd) {
-					mybe->server_myds->shut_hard();
-//					shutdown(mybe->server_myds->fd,SHUT_RDWR);
-//					close(mybe->server_myds->fd);
-					mybe->server_myds->fd=0;
-					thread->mypolls.remove_index_fast(mybe->server_myds->poll_fds_idx);
-					//server_fd=0;
-				}
-				mybe->server_myds->clean_net_failure();
-				mybe->server_myds->active=1;
-				goto __get_a_backend;
-			} else {
-				set_unhealthy();
-			}
-		}
-	}
-
 	//writeout();
 
 /*
