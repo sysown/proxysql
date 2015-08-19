@@ -1797,6 +1797,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"#HY000", (char *)"Too many connections");
+				__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 				client_myds->DSS=STATE_SLEEP;
 			} else {
 				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
@@ -1837,6 +1838,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
 		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
+		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 		free(_s);
 		client_myds->DSS=STATE_SLEEP;
 		//return -1;

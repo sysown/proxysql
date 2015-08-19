@@ -90,6 +90,8 @@ class MySQL_HostGroups_Manager {
 
 	public:
 	struct {
+		unsigned long client_connections_aborted;
+		unsigned long client_connections_created;
 		int client_connections;
 		unsigned long myconnpoll_get;
 		unsigned long myconnpoll_get_ok;

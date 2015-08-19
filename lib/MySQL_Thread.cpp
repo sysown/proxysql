@@ -1672,6 +1672,7 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		MySQL_Session *sess=create_new_session_and_client_data_stream(c);
 		//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 		//sess->myprot_client.generate_pkt_initial_handshake(true,NULL,NULL);
+		__sync_add_and_fetch(&MyHGM->status.client_connections_created,1);
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
 		}
@@ -1788,6 +1789,49 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Threads_status(MySQL_Session *sess)
 	status_str+= "=====================\n";
 	pta[0]=(char *)status_str.c_str();
 	result->add_row(pta);
+	free(pta);
+	return result;
+}
+
+SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
+	const int colnum=2;
+	char buf[256];
+	char **pta=(char **)malloc(sizeof(char *)*colnum);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
+  SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
+	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
+	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
+	{	// Connections created
+		pta[0]=(char *)"Client_Connections_aborted";
+		sprintf(buf,"%lu",MyHGM->status.client_connections_aborted);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Connections
+		pta[0]=(char *)"Client_Connections_connected";
+		sprintf(buf,"%d",MyHGM->status.client_connections);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Connections created
+		pta[0]=(char *)"Client_Connections_created";
+		sprintf(buf,"%lu",MyHGM->status.client_connections_created);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries
+		pta[0]=(char *)"Questions";
+		sprintf(buf,"%llu",get_total_queries());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Slow queries
+		pta[0]=(char *)"Slow_queries";
+		sprintf(buf,"%llu",get_slow_queries());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	free(pta);
 	return result;
 }

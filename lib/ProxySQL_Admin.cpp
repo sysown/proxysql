@@ -68,6 +68,8 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_mysql_query_digest_reset (schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY(schemaname, username, digest))"
 
+#define STATS_SQLITE_TABLE_MYSQL_GLOBAL "CREATE TABLE stats_mysql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
+
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
 #endif /* DEBUG */
@@ -934,6 +936,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_query_digest=false;
 	bool stats_mysql_query_digest_reset=false;
+	bool stats_mysql_global=false;
 	bool dump_global_variables=false;
 
 	if (strcasestr(query_no_space,"processlist"))
@@ -946,6 +949,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
 		{ stats_mysql_query_digest_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_global"))
+		{ stats_mysql_global=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_connection_pool"))
 		{ stats_mysql_connection_pool=true; refresh=true; }
 	if (admin) {
@@ -964,6 +969,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_query_digests_reset();
 		if (stats_mysql_connection_pool)
 			stats___mysql_connection_pool();
+		if (stats_mysql_global)
+			stats___mysql_global();
 		if (admin) {
 			if (dump_global_variables) {
 				flush_admin_variables___runtime_to_database(admindb, false, false, false);
@@ -1152,6 +1159,14 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		l_free(query_length,query);
 		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mysql-\%' ORDER BY variable_name");
 		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SHOW MYSQL STATUS") && !strncasecmp("SHOW MYSQL STATUS",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_mysql_global ORDER BY variable_name");
+		query_length=strlen(query)+1;
+		GloAdmin->stats___mysql_global();
 		goto __run_query;
 	}
 
@@ -1615,6 +1630,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_connection_pool", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
 
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
@@ -2151,6 +2167,28 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 
 
 
+
+void ProxySQL_Admin::stats___mysql_global() {
+	if (!GloMTH) return;
+	SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus();
+	if (resultset==NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_global");
+	char *a=(char *)"INSERT INTO stats_mysql_global VALUES (\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<2; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
 
 void ProxySQL_Admin::stats___mysql_processlist() {
 	if (!GloMTH) return;
