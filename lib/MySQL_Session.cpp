@@ -1266,80 +1266,10 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		case PROCESSING_QUERY:
 			break;
 		case PINGING_SERVER:
-/*
-			if (myds->revents) {
-				myconn->handler(myds->revents);
-				if (myconn->async_state_machine==ASYNC_PING_SUCCESSFUL) {
-					myds->DSS=STATE_READY;
-					/// multi-plexing attempt
-					if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-						myds->myconn->last_time_used=thread->curtime;
-						myds->myconn->async_state_machine=ASYNC_IDLE;
-						MyHGM->push_MyConn_to_pool(myds->myconn);
-				//MyHGM->destroy_MyConn_from_pool(mybe->server_myds->myconn);
-				//mybe->server_myds->myconn=NULL;
-						myds->detach_connection();
-						myds->unplug_backend();
-					}
-					// multi-plexing attempt
-					status=NONE;
-				}
-			}
-*/
 			break;
 		case CHANGING_SCHEMA:
-/*
-			if (myds->revents) {
-				myconn->handler(myds->revents);
-				if (myconn->async_state_machine==ASYNC_INITDB_SUCCESSFUL) {
-					myds->DSS=STATE_READY;
-					status=WAITING_CLIENT_DATA;
-					unsigned int k;
-					PtrSize_t pkt2;
-					for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-						myds->PSarrayOUTpending->remove_index(0,&pkt2);
-						myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-						myds->DSS=STATE_QUERY_SENT_DS;
-					}
-				}
-				if (myconn->async_state_machine==ASYNC_INITDB_FAILED) {
-					set_unhealthy();
-					myds->myconn->reusable=false;
-					return -1;
-				}
-			}
-*/
 			break;
 		case CHANGING_CHARSET:
-/*
-			if (myds->revents) {
-				myconn->handler(myds->revents);
-				if (myconn->async_state_machine==ASYNC_SET_NAMES_SUCCESSFUL) {
-#ifdef EXPMARIA
-					myds->DSS=STATE_MARIADB_QUERY;
-					status=PROCESSING_QUERY;
-					myds->myconn->async_state_machine=ASYNC_QUERY_START;
-					myds->myconn->set_query(myds->mysql_real_query.ptr,myds->mysql_real_query.size);
-					myds->myconn->handler(0);
-#else
-					myds->DSS=STATE_READY;
-					status=WAITING_CLIENT_DATA;
-#endif // EXPMARIA
-					unsigned int k;
-					PtrSize_t pkt2;
-					for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-						myds->PSarrayOUTpending->remove_index(0,&pkt2);
-						myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-						myds->DSS=STATE_QUERY_SENT_DS;
-					}
-				}
-				if (myconn->async_state_machine==ASYNC_SET_NAMES_FAILED) {
-					set_unhealthy();
-					myds->myconn->reusable=false;
-					return -1;
-				}
-			}
-*/
 			break;
 		default:
 			assert(0);
@@ -1353,55 +1283,11 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 /*
 		ATTEMPT TO COMMENT THIS BLOCK
+		leaving ONLY FAST_FORWARD for now
 		for (j=0; j<mybe->server_myds->PSarrayIN->len;) {
 			mybe->server_myds->PSarrayIN->remove_index(0,&pkt);
 
 		switch (status) {
-			case WAITING_SERVER_DATA:
-				switch (mybe->server_myds->DSS) {
-//					case STATE_PING_SENT_NET:
-//						handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(&pkt);
-//						break;
-
-					case STATE_QUERY_SENT_NET:
-						handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(&pkt);
-						break;
-
-					case STATE_ROW:
-						handler___status_WAITING_SERVER_DATA___STATE_ROW(&pkt);
-						break;
-
-					case STATE_EOF1:
-						handler___status_WAITING_SERVER_DATA___STATE_EOF1(&pkt);
-						break;
-
-					case STATE_READING_COM_STMT_PREPARE_RESPONSE:
-						handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(&pkt);
-						break;
-
-					default:
-						assert(0);
-				}
-				break;
-
-//			case CHANGING_SCHEMA:
-//				if (handler___status_CHANGING_SCHEMA(&pkt)==false) {
-//					return -1;
-//				}
-//				break;
-
-			case CHANGING_USER_SERVER:
-				if (handler___status_CHANGING_USER_SERVER(&pkt)==false) {
-					return -1;
-				}
-				break;
-
-//			case CHANGING_CHARSET:
-//				if (handler___status_CHANGING_CHARSET(&pkt)==false) {
-//					return -1;
-//				}
-//				break;
-
 			case FAST_FORWARD:
 				client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
@@ -1418,19 +1304,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	writeout();
 
-	//writeout();
-
-/*
-	if (  // FIXME: this implementation is horrible
-		(server_myds ? server_myds->PSarrayIN->len==0 : 1 ) && 
-		(server_myds ? server_myds->PSarrayOUT->len==0 : 1 ) && 
-		(client_myds ? client_myds->PSarrayIN->len==0 : 1 ) && 
-		(client_myds ? client_myds->PSarrayOUT->len==0 : 1 )
-	)
-	{
-	to_process=0;
-	}
-*/
 	if (wrong_pass==true) {
 		client_myds->array2buffer_full();
 		client_myds->write_to_net();
