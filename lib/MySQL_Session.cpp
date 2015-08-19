@@ -1418,30 +1418,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	writeout();
 
-	// FIXME: see bug #211
-	if (
-		mybe
-		&&
-		mybe->server_myds
-		&&
-		mybe->server_myds->DSS==STATE_QUERY_SENT_DS
-		&&
-		mybe->server_myds->PSarrayOUT->len==0
-		&&
-		mybe->server_myds->PSarrayOUTpending->len==0
-		&&
-		mybe->server_myds->net_failure==false
-		&&
-		mybe->server_myds->available_data_out()==false
-	) {
-		if (connections_handler) {
-			//fprintf(stderr,"time=%llu\n",monotonic_time());
-			//mybe->server_myds->timeout=thread->curtime+100;
-			//mybe->server_myds->DSS=STATE_PING_SENT_NET;
-		} else {
-			mybe->server_myds->setDSS_STATE_QUERY_SENT_NET();
-		}
-	}
 	if (mybe && mybe->server_myds) {
 		if (mybe->server_myds->net_failure) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p , MYDS:%p , myds_type=%d, DSS=%d , myconn:%p\n" , this, mybe->server_myds , mybe->server_myds->myds_type , mybe->server_myds->DSS, mybe->server_myds->myconn);
