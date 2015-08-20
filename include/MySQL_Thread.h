@@ -210,6 +210,7 @@ class iface_info {
 	~iface_info() {
 		free(iface);
 		free(address);
+		close(fd);
 	}
 };
 
@@ -253,6 +254,8 @@ class MySQL_Threads_Handler
 		bool monitor_timer_cached;
 		int ping_interval_server;
 		int ping_timeout_server;
+		int shun_on_failures;
+		int shun_recovery_time;
 		int connect_retries_on_failure;
 		int connect_retries_delay;
 		int connect_timeout_server;
@@ -270,6 +273,7 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		int max_transaction_time;
+		int wait_timeout;
 		int max_connections;
 		int default_query_delay;
 		int default_query_timeout;
@@ -312,8 +316,10 @@ class MySQL_Threads_Handler
 	int listener_del(const char *iface);
 	int listener_del(const char *address, int port);
 	void start_listeners();
+	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
 	SQLite3_result * SQL3_Processlist();
+	SQLite3_result * SQL3_GlobalStatus();
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_queries();
 	unsigned long long get_slow_queries();

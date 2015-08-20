@@ -168,12 +168,12 @@ class MySQL_Data_Stream
 	}
 	void free_mysql_real_query();	
 
-	void destroy_MySQL_Connection() {
-		MySQL_Connection *mc=myconn;
-		detach_connection();
-		unplug_backend();
-		delete mc;
-	}
+//	void destroy_MySQL_Connection() {
+//		MySQL_Connection *mc=myconn;
+//		detach_connection();
+//		unplug_backend();
+//		delete mc;
+//	}
 
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

@@ -45,11 +45,18 @@ class MySrvC {	// MySQL Server Container
 	enum MySerStatus status;
 	unsigned int compression;
 	unsigned int max_connections;
+	unsigned int connect_OK;
+	unsigned int connect_ERR;
+	time_t time_last_detected_error;
+	unsigned int connect_ERR_at_time_last_detected_error;
+	unsigned long long queries_sent;
+	bool shunned_automatic;
 	//uint8_t charset;
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections);
 	~MySrvC();
+	void connect_error();
 };
 
 class MySrvList {	// MySQL Server List
@@ -90,6 +97,8 @@ class MySQL_HostGroups_Manager {
 
 	public:
 	struct {
+		unsigned long client_connections_aborted;
+		unsigned long client_connections_created;
 		int client_connections;
 		unsigned long myconnpoll_get;
 		unsigned long myconnpoll_get_ok;

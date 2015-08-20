@@ -42,10 +42,10 @@ class MySQL_Session
 //	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
 	bool handler___status_CHANGING_USER_SERVER(PtrSize_t *);
 //	bool handler___status_CHANGING_CHARSET(PtrSize_t *);
-	void handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *);
+//	void handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *);
 //	void handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *);
-	void handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *);
-	void handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t *);
+//	void handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *);
+//	void handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t *);
 	//void handler___status_CONNECTING_SERVER___STATE_NOT_CONNECTED(PtrSize_t *);
 	//void handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
@@ -158,6 +158,8 @@ class MySQL_Session
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, MySQL_Protocol *myprot);
 	SQLite3_result * SQL3_Session_status();
+	unsigned int NumActiveTransactions();
+	unsigned long long IdleTime();
 
 	void reset_all_backends();
 	void writeout();

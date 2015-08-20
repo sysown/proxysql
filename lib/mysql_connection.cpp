@@ -386,11 +386,14 @@ handler_again:
 			}
     	break;
 		case ASYNC_CONNECT_SUCCESSFUL:
+			__sync_fetch_and_add(&parent->connect_OK,1);
 			break;
 		case ASYNC_CONNECT_FAILED:
+			parent->connect_error();
 			break;
 		case ASYNC_CONNECT_TIMEOUT:
 			proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
+			parent->connect_error();
 			break;
 		case ASYNC_CHANGE_USER_START:
 			change_user_start();
@@ -451,6 +454,7 @@ handler_again:
 			break;
 		case ASYNC_QUERY_START:
 			real_query_start();
+			__sync_fetch_and_add(&parent->queries_sent,1);
 			if (async_exit_status) {
 				next_event(ASYNC_QUERY_CONT);
 			} else {

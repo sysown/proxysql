@@ -35,6 +35,8 @@ static volatile bool nostart_=false;
 
 static int __admin_refresh_interval=0;
 
+static bool proxysql_mysql_paused=false;
+static int old_wait_timeout;
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
@@ -60,11 +62,13 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
 #define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , db VARCHAR , cli_host VARCHAR , cli_port VARCHAR , hostgroup VARCHAR , l_srv_host VARCHAR , l_srv_port VARCHAR , srv_host VARCHAR , srv_port VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR)"
-#define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL "CREATE TABLE stats_mysql_connection_pool (hostgroup VARCHAR , srv_host VARCHAR , srv_port VARCHAR , status VARCHAR , ConnUsed INT , ConnFree INT)"
+#define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL "CREATE TABLE stats_mysql_connection_pool (hostgroup VARCHAR , srv_host VARCHAR , srv_port VARCHAR , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , Queries INT)"
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST "CREATE TABLE stats_mysql_query_digest (schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY(schemaname, username, digest))"
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_mysql_query_digest_reset (schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY(schemaname, username, digest))"
+
+#define STATS_SQLITE_TABLE_MYSQL_GLOBAL "CREATE TABLE stats_mysql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
@@ -309,8 +313,68 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==strlen("PROXYSQL STOP") && !strncasecmp("PROXYSQL STOP",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL STOP command\n");
-		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		// to speed up this process we first change wait_timeout to 0
+		// MySQL_thread will call poll() with a maximum timeout of 100ms
+		old_wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
+		GloMTH->set_variable((char *)"wait_timeout",(char *)"0");
+		GloMTH->commit();
+		GloMTH->signal_all_threads(0);
+		GloMTH->stop_listeners();
+		char buf[32];
+		sprintf(buf,"%d",old_wait_timeout);
+		GloMTH->set_variable((char *)"wait_timeout",buf);
+		GloMTH->commit();
 		glovars.reload=2;
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		return false;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL PAUSE") && !strncasecmp("PROXYSQL PAUSE",query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL PAUSE command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (nostart_) {
+			if (__sync_fetch_and_add(&GloVars.global.nostart,0)) {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module not running, impossible to pause");
+				return false;
+			}
+		}
+		if (proxysql_mysql_paused==false) {
+			old_wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
+			GloMTH->set_variable((char *)"wait_timeout",(char *)"0");
+			GloMTH->commit();
+			// to speed up this process we first change wait_timeout to 0
+			// MySQL_thread will call poll() with a maximum timeout of 100ms
+			GloMTH->signal_all_threads(0);
+			GloMTH->stop_listeners();
+			proxysql_mysql_paused=true;
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is already paused, impossible to pause");
+		}
+		return false;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL RESUME") && !strncasecmp("PROXYSQL RESUME",query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL RESUME command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (nostart_) {
+			if (__sync_fetch_and_add(&GloVars.global.nostart,0)) {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module not running, impossible to resume");
+				return false;
+			}
+		}
+		if (proxysql_mysql_paused==true) {
+			// to speed up the process we add the listeners while poll() is called with a maximum timeout of of 100ms
+			GloMTH->start_listeners();
+			char buf[32];
+			sprintf(buf,"%d",old_wait_timeout);
+			GloMTH->set_variable((char *)"wait_timeout",buf);
+			GloMTH->commit();
+			proxysql_mysql_paused=false;
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is not paused, impossible to resume");
+		}
 		return false;
 	}
 
@@ -872,6 +936,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_query_digest=false;
 	bool stats_mysql_query_digest_reset=false;
+	bool stats_mysql_global=false;
 	bool dump_global_variables=false;
 
 	if (strcasestr(query_no_space,"processlist"))
@@ -884,6 +949,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
 		{ stats_mysql_query_digest_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_global"))
+		{ stats_mysql_global=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_connection_pool"))
 		{ stats_mysql_connection_pool=true; refresh=true; }
 	if (admin) {
@@ -902,6 +969,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_query_digests_reset();
 		if (stats_mysql_connection_pool)
 			stats___mysql_connection_pool();
+		if (stats_mysql_global)
+			stats___mysql_global();
 		if (admin) {
 			if (dump_global_variables) {
 				flush_admin_variables___runtime_to_database(admindb, false, false, false);
@@ -945,7 +1014,9 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	if (sess->stats==false) {
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
+			pthread_mutex_lock(&admin_mutex);
 			run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
+			pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) { 
@@ -1091,6 +1162,14 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	if (query_no_space_length==strlen("SHOW MYSQL STATUS") && !strncasecmp("SHOW MYSQL STATUS",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		query=l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_mysql_global ORDER BY variable_name");
+		query_length=strlen(query)+1;
+		GloAdmin->stats___mysql_global();
+		goto __run_query;
+	}
+
 	strA=(char *)"SHOW CREATE TABLE ";
 	strB=(char *)"SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A'),'CREATE TABLE %s (','CREATE TABLE %s ('||X'0A') AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";
 	strAl=strlen(strA);
@@ -1134,7 +1213,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 	if (query_no_space_length==strlen("SHOW PROCESSLIST") && !strncasecmp("SHOW PROCESSLIST",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		query=l_strdup("SELECT SessionID, user, db, hostgroup, command, time_ms, SUBSTR(info,0,100) info FROM stats_mysql_processlist;");
+		query=l_strdup("SELECT SessionID, user, db, hostgroup, command, time_ms, SUBSTR(info,0,100) info FROM stats_mysql_processlist");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -1551,6 +1630,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_connection_pool", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
 
 
 	check_and_build_standard_tables(admindb, tables_defs_admin);
@@ -2088,6 +2168,28 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 
 
 
+void ProxySQL_Admin::stats___mysql_global() {
+	if (!GloMTH) return;
+	SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus();
+	if (resultset==NULL) return;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_global");
+	char *a=(char *)"INSERT INTO stats_mysql_global VALUES (\"%s\",\"%s\")";
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int arg_len=0;
+		for (int i=0; i<2; i++) {
+			arg_len+=strlen(r->fields[i]);
+		}
+		char *query=(char *)malloc(strlen(a)+arg_len+32);
+		sprintf(query,a,r->fields[0],r->fields[1]);
+		statsdb->execute(query);
+		free(query);
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
 void ProxySQL_Admin::stats___mysql_processlist() {
 	if (!GloMTH) return;
 	SQLite3_result * resultset=GloMTH->SQL3_Processlist();
@@ -2117,15 +2219,15 @@ void ProxySQL_Admin::stats___mysql_connection_pool() {
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_connection_pool");
-	char *a=(char *)"INSERT INTO stats_mysql_connection_pool VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	char *a=(char *)"INSERT INTO stats_mysql_connection_pool VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
-		for (int i=0; i<6; i++) {
+		for (int i=0; i<9; i++) {
 			arg_len+=strlen(r->fields[i]);
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5]);
+		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8]);
 		statsdb->execute(query);
 		free(query);
 	}

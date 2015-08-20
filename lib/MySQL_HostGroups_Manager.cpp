@@ -109,10 +109,34 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	status=_status;
 	compression=_compression;
 	max_connections=_max_connections;
+	connect_OK=0;
+	connect_ERR=0;
+	queries_sent=0;
+	time_last_detected_error=0;
+	connect_ERR_at_time_last_detected_error=0;
+	shunned_automatic=false;
 	//charset=_charset;
 	myhgc=NULL;
 	ConnectionsUsed=new MySrvConnList(this);
 	ConnectionsFree=new MySrvConnList(this);
+}
+
+void MySrvC::connect_error() {
+	// NOTE: this function operates without any mutex
+	// although, it is not extremely important if any counter is lost
+	// as a single connection failure won't make a significant difference
+	__sync_fetch_and_add(&connect_ERR,1);
+	time_t t=time(NULL);
+	if (t!=time_last_detected_error) {
+		time_last_detected_error=t;
+		connect_ERR_at_time_last_detected_error=1;
+	} else {
+		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
+		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
+			status=MYSQL_SERVER_STATUS_SHUNNED;
+			shunned_automatic=true;
+		}
+	}
 }
 
 MySrvC::~MySrvC() {
@@ -185,6 +209,8 @@ class MyHGC { // MySQL Host Group Container
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
+	status.client_connections_aborted=0;
+	status.client_connections_created=0;
 	status.myconnpoll_get=0;
 	status.myconnpoll_get_ok=0;
 	status.myconnpoll_get_ping=0;
@@ -294,6 +320,9 @@ bool MySQL_HostGroups_Manager::commit() {
 				if (atoi(r->fields[4])!=atoi(r->fields[9])) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing status for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->status , atoi(r->fields[9]));
 					mysrvc->status=(MySerStatus)atoi(r->fields[9]);
+					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+						mysrvc->shunned_automatic=false;
+					}
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[10])) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing compression for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->compression , atoi(r->fields[10]));
@@ -426,7 +455,12 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
   mysrvc->ConnectionsUsed->remove(c);
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
-		mysrvc->ConnectionsFree->add(c);
+		if (c->async_state_machine==ASYNC_IDLE) {
+			mysrvc->ConnectionsFree->add(c);
+		} else {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+			delete c;
+		}
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 		delete c;
@@ -448,6 +482,23 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					sum+=mysrvc->weight;
+				}
+			} else {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+					// try to recover shunned servers
+					if (mysrvc->shunned_automatic && mysql_thread___shun_recovery_time) {
+						time_t t;
+						t=time(NULL);
+						// we do all these changes without locking . We assume the server is not used from long
+						// even if the server is still in used and any of the follow command fails it is not critical
+						// because this is only an attempt to recover a server that is probably dead anyway
+						if ((t - mysrvc->time_last_detected_error) > mysql_thread___shun_recovery_time) {
+							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+							mysrvc->shunned_automatic=false;
+							mysrvc->connect_ERR_at_time_last_detected_error=0;
+							mysrvc->time_last_detected_error=0;
+						}
+					}
 				}
 			}
 		}
@@ -600,7 +651,7 @@ __exit_get_multiple_idle_connections:
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
-  const int colnum=6;
+  const int colnum=9;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -609,6 +660,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
   result->add_column_definition(SQLITE_TEXT,"status");
   result->add_column_definition(SQLITE_TEXT,"ConnUsed");
   result->add_column_definition(SQLITE_TEXT,"ConnFree");
+  result->add_column_definition(SQLITE_TEXT,"ConnOK");
+  result->add_column_definition(SQLITE_TEXT,"ConnERR");
+  result->add_column_definition(SQLITE_TEXT,"Queries");
 
 	wrlock();
 	int i,j, k;
@@ -653,6 +707,12 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			pta[4]=strdup(buf);
 			sprintf(buf,"%u", mysrvc->ConnectionsFree->conns->len);
 			pta[5]=strdup(buf);
+			sprintf(buf,"%u", mysrvc->connect_OK);
+			pta[6]=strdup(buf);
+			sprintf(buf,"%u", mysrvc->connect_ERR);
+			pta[7]=strdup(buf);
+			sprintf(buf,"%llu", mysrvc->queries_sent);
+			pta[8]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])
