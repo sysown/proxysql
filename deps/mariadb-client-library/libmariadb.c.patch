@@ -5,11 +5,11 @@
 +    {
 +			struct mysql_async_context *ctxt;
 +			if ((ctxt = mysql->options.extension->async_context) != 0) {
-+				if (ctxt->active==0) {
++				//if (ctxt->active==0) {
 +					my_context_destroy(&ctxt->async_context);
 +					my_free((gptr)ctxt, MYF(0));
 +					mysql->options.extension->async_context=NULL;
-+				}
++				//}
 +			}
 +		}
    }
