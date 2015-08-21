@@ -54,6 +54,26 @@ mysql> select * from global_variables limit 3;
 
 __DISK__ and __CONFIG FILE__
 
-# Initial startup (--initial flag) for ProxySQL
+__DISK__ represents an on-disk SQLite3 database, with the default location at
+`/tmp/proxysql.db`. Across restarts, the in-memory configs that were not
+persisted will be gone. __CONFIG__ file is the classical config file, and we'll
+see the relationship between it and the other configuration layers in the next
+section.
+
+In the following sections, we'll describe the lifecycle of each of these layers
+for the basic operations that the daemon goes through: starting up for the
+first time, starting up, restarting, shutting down, etc.
+
+# Initial startup (or --initial flag)
+
+# Startup
+
+# Soft restart (via angel process)
+
+# Hard restart
+
+# Modifying config at runtime
+
+# Moving config between layers
 
 # Locations of config files
