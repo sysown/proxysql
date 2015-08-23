@@ -20,7 +20,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <resolv.h>
+//#include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <sys/wait.h>
