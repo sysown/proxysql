@@ -320,8 +320,9 @@ void MySQL_Connection::set_names_cont(short event) {
 
 void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 	query.length=length;
-	query.ptr=(char *)malloc(length);
-	memcpy(query.ptr,stmt,length);
+	query.ptr=stmt;
+	//query.ptr=(char *)malloc(length);
+	//memcpy(query.ptr,stmt,length);
 }
 
 void MySQL_Connection::real_query_start() {
@@ -807,7 +808,7 @@ void MySQL_Connection::async_free_result() {
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
 	if (query.ptr) {
-		free(query.ptr);
+		//free(query.ptr);
 		query.ptr=NULL;
 		query.length=0;
 	}
