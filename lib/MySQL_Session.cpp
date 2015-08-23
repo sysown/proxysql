@@ -421,27 +421,6 @@ __get_pkts_from_client:
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
 								__sync_add_and_fetch(&thread->status_variables.queries,1);
-#ifdef DEBUG
-								if (mysql_thread___session_debug) {
-									if ((pkt.size>9) && strncasecmp("dbg ",(const char *)pkt.ptr+sizeof(mysql_hdr)+1,4)==0) {
-											CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,true);
-//										if (mysql_thread___commands_stats==true) {
-//											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
-//											CurrentQuery.start_time=thread->curtime;
-//											CurrentQuery.query_parser_init();
-//											CurrentQuery.query_parser_command_type();
-//										}
-										handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_debug(&pkt);
-											CurrentQuery.end();
-//										if (mysql_thread___commands_stats==true) {
-//											CurrentQuery.end_time=thread->curtime;
-//											CurrentQuery.query_parser_update_counters();
-//											CurrentQuery.query_parser_free();
-//										}
-										break;
-									}
-								}
-#endif /* DEBUG */							
 								if (admin==false) {
 									bool rc_break=false;
 									if (session_fast_forward==false) {
@@ -1755,54 +1734,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
-#ifdef DEBUG
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_debug(PtrSize_t *pkt) {
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got ProxySQL dbg packet\n");
-	//SQLite3_result * result = SQL3_Session_status();
-	SQLite3_result * result=NULL;
-	char *query=NULL;
-	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
-	query=(char *)l_alloc(query_length);
-	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
-	query[query_length-1]=0;
-
-	char *query_no_space=(char *)l_alloc(query_length);
-	memcpy(query_no_space,query,query_length);
-
-	/*unsigned int query_no_space_length=*/remove_spaces(query_no_space);
-
-	if (!strcasecmp(query_no_space,"DBG THREAD STATUS")) {
-		result = thread->SQL3_Thread_status(this);
-		goto __exit_from_debug;
-	}
-	if (!strcasecmp(query_no_space,"DBG THREADS STATUS")) {
-		result = GloMTH->SQL3_Threads_status(this);
-		goto __exit_from_debug;
-	}
-	if (!strcasecmp(query_no_space,"DBG SESSION STATUS")) {
-		result = SQL3_Session_status();
-		goto __exit_from_debug;
-	}
-
-
-
-
-__exit_from_debug:
-	l_free(query_length,query);
-	l_free(query_length,query_no_space);
-	l_free(pkt->size,pkt->ptr);
-	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	if (result) {
-	//	SQLite3_result * result = thread->SQL3_Thread_status(this);
-		SQLite3_to_MySQL(result,NULL,0,&client_myds->myprot);
-		delete result;
-	} else {
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
-	}
-	client_myds->DSS=STATE_SLEEP;
-}
-#endif /* DEBUG */
-
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
@@ -2132,76 +2063,6 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		myds->DSS=STATE_SLEEP;
 	}
 }
-
-SQLite3_result * MySQL_Session::SQL3_Session_status() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Session status\n");
-  SQLite3_result *result=new SQLite3_result(4);
-	result->add_column_definition(SQLITE_TEXT,"ThreadID");
-	result->add_column_definition(SQLITE_TEXT,"Thread_ptr");
-	result->add_column_definition(SQLITE_TEXT,"Session_ptr");
-	result->add_column_definition(SQLITE_TEXT,"Status");
-
-	char buf[1024];
-
-	char **pta=(char **)malloc(sizeof(char *)*4);
-	long long int thread_id=syscall(SYS_gettid);
-	itostr(pta[0],thread_id);
-	pta[1]=(char *)malloc(32);
-	sprintf(pta[1],"%p",this->thread);
-	pta[2]=(char *)malloc(32);
-	sprintf(pta[2],"%p",this);
-	
-	std::string status_str;
-	status_str.reserve(10000);
-	status_str = "\n";
-	status_str+= "============\n";
-	status_str+= "MySQL Thread\n";
-	status_str+= "============\n";
-	status_str+= "ThreadID: ";
-	status_str.append(pta[0]);
-	status_str+= "\n";
-
-	status_str+="\ndefault_schema : "; status_str.append(mysql_thread___default_schema);
-	status_str+="\nserver_version : "; status_str.append(mysql_thread___server_version);
-	sprintf(buf,"\ncapabilities   : %d\npoll_timeout   : %d\n", mysql_thread___server_capabilities, mysql_thread___poll_timeout);
-	status_str.append(buf);
-	status_str+= "\n";
-
-	sprintf(buf, "Proxy_Polls: %p , len: %d , loops: %lu\n", &thread->mypolls, thread->mypolls.len, thread->mypolls.loops);
-	status_str.append(buf);
-	for (unsigned int i=0; i < thread->mypolls.len; i++) {
-		MySQL_Data_Stream *_myds=thread->mypolls.myds[i];
-		sprintf(buf, "myds[%d]: %p = { fd=%d , events=%d , revents=%d } , type=%d , dss=%d , sess=%p , conn=%p\n", i, _myds , thread->mypolls.fds[i].fd , thread->mypolls.fds[i].events , thread->mypolls.fds[i].revents , _myds->myds_type , _myds->DSS , _myds->sess , _myds->myconn);
-		status_str.append(buf);
-	}
-	status_str+= "\n";
-
-	sprintf(buf, "MySQL Sessions: %p, len: %d\n", thread->mysql_sessions, thread->mysql_sessions->len);
-	status_str.append(buf);
-	for (unsigned int i=0; i < thread->mysql_sessions->len; i++) {
-		MySQL_Session *s=(MySQL_Session *)thread->mysql_sessions->pdata[i];
-		MySQL_Connection_userinfo *ui=s->client_myds->myconn->userinfo;
-		sprintf(buf, "session[%d] = %p :\n\tuserinfo={%s,%s} , status=%d , myds={%p,%p} , HG={d:%d,c:%d}\n\tLast query= ", i, s, ui->username, ui->schemaname, s->status, s->client_myds, s->mybe->server_myds, s->default_hostgroup, s->current_hostgroup);
-		status_str.append(buf);
-		if (mysql_thread___commands_stats==true) {
-			if (s->CurrentQuery.QueryLength && s->CurrentQuery.MyComQueryCmd!=MYSQL_COM_QUERY___NONE) {
-				status_str.append((char *)s->CurrentQuery.QueryPointer);
-			}
-		}
-		status_str+= "\n";
-	}
-	
-	
-
-
-	pta[3]=(char *)status_str.c_str();
-	result->add_row(pta);
-	for (int i=0; i<3; i++)
-		free(pta[i]);
-	free(pta);
-	return result;
-}
-
 
 void MySQL_Session::set_unhealthy() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p\n", this);

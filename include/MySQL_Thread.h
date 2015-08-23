@@ -185,7 +185,6 @@ class MySQL_Thread
   //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
   //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
-  SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
 };
 
 
@@ -301,7 +300,6 @@ class MySQL_Threads_Handler
 
 	MySQL_Threads_Handler();
 	~MySQL_Threads_Handler();
-	SQLite3_result * SQL3_Threads_status(MySQL_Session *);
 	
 	char *get_variable_string(char *name);
 	uint8_t get_variable_uint8(char *name);
