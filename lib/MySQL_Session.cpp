@@ -424,34 +424,14 @@ __get_pkts_from_client:
 								if (admin==false) {
 									bool rc_break=false;
 									if (session_fast_forward==false) {
+										// Note: CurrentQuery sees the query as sent by the client.
+										// shortly after, the packets it used to contain the query will be deallocated
 										CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,true);
-//										if (mysql_thread___commands_stats==true) {
-//											CurrentQuery.init((unsigned char *)pkt.ptr,pkt.size,true);
-//											CurrentQuery.start_time=thread->curtime;
-//											CurrentQuery.query_parser_init();
-//											CurrentQuery.query_parser_command_type();
-//											//client_myds->myprot.process_pkt_COM_QUERY((unsigned char *)pkt.ptr,pkt.size);
-//										}
 									}
 									rc_break=handler_special_queries(&pkt);
 									if (rc_break==true) {
 										break;
 									}
-/*
-									//if (strncmp((char *)"select @@version_comment limit 1",(char *)pkt.ptr+5,pkt.size-5)==0) {
-									if (pkt.size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt.ptr+5,pkt.size-5)==0) {
-										PtrSize_t pkt_2;
-										pkt_2.size=PROXYSQL_VERSION_COMMENT_LEN;
-										pkt_2.ptr=l_alloc(pkt_2.size);
-										//memcpy(pkt_2.ptr,"\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00",pkt_2.size);	
-										memcpy(pkt_2.ptr,PROXYSQL_VERSION_COMMENT,pkt_2.size);
-										status=WAITING_CLIENT_DATA;
-										client_myds->DSS=STATE_SLEEP;
-										client_myds->PSarrayOUT->add(pkt_2.ptr,pkt_2.size);
-										l_free(pkt.size,pkt.ptr);
-										break;
-									}
-*/
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,false);
 									if (qpo) {
 										rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
@@ -472,29 +452,15 @@ __get_pkts_from_client:
 											pause_until+=qpo->delay*1000;
 										}
 									}
-									//if (server_myds!=mybe->server_myds) {
-									//	server_myds=mybe->server_myds;
-									//}
 
 
-#ifdef EXPMARIA
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
-									mybe->server_myds->mysql_real_query.size=pkt.size-5;
-									mybe->server_myds->mysql_real_query.ptr=(char *)malloc(pkt.size-5);
-//									mybe->server_myds->wait_until=0;
-//									if (qpo) {
-//										if (qpo->timeout > 0) {
-//											mybe->server_myds->wait_until=thread->curtime+qpo->timeout*1000;
-//										}
-//									}
+									//mybe->server_myds->mysql_real_query.size=pkt.size-5;
+									//mybe->server_myds->mysql_real_query.ptr=(char *)l_alloc(mybe->server_myds->mysql_real_query.size);
 									mybe->server_myds->killed_at=0;
-									//fprintf(stderr,"times: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime); 
-									memcpy(mybe->server_myds->mysql_real_query.ptr,(char *)pkt.ptr+5,pkt.size-5);
-									l_free(pkt.size,pkt.ptr);
-#else
-									mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-#endif /* EXPMARIA */
-
+									//memcpy(mybe->server_myds->mysql_real_query.ptr,(char *)pkt.ptr+5,pkt.size-5);
+									//l_free(pkt.size,pkt.ptr);
+									mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
 									// this is processed by the admin module
@@ -729,7 +695,7 @@ handler_again:
 						mybe->server_myds->wait_until+=def_query_timeout*1000;
 					}
 				}
-				int rc=myconn->async_query(myds->revents, myds->mysql_real_query.ptr,myds->mysql_real_query.size);
+				int rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize);
 
 //				if (myconn->async_state_machine==ASYNC_QUERY_END) {
 				if (rc==0) {

@@ -97,8 +97,10 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	client_addr=NULL;
 
 	sess=NULL;
-	mysql_real_query.ptr=NULL;
-	mysql_real_query.size=0;
+	mysql_real_query.pkt.ptr=NULL;
+	mysql_real_query.pkt.size=0;
+	mysql_real_query.QueryPtr=NULL;
+	mysql_real_query.QuerySize=0;
 
 	connect_retries_on_failure=0;
 	max_connect_time=0;
@@ -917,8 +919,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 }
 
 void MySQL_Data_Stream::free_mysql_real_query() {
-	if (mysql_real_query.ptr) {
-		free(mysql_real_query.ptr);
-		mysql_real_query.ptr=NULL;
+	if (mysql_real_query.QueryPtr) {
+		mysql_real_query.end();
 	}
 }

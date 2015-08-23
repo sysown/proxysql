@@ -31,7 +31,30 @@ typedef struct _mysql_data_buffer_t {
 } mysql_data_buffer_t;
 */
 
-
+// this class avoid copying data
+class MyDS_real_query {
+	public:
+	PtrSize_t pkt; // packet coming from the client
+	char *QueryPtr;	// pointer to beginning of the query
+	unsigned int QuerySize;	// size of the query
+	void init(PtrSize_t *_pkt) {
+		assert(QueryPtr==NULL);
+		assert(QuerySize==0);
+		assert(pkt.ptr==NULL);
+		assert(pkt.size==0);
+		pkt.ptr=_pkt->ptr;
+		pkt.size=_pkt->size;
+		QueryPtr=(char *)pkt.ptr+5;
+		QuerySize=pkt.size-5;
+	}
+	void end() {
+		l_free(pkt.size,pkt.ptr);
+		pkt.size=0;
+		QuerySize=0;
+		pkt.ptr=NULL;
+		QueryPtr=NULL;
+	}
+};
 
 class MySQL_Data_Stream
 {
@@ -102,10 +125,12 @@ class MySQL_Data_Stream
 	PtrSize_t multi_pkt;
 	uint8_t pkt_sid;
 
-	struct {
-		char *ptr;
-		unsigned int size;
-	} mysql_real_query;
+//	struct {
+//		char *ptr;
+//		unsigned int size;
+//	} mysql_real_query;
+
+	MyDS_real_query mysql_real_query;
 
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
