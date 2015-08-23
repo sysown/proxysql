@@ -19,10 +19,10 @@ void crash_handler(int sig) {
 	void *arr[20];
 	size_t s;
 
-	s = backtrace(arr, 20);
-
-	fprintf(stderr, "Error: signal %d:\n", sig);
-	backtrace_symbols_fd(arr, s, STDERR_FILENO);
+//#	s = backtrace(arr, 20);
+//#
+//#	fprintf(stderr, "Error: signal %d:\n", sig);
+//#	backtrace_symbols_fd(arr, s, STDERR_FILENO);
 	exit(EXIT_FAILURE);
 }
 

@@ -34,12 +34,12 @@ LIBS=-rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -l
 
 ODIR= obj
 
-CC=gcc
-CPP=g++
+CC=gcc48
+CPP=g++48
 #CC=clang
 
 CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
-CPPFLAGS=-std=c++0x $(CFLAGS) $(LDIRS) $(LIBS)
+CPPFLAGS=-std=c++11 -D_GLIBCXX_USE_C99 $(CFLAGS) $(LDIRS) $(LIBS)
 
 default: libproxysql.a
 .PHONY: default

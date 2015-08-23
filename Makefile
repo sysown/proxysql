@@ -12,37 +12,37 @@ DEBUG=${ALL_DEBUG}
 export EXTRALINK
 
 all:
-	OPTZ="${O2}" make default
+	OPTZ="${O2}" gmake default
 
 .PHONY: default
 default:
-	make deps
-	make lib
-	make src
+	gmake deps
+	gmake lib
+	gmake src
 
 .PHONY: debug
 debug:
-	OPTZ="${O0}" DEBUG="${ALL_DEBUG}" make default
+	OPTZ="${O0}" DEBUG="${ALL_DEBUG}" gmake default
 
 .PHONY: deps
 deps:
-	cd deps && make
+	cd deps && gmake
 
 .PHONY: lib
 lib:
-	cd lib && make -j 5
+	cd lib && gmake -j 5
 
 .PHONY: src
 src:
-	cd src && make
+	cd src && gmake
 
 .PHONY: clean
 clean:
-	cd lib && make clean
-	cd src && make clean
+	cd lib && gmake clean
+	cd src && gmake clean
 
 .PHONY: cleanall
 cleanall:
-	cd deps && make cleanall
-	cd lib && make clean
-	cd src && make clean
+	cd deps && gmake cleanall
+	cd lib && gmake clean
+	cd src && gmake clean

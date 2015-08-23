@@ -51,8 +51,9 @@ LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(INJEC
 #LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) $(GLIB_LDIRS) $(LIBCONFIG_LDIR)
 
 
-CFLAGS=-std=c++0x $(IDIRS) $(OPTZ) $(DEBUG)
+CFLAGS=-std=c++0x -D_GLIBCXX_USE_C99 $(IDIRS) $(OPTZ) $(DEBUG)
 LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl $(EXTRALINK)
+#LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lc -lcrypto -lssl $(EXTRALINK)
 #LIBS=-rdynamic -Wl,-Bstatic -lproxysql -ljemalloc -levent $(GLIB_LIB) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
@@ -60,7 +61,7 @@ LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 ODIR= obj
 
 #CC=gcc
-CC=g++
+CC=g++48
 #CC=clang
 
 
@@ -81,7 +82,7 @@ $(ODIR):
 	mkdir $(ODIR)
 
 $(LIBPROXYSQLAR):
-	cd $(LDIR) && make
+	cd $(LDIR) && gmake
 
 default: $(EXECUTABLE)
 
