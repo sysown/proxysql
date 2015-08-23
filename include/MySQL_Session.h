@@ -86,7 +86,7 @@ class MySQL_Session
 	MySQL_Thread *thread;
 	uint32_t thread_session_id;
 //	enum session_states sess_states;
-	QP_out_t *qpo;
+	Query_Processor_Output *qpo;
 	StatCounters *command_counters;
 	int healthy;
 	bool killed;
