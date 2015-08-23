@@ -78,7 +78,7 @@ Query_Info::~Query_Info() {
 		GloQPro->query_parser_free(QueryParserArgs);
 	}
 	if (QueryPointer) {
-		l_free(QueryLength+1,QueryPointer);
+		//l_free(QueryLength+1,QueryPointer);
 	}
 }
 
@@ -107,9 +107,10 @@ void Query_Info::end() {
 
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=(mysql_header ? len-5 : len);
-	QueryPointer=(unsigned char *)l_alloc(QueryLength+1);
-	memcpy(QueryPointer,(mysql_header ? _p+5 : _p),QueryLength);	
-	QueryPointer[QueryLength]=0;
+	//QueryPointer=(unsigned char *)l_alloc(QueryLength+1);
+	//memcpy(QueryPointer,(mysql_header ? _p+5 : _p),QueryLength);
+	QueryPointer=(mysql_header ? _p+5 : _p);
+	//QueryPointer[QueryLength]=0;
 	QueryParserArgs=NULL;
 	MyComQueryCmd=MYSQL_COM_QUERY_UNKNOWN;
 }
@@ -134,7 +135,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
-	l_free(QueryLength+1,QueryPointer);
+	//l_free(QueryLength+1,QueryPointer);
 	QueryPointer=NULL;
 	QueryLength=0;
 	return ret;
