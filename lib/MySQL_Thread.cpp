@@ -1527,14 +1527,17 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+		unsigned int numTrx=0;
 		unsigned long long sess_time = sess->IdleTime();
-		unsigned int numTrx = sess->NumActiveTransactions();
-		if (numTrx) {
-			// the session has idle transactions, kill it
-			if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
-		} else {
-			// the session is idle, kill it
-			if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+		if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+			numTrx = sess->NumActiveTransactions();
+			if (numTrx) {
+				// the session has idle transactions, kill it
+				if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
+			} else {
+				// the session is idle, kill it
+				if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+			}
 		}
 		if (sess->healthy==0) {
 			unregister_session(n);
