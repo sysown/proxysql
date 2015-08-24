@@ -35,6 +35,7 @@ class MySQL_Monitor {
 	void print_version();
 	void * monitor_connect();
 	void * monitor_ping();
+	void * monitor_replication_lag();
 	void * run();
 };
 
