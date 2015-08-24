@@ -57,19 +57,15 @@ __DISK__ and __CONFIG FILE__
 __DISK__ represents an on-disk SQLite3 database, with the default location at `$(PWD)/proxysql.db`. Across restarts, the in-memory configs that were not persisted will be gone. __CONFIG__ file is the classical config file, and we'll see the relationship between it and the other configuration layers in the next
 section.
 
-In the following sections, we'll describe the lifecycle of each of these layers
-for the basic operations that the daemon goes through: starting up for the
-first time, starting up, restarting, shutting down, etc.
+In the following sections, we'll describe the lifecycle of each of these layers for the basic operations that the daemon goes through: starting up for the first time, starting up, restarting, shutting down, etc.
 
 # Startup
 
-At a normal start-up, ProxySQL initializes its configuration from the persisted
-in-memory database. This is found in the "datadir" (usually the current working directory in which ProxySQL is ran). The filename for the database is named "proxysql.db". So, disk gets loaded into memory and then propagated towards the
+At a normal start-up, ProxySQL initializes its configuration from the persisted in-memory database. This is found in the "datadir" (usually the current working directory in which ProxySQL is ran). The filename for the database is named "proxysql.db". So, disk gets loaded into memory and then propagated towards the
 runtime configuration.
 
 # Initial startup (or --initial/--reload flag)
 
-At the initial start-up (or start-up done with --initial flag, which resets the
 At the initial start-up (or start-up done with --initial flag, which resets the database by renaming the old one), the major difference from normal start-up is that the memory and runtime configuration gets populated from the config file.
 
 After this is done, the configuration is also persisted to the disk database, which will be used for the next restarts.
