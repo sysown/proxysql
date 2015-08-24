@@ -107,6 +107,8 @@ Each such table has a well defined role in the admin interface:
 
 These tables represent the middle layer (in-memory database) from the diagram above and can be manipulated using standard SQL queries. In order to move the configuration from this layer upwards or downwards, see the next section.
 
+For more details about these tables and their fields, see their dedicated document: TODO
+
 # Moving config between layers
 
 In order to move configuration between the three layers, there are a set of different admin commands available through the admin interface. Once you understand what each of the three layers means, the semantics should be quite obvious. Together with the explanation of each command, there is a number written next to it. The number corresponds to the arrow in the diagram from above.
