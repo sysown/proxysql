@@ -70,13 +70,14 @@ At a normal start-up, ProxySQL initializes its configuration from the persisted
 in-memory database. This is found in the "datadir" (usually the current working directory in which ProxySQL is ran). The filename for the database is named "proxysql.db". So, disk gets loaded into memory and then propagated towards the
 runtime configuration.
 
-# Initial startup (or --initial flag)
+# Initial startup (or --initial/--reload flag)
 
 At the initial start-up (or start-up done with --initial flag, which resets the
-database by renaming the old one), the major difference from normal start-up is that the memory and runtime configuration gets populated from the config file.
+At the initial start-up (or start-up done with --initial flag, which resets the database by renaming the old one), the major difference from normal start-up is that the memory and runtime configuration gets populated from the config file.
 
-After this is done, the configuration is also persisted to the disk database,
-which will be used for the next restarts.
+After this is done, the configuration is also persisted to the disk database, which will be used for the next restarts.
+
+The difference between --reload and --initial is that --reload does not create a backup of the old configuration file, while --initial does.
 
 # Soft restart (via angel process)
 
