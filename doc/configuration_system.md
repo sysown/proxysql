@@ -80,7 +80,11 @@ which will be used for the next restarts.
 
 # Soft restart (via angel process)
 
+On soft restart, the configuration file isn't re-read, and the in-memory database is populated from the previously read version of the configuration file.
+
 # Hard restart
+
+On hard restart, the configuration file is re-read, because it's the same as killing the process and starting it again.
 
 # Modifying config at runtime
 
