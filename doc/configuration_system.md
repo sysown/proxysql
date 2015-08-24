@@ -36,7 +36,7 @@ __RUNTIME__ represents the in-memory data structures of ProxySQL used by the thr
 __MEMORY__ represents an in-memory SQLite3 database which is exposed to the outside via a MySQL-compatible interface. Users can connect with a MySQL client to this interface and query different tables and databases. The configuration tables
 available through this interface are:
 * mysql_servers -- the list of backend servers
-* mysql_users -- the list of users and their credentials which can connect to ProxySQL. Note that ProxySQL will use these credentials to connect to the backend servers as well (TODO: check)
+* mysql_users -- the list of users and their credentials which can connect to ProxySQL. Note that ProxySQL will use these credentials to connect to the backend servers as well
 * mysql_query_rules -- the list of rules for routing traffic to the different backend servers. These rules can also cause a rewrite of the query, or caching of the result
 * global_variables -- the list of global variables used throughout the proxy that can be tweaked at runtime. Examples of global variables:
 ```
