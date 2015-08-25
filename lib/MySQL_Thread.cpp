@@ -658,7 +658,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		if (!strcasecmp(name,"monitor_replication_lag_interval")) {
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 7*24*3600*1000) {
-				variables.monitor_ping_interval=intv;
+				variables.monitor_replication_lag_interval=intv;
 				return true;
 			} else {
 				return false;
@@ -667,7 +667,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		if (!strcasecmp(name,"monitor_replication_lag_timeout")) {
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 600*1000) {
-				variables.monitor_ping_timeout=intv;
+				variables.monitor_replication_lag_timeout=intv;
 				return true;
 			} else {
 				return false;
@@ -1634,6 +1634,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_connect_timeout=GloMTH->get_variable_int((char *)"monitor_connect_timeout");
 	mysql_thread___monitor_ping_interval=GloMTH->get_variable_int((char *)"monitor_ping_interval");
 	mysql_thread___monitor_ping_timeout=GloMTH->get_variable_int((char *)"monitor_ping_timeout");
+	mysql_thread___monitor_replication_lag_interval=GloMTH->get_variable_int((char *)"monitor_replication_lag_interval");
+	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
 	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
 
