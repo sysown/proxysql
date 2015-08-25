@@ -61,7 +61,8 @@ LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 ODIR= obj
 
 #CC=gcc
-CC=g++48
+CC?=gcc
+CXX?=g++
 #CC=clang
 
 
