@@ -34,8 +34,9 @@ LIBS=-rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -l
 
 ODIR= obj
 
-CC=gcc48
-CPP=g++48
+CC?=gcc
+CPP?=g++
+CXX?=g++
 #CC=clang
 
 CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
