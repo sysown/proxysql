@@ -5,26 +5,22 @@ O0=-O0
 O2=-O2
 O1=-O1
 O3=-O3 -mtune=native
-#OPTZ=$(O2)
 EXTRALINK=#-pg
 ALL_DEBUG=-ggdb -DDEBUG
 NO_DEBUG=
 DEBUG=${ALL_DEBUG}
-#export DEBUG
-#export OPTZ
-export EXTRALINK
-
+MAKEFILE?=Makefile.BSD
 CC?= gcc
 CXX?= g++
 
 all:
-	OPTZ="${O2}" gmake default
+	OPTZ="${O2}" gmake -f ${MAKEFILE} default
 
 .PHONY: default
 default:
-	gmake deps
-	gmake lib
-	gmake src
+	gmake -f ${MAKEFILE} deps
+	gmake -f ${MAKEFILE} lib
+	gmake -f ${MAKEFILE} src
 
 .PHONY: debug
 debug:
