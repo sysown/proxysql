@@ -35,7 +35,6 @@ LIBS=-rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -l
 ODIR= obj
 
 CC?=gcc
-CPP?=g++
 CXX?=g++
 #CC=clang
 
@@ -51,13 +50,13 @@ _OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo 
 OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
 
 %.ko: %.cpp
-	$(CPP) -fPIC -c -o $@ $< $(CPPFLAGS)
+	$(CXX) -fPIC -c -o $@ $< $(CPPFLAGS)
 
 $(ODIR)/%.o: %.c
 	$(CC) -fPIC -c -o $@ $< $(CFLAGS)
 
 $(ODIR)/%.oo: %.cpp
-	$(CPP) -fPIC -c -o $@ $< $(CPPFLAGS)
+	$(CXX) -fPIC -c -o $@ $< $(CPPFLAGS)
 
 libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a
 	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a
