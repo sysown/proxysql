@@ -28,15 +28,15 @@ debug:
 
 .PHONY: deps
 deps:
-	cd deps && gmake
+	cd deps && CC=${CC} CXX=${CXX} gmake
 
 .PHONY: lib
 lib:
-	cd lib && gmake -j 5
+	cd lib && CC=${CC} CXX=${CXX} gmake -j 5
 
 .PHONY: src
 src:
-	cd src && gmake
+	cd src && CC=${CC} CXX=${CXX} gmake
 
 .PHONY: clean
 clean:
