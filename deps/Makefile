@@ -39,7 +39,7 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.1.0-src.tar.gz
-	cd mariadb-client-library/mariadb_client && CC=/usr/local/bin/gcc48 CXX=/usr/local/bin/g++48 cmake .
+	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} cmake .
 	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} gmake
