@@ -53,7 +53,7 @@ LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(INJEC
 
 CFLAGS=-std=c++0x -D_GLIBCXX_USE_C99 $(IDIRS) $(OPTZ) $(DEBUG)
 #LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl $(EXTRALINK)
-LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lc -lc++ -lcrypto -lssl $(EXTRALINK)
+LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lc -lc++ -lcrypto -lssl -L/usr/local/include -liconv $(EXTRALINK)
 #LIBS=-rdynamic -Wl,-Bstatic -lproxysql -ljemalloc -levent $(GLIB_LIB) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
@@ -72,12 +72,12 @@ _OBJ = main.o proxysql_global.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 $(ODIR)/%.o: %.cpp
-	$(CC) -c -o $@ $< $(CFLAGS) -Wall
+	$(CXX) -c -o $@ $< $(CFLAGS) -Wall
 
 
 
 proxysql: $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
-	$(CC) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CFLAGS) $(LDIRS) $(LIBS)
+	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CFLAGS) $(LDIRS) $(LIBS)
 
 $(ODIR):
 	mkdir $(ODIR)
