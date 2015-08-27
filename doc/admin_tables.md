@@ -105,3 +105,43 @@ The fields have the following semantics:
 * fast_forward - bypass the query processing layer (rewriting, caching) and pass through the query directly as is to the backend server. Users flagged as such 
 * frontend - if set to 1, this (username, password) pair is used for authenticating to the ProxySQL instance
 * backend - if set to 1, this (username, password) pair is used for authenticating to the mysqld servers in the default_hostgroup hostgroup
+
+## `mysql_query_rules`
+
+Here is the statement used to create the `mysql_users` table:
+
+```sql
+CREATE TABLE mysql_query_rules (
+    rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+    active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0,
+    username VARCHAR,
+    schemaname VARCHAR,
+    flagIN INT NOT NULL DEFAULT 0,
+    match_pattern VARCHAR,
+    negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0,
+    flagOUT INT,
+    replace_pattern VARCHAR,
+    destination_hostgroup INT DEFAULT NULL,
+    cache_ttl INT CHECK(cache_ttl > 0),
+    reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL,
+    timeout INT UNSIGNED,
+    delay INT UNSIGNED,
+    apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0
+)
+```
+
+The fields have the following semantics:
+* rule_id - the unique id of the rule
+* active - only rules with active=1 will be considered by the query processing module
+* username, schemaname - filtering criteria for the rules. If these are non-NULL, a query will match only if the connection is made with the correct username and/or schemaname.
+* flagIN, flagOUT, apply - these allow us to create "chains of rules" that get applied one after the other. An internal flag value is set to 0, and only rules with flagIN=0 are considered at the beginning. After the first rule is matched, the internal value of the flag is set to the flagOUT of the rule, and rules having flagIN equal to the internal value of the flag are searched again. This happens until there are no more matching rules, or apply is set to 1 (which means this is the last rule to be applied)
+* match_pattern - regular expression that matches the query text. The dialect of regular expressions used is that of re2 - https://github.com/google/re2
+* negate_match_pattern - if this is set to 1, only queries not matching the query text will be considered as a match. This acts as a NOT operator in front of the regular expression matching against match_pattern.
+* replace_pattern - this is the pattern with which to replace the matched pattern. It's done using RE2::Replace, so it's worth taking a look at the online documentation for that: https://github.com/google/re2/blob/master/re2/re2.h#L378. Note that this is optional, and when this is missing, the query processor will only cache/route this query without rewriting.
+* destination_hostgroup - route matched queries to this hostgroup. This happens unless there is a started transaction, and the logged in user has the transaction_persistent flag set to 1 (see `mysql_users` table).
+* cache_ttl - the number of seconds for which to cache the result of the query 
+* reconnect - feature not used
+* timeout - the maximal timeout with which the matched or rewritten query should be executed.
+* delay - delay the execution of the query. This is essentially a throttling mechanism, together with the `mysql-default_query_delay` global variable (see below).
+
+More details can be found in the dedicated ![query rules](http://todo) section.
