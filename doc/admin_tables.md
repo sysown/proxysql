@@ -71,3 +71,37 @@ The fields have the following semantics:
 * weight - the bigger the weight of a server relative to other weights, the higher the probability of the server to be chosen from a hostgroup
 * compression - not supported yet
 * max_connections - the maximal number of connections ProxySQL will open to this backend server. Even though this server will have the highest weight, no new connections will be opened to it once this limit is hit.
+
+## `mysql_users`
+
+Here is the statement used to create the `mysql_users` table:
+
+```sql
+CREATE TABLE mysql_users (
+    username VARCHAR NOT NULL,
+    password VARCHAR,
+    active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,
+    use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0,
+    default_hostgroup INT NOT NULL DEFAULT 0,
+    default_schema VARCHAR,
+    schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0,
+    transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0,
+    fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0,
+    backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1,
+    frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1,
+    max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000,
+    PRIMARY KEY (username, backend),
+    UNIQUE (username, frontend)
+)
+```
+
+The fields have the following semantics:
+* username, password - credentials for connecting to the mysqld or ProxySQL instance
+* active - the users with active = 0 will be tracked in the database, but will be never loaded in the in-memory data structures
+* default_hostgroup - the hostgroup for which this credential will be used (for backend credentials)
+* default_schema - the schema to which the connection should change by default
+* schema_locked - not supported yet (TODO: check)
+* transaction_persistent - if this is set for the user with which the MySQL client is connecting to ProxySQL (thus a "frontend" user - see below), transactions started within a hostgroup will remain within that hostgroup,regardless of any other rules
+* fast_forward - bypass the query processing layer (rewriting, caching) and pass through the query directly as is to the backend server. Users flagged as such 
+* frontend - if set to 1, this (username, password) pair is used for authenticating to the ProxySQL instance
+* backend - if set to 1, this (username, password) pair is used for authenticating to the mysqld servers in the default_hostgroup hostgroup
