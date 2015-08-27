@@ -145,3 +145,26 @@ The fields have the following semantics:
 * delay - delay the execution of the query. This is essentially a throttling mechanism, together with the `mysql-default_query_delay` global variable (see below).
 
 More details can be found in the dedicated ![query rules](http://todo) section.
+
+## `global_variables`
+
+Here is the statement used to create the `global_variables` table:
+
+```sql
+CREATE TABLE global_variables (
+    variable_name VARCHAR NOT NULL PRIMARY KEY,
+    variable_value VARCHAR NOT NULL
+)
+```
+
+This is a much simpler table, essentially a key-value store. These are global variables used by ProxySQL and are useful in order to tweak its behaviour.
+
+There are 2 classes of global variables:
+* those whose name begins with `mysql-`. They will tweak the behaviour of MySQL-related features. Examples:
+    * `mysql-shun_on_failures` - number of connect failures allowed per second before the backend server is taken out of use temporarily
+    * `mysql-max_connections` - maximal number of connections that the proxy
+* those whose name begins with `admin-`. They will tweak the behaviour of the admin interface. Examples:
+    * `admin-admin_credentials` - double-colon separated username and password for accessing the admin interface with read-write rights
+    * `admin-mysql_ifaces` - TCP hostname and port on which to listen for incoming connections for the admin interface
+
+For more information about particular variables, please see the dedicated section on ![global variables][http://todo]
