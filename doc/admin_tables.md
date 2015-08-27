@@ -24,3 +24,50 @@ The purposes of these databases are as follows:
 * stats: contains runtime metrics collected from the internal functioning of the proxy. Example metrics include the number of times each query rule was matched, the currently running queries, etc.
 * monitor: contains monitoring metrics related to the backend servers to which ProxySQL connects. Example metrics include the minimal and maximal time for connecting to a backend server or for pinging it.
 * myhgm: only enabled in debug builds
+
+# main database
+
+Here are the tables from the "main" database:
+
+```bash
+mysql> show tables from main;
++-------------------+
+| tables            |
++-------------------+
+| mysql_servers     |
+| mysql_users       |
+| mysql_query_rules |
+| global_variables  |
+| mysql_collations  |
+| debug_levels      |
++-------------------+
+6 rows in set (0.01 sec)
+```
+
+## `mysql_servers`
+
+Here is the statement used to create the `mysql_servers` table:
+
+```sql
+CREATE TABLE mysql_servers (
+    hostgroup_id INT NOT NULL DEFAULT 0,
+    hostname VARCHAR NOT NULL,
+    port INT NOT NULL DEFAULT 3306,
+    status VARCHAR CHECK (status IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE',
+    weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1,
+    compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0,
+    max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000,
+    PRIMARY KEY (hostgroup_id, hostname, port) )
+```
+
+The fields have the following semantics:
+* hostgroup_id: the hostgroup in which this mysqld instance is included. Notice that the same instance can be part as more than one hostgroup
+* hostname, port: the TCP endpoint at which the mysqld instance can be contacted
+* status: 
+  * ONLINE - backend server is fully operational
+  * SHUNNED - backend sever is temporarily taken out of use because of too many connection errors in a time that was too short
+  * OFFLINE_SOFT - when a server is put into OFFLINE_SOFT mode, the existing connections are kept, while new incoming connections aren't accepted anymore
+  * OFFLINE_HARD - when a server is put into OFFLINE_HARD mode, the existing connections are dropped, while new incoming connections aren't accepted either. This is equivalent to deleting the server from a hostgroup, or temporarily taking it out of the hostgroup for maintenance work
+* weight - the bigger the weight of a server relative to other weights, the higher the probability of the server to be chosen from a hostgroup
+* compression - not supported yet
+* max_connections - the maximal number of connections ProxySQL will open to this backend server. Even though this server will have the highest weight, no new connections will be opened to it once this limit is hit.
