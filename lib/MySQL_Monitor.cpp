@@ -293,7 +293,7 @@ again:
 				break;
 
 			case 12:
-				if (&interr) {
+				if (interr) {
 					mysql_error_msg=strdup(mysql_error(mysql));
 					mysql_close(mysql);
 					mysql=NULL;
@@ -801,12 +801,12 @@ void * MySQL_Monitor::monitor_replication_lag() {
 
 		unsigned int glover;
 		char *error=NULL;
-		int cols=0;
-		int affected_rows=0;
+//		int cols=0;
+//		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT hostname, port FROM mysql_servers";
+		char *query=(char *)"SELECT hostgroup_id, hostname, port FROM mysql_servers";
 		t1=monotonic_time();
 
 		if (t1 < next_loop_at) {
@@ -830,7 +830,9 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+//		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		resultset = MyHGM->execute_query(query, &error);
+		assert(resultset);
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_replication_lag_loop;
@@ -841,7 +843,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]),libevent_base);
 				sds[i]->task_id=MON_REPLICATION_LAG;
 				replication_lag__num_active_connections++;
 				total_replication_lag__num_active_connections++;

@@ -265,6 +265,15 @@ bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t 
 }
 
 
+SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	wrlock();
+  mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
+	wrunlock();
+	return resultset;
+}
 
 bool MySQL_HostGroups_Manager::commit() {
 	char *error=NULL;

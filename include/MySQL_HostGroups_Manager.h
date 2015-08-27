@@ -115,6 +115,7 @@ class MySQL_HostGroups_Manager {
 	bool server_add(unsigned int hid, char *add, uint16_t p=3306, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100);
 	bool commit();
 
+	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	MyHGC * MyHGC_lookup(unsigned int);
 	
