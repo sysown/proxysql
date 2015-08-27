@@ -168,3 +168,14 @@ There are 2 classes of global variables:
     * `admin-mysql_ifaces` - TCP hostname and port on which to listen for incoming connections for the admin interface
 
 For more information about particular variables, please see the dedicated section on ![global variables][http://todo]
+
+# `mysql_collations`
+
+```CREATE TABLE mysql_collations (
+    Id INTEGER NOT NULL PRIMARY KEY,
+    Collation VARCHAR NOT NULL,
+    Charset VARCHAR NOT NULL,
+    `Default` VARCHAR NOT NULL
+)```
+
+The available (charset, collation) pairs supported by ProxySQL. In principle, ProxySQL will validate that incoming connections have a supported charset, and will make sure that the pooled backend connections are switched to the correct charset before using them.
