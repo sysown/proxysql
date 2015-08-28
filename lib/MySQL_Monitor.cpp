@@ -145,6 +145,8 @@ class MySQL_Monitor_State_Data {
 	int interr;
 	char * mysql_error_msg;
 	MYSQL_ROW *row;
+	unsigned int repl_lag;
+	unsigned int hostgroup_id;
 	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b) {
 		task_id=MON_CONNECT;
 		mysql=NULL;
@@ -806,7 +808,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT hostgroup_id, hostname, port FROM mysql_servers";
+		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
 		t1=monotonic_time();
 
 		if (t1 < next_loop_at) {
@@ -845,6 +847,8 @@ void * MySQL_Monitor::monitor_replication_lag() {
 				SQLite3_row *r=*it;
 				sds[i] = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]),libevent_base);
 				sds[i]->task_id=MON_REPLICATION_LAG;
+				sds[i]->hostgroup_id=atoi(r->fields[0]);
+				sds[i]->repl_lag=atoi(r->fields[3]);
 				replication_lag__num_active_connections++;
 				total_replication_lag__num_active_connections++;
 				MySQL_Monitor_State_Data *_mmsd=sds[i];
@@ -904,7 +908,9 @@ __end_monitor_replication_lag_loop:
 					}
 					if (j>-1) {
 						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-						repl_lag=atoi(row[j]);
+						if (row[j]) {
+							repl_lag=atoi(row[j]);
+						}
 					}
 					if (repl_lag>=0) {
 						rc=sqlite3_bind_int64(statement, 5, repl_lag); assert(rc==SQLITE_OK);
