@@ -489,10 +489,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length==strlen("LOAD MYSQL USERS FROM DISK") && !strncasecmp("LOAD MYSQL USERS FROM DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
-			l_free(*ql,*q);
-			*q=l_strdup("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
-			*ql=strlen(*q)+1;
-			return true;
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_mysql_users__from_disk_to_memory();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading mysql users to MEMORY\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
 		}
 
 		if (
@@ -503,10 +504,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length==strlen("SAVE MYSQL USERS TO DISK") && !strncasecmp("SAVE MYSQL USERS TO DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
-			l_free(*ql,*q);
-			*q=l_strdup("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
-			*ql=strlen(*q)+1;
-			return true;
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_mysql_users__from_memory_to_disk();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving mysql users to DISK\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
 		}
 
 		if (
@@ -2512,30 +2514,58 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 }
 
 
+void ProxySQL_Admin::flush_mysql_users__from_disk_to_memory() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM main.mysql_users");
+	admindb->execute("INSERT INTO main.mysql_users SELECT * FROM disk.mysql_users");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM disk.mysql_userss");
+	admindb->execute("INSERT INTO disk.mysql_users SELECT * FROM main.mysql_users");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
 void ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
-	// FIXME : low-priority , this should be transactional
-  admindb->execute("PRAGMA foreign_keys = OFF");
-  admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-  admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM main.mysql_servers");
+	admindb->execute("INSERT INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
 }
 
 void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
-	// FIXME : low-priority , this should be transactional
-  admindb->execute("PRAGMA foreign_keys = OFF");
-  admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-  admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM disk.mysql_servers");
+	admindb->execute("INSERT INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
 }
 
 void ProxySQL_Admin::flush_mysql_query_rules__from_disk_to_memory() {
+	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
+	admindb->execute("DELETE FROM main.mysql_query_rules");
+	admindb->execute("INSERT INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
 }
 
 void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
+	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
+	admindb->execute("DELETE FROM disk.mysql_query_rules");
+	admindb->execute("INSERT INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
 }
 
 void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
