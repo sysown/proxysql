@@ -255,6 +255,7 @@ class MySQL_Authentication;
 class MySQL_Connection;
 class MySQL_Protocol;
 class PtrArray;
+class PtrSizeArray;
 class StatCounters;
 class ProxySQL_ConfigFile;
 //class MySQL_Server;

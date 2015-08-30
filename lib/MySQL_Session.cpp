@@ -1836,7 +1836,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, 
 //			l[i]=result->rows[r]->sizes[i];
 //			p[i]=result->rows[r]->fields[i];
 //		}
-			sid=myprot->generate_pkt_row2(&pkt_length,sid,num_fields,lengths,row); sid++;
+			sid=myprot->generate_pkt_row2(myds->PSarrayOUT, &pkt_length,sid,num_fields,lengths,row); sid++;
 			client_myds->resultset_length+=pkt_length;
 		}
 		myds->DSS=STATE_ROW;
