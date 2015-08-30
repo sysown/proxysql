@@ -558,27 +558,6 @@ handler_again:
 			break;
 		case PINGING_SERVER:
 			
-/*
-			if (mybe->server_myds->revents) {
-				MySQL_Data_Stream *myds=mybe->server_myds;
-				MySQL_Connection *myconn=myds->myconn;
-				myconn->handler(myds->revents);
-				if (myconn->async_state_machine==ASYNC_PING_SUCCESSFUL) {
-					myds->DSS=STATE_READY;
-					myds->myconn->async_state_machine=ASYNC_IDLE;
-					if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-
-						return_MySQL_Connection_To_Poll(myds);
-					}
-					status=NONE;
-				} else {
-					if (myconn->async_state_machine==ASYNC_PING_FAILED) {
-						// FIXME: treat gracefully
-						assert(0);
-					}
-				}
-			}
-*/
 			assert(mybe->server_myds->myconn);
 			{	
 				MySQL_Data_Stream *myds=mybe->server_myds;
@@ -706,11 +685,6 @@ handler_again:
 					status=WAITING_CLIENT_DATA;
 					client_myds->DSS=STATE_SLEEP;
 					CurrentQuery.end();
-//					if (mysql_thread___commands_stats==true) {
-//						CurrentQuery.end_time=thread->curtime;
-//						CurrentQuery.query_parser_update_counters();
-//						CurrentQuery.query_parser_free();
-//					}
 					myds->free_mysql_real_query();
 					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
@@ -1099,100 +1073,7 @@ handler_again:
 			break;
 	}
 
-	goto __exit_DSS__STATE_NOT_INITIALIZED;
 
-__get_a_backend:
-/*
-	if (client_myds==NULL) {
-		goto __exit_DSS__STATE_NOT_INITIALIZED;
-	}
-
-	//if ((client_myds->DSS==STATE_QUERY_SENT_NET && session_fast_forward==false) || session_fast_forward==true) {
-	if (status!=FAST_FORWARD && client_myds->DSS==STATE_QUERY_SENT_NET) {
-	// the client has completely sent the query, now we should handle it server side
-	//
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET\n", this);
-		if (mybe && mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET , server_myds==STATE_NOT_INITIALIZED\n", this);
-			// DSS is STATE_NOT_INITIALIZED. It means we are not connected to any server
-			// try to connect
-			pending_connect=1;
-			unsigned long long curtime=monotonic_time();
-
-			// if DSS==STATE_NOT_INITIALIZED , we expect few pointers to be NULL . If it is not null, we have a bug
-			//assert(server_myds->myconn==NULL);
-			assert(mybe->server_myds->myconn==NULL);
-
-			handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
-			if (mybe->server_myds->myconn==NULL) {
-				pause_until=thread->curtime+100*1000;
-				goto __exit_DSS__STATE_NOT_INITIALIZED;
-			}
-			//mybe->server_myds->myprot.init(&mybe->server_myds, mybe->myconn->userinfo, this);
-			mybe->server_myds->myprot.init(&mybe->server_myds, mybe->server_myds->myconn->userinfo, this);
-			if (client_myds->myconn->has_prepared_statement==true) {
-				mybe->server_myds->myconn->has_prepared_statement=true;
-				mybe->server_myds->myconn->reusable=false;
-			}
-			// FIXME : handle missing connection from connection pool
-			// FIXME : perhaps is a goto __exit_DSS__STATE_NOT_INITIALIZED after setting time wait
-
-			thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
-
-			if (mybe->server_myds->DSS!=STATE_READY) {
-				mybe->server_myds->move_from_OUT_to_OUTpending();
-			}
-			// END OF if (server_myds->DSS==STATE_NOT_INITIALIZED)
-								//} else {  TRY #1
-		}    // TRY #1
-		if (session_fast_forward==true && mybe && mybe->server_myds && mybe->server_myds->myconn) {
-			mybe->server_myds->myconn->reusable=false;
-		}
-		if (session_fast_forward==false) {
-		if (mybe && mybe->server_myds->myds_type==MYDS_BACKEND && mybe->server_myds->DSS==STATE_READY) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, client_myds->DSS==STATE_QUERY_SENT_NET , server_myds==STATE_READY , server_myds->myds_type==MYDS_BACKEND\n", this);
-			//if (strcmp(userinfo_client.schemaname,userinfo_server.schemaname)==0) {
-			if (
-				(client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash)
-			) {
-				if (strcmp(client_myds->myconn->userinfo->username,mybe->server_myds->myconn->userinfo->username)) {
-					// username don't match, we must change user
-					handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();
-				} else {
-					// we should chek that schema is different, but here we assume that if we reach here user is identical, but schema is not
-					handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();
-				}
-			} else {
-#ifndef EXPMARIA
-				if (client_myds->myconn->options.charset!=mybe->server_myds->myconn->options.charset ) {
-					handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();
-				} else {
-#endif
-					//server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-#ifdef EXPMARIA
-					MySQL_Data_Stream *myds=mybe->server_myds;
-					myds->DSS=STATE_MARIADB_QUERY;
-					status=PROCESSING_QUERY;
-					myds->myconn->async_state_machine=ASYNC_QUERY_START;
-					myds->myconn->set_query(myds->mysql_real_query.ptr,myds->mysql_real_query.size);
-					myds->myconn->handler(0);
-#else
-					mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-//					if (client_myds->myconn->processing_prepared_statement) {
-						mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
-						mybe->server_myds->myconn->processing_prepared_statement_execute=client_myds->myconn->processing_prepared_statement_execute;
-//					}
-					status=WAITING_SERVER_DATA;
-#endif 
-#ifndef EXPMARIA
-				}
-#endif
-			}
-		}
-							//	}   TRY #1
-		}
-	}
-*/
 __exit_DSS__STATE_NOT_INITIALIZED:
 		
 
