@@ -16,7 +16,8 @@ enum MySerStatus {
 	MYSQL_SERVER_STATUS_ONLINE,
 	MYSQL_SERVER_STATUS_SHUNNED,
 	MYSQL_SERVER_STATUS_OFFLINE_SOFT,
-	MYSQL_SERVER_STATUS_OFFLINE_HARD
+	MYSQL_SERVER_STATUS_OFFLINE_HARD,
+	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG
 };
 
 
@@ -129,6 +130,8 @@ class MySQL_HostGroups_Manager {
 
 	void push_MyConn_to_pool(MySQL_Connection *);
 	void destroy_MyConn_from_pool(MySQL_Connection *);	
+
+	void replication_lag_action(int, char*, unsigned int, int);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

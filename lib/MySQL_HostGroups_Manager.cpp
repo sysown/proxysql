@@ -382,9 +382,6 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 				case 0:
 					st=(char *)"ONLINE";
 					break;
-				case 1:
-					st=(char *)"SHUNNED";
-					break;
 				case 2:
 					st=(char *)"OFFLINE_SOFT";
 					break;
@@ -392,7 +389,8 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 					st=(char *)"OFFLINE_HARD";
 					break;
 				default:
-					assert(0);
+				case 1:
+					st=(char *)"SHUNNED";
 					break;
 			}
 			fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag);
@@ -615,6 +613,39 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 }
 
 
+void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
+	wrlock();
+	int i,j;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+					if (
+						(current_replication_lag==-1 )
+						||
+						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
+					) {
+						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+					}
+				} else {
+					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+						if (current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag)) {
+							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+						}
+					}
+				}
+				goto __exit_replication_lag_action;
+			}
+		}
+	}
+__exit_replication_lag_action:
+	wrunlock();
+}
+
+
 int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned long long _max_last_time_used, MySQL_Connection **conn_list, int num_conn) {
 	wrlock();
 	int num_conn_current=0;
@@ -712,6 +743,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 					break;
 				case 3:
 					pta[3]=strdup("OFFLINE_HARD");
+					break;
+				case 4:
+					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
 					break;
 				default:
 					assert(0);
