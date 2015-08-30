@@ -745,6 +745,7 @@ handler_again:
 							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 							MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+							CurrentQuery.end();
 							GloQPro->delete_QP_out(qpo);
 							qpo=NULL;
 							myconn->async_free_result();
@@ -940,8 +941,10 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-								myds->destroy_MySQL_Connection_From_Pool();
-								myds->fd=0;
+							CurrentQuery.end();
+							myds->free_mysql_real_query();
+							myds->destroy_MySQL_Connection_From_Pool();
+							myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
 						}
@@ -957,6 +960,8 @@ handler_again:
 			if (mybe->server_myds->max_connect_time) {
 				if (thread->curtime >= mybe->server_myds->max_connect_time) {
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Max connect timeout reached");
+					CurrentQuery.end();
+					mybe->server_myds->free_mysql_real_query();
 					client_myds->DSS=STATE_SLEEP;
 					//enum session_status st;
 					while (previous_status.size()) {
@@ -1024,6 +1029,8 @@ handler_again:
 							} else {
 								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Max connect timeout reached");
 							}
+							CurrentQuery.end();
+							myds->free_mysql_real_query();
 							client_myds->DSS=STATE_SLEEP;
 							while (previous_status.size()) {
 								st=previous_status.top();
