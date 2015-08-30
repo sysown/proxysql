@@ -4,6 +4,24 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+class MySQL_ResultSet {
+	private:
+	public:
+	uint8_t sid;
+	MySQL_Data_Stream *myds;
+	MySQL_Protocol *myprot;
+	MYSQL *mysql;
+	MYSQL_RES *result;
+	unsigned int num_fields;
+	unsigned int num_rows;
+	unsigned long long resultset_size;
+	PtrSizeArray *PSarrayOUT;
+	MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my);
+	~MySQL_ResultSet();
+	void add_row(MYSQL_ROW row);
+	void add_eof();
+};
+
 
 class MySQL_Prepared_Stmt_info {
 	public:

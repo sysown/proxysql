@@ -4,6 +4,7 @@
 
 extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
+#define PROXYSQL_USE_RESULT
 
 // Bug https://mariadb.atlassian.net/browse/CONC-136
 //int STDCALL mysql_select_db_start(int *ret, MYSQL *mysql, const char *db);
@@ -154,6 +155,7 @@ MySQL_Connection::MySQL_Connection() {
 	mysql_result=NULL;
 	query.ptr=NULL;
 	query.length=0;
+	MyRS=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 
@@ -178,6 +180,9 @@ MySQL_Connection::~MySQL_Connection() {
 //		shutdown(fd, SHUT_RDWR);
 //		close(fd);
 //	}
+	if (MyRS) {
+		delete MyRS;
+	}
 };
 
 uint8_t MySQL_Connection::set_charset(uint8_t _c) {
@@ -459,7 +464,11 @@ handler_again:
 			if (async_exit_status) {
 				next_event(ASYNC_QUERY_CONT);
 			} else {
+#ifdef PROXYSQL_USE_RESULT
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+#else
 				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+#endif
 			}
 			break;
 		case ASYNC_QUERY_CONT:
@@ -467,7 +476,11 @@ handler_again:
 			if (async_exit_status) {
 				next_event(ASYNC_QUERY_CONT);
 			} else {
+#ifdef PROXYSQL_USE_RESULT
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+#else
 				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+#endif
 			}
 			break;
 		case ASYNC_STORE_RESULT_START:
@@ -487,6 +500,39 @@ handler_again:
 				next_event(ASYNC_STORE_RESULT_CONT);
 			} else {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+			}
+			break;
+		case ASYNC_USE_RESULT_START:
+			if (mysql_errno(mysql)) {
+				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+			}
+			mysql_result=mysql_use_result(mysql);
+			if (mysql_result==NULL) {
+				NEXT_IMMEDIATE(ASYNC_QUERY_END);
+			} else {
+				MyRS=new MySQL_ResultSet(&myds->sess->client_myds->myprot, mysql_result, mysql);
+				async_fetch_row_start=false;
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+			}
+			break;
+		case ASYNC_USE_RESULT_CONT:
+			if (async_fetch_row_start==false) {
+				async_exit_status=mysql_fetch_row_start(&mysql_row,mysql_result);
+				async_fetch_row_start=true;
+			} else {
+				async_exit_status=mysql_fetch_row_cont(&mysql_row,mysql_result, mysql_status(event, true));
+			}
+			if (async_exit_status) {
+				next_event(ASYNC_USE_RESULT_CONT);
+			} else {
+				async_fetch_row_start=false;
+				if (mysql_row) {
+					MyRS->add_row(mysql_row);
+					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+				} else {
+					MyRS->add_eof();
+					NEXT_IMMEDIATE(ASYNC_QUERY_END);
+				}
 			}
 			break;
 		case ASYNC_QUERY_END:

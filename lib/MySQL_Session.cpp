@@ -678,7 +678,9 @@ handler_again:
 
 //				if (myconn->async_state_machine==ASYNC_QUERY_END) {
 				if (rc==0) {
-					MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+					// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
+					//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+					MySQL_Result_to_MySQL_wire(myconn->MyRS);
 					GloQPro->delete_QP_out(qpo);
 					qpo=NULL;
 					myconn->async_free_result();
@@ -741,7 +743,7 @@ handler_again:
 							return -1;
 						} else {
 							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
-
+							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 							MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
 							GloQPro->delete_QP_out(qpo);
 							qpo=NULL;
@@ -1801,6 +1803,31 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backen
 	status=CHANGING_USER_SERVER;
 }
 
+
+void MySQL_Session::MySQL_Result_to_MySQL_wire(MySQL_ResultSet *MyRS) {
+	// FIXME: query cache is not handled
+	MYSQL *mysql=MyRS->mysql;
+	if (MyRS->result) {
+		client_myds->PSarrayOUT->copy_add(MyRS->PSarrayOUT,0,MyRS->PSarrayOUT->len);
+		while (MyRS->PSarrayOUT->len) MyRS->PSarrayOUT->remove_index(MyRS->PSarrayOUT->len-1,NULL);
+		//PtrSize_t pkt;
+		//while (MyRS->PSarrayOUT->len) {
+		//	MyRS->PSarrayOUT->remove_index(0,&pkt);
+		//	client_myds->PSarrayOUT->add(pkt.ptr,pkt.size);
+		//}
+	} else { // no result set
+		int myerrno=mysql_errno(mysql);
+		if (myerrno==0) {
+			unsigned int num_rows = mysql_affected_rows(mysql);
+			MyRS->myprot->generate_pkt_OK(true,NULL,NULL,MyRS->sid,num_rows,mysql->insert_id,mysql->server_status,mysql->warning_count,mysql->info);
+		} else {
+			// error
+			char sqlstate[10];
+			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
+			MyRS->myprot->generate_pkt_ERR(true,NULL,NULL,MyRS->sid,mysql_errno(mysql),sqlstate,mysql_error(mysql));
+		}
+	}
+}
 
 void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, MySQL_Protocol *myprot) {
 	assert(myprot);

@@ -43,6 +43,9 @@ class MySQL_Connection {
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
 	MYSQL_RES *mysql_result;
+	MYSQL_ROW mysql_row;
+	bool async_fetch_row_start;
+	MySQL_ResultSet *MyRS;
 	struct {
 		char *ptr;
 		unsigned long length;
