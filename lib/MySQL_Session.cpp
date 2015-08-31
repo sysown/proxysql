@@ -713,7 +713,11 @@ handler_again:
 							bool retry_conn=false;
 							proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
-								retry_conn=true;
+								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+								// transfer to frontend has started, we cannot retry
+								} else {
+									retry_conn=true;
+								}
 							}
 							myds->destroy_MySQL_Connection_From_Pool();
 							myds->fd=0;
@@ -731,7 +735,11 @@ handler_again:
 							proxy_error("Detected a broken connection during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
-								retry_conn=true;
+								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+								// transfer to frontend has started, we cannot retry
+								} else {
+									retry_conn=true;
+								}
 							}
 							myds->destroy_MySQL_Connection_From_Pool();
 							myds->fd=0;
