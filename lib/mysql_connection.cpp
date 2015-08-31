@@ -863,6 +863,10 @@ void MySQL_Connection::async_free_result() {
 		mysql_result=NULL;
     async_state_machine=ASYNC_IDLE;
 	}
+	if (MyRS) {
+		delete MyRS;
+		MyRS=NULL;
+	}
 }
 
 bool MySQL_Connection::IsActiveTransaction() {

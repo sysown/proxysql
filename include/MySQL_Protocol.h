@@ -7,6 +7,8 @@
 class MySQL_ResultSet {
 	private:
 	public:
+	bool transfer_started;
+	bool resultset_completed;
 	uint8_t sid;
 	MySQL_Data_Stream *myds;
 	MySQL_Protocol *myprot;
@@ -20,6 +22,7 @@ class MySQL_ResultSet {
 	~MySQL_ResultSet();
 	void add_row(MYSQL_ROW row);
 	void add_eof();
+	bool get_resultset(PtrSizeArray *PSarrayFinal);
 };
 
 

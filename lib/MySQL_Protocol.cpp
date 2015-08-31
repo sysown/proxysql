@@ -1896,6 +1896,8 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 
 MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my) {
+	transfer_started=false;
+	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
 	myds=myprot->get_myds();
@@ -1955,4 +1957,13 @@ void MySQL_ResultSet::add_eof() {
 	PSarrayOUT->add(pkt.ptr,pkt.size);
 	sid++;
 	resultset_size+=pkt.size;
+	resultset_completed=true;
+}
+
+bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
+	transfer_started=true;
+	PSarrayFinal->copy_add(PSarrayOUT,0,PSarrayOUT->len);
+	while (PSarrayOUT->len)
+		PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
+	return resultset_completed;
 }

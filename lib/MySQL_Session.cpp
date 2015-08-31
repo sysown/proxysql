@@ -680,7 +680,7 @@ handler_again:
 				if (rc==0) {
 					// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 					//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
-					MySQL_Result_to_MySQL_wire(myconn->MyRS);
+					MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 					GloQPro->delete_QP_out(qpo);
 					qpo=NULL;
 					myconn->async_free_result();
@@ -764,6 +764,10 @@ handler_again:
 						}
 					} else {
 						// rc==1 , nothing to do for now
+						// FIXME: 128 is completely arbitrary, for testing only
+						if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > 128) {
+							myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+						}
 					}
 				}
 
@@ -1811,27 +1815,21 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backen
 }
 
 
-void MySQL_Session::MySQL_Result_to_MySQL_wire(MySQL_ResultSet *MyRS) {
+void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS) {
 	// FIXME: query cache is not handled
-	MYSQL *mysql=MyRS->mysql;
-	if (MyRS->result) {
-		client_myds->PSarrayOUT->copy_add(MyRS->PSarrayOUT,0,MyRS->PSarrayOUT->len);
-		while (MyRS->PSarrayOUT->len) MyRS->PSarrayOUT->remove_index(MyRS->PSarrayOUT->len-1,NULL);
-		//PtrSize_t pkt;
-		//while (MyRS->PSarrayOUT->len) {
-		//	MyRS->PSarrayOUT->remove_index(0,&pkt);
-		//	client_myds->PSarrayOUT->add(pkt.ptr,pkt.size);
-		//}
+	if (MyRS) {
+		assert(MyRS->result);
+		MyRS->get_resultset(client_myds->PSarrayOUT);
 	} else { // no result set
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
 			unsigned int num_rows = mysql_affected_rows(mysql);
-			MyRS->myprot->generate_pkt_OK(true,NULL,NULL,MyRS->sid,num_rows,mysql->insert_id,mysql->server_status,mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status,mysql->warning_count,mysql->info);
 		} else {
 			// error
 			char sqlstate[10];
 			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
-			MyRS->myprot->generate_pkt_ERR(true,NULL,NULL,MyRS->sid,mysql_errno(mysql),sqlstate,mysql_error(mysql));
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
 		}
 	}
 }
