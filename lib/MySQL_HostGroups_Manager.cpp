@@ -113,6 +113,8 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	connect_OK=0;
 	connect_ERR=0;
 	queries_sent=0;
+	bytes_sent=0;
+	bytes_recv=0;
 	time_last_detected_error=0;
 	connect_ERR_at_time_last_detected_error=0;
 	shunned_automatic=false;
@@ -696,7 +698,7 @@ __exit_get_multiple_idle_connections:
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
-  const int colnum=9;
+  const int colnum=11;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -708,7 +710,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
   result->add_column_definition(SQLITE_TEXT,"ConnOK");
   result->add_column_definition(SQLITE_TEXT,"ConnERR");
   result->add_column_definition(SQLITE_TEXT,"Queries");
-
+  result->add_column_definition(SQLITE_TEXT,"Bytes_sent");
+  result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
 	wrlock();
 	int i,j, k;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -761,6 +764,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			pta[7]=strdup(buf);
 			sprintf(buf,"%llu", mysrvc->queries_sent);
 			pta[8]=strdup(buf);
+			sprintf(buf,"%llu", mysrvc->bytes_sent);
+			pta[9]=strdup(buf);
+			sprintf(buf,"%llu", mysrvc->bytes_recv);
+			pta[10]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])

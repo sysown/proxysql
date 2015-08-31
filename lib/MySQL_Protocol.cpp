@@ -1942,13 +1942,14 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 	}
 }
 
-void MySQL_ResultSet::add_row(MYSQL_ROW row) {
+unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 	unsigned long *lengths=mysql_fetch_lengths(result);
 	unsigned int pkt_length;
 	sid=myprot->generate_pkt_row2(PSarrayOUT, &pkt_length, sid, num_fields, lengths, row);
 	sid++;
 	resultset_size+=pkt_length;
 	num_rows++;
+	return pkt_length;
 }
 
 void MySQL_ResultSet::add_eof() {

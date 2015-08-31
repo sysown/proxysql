@@ -52,6 +52,8 @@ class MySrvC {	// MySQL Server Container
 	time_t time_last_detected_error;
 	unsigned int connect_ERR_at_time_last_detected_error;
 	unsigned long long queries_sent;
+	unsigned long long bytes_sent;
+	unsigned long long bytes_recv;
 	bool shunned_automatic;
 	//uint8_t charset;
 	MySrvConnList *ConnectionsUsed;

@@ -20,7 +20,7 @@ class MySQL_ResultSet {
 	PtrSizeArray *PSarrayOUT;
 	MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my);
 	~MySQL_ResultSet();
-	void add_row(MYSQL_ROW row);
+	unsigned int add_row(MYSQL_ROW row);
 	void add_eof();
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 };
