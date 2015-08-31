@@ -1034,7 +1034,7 @@ handler_again:
 								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 							} else {
 								char buf[256];
-								sprintf(buf,"Max connect failure while reaching hostgroup %d : %llu", current_hostgroup);
+								sprintf(buf,"Max connect failure while reaching hostgroup %d", current_hostgroup);
 								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
 							}
 							CurrentQuery.end();
