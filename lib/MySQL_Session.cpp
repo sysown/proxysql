@@ -972,7 +972,7 @@ handler_again:
 			if (mybe->server_myds->max_connect_time) {
 				if (thread->curtime >= mybe->server_myds->max_connect_time) {
 					char buf[256];
-					sprintf(buf,"Max connect timeout reached while reaching hostgroup %d : %llu", current_hostgroup, thread->curtime - CurrentQuery.start_time);
+					sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
 					CurrentQuery.end();
 					mybe->server_myds->free_mysql_real_query();
