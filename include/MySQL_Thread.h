@@ -263,7 +263,6 @@ class MySQL_Threads_Handler
 		int connect_timeout_server_max;
 		int free_connections_pct;
 		bool sessions_sort;
-		char *connect_timeout_server_error;
 		char *default_schema;
 		char *interfaces;
 		char *server_version;

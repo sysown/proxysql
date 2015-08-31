@@ -140,7 +140,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_retries_delay",
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
-	(char *)"connect_timeout_server_error",
 	(char *)"default_charset",
 	(char *)"free_connections_pct",
 	(char *)"have_compress",
@@ -229,7 +228,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.long_query_time=1000;
 	variables.ping_interval_server=10000;
 	variables.ping_timeout_server=200;
-	variables.connect_timeout_server_error=strdup((char *)"#2003:Can't connect to MySQL server");
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.default_charset=33;
 	variables.interfaces=strdup((char *)"");
@@ -326,7 +324,6 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 		if (!strcasecmp(name,"monitor_query_variables")) return strdup(variables.monitor_query_variables);
 		if (!strcasecmp(name,"monitor_query_status")) return strdup(variables.monitor_query_status);
 	}
-	if (!strcasecmp(name,"connect_timeout_server_error")) return strdup(variables.connect_timeout_server_error);
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
@@ -393,7 +390,6 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
-	if (!strcasecmp(name,"connect_timeout_server_error")) return strdup(variables.connect_timeout_server_error);
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
@@ -838,15 +834,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
-	if (!strcasecmp(name,"connect_timeout_server_error")) {
-		if (vallen) {
-			free(variables.connect_timeout_server_error);
-			variables.connect_timeout_server_error=strdup(value);
-			return true;
-		} else {
-			return false;
-		}
-	}
 	if (!strcasecmp(name,"default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -1095,7 +1082,6 @@ void MySQL_Threads_Handler::stop_listeners() {
 }
 
 MySQL_Threads_Handler::~MySQL_Threads_Handler() {
-	if (variables.connect_timeout_server_error) free(variables.connect_timeout_server_error);
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
@@ -1617,8 +1603,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");
 	mysql_thread___free_connections_pct=GloMTH->get_variable_int((char *)"free_connections_pct");
 	mysql_thread___connect_retries_delay=GloMTH->get_variable_int((char *)"connect_retries_delay");
-	if (mysql_thread___connect_timeout_server_error) free(mysql_thread___connect_timeout_server_error);
-	mysql_thread___connect_timeout_server_error=GloMTH->get_variable_string((char *)"connect_timeout_server_error");
 
 	if (mysql_thread___monitor_username) free(mysql_thread___monitor_username);
 	mysql_thread___monitor_username=GloMTH->get_variable_string((char *)"monitor_username");
@@ -1672,7 +1656,6 @@ MySQL_Thread::MySQL_Thread() {
 	last_processing_idles=0;
 	mysql_sessions_connections_handler=NULL;
 	__thread_MySQL_Thread_Variables_version=0;
-	mysql_thread___connect_timeout_server_error=NULL;
 	mysql_thread___server_version=NULL;
 
 	status_variables.queries=0;
