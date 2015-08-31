@@ -963,7 +963,9 @@ handler_again:
 			//fprintf(stderr,"CONNECTING_SERVER\n");
 			if (mybe->server_myds->max_connect_time) {
 				if (thread->curtime >= mybe->server_myds->max_connect_time) {
-					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Max connect timeout reached");
+					char buf[256];
+					sprintf(buf,"Max connect timeout reached while reaching hostgroup %d : %llu", current_hostgroup, thread->curtime - CurrentQuery.start_time);
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
 					CurrentQuery.end();
 					mybe->server_myds->free_mysql_real_query();
 					client_myds->DSS=STATE_SLEEP;
@@ -1031,7 +1033,9 @@ handler_again:
 								sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 							} else {
-								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Max connect timeout reached");
+								char buf[256];
+								sprintf(buf,"Max connect failure while reaching hostgroup %d : %llu", current_hostgroup);
+								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
 							}
 							CurrentQuery.end();
 							myds->free_mysql_real_query();
