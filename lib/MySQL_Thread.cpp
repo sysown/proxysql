@@ -160,6 +160,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_timer_cached",
 	(char *)"max_transaction_time",
 	(char *)"threshold_query_length",
+	(char *)"threshold_resultset_size",
 	(char *)"wait_timeout",
 	(char *)"max_connections",
 	(char *)"default_query_delay",
@@ -223,6 +224,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_timer_cached=true;
 	variables.max_transaction_time=4*3600*1000;
 	variables.threshold_query_length=512*1024;
+	variables.threshold_resultset_size=4*1024*1024;
 	variables.wait_timeout=8*3600*1000;
 	variables.max_connections=10*1000;
 	variables.default_query_delay=0;
@@ -369,6 +371,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
 	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
 	if (!strcasecmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
+	if (!strcasecmp(name,"threshold_resultset_size")) return (int)variables.threshold_resultset_size;
 	if (!strcasecmp(name,"wait_timeout")) return (int)variables.wait_timeout;
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
 	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
@@ -489,6 +492,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"threshold_query_length")) {
 		sprintf(intbuf,"%d",variables.threshold_query_length);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"threshold_resultset_size")) {
+		sprintf(intbuf,"%d",variables.threshold_resultset_size);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"wait_timeout")) {
@@ -719,6 +726,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1024 && intv <= 1*1024*1024*1024) {
 			variables.threshold_query_length=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"threshold_resultset_size")) {
+		int intv=atoi(value);
+		if (intv >= 1024 && intv <= 1*1024*1024*1024) {
+			variables.threshold_resultset_size=intv;
 			return true;
 		} else {
 			return false;
@@ -1606,6 +1622,7 @@ void MySQL_Thread::refresh_variables() {
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
 	mysql_thread___max_transaction_time=GloMTH->get_variable_int((char *)"max_transaction_time");
 	mysql_thread___threshold_query_length=GloMTH->get_variable_int((char *)"threshold_query_length");
+	mysql_thread___threshold_resultset_size=GloMTH->get_variable_int((char *)"threshold_resultset_size");
 	mysql_thread___wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
 	mysql_thread___max_connections=GloMTH->get_variable_int((char *)"max_connections");
 	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");

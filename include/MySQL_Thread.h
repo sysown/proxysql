@@ -279,6 +279,7 @@ class MySQL_Threads_Handler
 		bool have_compress;
 		int max_transaction_time;
 		int threshold_query_length;
+		int threshold_resultset_size;
 		int wait_timeout;
 		int max_connections;
 		int default_query_delay;

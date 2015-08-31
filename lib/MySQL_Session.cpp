@@ -771,9 +771,9 @@ handler_again:
 							}
 						}
 					} else {
-						// rc==1 , nothing to do for now
-						// FIXME: 128 is completely arbitrary, for testing only
-						if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > 128) {
+						// rc==1 , query is still running
+						// start sending to frontend if mysql_thread___threshold_resultset_size is reached
+						if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int) mysql_thread___threshold_resultset_size) {
 							myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
 						}
 					}
