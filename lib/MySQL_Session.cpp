@@ -752,7 +752,8 @@ handler_again:
 						} else {
 							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
-							MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+							//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 							CurrentQuery.end();
 							GloQPro->delete_QP_out(qpo);
 							qpo=NULL;
@@ -1828,10 +1829,25 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backen
 
 
 void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS) {
-	// FIXME: query cache is not handled
 	if (MyRS) {
 		assert(MyRS->result);
-		MyRS->get_resultset(client_myds->PSarrayOUT);
+		bool transfer_started=MyRS->transfer_started;
+		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
+		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
+		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
+			if (qpo && qpo->cache_ttl>0) { // the resultset should be cached
+				if (mysql_errno(mysql)==0) { // no errors
+					client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
+					client_myds->resultset_length=MyRS->resultset_size;
+					unsigned char *aa=client_myds->resultset2buffer(false);
+					while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
+					GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,client_myds->resultset_length,qpo->cache_ttl);
+					l_free(client_myds->resultset_length,aa);
+					client_myds->resultset_length=0;
+					l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
+				}
+			}
+		}
 	} else { // no result set
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
@@ -1842,72 +1858,6 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			char sqlstate[10];
 			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
-		}
-	}
-}
-
-void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, MySQL_Protocol *myprot) {
-	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
-	myds->DSS=STATE_QUERY_SENT_DS;
-	uint8_t sid=client_myds->pkt_sid+1;
-	unsigned int num_fields=mysql_field_count(mysql);
-	unsigned int num_rows;
-	unsigned int pkt_length=0;
-	if (result) {
-		// we have a result set, this should be a SELECT statement with result
-		assert(result->current_field==0);
-		myprot->generate_pkt_column_count(true,NULL,&pkt_length,sid,num_fields); sid++;
-		client_myds->resultset_length+=pkt_length;
-		for (unsigned int i=0; i<num_fields; i++) {
-			MYSQL_FIELD *field=mysql_fetch_field(result);
-			myprot->generate_pkt_field(true,NULL,&pkt_length,sid,field->db,field->table,field->org_table,field->name,field->org_name,field->charsetnr,field->length,field->type,field->flags,field->decimals,false,0,NULL);
-			client_myds->resultset_length+=pkt_length;
-			sid++;
-		}
-		myds->DSS=STATE_COLUMN_DEFINITION;
-		num_rows=mysql_num_rows(result);
-		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->server_status); sid++;
-		client_myds->resultset_length+=pkt_length;
-		//char **p=(char **)malloc(sizeof(char*)*num_fields);
-		//int *l=(int *)malloc(sizeof(int*)*num_fields);
-		//p[0]="column test";
-		for (unsigned int r=0; r<num_rows; r++) {
-			MYSQL_ROW row=mysql_fetch_row(result);
-			unsigned long *lengths=mysql_fetch_lengths(result);
-//
-//		for (int i=0; i<num_fields; i++) {
-//			l[i]=result->rows[r]->sizes[i];
-//			p[i]=result->rows[r]->fields[i];
-//		}
-			sid=myprot->generate_pkt_row2(myds->PSarrayOUT, &pkt_length,sid,num_fields,lengths,row); sid++;
-			client_myds->resultset_length+=pkt_length;
-		}
-		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,&pkt_length,sid,0,mysql->server_status); sid++;
-		client_myds->resultset_length+=pkt_length;
-		if (qpo && qpo->cache_ttl>0 && mysql_errno(mysql)==0) {
-			client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
-			unsigned char *aa=client_myds->resultset2buffer(false);
-			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);	
-			GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,client_myds->resultset_length,30);
-			l_free(client_myds->resultset_length,aa);
-			client_myds->resultset_length=0;
-			l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
-		}
-		myds->DSS=STATE_SLEEP;
-		//free(l);
-		//free(p);
-	} else { // no result set
-		int myerrno=mysql_errno(mysql);
-		if (myerrno==0) {
-			num_rows = mysql_affected_rows(mysql);
-			myprot->generate_pkt_OK(true,NULL,NULL,sid,num_rows,mysql->insert_id,mysql->server_status,mysql->warning_count,mysql->info);
-		} else {
-			// error
-			char sqlstate[10];
-			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
-			myprot->generate_pkt_ERR(true,NULL,NULL,sid,mysql_errno(mysql),sqlstate,mysql_error(mysql));
 		}
 	}
 }

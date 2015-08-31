@@ -153,7 +153,6 @@ class MySQL_Session
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MYSQL_RES *result, MySQL_Protocol *myprot);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS);
 	unsigned int NumActiveTransactions();
 	unsigned long long IdleTime();
