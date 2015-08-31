@@ -155,6 +155,7 @@ MySQL_Connection::MySQL_Connection() {
 	mysql_result=NULL;
 	query.ptr=NULL;
 	query.length=0;
+	largest_query_length=0;
 	MyRS=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
@@ -326,6 +327,9 @@ void MySQL_Connection::set_names_cont(short event) {
 void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 	query.length=length;
 	query.ptr=stmt;
+	if (length > largest_query_length) {
+		largest_query_length=length;
+	}
 	//query.ptr=(char *)malloc(length);
 	//memcpy(query.ptr,stmt,length);
 }
