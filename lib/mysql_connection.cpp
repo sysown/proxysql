@@ -466,6 +466,7 @@ handler_again:
 			real_query_start();
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.length);
+			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
 			if (async_exit_status) {
 				next_event(ASYNC_QUERY_CONT);
 			} else {
@@ -534,6 +535,7 @@ handler_again:
 				if (mysql_row) {
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
+					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
 					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 				} else {
 					MyRS->add_eof();

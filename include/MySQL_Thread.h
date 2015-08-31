@@ -158,9 +158,14 @@ class MySQL_Thread
 	int shutdown;
 	PtrArray *mysql_sessions;
 
+	// status variables are per thread only
+	// in this way, there is no need for atomic operation and there is no cache miss
+	// when it is needed a total, all threads are checked
 	struct {
 		unsigned long long queries;
 		unsigned long long queries_slow;
+		unsigned long long queries_backends_bytes_sent;
+		unsigned long long queries_backends_bytes_recv;
 	} status_variables;
 
 
@@ -323,6 +328,8 @@ class MySQL_Threads_Handler
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_queries();
 	unsigned long long get_slow_queries();
+	unsigned long long get_queries_backends_bytes_recv();
+	unsigned long long get_queries_backends_bytes_sent();
 };
 
 
