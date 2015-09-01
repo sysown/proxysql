@@ -220,3 +220,18 @@ The purposes of the tables are as follows:
 * `stats_mysql_query_digest` - a table that contains statistics related to the queries routed through the ProxySQL server. How many times each query was executed, and the total execution time are just several provided stats. The interesting part is that here the queries are stripped from their numerical parameters, which are replaced with a question mark, in order to be able to group all queries of the same type under the same row.
 * `stats_mysql_query_digest` - identical to `stats_mysql_query`, but querying it has a side effect - resetting the internal statistics to zero. This should be used before making a change, to be able to compare the statistics before and after the change.
 * `stats_mysql_global` - global statistics such as total number of queries, total number of successful connections, etc.
+
+## `stats_mysql_query_rules`
+
+Here is the statement used to create the `stats_mysql_query_rules` table:
+
+```sql
+CREATE TABLE stats_mysql_query_rules (
+    rule_id INTEGER PRIMARY KEY,
+    hits INT NOT NULL
+)
+```
+
+The fields have the following semantics:
+* rule_id - the id of the rule, can be joined with the `main.mysql_query_rules` table on the `rule_id` field.
+* hits - the total number of hits for this rule. One hit is registered if the current incoming query matches the rule. Each time a new query that matches the rule is processed, the number of hits is increased.
