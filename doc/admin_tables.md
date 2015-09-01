@@ -25,6 +25,10 @@ The purposes of these databases are as follows:
 * monitor: contains monitoring metrics related to the backend servers to which ProxySQL connects. Example metrics include the minimal and maximal time for connecting to a backend server or for pinging it.
 * myhgm: only enabled in debug builds
 
+Also, the access to the admin database is done using two types of users, with these default credentials:
+* user: admin/password: admin -- with read-write access to all the tables
+* user: stats/password: stats -- with read-only access to most of the tables. This is used for pulling metrics out of ProxySQL, without exposing too much of the database
+
 # main database
 
 Here are the tables from the "main" database:
