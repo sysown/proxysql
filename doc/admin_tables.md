@@ -183,3 +183,7 @@ For more information about particular variables, please see the dedicated sectio
 )```
 
 The available (charset, collation) pairs supported by ProxySQL. In principle, ProxySQL will validate that incoming connections have a supported charset, and will make sure that the pooled backend connections are switched to the correct charset before using them.
+
+# disk database
+
+The "disk" database has exactly the same tables as the "main" database, with the same semantics. The only major difference is that these tables are stored on disk, instead of being stored in-memory. Whenever ProxySQL is restarted, the in-memory "main" database will be populated starting from this database.
