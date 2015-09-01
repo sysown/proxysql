@@ -389,3 +389,29 @@ The fields have the following semantics:
 * min_time, max_time - the range of durations to expect when executing such a query. min_time is the minimal execution time seen so far, while max_time represents the maximal execution time.
 
 The `stats_mysql_query_digest_reset` table is identical in content and structure, but querying it has an additional side effect - the statistics are reset. This is useful whenever you want to save the results of statistics before making a modification, in order to compare them with the same statistics after the modification.
+
+## `stats_mysql_global`
+
+Here is the statement used to create the `stats_mysql_query_digest` table:
+
+```sql
+CREATE TABLE stats_mysql_global (
+    Variable_Name VARCHAR NOT NULL PRIMARY KEY,
+    Variable_Value VARCHAR NOT NULL
+)
+```
+
+Each row represents a global statistic at the proxy level related to MySQL. Currently, the available variables are:
+
+```bash
+mysql> select * from stats.stats_mysql_global;
++------------------------------+----------------+
+| Variable_Name                | Variable_Value |
++------------------------------+----------------+
+| Client_Connections_aborted   | 0              |
+| Client_Connections_connected | 4              |
+| Client_Connections_created   | 4              |
+| Questions                    | 36337716       |
+| Slow_queries                 | 0              |
++------------------------------+----------------+
+```
