@@ -343,3 +343,49 @@ Each row represents a backend server within a hostgroup. The fields have the fol
 * ConnOK - how many connections are healthy
 * ConnERR - how many connections weren't established successfully. The sum between ConnOK and ConnERR is equal to the sum between ConnUsed and ConnFree. The total is the number of connections in the connection pool for that particular backend server
 * Queries - the number of queries routed towards this particular backend server
+
+## `stats_mysql_query_digest` and `stats_mysql_query_digest_reset`
+
+Here is the statement used to create the `stats_mysql_query_digest` table:
+
+```sql
+CREATE TABLE stats_mysql_query_digest (
+    schemaname VARCHAR NOT NULL,
+    username VARCHAR NOT NULL,
+    digest VARCHAR NOT NULL,
+    digest_text VARCHAR NOT NULL,
+    count_star INTEGER NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    sum_time INTEGER NOT NULL,
+    min_time INTEGER NOT NULL,
+    max_time INTEGER NOT NULL,
+    PRIMARY KEY(schemaname, username, digest)
+)
+```
+
+Each row represents a class of queries all having the same parameters but with different values routed through ProxySQL. Here's how a typical result looks like:
+
+```bash
+mysql> select * from stats_mysql_query_digest order by count_star desc limit 2;
++------------+----------+--------------------+----------------------------------+------------+------------+------------+------------+----------+----------+
+| schemaname | username | digest             | digest_text                      | count_star | first_seen | last_seen  | sum_time   | min_time | max_time |
++------------+----------+--------------------+----------------------------------+------------+------------+------------+------------+----------+----------+
+| test       | root     | 0x7721D69250CB40   | SELECT c FROM sbtest3 WHERE id=? | 8122800    | 1441091306 | 1441101551 | 7032352665 | 1010     | 117541   |
+| test       | root     | 0x3BC2F7549D058B6F | SELECT c FROM sbtest4 WHERE id=? | 8100134    | 1441091306 | 1441101551 | 7002512958 | 101      | 102285   |
++------------+----------+--------------------+----------------------------------+------------+------------+------------+------------+----------+----------+
+
+```
+
+The fields have the following semantics:
+* schemaname - the schema that is currently being queried
+* username - the username with which the MySQL client connected to ProxySQL
+* digest - a hexadecimal hash that uniquely represents a query with its parameters stripped
+* digest_text - the actual text with its parameters stripped
+* count_star - the total number of times the query has been executed (with different values for the parameters)
+* first_seen - unix timestamp, the first moment when the query was routed through the proxy
+* last_seen - unix timestamp, the last moment (so far) when the query was routed through the proxy
+* sum_time - the total time spent executing queries of this type. This is particularly useful to figure out where the most time is spent in your application's workload, and provides a good starting point for where to improve
+* min_time, max_time - the range of durations to expect when executing such a query. min_time is the minimal execution time seen so far, while max_time represents the maximal execution time.
+
+The `stats_mysql_query_digest_reset` table is identical in content and structure, but querying it has an additional side effect - the statistics are reset. This is useful whenever you want to save the results of statistics before making a modification, in order to compare them with the same statistics after the modification.
