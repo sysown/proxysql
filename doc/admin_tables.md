@@ -265,3 +265,54 @@ The fields have the following semantics:
 * total_time - the total time spent executing commands of that time
 * total_cnt - the total number of commands of that type executed
 * cnt_100us, cnt_500us, ..., cnt_10s, cnt_INFs - the total number of commands of the given type which executed under the specified time limit. For example, cnt_500us is the number of commands which executed in under 500 microseconds, but more than 100 microseconds (because there's also a cnt_100us field). cnt_INFs is the number of commands whose execution exceeded 10 seconds.
+
+## `stats_mysql_processlist`
+
+Here is the statement used to create the `stats_mysql_processlist` table:
+
+```sql
+CREATE TABLE stats_mysql_processlist (
+    ThreadID INT NOT NULL,
+    SessionID INTEGER PRIMARY KEY,
+    user VARCHAR,
+    db VARCHAR,
+    cli_host VARCHAR,
+    cli_port VARCHAR,
+    hostgroup VARCHAR,
+    l_srv_host VARCHAR,
+    l_srv_port VARCHAR,
+    srv_host VARCHAR,
+    srv_port VARCHAR,
+    command VARCHAR,
+    time_ms INT NOT NULL,
+    info VARCHAR
+)
+```
+
+The fields have the following semantics:
+* ThreadID - the internal ID of the thread within ProxySQL. This is a 0-based numbering of the threads
+* SessionID - the internal global numbering of the ProxySQL sessions. It's useful to be able to uniquely identify such a session in order to be able to kill it, for example.
+* user - the user with which the MySQL client connected to ProxySQL in order to execute this query
+* db - the schema that is being queried
+* cli_host, cli_port - the (host, port) pair of the TCP connection between the MySQL client and ProxySQL
+* hostgroup - the hostgroup towards which the current query was routed. This routing is done by default in terms of the username with which the MySQL client connected to ProxySQL, but it can be modified on a per-query basis by using the query rules
+* l_srv_host, l_srv_port - the (host, part) pair of the TCP connection between ProxySQL and the backend MySQL server from the current hostgroup
+* srv_host, srv_port - the (host, port) pair on which the backend MySQL server is listening for TCP connections
+* command - the type of MySQL query being executed (the MySQL command verb)
+* time_ms - the time for which the query has been executing so far
+* info - the actual query being executed
+
+Please note that this is just a snapshot in time of the actual MySQL queries being ran. There is no guarantee that the same queries will be running a fraction of a second later. Here is how the results look like:
+
+```sql
+mysql> select * from stats_mysql_processlist;
++----------+-----------+------+------+-----------+----------+-----------+------------+------------+-----------+----------+---------+---------+---------------------------------------+
+| ThreadID | SessionID | user | db   | cli_host  | cli_port | hostgroup | l_srv_host | l_srv_port | srv_host  | srv_port | command | time_ms | info                                  |
++----------+-----------+------+------+-----------+----------+-----------+------------+------------+-----------+----------+---------+---------+---------------------------------------+
+| 3        | 1         | root | test | 127.0.0.1 | 51831    | 0         | 127.0.0.1  | 55310      | 127.0.0.1 | 3306     | Query   | 0       | SELECT c FROM sbtest1 WHERE id=198898 |
+| 0        | 2         | root | test | 127.0.0.1 | 51832    | 0         | 127.0.0.1  | 55309      | 127.0.0.1 | 3306     | Query   | 0       | SELECT c FROM sbtest3 WHERE id=182586 |
+| 2        | 3         | root | test | 127.0.0.1 | 51833    | 0         | 127.0.0.1  | 55308      | 127.0.0.1 | 3306     | Query   | 0       | SELECT c FROM sbtest1 WHERE id=199230 |
+| 1        | 4         | root | test | 127.0.0.1 | 51834    | 0         | 127.0.0.1  | 55307      | 127.0.0.1 | 3306     | Query   | 0       | SELECT c FROM sbtest2 WHERE id=201110 |
++----------+-----------+------+------+-----------+----------+-----------+------------+------------+-----------+----------+---------+---------+---------------------------------------+
+4 rows in set (0.02 sec)
+```
