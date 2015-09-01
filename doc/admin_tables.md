@@ -316,3 +316,30 @@ mysql> select * from stats_mysql_processlist;
 +----------+-----------+------+------+-----------+----------+-----------+------------+------------+-----------+----------+---------+---------+---------------------------------------+
 4 rows in set (0.02 sec)
 ```
+
+## `stats_mysql_connection_pool`
+
+Here is the statement used to create the `stats_mysql_connection_pool` table:
+```sql
+CREATE TABLE stats_mysql_connection_pool (
+    hostgroup VARCHAR,
+    srv_host VARCHAR,
+    srv_port VARCHAR,
+    status VARCHAR,
+    ConnUsed INT,
+    ConnFree INT,
+    ConnOK INT,
+    ConnERR INT,
+    Queries INT
+)
+```
+
+Each row represents a backend server within a hostgroup. The fields have the following semantics:
+* hostgroup - the hostgroup in which the backend server belongs. Note that a single backend server can belong to more than one hostgroup
+* srv_host, srv_port - the TCP endpoint on which the mysqld backend server is listening for connections
+* status - the status of the backend server. Can be ONLINE, SHUNNED, OFFLINE_SOFT, OFFLINE_HARD. See the description of the `mysql_servers` table above for more details about what each status means
+* ConnUsed - how many connections are currently used by ProxySQL for sending queries to the backend server
+* ConnFree - how many connections are currently free. They are kept open in order to minimize the time cost of sending a query to the backend server
+* ConnOK - how many connections are healthy
+* ConnERR - how many connections weren't established successfully. The sum between ConnOK and ConnERR is equal to the sum between ConnUsed and ConnFree. The total is the number of connections in the connection pool for that particular backend server
+* Queries - the number of queries routed towards this particular backend server
