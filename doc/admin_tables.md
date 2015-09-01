@@ -235,3 +235,33 @@ CREATE TABLE stats_mysql_query_rules (
 The fields have the following semantics:
 * rule_id - the id of the rule, can be joined with the `main.mysql_query_rules` table on the `rule_id` field.
 * hits - the total number of hits for this rule. One hit is registered if the current incoming query matches the rule. Each time a new query that matches the rule is processed, the number of hits is increased.
+
+## `stats_mysql_commands_counters`
+
+Here is the statement used to create the `stats_mysql_commands_counters` table:
+
+```sql
+CREATE TABLE stats_mysql_commands_counters (
+    Command VARCHAR NOT NULL PRIMARY KEY,
+    Total_Time_us INT NOT NULL,
+    Total_cnt INT NOT NULL,
+    cnt_100us INT NOT NULL,
+    cnt_500us INT NOT NULL,
+    cnt_1ms INT NOT NULL,
+    cnt_5ms INT NOT NULL,
+    cnt_10ms INT NOT NULL,
+    cnt_50ms INT NOT NULL,
+    cnt_100ms INT NOT NULL,
+    cnt_500ms INT NOT NULL,
+    cnt_1s INT NOT NULL,
+    cnt_5s INT NOT NULL,
+    cnt_10s INT NOT NULL,
+    cnt_INFs
+)
+```
+
+The fields have the following semantics:
+* command - the type of SQL command that has been executed. Examples: FLUSH, INSERT, KILL, SELECT FOR UPDATE, etc.
+* total_time - the total time spent executing commands of that time
+* total_cnt - the total number of commands of that type executed
+* cnt_100us, cnt_500us, ..., cnt_10s, cnt_INFs - the total number of commands of the given type which executed under the specified time limit. For example, cnt_500us is the number of commands which executed in under 500 microseconds, but more than 100 microseconds (because there's also a cnt_100us field). cnt_INFs is the number of commands whose execution exceeded 10 seconds.
