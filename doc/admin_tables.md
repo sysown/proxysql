@@ -187,3 +187,36 @@ The available (charset, collation) pairs supported by ProxySQL. In principle, Pr
 # disk database
 
 The "disk" database has exactly the same tables as the "main" database, with the same semantics. The only major difference is that these tables are stored on disk, instead of being stored in-memory. Whenever ProxySQL is restarted, the in-memory "main" database will be populated starting from this database.
+
+# stats database
+
+This database contains metrics gathered by ProxySQL with respect to its internal functioning. Here you will find information on how often certain counters get triggered and the execution times of the queries that pass through ProxySQL.
+
+Generally, the tables from this database are populated on the fly when the SQL query against them is ran, by examining in-memory data structures.
+
+Here are the tables from the "stats" database:
+
+```bash
+mysql> mysql> show tables from stats;
++--------------------------------+
+| tables                         |
++--------------------------------+
+| stats_mysql_query_rules        |
+| stats_mysql_commands_counters  |
+| stats_mysql_processlist        |
+| stats_mysql_connection_pool    |
+| stats_mysql_query_digest       |
+| stats_mysql_query_digest_reset |
+| stats_mysql_global             |
++--------------------------------+
+7 rows in set (0.00 sec)
+```
+
+The purposes of the tables are as follows:
+* `stats_mysql_query_rules` - counts how many times each query rule was matched by queries
+* `stats_mysql_commands_counters` - counts how many times each type of SQL command was executed (e.g. UPDATE, DELETE, TRUNCATE, etc.) and how much time those executions took
+* `stats_mysql_processlist` - a table that simulates the results of the "SHOW PROCESSLIST" mysqld command. This table will contain similar information aggregated across all backends
+* `stats_mysql_connection_pool` - a table that contains the statistics related to the usage of the connection pool for each backend server in each hostgroup
+* `stats_mysql_query_digest` - a table that contains statistics related to the queries routed through the ProxySQL server. How many times each query was executed, and the total execution time are just several provided stats. The interesting part is that here the queries are stripped from their numerical parameters, which are replaced with a question mark, in order to be able to group all queries of the same type under the same row.
+* `stats_mysql_query_digest` - identical to `stats_mysql_query`, but querying it has a side effect - resetting the internal statistics to zero. This should be used before making a change, to be able to compare the statistics before and after the change.
+* `stats_mysql_global` - global statistics such as total number of queries, total number of successful connections, etc.
