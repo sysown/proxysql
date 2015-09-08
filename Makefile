@@ -41,6 +41,26 @@ clean:
 	cd lib && make clean
 	cd src && make clean
 
+packages:
+	# Wipe out binaries directory entirely
+	rm -rf binaries && mkdir binaries
+
+	# Create CentOS 7 rpm file by creating docker image, running a container and extracting the RPM from the temp container
+	docker build -t centos7_proxysql ./scenarios/centos7-build
+	docker run -i --name=centos7_build centos7_proxysql bash &
+	sleep 5
+	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-0.3-1.x86_64.rpm ./binaries
+	docker kill centos7_build
+	docker rm centos7_build
+
+	# Create DEB rpm
+	docker build -t ubuntu14_proxysql ./scenarios/ubuntu-14.04-build
+	docker run -i --name=ubuntu14_build ubuntu14_proxysql bash &
+	sleep 5
+	docker cp ubuntu14_build:/opt/proxysql/src/proxysql_0.3_all.deb ./binaries
+	docker kill ubuntu14_build
+	docker rm ubuntu14_build
+
 .PHONY: cleanall
 cleanall:
 	cd deps && make cleanall
