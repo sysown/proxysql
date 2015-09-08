@@ -2882,7 +2882,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		int max_connections=10000;
 		if (user.lookupValue("username", username)==false) continue;
 		user.lookupValue("password", password);
-		user.lookupValue("hostgroup", default_hostgroup);
+		user.lookupValue("default_hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
 		user.lookupValue("default_schema", default_schema);
