@@ -625,7 +625,7 @@ handler_again:
 						pthread_attr_t attr;
 						pthread_attr_init(&attr);
 						pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-						pthread_attr_setstacksize (&attr, 128*1024);
+						pthread_attr_setstacksize (&attr, 256*1024);
 						pthread_t pt;
 						pthread_create(&pt, &attr, &kill_query_thread, ka);
 					}
