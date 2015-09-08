@@ -46,7 +46,7 @@ packages:
 	rm -rf binaries && mkdir binaries
 
 	# Create CentOS 7 rpm file by creating docker image, running a container and extracting the RPM from the temp container
-	docker build -t centos7_proxysql ./scenarios/centos7-build
+	docker build -t centos7_proxysql --no-cache=true ./scenarios/centos7-build
 	docker run -i --name=centos7_build centos7_proxysql bash &
 	sleep 5
 	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-0.3-1.x86_64.rpm ./binaries
@@ -54,7 +54,7 @@ packages:
 	docker rm centos7_build
 
 	# Create DEB rpm
-	docker build -t ubuntu14_proxysql ./scenarios/ubuntu-14.04-build
+	docker build -t ubuntu14_proxysql --no-cache=true ./scenarios/ubuntu-14.04-build
 	docker run -i --name=ubuntu14_build ubuntu14_proxysql bash &
 	sleep 5
 	docker cp ubuntu14_build:/opt/proxysql/src/proxysql_0.3_all.deb ./binaries
