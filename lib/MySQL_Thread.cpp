@@ -1374,7 +1374,6 @@ void MySQL_Thread::run() {
 			}
 			if (myds) myds->revents=0;
 			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER) {
-//				mypolls.myds[n]->set_pollout();
 				if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
 					mypolls.fds[n].events = POLLIN;
 					if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)

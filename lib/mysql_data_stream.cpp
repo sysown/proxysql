@@ -337,7 +337,10 @@ int MySQL_Data_Stream::write_to_net() {
 	VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
-			shut_soft();
+			if (mypolls->fds[poll_fds_idx].revents & POLLOUT) { // in write_to_net_poll() we has remove this safety
+                                                          // so we enforce it here
+				shut_soft();
+			}
 		} else {
 			int ssl_ret=SSL_get_error(ssl, bytes_io);
 			if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
@@ -371,7 +374,7 @@ void MySQL_Data_Stream::set_pollout() {
 	if (DSS > STATE_MARIADB_BEGIN && DSS < STATE_MARIADB_END) {
 		_pollfd->events = myconn->wait_events;
 	} else {
-		if (available_data_out() || queueOUT.partial) {
+		if (PSarrayOUT->len || available_data_out() || queueOUT.partial) {
 			_pollfd->events = POLLIN | POLLOUT;
 		} else {
 			_pollfd->events = POLLIN;
@@ -670,14 +673,16 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 
 int MySQL_Data_Stream::array2buffer() {
 	int ret=0;
-	//unsigned int idx=0;
+	unsigned int idx=0;
 	bool cont=true;
 	while (cont) {
 		VALGRIND_DISABLE_ERROR_REPORTING;
-		if (queue_available(queueOUT)==0) return ret;
+		if (queue_available(queueOUT)==0) {
+			goto __exit_array2buffer;
+		}
 		if (queueOUT.partial==0) { // read a new packet
-			//if (PSarrayOUT->len-idx) {
-			if (PSarrayOUT->len) {
+			if (PSarrayOUT->len-idx) {
+			//if (PSarrayOUT->len) {
 				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
 				if (queueOUT.pkt.ptr) {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
@@ -689,7 +694,9 @@ int MySQL_Data_Stream::array2buffer() {
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
 		VALGRIND_DISABLE_ERROR_REPORTING;
-					PSarrayOUT->remove_index(0,&queueOUT.pkt);
+					memcpy(&queueOUT.pkt,PSarrayOUT->index(idx), sizeof(PtrSize_t));
+					idx++;
+					//PSarrayOUT->remove_index(0,&queueOUT.pkt);
 		VALGRIND_ENABLE_ERROR_REPORTING;
 					// this is a special case, needed because compression is enabled *after* the first OK
 					if (DSS==STATE_CLIENT_AUTH_OK) {
@@ -739,6 +746,10 @@ int MySQL_Data_Stream::array2buffer() {
 	}
 	//for (int i=0; i<idx; i++) { PSarrayOUT->remove_index(0,NULL); }
 	//if (idx) PSarrayOUT->remove_index_range(0,idx);
+__exit_array2buffer:
+	if (idx) {
+		PSarrayOUT->remove_index_range(0,idx);
+	}
 	return ret;
 }
 
@@ -914,7 +925,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	mc->last_time_used=sess->thread->curtime;
 	detach_connection();
 	unplug_backend();
-	mc->async_state_machine=ASYNC_IDLE;
+	//mc->async_state_machine=ASYNC_IDLE;
 	MyHGM->push_MyConn_to_pool(mc);
 }
 
