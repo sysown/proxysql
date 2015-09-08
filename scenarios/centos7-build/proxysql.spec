@@ -41,5 +41,5 @@ rm -rf %{buildroot}
 %{_bindir}/*
 
 %changelog
-* Thu Apr 24 2009  Elia Pinto <devzero2000@rpm5.org> 1.0-1
-- First Build
+* Thu Sep 9 2015  Andrei Ismail <iandrei@gmail.com> 0.3-1
+- Added support for automatic packaging on Ubuntu 14.04 and CentOS 7.
