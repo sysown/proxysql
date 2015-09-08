@@ -363,7 +363,9 @@ __get_pkts_from_client:
 						handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(&pkt);
 						break;
 					default:
-						assert(0); // FIXME: this should become close connection
+						proxy_error("Detected not valid state client state: %d\n", client_myds->DSS);
+						return -1; //close connection
+						break;
 				}
 				break;
 
