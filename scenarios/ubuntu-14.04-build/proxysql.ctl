@@ -7,7 +7,7 @@ Package: proxysql
 Version: 0.3
 Maintainer: Rene Cannao <rene.cannao@gmail.com>
 Architecture: all
-Changelog: CHANGELOG.md
+# Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /opt/proxysql
  proxysql.cfg /etc 
