@@ -5,7 +5,7 @@
 #include "cpp.h"
 
 
-#define QUEUE_T_DEFAULT_SIZE	8192
+#define QUEUE_T_DEFAULT_SIZE	32768
 
 typedef struct _queue_t {
     void *buffer;
