@@ -869,8 +869,8 @@ void MySQL_Connection::async_free_result() {
 	if (mysql_result) {
 		mysql_free_result(mysql_result);
 		mysql_result=NULL;
-    async_state_machine=ASYNC_IDLE;
 	}
+	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		delete MyRS;
 		MyRS=NULL;
