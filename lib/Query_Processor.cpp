@@ -15,7 +15,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_PROCESSOR_VERSION "0.1.728" DEB
+#define QUERY_PROCESSOR_VERSION "0.2.0902" DEB
 
 class QP_rule_text_hitsonly {
 	public:

@@ -1530,7 +1530,7 @@ __end_while_pool:
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_ADMIN_VERSION "0.1.0815" DEB
+#define PROXYSQL_ADMIN_VERSION "0.2.0902" DEB
 
 ProxySQL_Admin::ProxySQL_Admin() {
 #ifdef DEBUG

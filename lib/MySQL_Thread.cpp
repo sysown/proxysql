@@ -48,7 +48,7 @@ extern "C" {
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define MYSQL_THREAD_VERSION "0.1.1114" DEB
+#define MYSQL_THREAD_VERSION "0.2.0902" DEB
 
 
 #define DEFAULT_NUM_THREADS	4

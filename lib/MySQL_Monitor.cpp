@@ -10,7 +10,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define MYSQL_MONITOR_VERSION "0.2.0519" DEB
+#define MYSQL_MONITOR_VERSION "0.2.0902" DEB
 
 
 #include <event2/event.h>
