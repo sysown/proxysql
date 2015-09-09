@@ -151,7 +151,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
 		GloVars.configfile_open=true;
 	}
-	char *t=get_current_dir_name();
+	char *t=getcwd(NULL, 512);
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
 		// datadir was not specified , try to read config file
 		if (GloVars.configfile_open==true) {

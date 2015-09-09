@@ -26,7 +26,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_CACHE_VERSION "0.1.0629" DEB
+#define QUERY_CACHE_VERSION "0.2.0902" DEB
 
 __thread uint64_t __thr_cntSet=0;
 __thread uint64_t __thr_cntGet=0;

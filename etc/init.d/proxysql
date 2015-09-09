@@ -1,0 +1,115 @@
+#!/bin/bash 
+#
+# Provides : proxysql
+# Required-Start : $local_fs
+# Required-Stop  : $local_fs
+# Default-Start     : 2 3 4 5
+# Default-Stop      : 0 1 6
+# Short-Description : High Performance Advanced Proxy for MySQL
+# Description : High Performance and Advanced Proxy for MySQL and forks.
+#               It provides advanced features like connection pool, query routing and rewrite,
+#               firewalling, throttling, real time analysis, error-free failover 
+
+DATADIR="/var/run/proxysql"
+OPTS="-c /etc/proxysql.cnf -D $DATADIR"
+PIDFILE="$DATADIR/proxysql.pid"
+
+getpid() {
+  if [ -f $PIDFILE ]
+  then
+    if [ -r $PIDFILE ]
+    then
+      pid=`cat $PIDFILE`
+      if [ "X$pid" != "X" ]
+      then
+        # Verify that a process with this pid is still running.
+        pid=`ps -p $pid | grep $pid | grep -v grep | awk '{print $1}' | tail -1`
+        if [ "X$pid" = "X" ]
+        then
+          # This is a stale pid file.
+          rm -f $PIDFILE
+          echo "Removed stale pid file: $PIDFILE"
+        fi
+      fi
+    else
+      echo "Cannot read $PIDFILE."
+      exit 1
+    fi
+  fi
+}
+
+
+initial() {
+	OPTS="--initial $OPTS"
+	start
+}
+
+start() {
+  echo -n "Starting ProxySQL: "
+	mkdir $DATADIR 2>/dev/null
+  getpid
+  if [ "X$pid" = "X" ]
+   then
+	 	proxysql $OPTS
+		if [ "$?" = "0" ]; then
+			echo "DONE!"
+			return 0
+		else
+			echo "FAILED!"
+			return 1
+		fi
+	else
+		echo "ProxySQL is already running."
+		exit 1
+	fi
+}
+
+stop() {
+  echo -n "Shutting down ProxySQL: "
+  getpid
+  if [ "X$pid" = "X" ]
+	then
+		echo "ProxySQL was not running."
+		exit 1
+	else
+		killall proxysql
+		exit 0
+	fi
+}
+
+status() {
+  getpid
+  if [ "X$pid" = "X" ]
+  then
+    echo "ProxySQL is not running."
+    exit 1
+  else
+    echo "ProxySQL is running ($pid)."
+    exit 0
+  fi
+}
+
+case "$1" in
+    start)
+    start
+  ;;
+		initial)
+		initial
+	;;
+    stop)
+    stop
+  ;;
+    status)
+		status
+  ;;
+    restart)
+    stop
+    start
+  ;;
+    *)
+  echo "Usage: ProxySQL {start|stop|status|restart}"
+  exit 1
+  ;;
+esac
+exit $?
+

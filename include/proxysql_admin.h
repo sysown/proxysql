@@ -103,6 +103,8 @@ class ProxySQL_Admin {
 	int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
 	void save_debug_from_runtime() { return flush_debug_levels_runtime_to_database(admindb, true); }
 #endif /* DEBUG */
+	void flush_mysql_users__from_memory_to_disk();
+	void flush_mysql_users__from_disk_to_memory();
 	void flush_mysql_servers__from_memory_to_disk();
 	void flush_mysql_servers__from_disk_to_memory();
 	void flush_mysql_query_rules__from_memory_to_disk();	

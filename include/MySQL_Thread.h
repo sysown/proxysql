@@ -158,9 +158,14 @@ class MySQL_Thread
 	int shutdown;
 	PtrArray *mysql_sessions;
 
+	// status variables are per thread only
+	// in this way, there is no need for atomic operation and there is no cache miss
+	// when it is needed a total, all threads are checked
 	struct {
 		unsigned long long queries;
 		unsigned long long queries_slow;
+		unsigned long long queries_backends_bytes_sent;
+		unsigned long long queries_backends_bytes_recv;
 	} status_variables;
 
 
@@ -185,7 +190,6 @@ class MySQL_Thread
   //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
   //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
-  SQLite3_result * SQL3_Thread_status(MySQL_Session *sess);
 };
 
 
@@ -245,6 +249,8 @@ class MySQL_Threads_Handler
 		int monitor_connect_timeout;
 		int monitor_ping_interval;
 		int monitor_ping_timeout;
+		int monitor_replication_lag_interval;
+		int monitor_replication_lag_timeout;
 		int monitor_query_interval;
 		int monitor_query_timeout;
 		char * monitor_query_variables;
@@ -262,7 +268,6 @@ class MySQL_Threads_Handler
 		int connect_timeout_server_max;
 		int free_connections_pct;
 		bool sessions_sort;
-		char *connect_timeout_server_error;
 		char *default_schema;
 		char *interfaces;
 		char *server_version;
@@ -273,6 +278,8 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		int max_transaction_time;
+		int threshold_query_length;
+		int threshold_resultset_size;
 		int wait_timeout;
 		int max_connections;
 		int default_query_delay;
@@ -301,7 +308,6 @@ class MySQL_Threads_Handler
 
 	MySQL_Threads_Handler();
 	~MySQL_Threads_Handler();
-	SQLite3_result * SQL3_Threads_status(MySQL_Session *);
 	
 	char *get_variable_string(char *name);
 	uint8_t get_variable_uint8(char *name);
@@ -323,6 +329,8 @@ class MySQL_Threads_Handler
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_queries();
 	unsigned long long get_slow_queries();
+	unsigned long long get_queries_backends_bytes_recv();
+	unsigned long long get_queries_backends_bytes_sent();
 };
 
 

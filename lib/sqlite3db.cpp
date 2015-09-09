@@ -7,6 +7,7 @@ SQLite3DB::SQLite3DB() {
 	db=NULL;
 	url=NULL;
 	assert_on_error=0;
+	spinlock_rwlock_init(&rwlock);
 }
 
 SQLite3DB::~SQLite3DB() {
@@ -161,3 +162,18 @@ bool SQLite3DB::check_and_build_table(char *table_name, char *table_def) {
 	return rcb;
 }
 
+void SQLite3DB::rdlock() {
+	spin_wrlock(&rwlock);
+}
+
+void SQLite3DB::rdunlock() {
+	spin_wrunlock(&rwlock);
+}
+
+void SQLite3DB::wrlock() {
+	spin_wrlock(&rwlock);
+}
+
+void SQLite3DB::wrunlock() {
+	spin_wrunlock(&rwlock);
+}

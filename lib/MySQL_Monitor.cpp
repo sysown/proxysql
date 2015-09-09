@@ -10,7 +10,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define MYSQL_MONITOR_VERSION "0.2.0519" DEB
+#define MYSQL_MONITOR_VERSION "0.2.0902" DEB
 
 
 #include <event2/event.h>
@@ -56,6 +56,8 @@ static int connect__num_active_connections;
 static int total_connect__num_active_connections=0;
 static int ping__num_active_connections;
 static int total_ping__num_active_connections=0;
+static int replication_lag__num_active_connections;
+static int total_replication_lag__num_active_connections=0;
 
 
 struct cmp_str {
@@ -122,7 +124,8 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 
 enum MySQL_Monitor_State_Data_Task_Type {
 	MON_CONNECT,
-	MON_PING
+	MON_PING,
+	MON_REPLICATION_LAG
 };
 
 class MySQL_Monitor_State_Data {
@@ -142,6 +145,8 @@ class MySQL_Monitor_State_Data {
 	int interr;
 	char * mysql_error_msg;
 	MYSQL_ROW *row;
+	unsigned int repl_lag;
+	unsigned int hostgroup_id;
 	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b) {
 		task_id=MON_CONNECT;
 		mysql=NULL;
@@ -218,6 +223,9 @@ again:
 					case MON_PING:
 						NEXT_IMMEDIATE(7);
 						break;
+					case MON_REPLICATION_LAG:
+						NEXT_IMMEDIATE(10);
+						break;
 					default:
 						assert(0);
 						break;
@@ -255,6 +263,7 @@ again:
 				}
 				switch(task_id) {
 					case MON_PING:
+					case MON_REPLICATION_LAG:
 						NEXT_IMMEDIATE(39);
 						break;
 					default:
@@ -263,6 +272,70 @@ again:
 				}
 				break;
 
+			case 10:
+				if (mysql_thread___monitor_timer_cached==true) {
+					event_base_gettimeofday_cached(base, &tv_out);
+				} else {
+					evutil_gettimeofday(&tv_out, NULL);
+				}
+				t1=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+				status=mysql_query_start(&interr,mysql,"SHOW SLAVE STATUS");
+				if (status)
+					next_event(11,status);
+				else
+					NEXT_IMMEDIATE(12);
+				break;
+
+			case 11:
+				status=mysql_query_cont(&interr,mysql, mysql_status(event));
+				if (status)
+					next_event(11,status);
+				else
+					NEXT_IMMEDIATE(12);
+				break;
+
+			case 12:
+				if (interr) {
+					mysql_error_msg=strdup(mysql_error(mysql));
+					mysql_close(mysql);
+					mysql=NULL;
+					NEXT_IMMEDIATE(50);
+				} else {
+					status=mysql_store_result_start(&result, mysql);
+					if (status)
+						next_event(13,status);
+					else
+						NEXT_IMMEDIATE(14);
+				}
+				break;
+
+			case 13:
+				status=mysql_store_result_cont(&result, mysql, mysql_status(event));
+				if (status)
+					next_event(13,status);
+				else
+					NEXT_IMMEDIATE(14);
+				break;
+
+			case 14:
+				if (result) {
+					if (mysql_thread___monitor_timer_cached==true) {
+						event_base_gettimeofday_cached(base, &tv_out);
+					} else {
+						evutil_gettimeofday(&tv_out, NULL);
+					}
+					t2=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					GloMyMon->My_Conn_Pool->put_connection(hostname,port,mysql);
+					mysql=NULL;
+					return -1;
+				}	else {
+					// no resultset, consider it an error
+					mysql_error_msg=strdup(mysql_error(mysql));
+					mysql_close(mysql);
+					mysql=NULL;
+					NEXT_IMMEDIATE(50);
+				}
+				break;
 
 			case 39:
 				if (mysql_thread___monitor_timer_cached==true) {
@@ -367,6 +440,11 @@ state_machine_handler(int fd __attribute__((unused)), short event, void *arg) {
 				if (ping__num_active_connections == 0)
 					event_base_loopbreak(base);
 				break;
+			case MON_REPLICATION_LAG:
+				replication_lag__num_active_connections--;
+				if (replication_lag__num_active_connections == 0)
+					event_base_loopbreak(base);
+				break;
 			default:
 				assert(0);
 				break;
@@ -394,10 +472,12 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_ping", MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_ping_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING_LOG);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_server_replication_lag_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_REPLICATION_LAG_LOG);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON mysql_server_ping_log (time_start)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_replication_lag_log_time_start ON mysql_server_replication_lag_log (time_start)");
 
 
 };
@@ -705,6 +785,173 @@ __sleep_monitor_ping_loop:
 	}
 	return NULL;
 }
+void * MySQL_Monitor::monitor_replication_lag() {
+	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
+	struct event_base *libevent_base;
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	mysql_thr->curtime=monotonic_time();
+	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	mysql_thr->refresh_variables();
+
+	unsigned long long t1;
+	unsigned long long t2;
+	unsigned long long start_time;
+	unsigned long long next_loop_at=0;
+
+	while (shutdown==false) {
+
+		unsigned int glover;
+		char *error=NULL;
+//		int cols=0;
+//		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		MySQL_Monitor_State_Data **sds=NULL;
+		int i=0;
+		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
+		t1=monotonic_time();
+
+		if (t1 < next_loop_at) {
+			goto __sleep_monitor_replication_lag;
+		}
+		next_loop_at=t1+1000*mysql_thread___monitor_replication_lag_interval;
+
+		struct timeval tv_out;
+		evutil_gettimeofday(&tv_out, NULL);
+		start_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+
+		replication_lag__num_active_connections=0;
+		// create libevent base
+		libevent_base= event_base_new();
+
+		glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			//proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
+		}
+
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+//		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		resultset = MyHGM->execute_query(query, &error);
+		assert(resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", query, error);
+			goto __end_monitor_replication_lag_loop;
+		} else {
+			if (resultset->rows_count==0) {
+				goto __end_monitor_replication_lag_loop;
+			}
+			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]),libevent_base);
+				sds[i]->task_id=MON_REPLICATION_LAG;
+				sds[i]->hostgroup_id=atoi(r->fields[0]);
+				sds[i]->repl_lag=atoi(r->fields[3]);
+				replication_lag__num_active_connections++;
+				total_replication_lag__num_active_connections++;
+				MySQL_Monitor_State_Data *_mmsd=sds[i];
+				_mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(_mmsd->hostname, _mmsd->port);
+				if (_mmsd->mysql==NULL) {
+					state_machine_handler(-1,-1,_mmsd);
+				} else {
+					int fd=mysql_get_socket(_mmsd->mysql);
+					_mmsd->ST=10;
+					state_machine_handler(fd,-1,_mmsd);
+				}
+				i++;
+			}
+		}
+
+		// start libevent loop
+		event_base_dispatch(libevent_base);
+
+__end_monitor_replication_lag_loop:
+		if (sds) {
+			sqlite3_stmt *statement;
+			sqlite3 *mondb=monitordb->get_db();
+			int rc;
+			char *query=NULL;
+			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start < ?1";
+			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, start_time-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			SAFE_SQLITE3_STEP(statement);
+			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+			sqlite3_finalize(statement);
+
+			query=(char *)"INSERT OR REPLACE INTO mysql_server_replication_lag_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
+			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			assert(rc==SQLITE_OK);
+			while (i>0) {
+				i--;
+				int repl_lag=-1;
+				MySQL_Monitor_State_Data *mmsd=sds[i];
+				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
+				if (mmsd->result) {
+					unsigned int num_fields;
+					unsigned int k;
+					int j=-1;
+					MYSQL_FIELD *fields;
+
+					num_fields = mysql_num_fields(mmsd->result);
+					fields = mysql_fetch_fields(mmsd->result);
+					for(k = 0; k < num_fields; k++) {
+						if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
+							j=k;
+						}
+					}
+					if (j>-1) {
+						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
+						if (row[j]) {
+							repl_lag=atoi(row[j]);
+						}
+					}
+					if (repl_lag>=0) {
+						rc=sqlite3_bind_int64(statement, 5, repl_lag); assert(rc==SQLITE_OK);
+					} else {
+						rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
+					}
+					mysql_free_result(mmsd->result);
+					mmsd->result=NULL;
+				} else {
+					rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
+				}
+				rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				SAFE_SQLITE3_STEP(statement);
+				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
+				delete mmsd;
+			}
+			sqlite3_finalize(statement);
+			free(sds);
+		}
+
+		if (resultset)
+			delete resultset;
+
+		event_base_free(libevent_base);
+
+
+__sleep_monitor_replication_lag:
+		t2=monotonic_time();
+		if (t2<next_loop_at) {
+			unsigned long long st=0;
+			st=next_loop_at-t2;
+			if (st > 500000) {
+				st = 500000;
+			}
+			usleep(st);
+		}
+	}
+	return NULL;
+}
 
 void * MySQL_Monitor::run() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -715,6 +962,7 @@ void * MySQL_Monitor::run() {
 	mysql_thr->refresh_variables();
 	std::thread * monitor_connect_thread = new std::thread(&MySQL_Monitor::monitor_connect,this);
 	std::thread * monitor_ping_thread = new std::thread(&MySQL_Monitor::monitor_ping,this);
+	std::thread * monitor_replication_lag_thread = new std::thread(&MySQL_Monitor::monitor_replication_lag,this);
 	while (shutdown==false) {
 		unsigned int glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
@@ -726,5 +974,6 @@ void * MySQL_Monitor::run() {
 	}
 	monitor_connect_thread->join();
 	monitor_ping_thread->join();
+	monitor_replication_lag_thread->join();
 	return NULL;
 };

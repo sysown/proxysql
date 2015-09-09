@@ -1139,7 +1139,7 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-uint8_t MySQL_Protocol::generate_pkt_row2(unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
+uint8_t MySQL_Protocol::generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
 	int col=0;
 	unsigned int rowlen=0;
 	uint8_t pkt_sid=sequence_id;
@@ -1166,7 +1166,7 @@ uint8_t MySQL_Protocol::generate_pkt_row2(unsigned int *len, uint8_t sequence_id
 		myhdr.pkt_id=pkt_sid;
 		myhdr.pkt_length=rowlen;
 		memcpy(pkt.ptr, &myhdr, sizeof(mysql_hdr));
-		(*myds)->PSarrayOUT->add(pkt.ptr,pkt.size);
+		PSarrayOut->add(pkt.ptr,pkt.size);
 	} else {
 		unsigned int left=pkt.size;
 		unsigned int copied=0;
@@ -1180,7 +1180,7 @@ uint8_t MySQL_Protocol::generate_pkt_row2(unsigned int *len, uint8_t sequence_id
 			pkt_sid++;
 			myhdr.pkt_length=0xFFFFFF;
 			memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
-			(*myds)->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+			PSarrayOut->add(pkt2.ptr,pkt2.size);
 			copied+=0xFFFFFF;
 			left-=0xFFFFFF;
 		}
@@ -1192,7 +1192,7 @@ uint8_t MySQL_Protocol::generate_pkt_row2(unsigned int *len, uint8_t sequence_id
 		myhdr.pkt_id=pkt_sid;
 		myhdr.pkt_length=left-sizeof(mysql_hdr);
 		memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
-		(*myds)->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+		PSarrayOut->add(pkt2.ptr,pkt2.size);
 	}
 	if (len) { *len=pkt.size+(pkt_sid-sequence_id)*sizeof(mysql_hdr); }
 	if (pkt.size >= (0xFFFFFF+sizeof(mysql_hdr))) {
@@ -1893,3 +1893,78 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 //uint16_t get_status(unsigned char *pkt, unsigned int len) {
 //}
+
+
+MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my) {
+	transfer_started=false;
+	resultset_completed=false;
+	myprot=_myprot;
+	mysql=_my;
+	myds=myprot->get_myds();
+	sid=myds->pkt_sid+1;
+	PSarrayOUT = new PtrSizeArray();
+	result=_res;
+	resultset_size=0;
+	num_rows=0;
+	num_fields=mysql_field_count(mysql);
+	PtrSize_t pkt;
+	// immediately generate the first set of packets
+	// columns count
+	myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields);
+	sid++;
+	PSarrayOUT->add(pkt.ptr,pkt.size);
+	resultset_size+=pkt.size;
+	// columns description
+	for (unsigned int i=0; i<num_fields; i++) {
+		MYSQL_FIELD *field=mysql_fetch_field(result);
+		myprot->generate_pkt_field(false,&pkt.ptr,&pkt.size,sid,field->db,field->table,field->org_table,field->name,field->org_name,field->charsetnr,field->length,field->type,field->flags,field->decimals,false,0,NULL);
+		PSarrayOUT->add(pkt.ptr,pkt.size);
+		resultset_size+=pkt.size;
+		sid++;
+	}
+	// first EOF
+	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status);
+	sid++;
+	PSarrayOUT->add(pkt.ptr,pkt.size);
+	resultset_size+=pkt.size;
+}
+
+
+
+MySQL_ResultSet::~MySQL_ResultSet() {
+	PtrSize_t pkt;
+	if (PSarrayOUT) {
+		while (PSarrayOUT->len) {
+			PSarrayOUT->remove_index_fast(0,&pkt);
+			l_free(pkt.size, pkt.ptr);
+		}
+		delete PSarrayOUT;
+	}
+}
+
+unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
+	unsigned long *lengths=mysql_fetch_lengths(result);
+	unsigned int pkt_length;
+	sid=myprot->generate_pkt_row2(PSarrayOUT, &pkt_length, sid, num_fields, lengths, row);
+	sid++;
+	resultset_size+=pkt_length;
+	num_rows++;
+	return pkt_length;
+}
+
+void MySQL_ResultSet::add_eof() {
+	PtrSize_t pkt;
+	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status);
+	PSarrayOUT->add(pkt.ptr,pkt.size);
+	sid++;
+	resultset_size+=pkt.size;
+	resultset_completed=true;
+}
+
+bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
+	transfer_started=true;
+	PSarrayFinal->copy_add(PSarrayOUT,0,PSarrayOUT->len);
+	while (PSarrayOUT->len)
+		PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
+	return resultset_completed;
+}

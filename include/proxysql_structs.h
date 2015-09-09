@@ -38,6 +38,8 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_QUERY_END,
 	ASYNC_STORE_RESULT_START,
 	ASYNC_STORE_RESULT_CONT,
+	ASYNC_USE_RESULT_START,
+	ASYNC_USE_RESULT_CONT,
 	ASYNC_INITDB_START,
 	ASYNC_INITDB_CONT,
 	ASYNC_INITDB_END,
@@ -255,6 +257,7 @@ class MySQL_Authentication;
 class MySQL_Connection;
 class MySQL_Protocol;
 class PtrArray;
+class PtrSizeArray;
 class StatCounters;
 class ProxySQL_ConfigFile;
 //class MySQL_Server;
@@ -668,6 +671,8 @@ MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread int mysql_thread___max_transaction_time;
+__thread int mysql_thread___threshold_query_length;
+__thread int mysql_thread___threshold_resultset_size;
 __thread int mysql_thread___wait_timeout;
 __thread int mysql_thread___max_connections;
 __thread int mysql_thread___default_query_delay;
@@ -682,7 +687,6 @@ __thread int mysql_thread___connect_retries_on_failure;
 __thread int mysql_thread___connect_retries_delay;
 __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
-__thread char *mysql_thread___connect_timeout_server_error;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
 __thread int mysql_thread___poll_timeout;
@@ -700,6 +704,8 @@ __thread int mysql_thread___monitor_connect_interval;
 __thread int mysql_thread___monitor_connect_timeout;
 __thread int mysql_thread___monitor_ping_interval;
 __thread int mysql_thread___monitor_ping_timeout;
+__thread int mysql_thread___monitor_replication_lag_interval;
+__thread int mysql_thread___monitor_replication_lag_timeout;
 __thread int mysql_thread___monitor_query_interval;
 __thread int mysql_thread___monitor_query_timeout;
 __thread char * mysql_thread___monitor_query_variables;
@@ -720,6 +726,8 @@ extern MySQL_HostGroups_Manager *MyHGM;
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
 extern __thread int mysql_thread___max_transaction_time;
+extern __thread int mysql_thread___threshold_query_length;
+extern __thread int mysql_thread___threshold_resultset_size;
 extern __thread int mysql_thread___wait_timeout;
 extern __thread int mysql_thread___max_connections;
 extern __thread int mysql_thread___default_query_delay;
@@ -734,7 +742,6 @@ extern __thread int mysql_thread___connect_retries_on_failure;
 extern __thread int mysql_thread___connect_retries_delay;
 extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
-extern __thread char *mysql_thread___connect_timeout_server_error;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
 extern __thread int mysql_thread___poll_timeout;
@@ -752,6 +759,8 @@ extern __thread int mysql_thread___monitor_connect_interval;
 extern __thread int mysql_thread___monitor_connect_timeout;
 extern __thread int mysql_thread___monitor_ping_interval;
 extern __thread int mysql_thread___monitor_ping_timeout;
+extern __thread int mysql_thread___monitor_replication_lag_interval;
+extern __thread int mysql_thread___monitor_replication_lag_timeout;
 extern __thread int mysql_thread___monitor_query_interval;
 extern __thread int mysql_thread___monitor_query_timeout;
 extern __thread char * mysql_thread___monitor_query_variables;

@@ -77,7 +77,22 @@ struct _Query_Processor_rule_t {
 };
 
 
-struct _Query_Processor_output_t {
+//struct _Query_Processor_output_t {
+//	void *ptr;
+//	unsigned int size;
+//	int destination_hostgroup;
+//	int cache_ttl;
+//	int reconnect;
+//	int timeout;
+//	int delay;
+//	std::string *new_query;
+//};
+
+typedef struct _Query_Processor_rule_t QP_rule_t;
+//typedef struct _Query_Processor_output_t QP_out_t;
+
+class Query_Processor_Output {
+	public:
 	void *ptr;
 	unsigned int size;
 	int destination_hostgroup;
@@ -86,10 +101,13 @@ struct _Query_Processor_output_t {
 	int timeout;
 	int delay;
 	std::string *new_query;
+	void * operator new(size_t size) {
+		return l_alloc(size);
+	}
+	void operator delete(void *ptr) {
+		l_free(sizeof(Query_Processor_Output),ptr);
+	}
 };
-
-typedef struct _Query_Processor_rule_t QP_rule_t;
-typedef struct _Query_Processor_output_t QP_out_t;
 
 static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];
 
@@ -171,8 +189,8 @@ class Query_Processor {
 	void delete_query_rule(QP_rule_t *qr);	// destructor
 	//virtual bool remove(int rule_id, bool lock=true) {return false;}; // FIXME: not implemented yet, should be implemented at all ?
 //	virtual bool remove_locked(int rule_id) {return false;};		// call this instead of remove() in case lock was already acquired via wrlock()
-	QP_out_t * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original);
-	void delete_QP_out(QP_out_t *o);
+	Query_Processor_Output * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original);
+	void delete_QP_out(Query_Processor_Output *o);
 
 	void sort(bool lock=true);
 

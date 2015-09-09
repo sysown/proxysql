@@ -138,6 +138,7 @@ class SQLite3DB {
 	private:
 	char *url;
 	sqlite3 *db;
+	rwlock_t rwlock;
 	public:
 	char *get_url() const { return url; }
 	sqlite3 *get_db() const { return db; }
@@ -145,6 +146,12 @@ class SQLite3DB {
 	SQLite3DB();
 	~SQLite3DB();
 	int open(char *, int);
+
+	void rdlock();
+	void rdunlock();
+	void wrlock();
+	void wrunlock();
+
 	bool execute(const char *);
 	bool execute_statement(const char *, char **, int *, int *, SQLite3_result **);
 	int return_one_int(const char *);
