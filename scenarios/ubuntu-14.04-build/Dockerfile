@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y\
     libtool
 
 RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git proxysql
-RUN cd /opt/proxysql; make clean && make
+RUN cd /opt/proxysql; make clean && make -j 5
 
 ADD ./proxysql.ctl /opt/proxysql/src/proxysql.ctl
 RUN cd /opt/proxysql/src; equivs-build proxysql.ctl

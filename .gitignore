@@ -30,7 +30,6 @@ oldcode/tests/connect_speed
 *.swp
 
 
-
 # SQLITE files
 *.db
 *.db-shm
@@ -44,6 +43,7 @@ oldcode/tests/connect_speed
 
 #binary
 proxysql
+binaries/*
 
 #core
 core

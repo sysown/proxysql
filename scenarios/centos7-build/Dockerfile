@@ -16,7 +16,7 @@ RUN yum install -y patch
 
 
 RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git proxysql
-RUN cd /opt/proxysql; make clean && make
+RUN cd /opt/proxysql; make clean && make -j 5
 
 RUN cd /opt/proxysql/src; mkdir -p proxysql-0.3/usr/bin; mkdir -p proxysql-0.3/etc; cp proxysql proxysql-0.3/usr/bin/; cp proxysql.cfg proxysql-0.3/etc; tar czvf proxysql-0.3.tar.gz proxysql-0.3
 
