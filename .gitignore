@@ -43,7 +43,8 @@ oldcode/tests/connect_speed
 
 #binary
 proxysql
-binaries/*
+binaries/*deb
+binaries/*rpm
 
 #core
 core
