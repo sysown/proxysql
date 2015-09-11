@@ -8,7 +8,7 @@ Maintainer: Rene Cannao <rene.cannao@gmail.com>
 Architecture: amd64
 # Changelog: CHANGELOG.md
 # Readme: README.md
-Files: src/proxysql /usr/bin/proxysql
+Files: proxysql /usr/bin/
  etc/proxysql.cnf /
  etc/init.d/proxysql /
 Description: High performance MySQL proxy
