@@ -340,9 +340,11 @@ Each row represents a backend server within a hostgroup. The fields have the fol
 * status - the status of the backend server. Can be ONLINE, SHUNNED, OFFLINE_SOFT, OFFLINE_HARD. See the description of the `mysql_servers` table above for more details about what each status means
 * ConnUsed - how many connections are currently used by ProxySQL for sending queries to the backend server
 * ConnFree - how many connections are currently free. They are kept open in order to minimize the time cost of sending a query to the backend server
-* ConnOK - how many connections are healthy
-* ConnERR - how many connections weren't established successfully. The sum between ConnOK and ConnERR is equal to the sum between ConnUsed and ConnFree. The total is the number of connections in the connection pool for that particular backend server
+* ConnOK - how many connections were established successfully.
+* ConnERR - how many connections weren't established successfully.
 * Queries - the number of queries routed towards this particular backend server
+* Bytes_data_sent - the amount of data sent to the backend. This does not include metadata (packets' headers)
+* Bytes_data_recv - the amount of data received from the backend. This does not include metadata (packets' headers, OK/ERR packets, fields' description, etc)
 
 ## `stats_mysql_query_digest` and `stats_mysql_query_digest_reset`
 
