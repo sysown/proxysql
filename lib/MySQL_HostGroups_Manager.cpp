@@ -136,6 +136,7 @@ void MySrvC::connect_error() {
 	} else {
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
+			proxy_info("Shunning server %s:%d with %u errors/sec\n", address, port, connect_ERR_at_time_last_detected_error);
 			status=MYSQL_SERVER_STATUS_SHUNNED;
 			shunned_automatic=true;
 		}
@@ -636,6 +637,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 						||
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
 					) {
+						proxy_info("Shunning server %s:%d with replication lag of %d second\n", address, port, current_replication_lag);
 						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
 					}
 				} else {

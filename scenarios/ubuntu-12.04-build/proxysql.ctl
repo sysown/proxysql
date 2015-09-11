@@ -1,7 +1,6 @@
 Section: misc
 Priority: optional
 Homepage: http://www.proxysql.com
-Standards-Version: 3.9.2
 
 Package: proxysql
 Version: 0.2.0902
