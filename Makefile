@@ -44,7 +44,7 @@ clean:
 packages: centos7 ubuntu12 ubuntu14
 .PHONY: packages
 
-centos7: binaries/proxysql-0.3-1.x86_64.rpm
+centos7: binaries/proxysql-0.2.0902-1.x86_64.rpm
 .PHONY: centos
 
 ubuntu12: binaries/proxysql_0.2.0902-ubuntu12_amd64.deb
@@ -53,12 +53,12 @@ ubuntu12: binaries/proxysql_0.2.0902-ubuntu12_amd64.deb
 ubuntu14: binaries/proxysql_0.2.0902-ubuntu14_amd64.deb
 .PHONY: ubuntu14
 
-binaries/proxysql-0.3-1.x86_64.rpm:
+binaries/proxysql-0.2.0902-1.x86_64.rpm:
 	# Create CentOS 7 rpm file by creating docker image, running a container and extracting the RPM from the temp container
 	docker build -t centos7_proxysql --no-cache=true ./scenarios/centos7-build
 	docker run -i --name=centos7_build centos7_proxysql bash &
 	sleep 5
-	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-0.3-1.x86_64.rpm ./binaries
+	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-0.2.0902-1.x86_64.rpm ./binaries
 #	docker kill centos7_build
 	docker rm centos7_build
 
