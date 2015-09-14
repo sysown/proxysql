@@ -129,6 +129,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
+	ad->num_connections_used=0;
 	cg.bt_map.insert(std::make_pair(hash1,ad));
 	cg.cred_array->add(ad);
 	spin_wrunlock(&cg.lock);

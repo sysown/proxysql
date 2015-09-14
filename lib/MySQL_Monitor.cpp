@@ -887,7 +887,7 @@ __end_monitor_replication_lag_loop:
 			assert(rc==SQLITE_OK);
 			while (i>0) {
 				i--;
-				int repl_lag=-1;
+				int repl_lag=-2;
 				MySQL_Monitor_State_Data *mmsd=sds[i];
 				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
@@ -896,9 +896,8 @@ __end_monitor_replication_lag_loop:
 				if (mmsd->result) {
 					unsigned int num_fields;
 					unsigned int k;
-					int j=-1;
 					MYSQL_FIELD *fields;
-
+					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
 					for(k = 0; k < num_fields; k++) {
@@ -908,8 +907,11 @@ __end_monitor_replication_lag_loop:
 					}
 					if (j>-1) {
 						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-						if (row[j]) {
-							repl_lag=atoi(row[j]);
+						if (row) {
+							repl_lag=-1;
+							if (row[j]) {
+								repl_lag=atoi(row[j]);
+							}
 						}
 					}
 					if (repl_lag>=0) {
@@ -926,7 +928,7 @@ __end_monitor_replication_lag_loop:
 				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
-				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
+				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, (repl_lag==-1 ? 0 : repl_lag));
 				delete mmsd;
 			}
 			sqlite3_finalize(statement);

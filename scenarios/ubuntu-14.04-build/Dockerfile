@@ -20,4 +20,4 @@ RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git proxysql
 RUN cd /opt/proxysql; make clean && make -j
 
 ADD ./proxysql.ctl /opt/proxysql/proxysql.ctl
-RUN cd /opt/proxysql; equivs-build proxysql.ctl
+RUN cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl
