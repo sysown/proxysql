@@ -5,6 +5,8 @@
 #define SELECT_VERSION_COMMENT_LEN 32
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
 #define PROXYSQL_VERSION_COMMENT_LEN 81
+#define SELECT_LAST_INSERT_ID "SELECT LAST_INSERT_ID()"
+#define SELECT_LAST_INSERT_ID_LEN 23
 
 #define EXPMARIA
 
@@ -283,6 +285,29 @@ void MySQL_Session::writeout() {
 }
 
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+	if (pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
+		char buf[16];
+		sprintf(buf,"%u",last_insert_id);
+		unsigned int nTrx=NumActiveTransactions();
+		MySQL_Data_Stream *myds=client_myds;
+		MySQL_Protocol *myprot=&client_myds->myprot;
+		myds->DSS=STATE_QUERY_SENT_DS;
+		int sid=1;
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL); sid++;
+		myds->DSS=STATE_COLUMN_DEFINITION;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,(nTrx ? 3 : 2)); sid++;
+		char **p=(char **)malloc(sizeof(char*)*1);
+		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+		l[0]=strlen(buf);;
+		p[0]=buf;
+		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+		myds->DSS=STATE_ROW;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,(nTrx ? 3 : 2)); sid++;
+		myds->DSS=STATE_SLEEP;
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
 	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		PtrSize_t pkt_2;
 		pkt_2.size=PROXYSQL_VERSION_COMMENT_LEN;
@@ -682,6 +707,11 @@ handler_again:
 				if (rc==0) {
 					// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 					//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+
+					// Support for LAST_INSERT_ID()
+					if (myconn->mysql->insert_id) {
+						last_insert_id=myconn->mysql->insert_id;
+					}
 					MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 					GloQPro->delete_QP_out(qpo);
 					qpo=NULL;
