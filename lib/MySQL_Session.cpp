@@ -289,6 +289,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		char buf[16];
 		sprintf(buf,"%u",last_insert_id);
 		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		MySQL_Data_Stream *myds=client_myds;
 		MySQL_Protocol *myprot=&client_myds->myprot;
 		myds->DSS=STATE_QUERY_SENT_DS;
@@ -296,14 +297,14 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
 		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL); sid++;
 		myds->DSS=STATE_COLUMN_DEFINITION;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,(nTrx ? 3 : 2)); sid++;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus); sid++;
 		char **p=(char **)malloc(sizeof(char*)*1);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
 		l[0]=strlen(buf);;
 		p[0]=buf;
 		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,(nTrx ? 3 : 2)); sid++;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus); sid++;
 		myds->DSS=STATE_SLEEP;
 		l_free(pkt->size,pkt->ptr);
 		return true;
@@ -331,7 +332,9 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			free(errmsg);
 		} else {
 			client_myds->myconn->set_charset(c->nr);
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+			unsigned int nTrx=NumActiveTransactions();
+			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0|setStatus,0,NULL);
 		}
 		client_myds->DSS=STATE_SLEEP;
 		status=WAITING_CLIENT_DATA;
@@ -1578,7 +1581,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	// FIXME: ProxySQL doesn't support yet CLIENT_MULTI_STATEMENTS 
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	if (v==1) {
-		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0,0);
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0, setStatus );
 	} else {
 		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"");
 	}
@@ -1590,7 +1595,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_PING packet\n");
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
+	unsigned int nTrx=NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,2|setStatus,0,NULL);
 	client_myds->DSS=STATE_SLEEP;
 }
 
@@ -1646,12 +1653,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0|setStatus,NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,NULL);
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,2|setStatus,0,NULL);
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -1884,7 +1895,9 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
 			unsigned int num_rows = mysql_affected_rows(mysql);
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status,mysql->warning_count,mysql->info);
+			unsigned int nTrx=NumActiveTransactions();
+			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status|setStatus,mysql->warning_count,mysql->info);
 		} else {
 			// error
 			char sqlstate[10];
@@ -1908,7 +1921,9 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		}
 		myds->DSS=STATE_COLUMN_DEFINITION;
 
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,0); sid++;
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,2 | setStatus ); sid++;
 		char **p=(char **)malloc(sizeof(char*)*result->columns);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*result->columns);
 		//p[0]="column test";
@@ -1920,7 +1935,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		myprot->generate_pkt_row(true,NULL,NULL,sid,result->columns,l,p); sid++;
 		}
 		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0,2); sid++;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus ); sid++;
 		myds->DSS=STATE_SLEEP;
 		free(l);
 		free(p);
@@ -1931,7 +1946,9 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"#28000",error);
 		} else {
 			// no error, DML succeeded
-			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,0,0,NULL);
+			unsigned int nTrx=NumActiveTransactions();
+			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,0|setStatus,0,NULL);
 		}
 		myds->DSS=STATE_SLEEP;
 	}
