@@ -61,7 +61,8 @@ class SQLite3_row {
 				fields[i]=strdup(_fields[i]);
 			} else {
 				sizes[i]=0;
-				fields[i]=strdup((char *)"");
+				fields[i]=NULL;
+				//fields[i]=strdup((char *)"");
 			}
 		}
 	};

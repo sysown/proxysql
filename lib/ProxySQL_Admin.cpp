@@ -2330,26 +2330,36 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime() {
 	if (resultset==NULL) return;
 	admindb->execute("DELETE FROM mysql_query_rules");
 	//char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
-	char *a=(char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, apply) VALUES (%s, %s, \"%s\", \"%s\", %s, \"%s\", %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+	char *a=(char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, apply) VALUES (%s, %s, %s, %s, %s, \"%s\", %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
+		char *buffs[15];
 		for (int i=0; i<15; i++) {
-			arg_len+=strlen(r->fields[i]+4);
+			if (r->fields[i]) {
+				int l=strlen(r->fields[i])+4;
+				arg_len+=l;
+				buffs[i]=(char *)malloc(l);
+				sprintf(buffs[i],"\"%s\"",r->fields[i]);
+			} else {
+				int l=9;
+				arg_len+=l;
+				buffs[i]=(char *)malloc(l);
+				sprintf(buffs[i],"NULL");
+			}
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		char *buf1=(char *)strlen(r->fields[8])+8;
-		if (r->fields[8]) {
-			sprintf(buf1,"\"%s\"",r->fields[8]);
-		} else {
-			sprintf(buf1,"NULL");
-		}
-		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],
+
+		sprintf(query,a,
+			buffs[0],
+			buffs[1],
+			buffs[2],
+			buffs[3],
 			( strcmp(r->fields[4],"-1")==0 ? "NULL" : r->fields[4] ), // flagIN
-			r->fields[5], // match_pattern
+			buffs[5], // match_pattern
 			r->fields[6], // negate
 			( strcmp(r->fields[7],"-1")==0 ? "NULL" : r->fields[7] ), // flagOUT
-			buf1, // replace_pattern
+			buffs[8], // replace_pattern
 			( strcmp(r->fields[9],"-1")==0 ? "NULL" : r->fields[9] ), // destination_hostgroup
 			( strcmp(r->fields[10],"-1")==0 ? "NULL" : r->fields[10] ), // cache_ttl
 			( strcmp(r->fields[11],"-1")==0 ? "NULL" : r->fields[11] ), // reconnect
@@ -2359,6 +2369,9 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime() {
 		);
 		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
+		for (int i=0; i<15; i++) {
+			free(buffs[i]);
+		}
 		free(query);
 	}
 	delete resultset;
