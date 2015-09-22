@@ -1923,7 +1923,9 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 		sid++;
 	}
 	// first EOF
-	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status);
+	unsigned int nTrx=myds->sess->NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
 	sid++;
 	PSarrayOUT->add(pkt.ptr,pkt.size);
 	resultset_size+=pkt.size;
@@ -1954,7 +1956,9 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 
 void MySQL_ResultSet::add_eof() {
 	PtrSize_t pkt;
-	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status);
+	unsigned int nTrx=myds->sess->NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
 	PSarrayOUT->add(pkt.ptr,pkt.size);
 	sid++;
 	resultset_size+=pkt.size;

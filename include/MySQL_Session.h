@@ -126,6 +126,9 @@ class MySQL_Session
 	MySQL_Backend *mybe;
 	PtrArray *mybes;
 
+	// Support for LAST_INSERT_ID()
+	unsigned int last_insert_id;
+
 	MySQL_Session();
 //	MySQL_Session(int);
 	~MySQL_Session();

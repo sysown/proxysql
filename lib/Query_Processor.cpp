@@ -364,6 +364,7 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_UNLOCK_TABLES]=(char *)"UNLOCK_TABLES";
   commands_counters_desc[MYSQL_COM_QUERY_UPDATE]=(char *)"UPDATE";
   commands_counters_desc[MYSQL_COM_QUERY_USE]=(char *)"USE";
+  commands_counters_desc[MYSQL_COM_QUERY_SHOW]=(char *)"SHOW";
   commands_counters_desc[MYSQL_COM_QUERY_UNKNOWN]=(char *)"UNKNOWN";
 };
 
