@@ -199,7 +199,7 @@ class Query_Processor {
 	void delete_query_rule(QP_rule_t *qr);	// destructor
 	//virtual bool remove(int rule_id, bool lock=true) {return false;}; // FIXME: not implemented yet, should be implemented at all ?
 //	virtual bool remove_locked(int rule_id) {return false;};		// call this instead of remove() in case lock was already acquired via wrlock()
-	Query_Processor_Output * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original);
+	Query_Processor_Output * process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi);
 	void delete_QP_out(Query_Processor_Output *o);
 
 	void sort(bool lock=true);
@@ -214,7 +214,7 @@ class Query_Processor {
 
 	void * query_parser_init(char *query, int query_length, int flags);
 	enum MYSQL_COM_QUERY_command query_parser_command_type(void *args);
-	char * query_parser_first_comment(void *args);
+	bool query_parser_first_comment(Query_Processor_Output *qpo, char *fc);
 	void query_parser_free(void *args);
 
 	void update_query_digest(void *p, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);

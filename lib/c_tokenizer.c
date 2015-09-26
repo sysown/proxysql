@@ -72,6 +72,7 @@ void c_split_2(const char *in, const char *del, char **out1, char **out2) {
 	*out1=NULL;
 	*out2=NULL;
 	const char *t;
+	//tokenizer_t tok = tokenizer( in, del, TOKENIZER_NO_EMPTIES );
 	tokenizer_t tok = tokenizer( in, del, TOKENIZER_NO_EMPTIES );
 	for ( t=tokenize(&tok); t; t=tokenize(&tok)) {
 		if (*out1==NULL) { *out1=strdup(t); continue; }

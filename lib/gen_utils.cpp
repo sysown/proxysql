@@ -5,17 +5,26 @@
 int remove_spaces(const char *s) {
 	char *inp = (char *)s, *outp = (char *)s;
 	bool prev_space = false;
+	bool fns = false;
 	while (*inp) {
 		if (isspace(*inp)) {
-			if (!prev_space) {
-				*outp++ = ' ';
-				prev_space = true;
+			if (fns) {
+				if (!prev_space) {
+					*outp++ = ' ';
+					prev_space = true;
+				}
 			}
 		} else {
 			*outp++ = *inp;
-			prev_space = 0;
+			prev_space = false;
+			if (!fns) fns=true;
 		}
 		++inp;
+	}
+	if (outp>s) {
+		if (prev_space) {
+			outp--;
+		}
 	}
 	*outp = '\0';
 	return strlen(s);

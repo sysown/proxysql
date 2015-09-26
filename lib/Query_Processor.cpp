@@ -592,9 +592,13 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 
 
 
-Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
+Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
 	Query_Processor_Output *ret=NULL;
 	ret=new Query_Processor_Output();
+	SQP_par_t *qp=NULL;
+	if (qi && qi->QueryParserArgs) {
+		qp=(SQP_par_t *)qi->QueryParserArgs;
+	}
 	unsigned int len=size-sizeof(mysql_hdr)-1;
 	char *query=(char *)l_alloc(len+1);
 	memcpy(query,(char *)ptr+sizeof(mysql_hdr)+1,len);
@@ -733,6 +737,10 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 __exit_process_mysql_query:
 	// FIXME : there is too much data being copied around
 	l_free(len+1,query);
+	if (qp && qp->first_comment[0]) {
+		// we have a comment to parse
+		query_parser_first_comment(ret, qp->first_comment);
+	}
 	return ret;
 };
 
@@ -783,6 +791,7 @@ void * Query_Processor::query_parser_init(char *query, int query_length, int fla
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
+	qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
 	if (mysql_thread___query_digests) {
 		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, qp->first_comment);
 		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
@@ -958,7 +967,39 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *
 	return MYSQL_COM_QUERY_UNKNOWN;
 }
 
-char * Query_Processor::query_parser_first_comment(void *args) { return NULL; }
+bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {
+	bool ret=false;
+	tokenizer_t tok = tokenizer( fc, ";", TOKENIZER_NO_EMPTIES );
+	const char* token;
+	for ( token = tokenize( &tok ) ; token ;  token = tokenize( &tok ) ) {
+		char *key=NULL;
+		char *value=NULL;
+    c_split_2(token, "=", &key, &value);
+		remove_spaces(key);
+		remove_spaces(value);
+		if (strlen(key)) {
+			char c=value[0];
+			if (!strcasecmp(key,"query_timeout")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->timeout=t;
+				}
+			}
+			if (!strcasecmp(key,"hostgroup")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->destination_hostgroup=t;
+				}
+			}
+		}
+		free(key);
+		free(value);
+		fprintf(stderr,"%s , key=%s , value=%s\n", token, key, value);
+	}
+	free_tokenizer( &tok );
+	return ret;
+}
+
 
 void Query_Processor::query_parser_free(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
