@@ -979,6 +979,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 		remove_spaces(value);
 		if (strlen(key)) {
 			char c=value[0];
+			if (!strcasecmp(key,"query_delay")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->delay=t;
+				}
+			}
 			if (!strcasecmp(key,"query_timeout")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
