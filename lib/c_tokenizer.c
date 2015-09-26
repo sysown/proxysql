@@ -178,7 +178,7 @@ static char is_digit_string(char *f, char *t)
 }
 
 
-char *mysql_query_digest(char *s, int len){
+char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment){
 	int i = 0;
 
 	char *r = (char *) malloc(len + SIZECHAR);
@@ -190,6 +190,8 @@ char *mysql_query_digest(char *s, int len){
 	char qutr_char = 0;
 
 	char flag = 0;
+	char fc=0;
+	int fc_len=0;
 
 	while(i < len)
 	{
@@ -250,6 +252,22 @@ char *mysql_query_digest(char *s, int len){
 			// --------
 			// comment
 			// --------
+			if (flag == 1) {
+				if (fc==0) {
+					fc=1;
+				}
+				if (fc==1) {
+					if (fc_len<FIRST_COMMENT_MAX_LENGTH-1) {
+						first_comment[fc_len]= !is_space_char(*s) ? *s : ' ';
+						fc_len++;
+					}
+					if (prev_char == '*' && *s == '/') {
+						if (fc_len>=2) fc_len-=2;
+						first_comment[fc_len]=0;
+						fc=2;
+					}
+				}
+			}
 			if(
 				// comment type 1 - /* .. */
 				(flag == 1 && prev_char == '*' && *s == '/') ||

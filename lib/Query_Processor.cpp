@@ -69,6 +69,7 @@ struct __SQP_query_parser_t {
 	sfilter sf;
 	uint64_t digest;
 	char *digest_text;
+	char *first_comment;
 	uint64_t digest_total;
 };
 
@@ -794,9 +795,14 @@ void * Query_Processor::query_parser_init(char *query, int query_length, int fla
 	if (mysql_thread___commands_stats)
 		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
+	qp->first_comment=NULL;
+	qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest(query, query_length);
+		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, qp->first_comment);
 		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
+		if (strlen(qp->first_comment)) {
+			fprintf(stderr,"Comment= %s \n", qp->first_comment);
+		}
 	}
 	return (void *)qp;
 };
@@ -974,5 +980,8 @@ void Query_Processor::query_parser_free(void *args) {
 		free(qp->digest_text);
 		qp->digest_text=NULL;
 	}
-	free(qp);	
+	if (qp->first_comment) {
+		l_free(FIRST_COMMENT_MAX_LENGTH,qp->first_comment);
+	}
+	free(qp);
 };
