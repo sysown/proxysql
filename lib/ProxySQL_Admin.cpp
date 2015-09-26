@@ -2539,7 +2539,7 @@ void ProxySQL_Admin::flush_mysql_users__from_disk_to_memory() {
 void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM disk.mysql_userss");
+	admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("INSERT INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
