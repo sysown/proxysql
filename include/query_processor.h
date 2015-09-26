@@ -107,6 +107,16 @@ class Query_Processor_Output {
 	void operator delete(void *ptr) {
 		l_free(sizeof(Query_Processor_Output),ptr);
 	}
+	Query_Processor_Output() {
+		ptr=NULL;
+		size=0;
+		destination_hostgroup=-1;
+		cache_ttl=-1;
+		reconnect=-1;
+		timeout=-1;
+		delay=-1;
+		new_query=NULL;
+	}
 };
 
 static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];

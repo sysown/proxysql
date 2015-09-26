@@ -594,6 +594,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 
 Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
 	Query_Processor_Output *ret=NULL;
+	ret=new Query_Processor_Output();
 	unsigned int len=size-sizeof(mysql_hdr)-1;
 	char *query=(char *)l_alloc(len+1);
 	memcpy(query,(char *)ptr+sizeof(mysql_hdr)+1,len);
@@ -660,21 +661,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			}
 		}
 		// if we arrived here, we have a match
-		if (ret==NULL) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "this is the first time we find a match\n");
-			// create struct
-			//ret=(QP_out_t *)l_alloc(sizeof(QP_out_t));
-			ret=new Query_Processor_Output();
-			// initalized all values
-			ret->ptr=NULL;
-			ret->size=0;
-			ret->destination_hostgroup=-1;
-			ret->cache_ttl=-1;
-			ret->reconnect=-1;
-			ret->timeout=-1;
-			ret->delay=-1;
-			ret->new_query=NULL;
-		}
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 
 /*
