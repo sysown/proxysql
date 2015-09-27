@@ -984,6 +984,190 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 }
 
 
+SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename, char **err) {
+	char *tn=NULL; // tablename
+	// note that tablename is passed with a trailing '
+	tn=(char *)malloc(strlen(tablename));
+	unsigned int i=0, j=0;
+	while (i<strlen(tablename)) {
+		if (tablename[i]!='\\' && tablename[i]!='`' && tablename[i]!='\'') {
+			tn[j]=tablename[i];
+			j++;
+		}
+		i++;
+	}
+	tn[j]=0;
+/*
+	if (!strcmp(tablename,"global_variables`") || !strcmp(tablename,"global\\_variables`")) tn=(char *)"global_variables";
+	else if (!strcmp(tablename,"debug_levels`") || !strcmp(tablename,"debug_levels`")) tn=(char *)"debug_levels";
+	else if (!strcmp(tablename,"mysql_collations`") || !strcmp(tablename,"mysql\\_collations`")) tn=(char *)"mysql_collations";
+	else if (!strcmp(tablename,"mysql_query_rules`") || !strcmp(tablename,"mysql\\_query\\_rules`")) tn=(char *)"mysql_query_rules";
+	else if (!strcmp(tablename,"mysql_servers`") || !strcmp(tablename,"mysql\\_servers`")) tn=(char *)"mysql_servers";
+	else if (!strcmp(tablename,"mysql_users`") || !strcmp(tablename,"mysql\\_users`")) tn=(char *)"mysql_users";
+*/
+/*
+	if (tn==NULL) {
+		*err=strdup((char *)"Table does not exist");
+		free(tn);
+		return NULL;
+	}
+*/
+	SQLite3_result *resultset=NULL;
+	char *q1=(char *)"PRAGMA table_info(%s)";
+	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
+	sprintf(q2,q1,tn);
+	int affected_rows;
+	int cols;
+	char *error=NULL;
+	admindb->execute_statement(q2, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q2, error);
+		free(q2);
+		*err=strdup(error);
+		free(error);
+		if (resultset) delete resultset;
+		free(tn);
+		return NULL;
+	}
+
+	if (resultset==NULL) {
+		free(tn);
+		return NULL;
+	}
+
+	if (resultset->rows_count==0) {
+		free(tn);
+		delete resultset;
+		*err=strdup((char *)"Table does not exist");
+		return NULL;
+	}
+
+	SQLite3_result *result=new SQLite3_result(6);
+	result->add_column_definition(SQLITE_TEXT,"Field");
+	result->add_column_definition(SQLITE_TEXT,"Type");
+	result->add_column_definition(SQLITE_TEXT,"Null");
+	result->add_column_definition(SQLITE_TEXT,"Key");
+	result->add_column_definition(SQLITE_TEXT,"Default");
+	result->add_column_definition(SQLITE_TEXT,"Extra");
+	char *pta[6];
+	pta[1]=(char *)"varchar(255)";
+	pta[2]=(char *)"NO";
+	pta[3]=(char *)"";
+	pta[4]=(char *)"";
+	pta[5]=(char *)"";
+	free(q2);
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		pta[0]=r->fields[0];
+		result->add_row(pta);
+	}
+	delete resultset;
+	free(tn);
+	return result;
+}
+
+SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablename, char **err) {
+	char *pta[18];
+	pta[0]=NULL;
+	char *tn=NULL; // tablename
+	// note that tablename is passed with a trailing '
+	tn=(char *)malloc(strlen(tablename));
+	unsigned int i=0, j=0;
+	while (i<strlen(tablename)) {
+		if (tablename[i]!='\\' && tablename[i]!='`' && tablename[i]!='\'') {
+			tn[j]=tablename[i];
+			j++;
+		}
+		i++;
+	}
+	tn[j]=0;
+/*
+	if (!strcmp(tablename,"global_variables'") || !strcmp(tablename,"global\\_variables'")) pta[0]=(char *)"global_variables";
+	else if (!strcmp(tablename,"debug_levels'") || !strcmp(tablename,"debug\\_levels'")) pta[0]=(char *)"debug_levels";
+	else if (!strcmp(tablename,"mysql_collations'") || !strcmp(tablename,"mysql\\_collations'")) pta[0]=(char *)"mysql_collations";
+	else if (!strcmp(tablename,"mysql_query_rules'") || !strcmp(tablename,"mysql\\_query\\_rules'")) pta[0]=(char *)"mysql_query_rules";
+	else if (!strcmp(tablename,"mysql_servers'") || !strcmp(tablename,"mysql\\_servers'")) pta[0]=(char *)"mysql_servers";
+	else if (!strcmp(tablename,"mysql_users'") || !strcmp(tablename,"mysql\\_users'")) pta[0]=(char *)"mysql_users";
+*/
+/*
+	if (tn==NULL) {
+		*err=strdup((char *)"Table does not exist");
+		free(tn);
+		return NULL;
+	}
+*/
+	SQLite3_result *resultset=NULL;
+	char *q1=(char *)"PRAGMA table_info(%s)";
+	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
+	sprintf(q2,q1,tn);
+	int affected_rows;
+	int cols;
+	char *error=NULL;
+	admindb->execute_statement(q2, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q2, error);
+		free(q2);
+		*err=strdup(error);
+		free(error);
+		if (resultset) delete resultset;
+		free(tn);
+		return NULL;
+	}
+
+	if (resultset==NULL) {
+		free(tn);
+		return NULL;
+	}
+
+	if (resultset->rows_count==0) {
+		free(tn);
+		delete resultset;
+		*err=strdup((char *)"Table does not exist");
+		return NULL;
+	}
+	SQLite3_result *result=new SQLite3_result(18);
+	result->add_column_definition(SQLITE_TEXT,"Name");
+	result->add_column_definition(SQLITE_TEXT,"Engine");
+	result->add_column_definition(SQLITE_TEXT,"Version");
+	result->add_column_definition(SQLITE_TEXT,"Row_format");
+	result->add_column_definition(SQLITE_TEXT,"Rows");
+	result->add_column_definition(SQLITE_TEXT,"Avg_row_length");
+	result->add_column_definition(SQLITE_TEXT,"Data_length");
+	result->add_column_definition(SQLITE_TEXT,"Max_data_length");
+	result->add_column_definition(SQLITE_TEXT,"Index_length");
+	result->add_column_definition(SQLITE_TEXT,"Data_free");
+	result->add_column_definition(SQLITE_TEXT,"Auto_increment");
+	result->add_column_definition(SQLITE_TEXT,"Create_time");
+	result->add_column_definition(SQLITE_TEXT,"Update_time");
+	result->add_column_definition(SQLITE_TEXT,"Check_time");
+	result->add_column_definition(SQLITE_TEXT,"Collation");
+	result->add_column_definition(SQLITE_TEXT,"Checksum");
+	result->add_column_definition(SQLITE_TEXT,"Create_options");
+	result->add_column_definition(SQLITE_TEXT,"Comment");
+	pta[0]=tn;
+	pta[1]=(char *)"SQLite";
+	pta[2]=(char *)"10";
+	pta[3]=(char *)"Dynamic";
+	pta[4]=(char *)"10";
+	pta[5]=(char *)"0";
+	pta[6]=(char *)"0";
+	pta[7]=(char *)"0";
+	pta[8]=(char *)"0";
+	pta[9]=(char *)"0";
+	pta[10]=(char *)"NULL";
+	pta[11]=(char *)"0000-00-00 00:00:00";
+	pta[12]=(char *)"0000-00-00 00:00:00";
+	pta[13]=(char *)"0000-00-00 00:00:00";
+	pta[14]=(char *)"utf8_bin";
+	pta[15]=(char *)"NULL";
+	pta[16]=(char *)"";
+	pta[17]=(char *)"";
+	result->add_row(pta);
+	free(tn);
+	return result;
+}
+
+
 void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *pkt) {
 
 	char *error=NULL;
@@ -1032,6 +1216,80 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			goto __run_query;
 		}
 
+
+	// queries generated by mysqldump
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (
+			!strncmp("/*!40014 SET ", query_no_space, 13) ||
+			!strncmp("/*!40101 SET ", query_no_space, 13) ||
+			!strncmp("/*!40103 SET ", query_no_space, 13) ||
+			!strncmp("/*!40111 SET ", query_no_space, 13) ||
+			!strncmp("/*!40000 ALTER TABLE", query_no_space, strlen("/*!40000 ALTER TABLE"))
+				||
+			!strncmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */"))
+				||
+			!strncmp("/*!40103 SET TIME_ZONE=", query_no_space, strlen("/*!40103 SET TIME_ZONE="))
+				||
+			!strncmp("LOCK TABLES", query_no_space, strlen("LOCK TABLES"))
+				||
+			!strncmp("UNLOCK TABLES", query_no_space, strlen("UNLOCK TABLES"))
+				||
+			!strncmp("SET SQL_QUOTE_SHOW_CREATE=1", query_no_space, strlen("SET SQL_QUOTE_SHOW_CREATE=1"))
+				||
+			!strncmp("SET SESSION character_set_results", query_no_space, strlen("SET SESSION character_set_results"))
+				||
+			!strncasecmp("USE ", query_no_space, strlen("USE ")) // this applies to all clients, not only mysqldump
+		) {
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			run_query=false;
+			goto __run_query;
+		}
+		if (!strncmp("SHOW VARIABLES LIKE 'gtid\\_mode'", query_no_space, strlen("SHOW VARIABLES LIKE 'gtid\\_mode'"))) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT variable_name Variable_name, Variable_value Value FROM global_variables WHERE Variable_name='gtid_mode'");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+		if (!strncmp("select @@collation_database", query_no_space, strlen("select @@collation_database"))) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT Collation '@@collation_database' FROM mysql_collations WHERE Collation='utf8_general_ci' LIMIT 1");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+		if (!strncmp("SHOW VARIABLES LIKE 'ndbinfo\\_version'", query_no_space, strlen("SHOW VARIABLES LIKE 'ndbinfo\\_version'"))) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT variable_name Variable_name, Variable_value Value FROM global_variables WHERE Variable_name='ndbinfo_version'");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+		if (!strncmp("show table status like '", query_no_space, strlen("show table status like '"))) {
+			char *strA=query_no_space+24;
+			int strAl=strlen(strA);
+			if (strAl<2) { // error
+				goto __run_query;
+			}
+			char *err=NULL;
+			SQLite3_result *resultset=SPA->generate_show_table_status(strA, &err);
+			sess->SQLite3_to_MySQL(resultset, err, 0, &sess->client_myds->myprot);
+			if (resultset) delete resultset;
+			if (err) free(err);
+			run_query=false;
+			goto __run_query;
+		}
+		if (!strncmp("show fields from `", query_no_space, strlen("show fields from `"))) {
+			char *strA=query_no_space+18;
+			int strAl=strlen(strA);
+			if (strAl<2) { // error
+				goto __run_query;
+			}
+			char *err=NULL;
+			SQLite3_result *resultset=SPA->generate_show_fields_from(strA, &err);
+			sess->SQLite3_to_MySQL(resultset, err, 0, &sess->client_myds->myprot);
+			if (resultset) delete resultset;
+			if (err) free(err);
+			run_query=false;
+			goto __run_query;
+		}
 	}
 
 	// FIXME: this should be removed, it is just a POC for issue #253 . What is important is the call to GloMTH->signal_all_threads();
@@ -1123,6 +1381,33 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES LIKE ", query_no_space, 17))) {
+		strA=query_no_space+17;
+		strAl=strlen(strA);
+		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
+		strBl=strlen(strB);
+		char *tn=NULL; // tablename
+		tn=(char *)malloc(strlen(strA));
+		unsigned int i=0, j=0;
+		while (i<strlen(strA)) {
+			if (strA[i]!='\\' && strA[i]!='`' && strA[i]!='\'') {
+				tn[j]=strA[i];
+				j++;
+			}
+			i++;
+		}
+		tn[j]=0;
+		int l=strBl+strlen(tn)-2;
+		char *b=(char *)l_alloc(l+1);
+		snprintf(b,l+1,strB,tn);
+		b[l]=0;
+		free(tn);
+		l_free(query_length,query);
+		query=b;
+		query_length=l+1;
+		goto __run_query;
+	}
+
 	if (query_no_space_length==strlen("SHOW MYSQL USERS") && !strncasecmp("SHOW MYSQL USERS",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM mysql_users ORDER BY username, active DESC, username ASC");
@@ -1186,6 +1471,13 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			free(tbh);
 			tbh=dbh;
 			dbh=strdup("main");
+		}
+		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
+			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
+			strncpy(tbh_tmp,tbh+1,strlen(tbh)-2);
+			tbh_tmp[strlen(tbh)-2]=0;
+			free(tbh);
+			tbh=tbh_tmp;
 		}
 		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
 		char *buff=(char *)l_alloc(l+1);

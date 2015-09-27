@@ -136,5 +136,7 @@ class ProxySQL_Admin {
 
 	void flush_error_log();
 	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
+	SQLite3_result * generate_show_table_status(const char *, char **err);
+	SQLite3_result * generate_show_fields_from(const char *tablename, char **err);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
