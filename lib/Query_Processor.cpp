@@ -37,28 +37,30 @@ class QP_rule_text_hitsonly {
 class QP_rule_text {
 	public:
 	char **pta;
+	const int num_fields=17;
 	QP_rule_text(QP_rule_t *QPr) {
 		pta=NULL;
-		pta=(char **)malloc(sizeof(char *)*16);
+		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
 		itostr(pta[1], (long long)QPr->active);
 		pta[2]=strdup_null(QPr->username);
 		pta[3]=strdup_null(QPr->schemaname);
 		itostr(pta[4], (long long)QPr->flagIN);
-		pta[5]=strdup_null(QPr->match_pattern);
-		itostr(pta[6], (long long)QPr->negate_match_pattern);
-		itostr(pta[7], (long long)QPr->flagOUT);
-		pta[8]=strdup_null(QPr->replace_pattern);
-		itostr(pta[9], (long long)QPr->destination_hostgroup);
-		itostr(pta[10], (long long)QPr->cache_ttl);
-		itostr(pta[11], (long long)QPr->reconnect);
-		itostr(pta[12], (long long)QPr->timeout);
-		itostr(pta[13], (long long)QPr->delay);
-		itostr(pta[14], (long long)QPr->apply);
-		itostr(pta[15], (long long)QPr->hits);
+		pta[5]=strdup_null(QPr->match_digest);
+		pta[6]=strdup_null(QPr->match_pattern);
+		itostr(pta[7], (long long)QPr->negate_match_pattern);
+		itostr(pta[8], (long long)QPr->flagOUT);
+		pta[9]=strdup_null(QPr->replace_pattern);
+		itostr(pta[10], (long long)QPr->destination_hostgroup);
+		itostr(pta[11], (long long)QPr->cache_ttl);
+		itostr(pta[12], (long long)QPr->reconnect);
+		itostr(pta[13], (long long)QPr->timeout);
+		itostr(pta[14], (long long)QPr->delay);
+		itostr(pta[15], (long long)QPr->apply);
+		itostr(pta[16], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
-		for(int i=0; i<16; i++) {
+		for(int i=0; i<num_fields; i++) {
 			free_null(pta[i]);
 		}
 		free(pta);
@@ -69,6 +71,7 @@ struct __SQP_query_parser_t {
 	sfilter sf;
 	uint64_t digest;
 	char *digest_text;
+	char *first_comment;
 	uint64_t digest_total;
 };
 
@@ -197,11 +200,15 @@ typedef struct __RE2_objects_t re2_t;
 
 static bool rules_sort_comp_function (QP_rule_t * a, QP_rule_t * b) { return (a->rule_id < b->rule_id); }
 
-static re2_t * compile_query_rule(QP_rule_t *qr) {
+static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt=new re2::RE2::Options(RE2::Quiet);
 	r->opt->set_case_sensitive(false);
-	r->re=new RE2(qr->match_pattern, *r->opt);
+	if (i==1) {
+		r->re=new RE2(qr->match_digest, *r->opt);
+	} else if (i==2) {
+		r->re=new RE2(qr->match_pattern, *r->opt);
+	}
 	return r;
 };
 
@@ -215,11 +222,17 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->match_pattern);
 	if (qr->replace_pattern)
 		free(qr->replace_pattern);
-	if (qr->regex_engine) {
-		re2_t *r=(re2_t *)qr->regex_engine;
+	if (qr->regex_engine1) {
+		re2_t *r=(re2_t *)qr->regex_engine1;
 		delete r->opt;
 		delete r->re;
-		free(qr->regex_engine);
+		free(qr->regex_engine1);
+	}
+	if (qr->regex_engine2) {
+		re2_t *r=(re2_t *)qr->regex_engine2;
+		delete r->opt;
+		delete r->re;
+		free(qr->regex_engine2);
 	}
 	free(qr);
 };
@@ -403,13 +416,14 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int delay, bool apply) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int delay, bool apply) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
 	newQR->username=(username ? strdup(username) : NULL);
 	newQR->schemaname=(schemaname ? strdup(schemaname) : NULL);
 	newQR->flagIN=flagIN;
+	newQR->match_digest=(match_digest ? strdup(match_digest) : NULL);
 	newQR->match_pattern=(match_pattern ? strdup(match_pattern) : NULL);
 	newQR->negate_match_pattern=negate_match_pattern;
 	newQR->flagOUT=flagOUT;
@@ -420,9 +434,10 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->timeout=timeout;
 	newQR->delay=delay;
 	newQR->apply=apply;
-	newQR->regex_engine=NULL;
+	newQR->regex_engine1=NULL;
+	newQR->regex_engine2=NULL;
 	newQR->hits=0;
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_digest=\"%s\", %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_digest, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
 	return newQR;
 };
 
@@ -510,7 +525,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(16);
+	SQLite3_result *result=new SQLite3_result(17);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -518,6 +533,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"username");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
 	result->add_column_definition(SQLITE_TEXT,"flagIN");
+	result->add_column_definition(SQLITE_TEXT,"match_digest");
 	result->add_column_definition(SQLITE_TEXT,"match_pattern");
 	result->add_column_definition(SQLITE_TEXT,"negate_match_pattern");
 	result->add_column_definition(SQLITE_TEXT,"flagOUT");
@@ -591,8 +607,13 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 
 
 
-Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, bool delete_original) {
+Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
 	Query_Processor_Output *ret=NULL;
+	ret=new Query_Processor_Output();
+	SQP_par_t *qp=NULL;
+	if (qi && qi->QueryParserArgs) {
+		qp=(SQP_par_t *)qi->QueryParserArgs;
+	}
 	unsigned int len=size-sizeof(mysql_hdr)-1;
 	char *query=(char *)l_alloc(len+1);
 	memcpy(query,(char *)ptr+sizeof(mysql_hdr)+1,len);
@@ -609,11 +630,15 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			qr1=*it;
 			if (qr1->active) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
-				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->delay, qr1->apply);
+				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->delay, qr1->apply);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
+				if (qr2->match_digest) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: \n", qr2->rule_id, qr2->match_digest);
+					qr2->regex_engine1=(void *)compile_query_rule(qr2,1);
+				}
 				if (qr2->match_pattern) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: \n", qr2->rule_id, qr2->match_pattern);
-					qr2->regex_engine=(void *)compile_query_rule(qr2);
+					qr2->regex_engine2=(void *)compile_query_rule(qr2,2);
 				}
 				_thr_SQP_rules->push_back(qr2);
 			}
@@ -642,7 +667,21 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			}
 		}
 
-		re2p=(re2_t *)qr->regex_engine;
+		// match on digest
+		if (qp && qp->digest_text ) { // we call this only if we have a query digest
+			re2p=(re2_t *)qr->regex_engine1;
+			if (qr->match_digest) {
+				bool rc;
+				// we always match on original query
+				rc=RE2::PartialMatch(qp->digest_text,*re2p->re);
+				if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
+					continue;
+				}
+			}
+		}
+		// match on query
+		re2p=(re2_t *)qr->regex_engine2;
 		if (qr->match_pattern) {
 			bool rc;
 			if (ret && ret->new_query) {
@@ -658,22 +697,8 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				continue;
 			}
 		}
+
 		// if we arrived here, we have a match
-		if (ret==NULL) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "this is the first time we find a match\n");
-			// create struct
-			//ret=(QP_out_t *)l_alloc(sizeof(QP_out_t));
-			ret=new Query_Processor_Output();
-			// initalized all values
-			ret->ptr=NULL;
-			ret->size=0;
-			ret->destination_hostgroup=-1;
-			ret->cache_ttl=-1;
-			ret->reconnect=-1;
-			ret->timeout=-1;
-			ret->delay=-1;
-			ret->new_query=NULL;
-		}
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 
 /*
@@ -746,6 +771,10 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 __exit_process_mysql_query:
 	// FIXME : there is too much data being copied around
 	l_free(len+1,query);
+	if (qp && qp->first_comment[0]) {
+		// we have a comment to parse
+		query_parser_first_comment(ret, qp->first_comment);
+	}
 	return ret;
 };
 
@@ -794,9 +823,17 @@ void * Query_Processor::query_parser_init(char *query, int query_length, int fla
 	if (mysql_thread___commands_stats)
 		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
+	qp->first_comment=NULL;
+	qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
+	qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest(query, query_length);
+		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, qp->first_comment);
 		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
+#ifdef DEBUG
+		if (strlen(qp->first_comment)) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
+		}
+#endif /* DEBUG */
 	}
 	return (void *)qp;
 };
@@ -966,7 +1003,51 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *
 	return MYSQL_COM_QUERY_UNKNOWN;
 }
 
-char * Query_Processor::query_parser_first_comment(void *args) { return NULL; }
+bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {
+	bool ret=false;
+	tokenizer_t tok = tokenizer( fc, ";", TOKENIZER_NO_EMPTIES );
+	const char* token;
+	for ( token = tokenize( &tok ) ; token ;  token = tokenize( &tok ) ) {
+		char *key=NULL;
+		char *value=NULL;
+    c_split_2(token, "=", &key, &value);
+		remove_spaces(key);
+		remove_spaces(value);
+		if (strlen(key)) {
+			char c=value[0];
+			if (!strcasecmp(key,"cache_ttl")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->cache_ttl=t;
+				}
+			}
+			if (!strcasecmp(key,"query_delay")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->delay=t;
+				}
+			}
+			if (!strcasecmp(key,"query_timeout")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->timeout=t;
+				}
+			}
+			if (!strcasecmp(key,"hostgroup")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->destination_hostgroup=t;
+				}
+			}
+		}
+		free(key);
+		free(value);
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
+	}
+	free_tokenizer( &tok );
+	return ret;
+}
+
 
 void Query_Processor::query_parser_free(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
@@ -974,5 +1055,8 @@ void Query_Processor::query_parser_free(void *args) {
 		free(qp->digest_text);
 		qp->digest_text=NULL;
 	}
-	free(qp);	
+	if (qp->first_comment) {
+		l_free(FIRST_COMMENT_MAX_LENGTH,qp->first_comment);
+	}
+	free(qp);
 };

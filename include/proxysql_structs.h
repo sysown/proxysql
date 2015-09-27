@@ -260,6 +260,7 @@ class PtrArray;
 class PtrSizeArray;
 class StatCounters;
 class ProxySQL_ConfigFile;
+class Query_Info;
 //class MySQL_Server;
 class SQLite3_result;
 //class MySQL_Servers;

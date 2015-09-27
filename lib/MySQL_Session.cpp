@@ -462,7 +462,7 @@ __get_pkts_from_client:
 									if (rc_break==true) {
 										break;
 									}
-									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,false);
+									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									if (qpo) {
 										rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
 										if (rc_break==true) { break; }
@@ -699,9 +699,9 @@ handler_again:
 					if (mysql_thread___default_query_timeout) {
 						if (mybe->server_myds->wait_until==0) {
 							mybe->server_myds->wait_until=thread->curtime;
+							unsigned long long def_query_timeout=mysql_thread___default_query_timeout;
+							mybe->server_myds->wait_until+=def_query_timeout*1000;
 						}
-						unsigned long long def_query_timeout=mysql_thread___default_query_timeout;
-						mybe->server_myds->wait_until+=def_query_timeout*1000;
 					}
 				}
 				int rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize);
