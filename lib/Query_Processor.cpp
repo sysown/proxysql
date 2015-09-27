@@ -829,9 +829,11 @@ void * Query_Processor::query_parser_init(char *query, int query_length, int fla
 	if (mysql_thread___query_digests) {
 		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, qp->first_comment);
 		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
+#ifdef DEBUG
 		if (strlen(qp->first_comment)) {
-			fprintf(stderr,"Comment= %s \n", qp->first_comment);
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
 		}
+#endif /* DEBUG */
 	}
 	return (void *)qp;
 };
@@ -1040,7 +1042,7 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 		}
 		free(key);
 		free(value);
-		fprintf(stderr,"%s , key=%s , value=%s\n", token, key, value);
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
 	}
 	free_tokenizer( &tok );
 	return ret;
