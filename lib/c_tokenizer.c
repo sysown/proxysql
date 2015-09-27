@@ -194,6 +194,8 @@ char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment
 	char fc=0;
 	int fc_len=0;
 
+	char fns=0;
+
 	while(i < len)
 	{
 		// =================================================
@@ -235,6 +237,12 @@ char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment
 			else
 			{
 				flag = 0;
+				if (fns==0 && is_space_char(*s)) {
+					s++;
+					i++;
+					continue;
+				}
+				if (fns==0) fns=1;
 				if(is_space_char(prev_char) && is_space_char(*s)){
 					prev_char = ' ';
 					*p_r = ' ';
@@ -372,6 +380,16 @@ char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment
 
 		i++;
 	}
+
+	// remove a trailing space
+	if (p_r>r) {
+		char *e=p_r;
+		e--;
+		if (*e==' ') {
+			*e=0;
+		}
+	}
+
 	*p_r = 0;
 
 	// process query stats
