@@ -5,22 +5,9 @@
 #include <string.h>
 
 #include "c_tokenizer.h"
-/*
-// commented for issue #137
-#ifndef strdup
-#define strdup sdup
-static char* sdup( const char* s )
-{
-	size_t n = strlen( s ) + 1;
-	char*	p = malloc( n );
-	return p ? memcpy( p, s, n ) : NULL;
-}
-#endif
-*/
+
 tokenizer_t tokenizer( const char* s, const char* delimiters, int empties )
 {
-//	Commented for issue #137
-//	char* strdup( const char* );
 
 	tokenizer_t result;
 
@@ -72,7 +59,6 @@ void c_split_2(const char *in, const char *del, char **out1, char **out2) {
 	*out1=NULL;
 	*out2=NULL;
 	const char *t;
-	//tokenizer_t tok = tokenizer( in, del, TOKENIZER_NO_EMPTIES );
 	tokenizer_t tok = tokenizer( in, del, TOKENIZER_NO_EMPTIES );
 	for ( t=tokenize(&tok); t; t=tokenize(&tok)) {
 		if (*out1==NULL) { *out1=strdup(t); continue; }
@@ -82,13 +68,7 @@ void c_split_2(const char *in, const char *del, char **out1, char **out2) {
 	if (*out2==NULL) *out2=strdup("");
 	free_tokenizer( &tok );
 }
-//#include "proxysql.h"
-//#include <stdio.h>
-//#include <stdlib.h>
-//#include <string.h>
 #define SIZECHAR	sizeof(char)
-
-// Added by chan ------------------------------------------------
 
 // check char if it could be table name
 static inline char is_normal_char(char c)
@@ -393,6 +373,5 @@ char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment
 	*p_r = 0;
 
 	// process query stats
-	// last changed at 20140418 - by chan
 	return r;
 }
