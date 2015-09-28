@@ -33,6 +33,7 @@ class Query_Info {
 	unsigned long long query_parser_update_counters();
 	void begin(unsigned char *_p, int len, bool mysql_header=false);
 	void end();
+	char *get_digest_text();
 };
 
 class MySQL_Session
