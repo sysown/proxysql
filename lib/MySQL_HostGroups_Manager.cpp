@@ -225,7 +225,9 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	mydb->execute(MYHGM_MYSQL_SERVERS);
 	mydb->execute(MYHGM_MYSQL_SERVERS_INCOMING);
+	mydb->execute(MYHGM_MYSQL_REPLICATION_HOSTGROUPS);
 	MyHostGroups=new PtrArray();
+	incoming_replication_hostgroups=NULL;
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
@@ -359,8 +361,11 @@ bool MySQL_HostGroups_Manager::commit() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
 
-	// FIXME: scan all servers and recreate mysql_servers
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_replication_hostgroups\n");
+	mydb->execute("DELETE FROM mysql_replication_hostgroups");
+
 	generate_mysql_servers_table();
+	generate_mysql_replication_hostgroups_table();
 
 	wrunlock();
 	if (GloMTH) {
@@ -403,6 +408,20 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 			free(query);
 		}
 	}
+}
+
+void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
+	if (incoming_replication_hostgroups==NULL)
+		return;
+	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		long long unsigned wh=atoll(r->fields[0]);
+		long long unsigned rh=atoll(r->fields[1]);
+		char query[256];
+		sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%llu,%llu)",wh,rh);
+		mydb->execute(query);
+	}
+	incoming_replication_hostgroups=NULL;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
@@ -703,6 +722,10 @@ __exit_get_multiple_idle_connections:
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning %d idle connections\n", num_conn_current);
 	return num_conn_current;
+}
+
+void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_result *s) {
+	incoming_replication_hostgroups=s;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
