@@ -437,6 +437,19 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	return resultset;
 }
 
+SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgroups() {
+	wrlock();
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup FROM mysql_replication_hostgroups";
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	wrunlock();
+	return resultset;
+}
+
 MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 	MyHGC *myhgc=new MyHGC(_hid);
 	return myhgc;

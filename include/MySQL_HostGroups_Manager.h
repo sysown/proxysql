@@ -124,6 +124,7 @@ class MySQL_HostGroups_Manager {
 	void set_incoming_replication_hostgroups(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
+	SQLite3_result *dump_table_mysql_replication_hostgroups();
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);

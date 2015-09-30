@@ -3051,22 +3051,45 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 }
 
 void ProxySQL_Admin::save_mysql_servers_runtime_to_database() {
-	char *query=(char *)"DELETE FROM main.mysql_servers";
+	char *query=NULL;
+	SQLite3_result *resultset=NULL;
+	// dump mysql_servers
+	query=(char *)"DELETE FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	SQLite3_result *resultset=MyHGM->dump_table_mysql_servers();
-	if (!resultset) return;
-	char *q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s)";
-	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
-		char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+strlen(r->fields[7])+16);
-		sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[4], r->fields[3], r->fields[5], r->fields[6], r->fields[7]);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-		//fprintf(stderr,"%s\n",query);
-		admindb->execute(query);
-		free(query);
+	resultset=MyHGM->dump_table_mysql_servers();
+	if (resultset) {
+		char *q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s)";
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+strlen(r->fields[7])+16);
+			sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[4], r->fields[3], r->fields[5], r->fields[6], r->fields[7]);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+			admindb->execute(query);
+			free(query);
+		}
 	}
 	if(resultset) delete resultset;
+	resultset=NULL;
+
+	// dump mysql_replication_hostgroups
+	query=(char *)"DELETE FROM main.mysql_replication_hostgroups";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset=MyHGM->dump_table_mysql_replication_hostgroups();
+	if (resultset) {
+		char *q=(char *)"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s)";
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+16);
+			sprintf(query, q, r->fields[0], r->fields[1]);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+			admindb->execute(query);
+			free(query);
+		}
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
 }
 
 
