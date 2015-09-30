@@ -2495,10 +2495,26 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 		SQLite3_row *r=*it;
 		int arg_len=0;
 		for (int i=0; i<14; i++) {
-			arg_len+=strlen(r->fields[i]);
+			if (r->fields[i])
+				arg_len+=strlen(r->fields[i]);
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
-		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11],r->fields[12],r->fields[13]);
+		sprintf(query,a,
+			(r->fields[0] ? r->fields[0] : ""),
+			(r->fields[1] ? r->fields[1] : ""),
+			(r->fields[2] ? r->fields[2] : ""),
+			(r->fields[3] ? r->fields[3] : ""),
+			(r->fields[4] ? r->fields[4] : ""),
+			(r->fields[5] ? r->fields[5] : ""),
+			(r->fields[6] ? r->fields[6] : ""),
+			(r->fields[7] ? r->fields[7] : ""),
+			(r->fields[8] ? r->fields[8] : ""),
+			(r->fields[9] ? r->fields[9] : ""),
+			(r->fields[10] ? r->fields[10] : ""),
+			(r->fields[11] ? r->fields[11] : ""),
+			(r->fields[12] ? r->fields[12] : ""),
+			(r->fields[13] ? r->fields[13] : "")
+		);
 		statsdb->execute(query);
 		free(query);
 	}
