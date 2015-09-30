@@ -413,13 +413,13 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 	if (incoming_replication_hostgroups==NULL)
 		return;
+	proxy_info("New mysql_replication_hostgroups table\n");
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		long long unsigned wh=atoll(r->fields[0]);
-		long long unsigned rh=atoll(r->fields[1]);
 		char query[256];
-		sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%llu,%llu)",wh,rh);
+		sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s)",r->fields[0],r->fields[1]);
 		mydb->execute(query);
+		fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s\n", r->fields[0],r->fields[1]);
 	}
 	incoming_replication_hostgroups=NULL;
 }
