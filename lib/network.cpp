@@ -57,7 +57,7 @@ int listen_on_unix(char *path, int backlog) {
 	// remove the socket
 	r=unlink(path);
 	if ( (r==-1) && (errno!=ENOENT) ) {
-		proxy_error("Error unlink Unix Socket %s", path);
+		proxy_error("Error unlink Unix Socket %s\n", path);
 		return -1;
 	}
 
