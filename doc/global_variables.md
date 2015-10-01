@@ -72,13 +72,13 @@ Default value: `5` (reconnect times)
 
 The timeout for a single attempt at connecting to a backend server from the proxy. If this fails, according to the other parameters, the attempt will be retried until too many errors per second are generated (and the server is automatically shunned) or until the final cut-off is reached and an error is returned to the client (see `mysql-connect_timeout_server_max`).
 
-Default value: '1000' (miliseconds, the equivalent of 1 second)
+Default value: `1000` (miliseconds, the equivalent of 1 second)
 
 ### `mysql-connect_timeout_server_max`
 
 The timeout for connecting to a backend server from the proxy. When this timeout is reached, an error is returned to the client with code #28000 and the message "Max connect timeout reached while reaching hostgroup...".
 
-Default value: '10000' (miliseconds, the equivalent of 10 seconds)
+Default value: `10000` (miliseconds, the equivalent of 10 seconds)
 
 ### `mysql-default_charset`
 
@@ -121,37 +121,37 @@ Currently unused.
 
 The TCP interfaces on which ProxySQL should listen for incoming MySQL traffic. As is obvious from the default value, this also supports UNIX sockets for faster local traffic.
 
-Default value: '0.0.0.0:6033;/tmp/proxysql.sock'
+Default value: `0.0.0.0:6033;/tmp/proxysql.sock`
 
 ### `mysql-long_query_time`
 
 Threshold for counting queries passing through the proxy as 'slow'. The total number of slow queries can be found in the `stats_mysql_global` table, in the variable named `Slow_queries` (each row in that table represents one variable).
 
-Default value: '1000' (ms)
+Default value: `1000` (ms)
 
 ### `mysql-max_connections`
 
 The maximal number of TCP connections that the proxy can handle. After this number is reached, new connections will be rejected with the `#HY000` error, and the error message `Too many connections`.
 
-Default value: '10000' (connections)
+Default value: `10000` (connections)
 
 ### `mysql-max_transaction_time`
 
 Sessions with active transactions running more than this timeout are killed.
 
-Default value: '14400000' (miliseconds - the equivalent of 4 hours)
+Default value: `14400000` (miliseconds - the equivalent of 4 hours)
 
 ### `mysql-monitor_connect_interval`
 
 The interval at which the Monitor module of the proxy will try to connect to all the MySQL servers in order to check whether they are available or not.
 
-Default value: '120000' (miliseconds - the equivalent of 2 minutes)
+Default value: `120000` (miliseconds - the equivalent of 2 minutes)
 
 ### `mysql-monitor_connect_timeout`
 
 Currently unused.
 
-Default value: '200' (miliseconds)
+Default value: `200` (miliseconds)
 
 ### `mysql-monitor_history`
 
@@ -160,97 +160,97 @@ The duration for which the events for the checks made by the Monitor module are 
 * `mysql_server_ping_log`
 * `mysql_server_replication_lag_log`
 
-Default value: '600000' (miliseconds - the equivalent of 100 seconds)
+Default value: `600000` (miliseconds - the equivalent of 100 seconds)
 
 ### `mysql-monitor_username`, `mysql-monitor_password`
 
 The (username, password) combination with which the Monitor module will connect to the backend servers in order to check their health. Note that ProxySQL does not make any automated decisions based on these checks, but the data can be used in external scripts.
 
-Default values: 'monitor' / `monitor`
+Default values: `monitor` / `monitor`
 
 ### `mysql-monitor_ping_interval`
 
 The interval at which the Monitor module should ping the backend servers by using the [mysql_ping](https://dev.mysql.com/doc/refman/5.0/en/mysql-ping.html) API.
 
-Default value: '60000' (miliseconds, the equivalent of 1 minute)
+Default value: `60000` (miliseconds, the equivalent of 1 minute)
 
 ### `mysql-monitor_ping_timeout`
 
 Currently unused.
 
-Default value: '100' (miliseconds)
+Default value: `100` (miliseconds)
 
 ### `mysql-monitor_query_interval`
 
 Currently unused. Will be used by the Monitor module in order to collect data about the global status of the backend servers.
 
-Default value: '60000' (miliseconds, the equivalent of 1 minute)
+Default value: `60000` (miliseconds, the equivalent of 1 minute)
 
 ### `mysql-monitor_query_status`
 
 Currently unused. Will be used by the Monitor module in order to collect data about the global status of the backend servers.
 
-Default value: 'SELECT * FROM INFORMATION_SCHEMA.GLOBAL_STATUS'
+Default value: `SELECT * FROM INFORMATION_SCHEMA.GLOBAL_STATUS`
 
 ### `mysql-monitor_query_timeout`
 
 Currently unused. Will be used by the Monitor module in order to collect data about the global status of the backend servers.
 
-Default value: '100' (miliseconds)
+Default value: `100` (miliseconds)
 
 ### `mysql-monitor_query_variables`
 
 Currently unused. Will be used by the Monitor module in order to collect data about the global status of the backend servers.
 
-Default value: 'SELECT * FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES'
+Default value: `SELECT * FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES`
 
 ### `mysql-monitor_replication_lag_interval`
 
 The interval at which the proxy should connect to the backend servers in order to monitor the replication lag between those that are slaves and their masters. Slaves can be temporarily shunned if the replication lag is too large. This setting is controlled by the `mysql_servers`.`max_replication_lag` column in the admin interface, at a per-hostgroup level.
 
-Default value: '10000' (miliseconds, the equivalent of 10 seconds)
+Default value: `10000` (miliseconds, the equivalent of 10 seconds)
 
 ### `mysql-monitor_replication_lag_timeout`
 
 Currently unused.
 
-Default value: '1000' (miliseconds)
+Default value: `1000` (miliseconds)
 
 ### `mysql-monitor_timer_cached`
 
 This variable controls whether ProxySQL should use a cached (and less accurate) value of wall clock time, or not. The actual API used for this is described [here](http://stuff.onse.fi/man?program=event_base_gettimeofday_cached&section=3).
 
-Default value: 'true'
+Default value: `true`
 
 ### `mysql-ping_interval_server`
 
 The interval at which the proxy should ping backend connections in order to maintain them alive, even though there is no outgoing traffic. The purpose here is to keep some connections alive in order to reduce the latency of new queries towards a less frequently used destination backend server.
 
-Default value: '10000' (miliseconds, the equivalent of 10 seconds)
+Default value: `10000` (miliseconds, the equivalent of 10 seconds)
 
 ### `mysql-ping_timeout_server`
 
 The proxy internally pings the connections it has opened in order to keep them alive. This elliminates the cost of opening a new connection towards a hostgroup when a query needs to be routed, at the cost of additional memory footprint inside the proxy and some extra traffic. This is the timeout allowed for those pings to succeed.
 
-Default value: '200' (miliseconds)
+Default value: `200` (miliseconds)
 
 ### `mysql-poll_timeout`
 
 The minimal timeout used by the proxy in order to detect incoming/outgoing traffic via the `poll()` system call. If the proxy determines that it should stick to a higher timeout because of its internal computations, it will use that one, but it will never use a value less than this one.
 
-Default value: '2000' (miliseconds, the equivalent of 2 seconds)
+Default value: `2000` (miliseconds, the equivalent of 2 seconds)
 
 ### `mysql-poll_timeout_on_failure`
 
 The timeout used in order to detect incoming/outgoing traffic after a connection error has occured. The proxy automatically tweaks its timeout to a lower value in such an event in order to be able to quickly respond with a valid connection.
 
-Default value: '100' (miliseconds)
+Default value: `100` (miliseconds)
 
 ### `mysql-query_digests`
 
 When this variable is set to true, the proxy analyzes the queries passing through it and divides them into classes of queries having different values for the same parameters. It computes a couple of metrics for these classes of queries, all found in the `stats_mysql_query_digest` table. For more details, please refer to the [admin tables documentation](https://github.com/sysown/proxysql-0.2/blob/master/doc/admin_tables.md).
 
-Default value: 'true' (query digests are enabled)
+Default value: `true` (query digests are enabled)
 
 ### `mysql-server_capabilities`
 
@@ -268,19 +268,19 @@ Default value: `47626`
 
 The server version with which the proxy will respond to the clients. Note that regardless of the versions of the backend servers, the proxy will respond with this.
 
-Default value: '5.1.30'
+Default value: `5.1.30`
 
 ### `mysql-servers_stats`
 
 Currently unused. Will be removed in a future version.
 
-Default value: 'true'
+Default value: `true`
 
 ### `mysql-session_debug`
 
 Currently unused. Will be removed in a future version.
 
-Default value: 'true'
+Default value: `true`
 
 ### `mysql-sessions_sort`
 
@@ -288,25 +288,25 @@ Sessions are conversations between a MySQL client and a backend server in the pr
 
 This variable controls whether sessions should be processed in the order of waiting time, in order to have a more balanced distribution of traffic among sessions.
 
-Default value: 'true'
+Default value: `true`
 
 ### `mysql-shun_on_failures`
 
 The number of connection errors tolerated to the same server within an interval of 1 second until it is automatically shunned temporarily. For now, this can not be disabled by setting it to a special value, so if you want to do that, you can increase it to a very large value.
 
-Default value: '5'
+Default value: `5`
 
 ### `mysql-shun_recovery_time`
 
 A backend server that has been automatically shunned will be recovered after at least this amount of time. Note that there is no actual hard guarantee of the exact timing, but in practice it shouldn't exceed this value by more than a couple of seconds.
 
-Default value: '10' (seconds)
+Default value: `10` (seconds)
 
 ### `mysql-stacksize`
 
 The stack size to be used with the background threads that the proxy uses to handle MySQL traffic and connect to the backends. Note that changing this value has no effect at runtime, if you need to change it you have to restart the proxy.
 
-Default value: '1048576' (bytes, the equivalent of 1 MB)
+Default value: `1048576` (bytes, the equivalent of 1 MB)
 
 ### `mysql-threads`
 
@@ -318,7 +318,7 @@ The number of background threads that ProxySQL uses in order to process MySQL tr
 
 Note that changing this value has no effect at runtime, if you need to change it you have to restart the proxy.
 
-Default value: '4' (background threads to process MySQL traffic)
+Default value: `4` (background threads to process MySQL traffic)
 
 ### `mysql-threshold_query_length`
 
@@ -328,16 +328,16 @@ More details about it here: https://dev.mysql.com/doc/refman/5.6/en/memory-use.h
 
 Relevant quote from the mysqld documentation: "The connection buffer and result buffer each begin with a size equal to net_buffer_length bytes, but are dynamically enlarged up to max_allowed_packet bytes as needed. The result buffer shrinks to net_buffer_length bytes after each SQL statement."
 
-Default value: '524288' (bytes, the equivalent of 0.5 MB)
+Default value: `524288` (bytes, the equivalent of 0.5 MB)
 
 ### `mysql-threshold_resultset_size`
 
 If a resultset returned by a backend server is bigger than this, proxysql will start sending the result to the MySQL client that was requesting the result in order to limit its memory footprint.
 
-Default value: '4194304' (bytes, the equivalent of 4 MB)
+Default value: `4194304` (bytes, the equivalent of 4 MB)
 
 ### `mysql-wait_timeout`
 
 If a proxy session (which is a conversation between a MySQL client and a backend MySQL server) has been idle for more than this threshold, the proxy will kill the session.
 
-Default value: '28800000' (miliseconds, the equivalent of 8 hours)
+Default value: `28800000` (miliseconds, the equivalent of 8 hours)
