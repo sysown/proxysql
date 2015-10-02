@@ -149,6 +149,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_connect_timeout",
 	(char *)"monitor_ping_interval",
 	(char *)"monitor_ping_timeout",
+	(char *)"monitor_read_only_interval",
+	(char *)"monitor_read_only_timeout",
 	(char *)"monitor_replication_lag_interval",
 	(char *)"monitor_replication_lag_timeout",
 	(char *)"monitor_username",
@@ -213,6 +215,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_connect_timeout=200;
 	variables.monitor_ping_interval=60000;
 	variables.monitor_ping_timeout=100;
+	variables.monitor_read_only_interval=1000;
+	variables.monitor_read_only_timeout=100;
 	variables.monitor_replication_lag_interval=10000;
 	variables.monitor_replication_lag_timeout=1000;
 	variables.monitor_query_interval=60000;
@@ -357,6 +361,8 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 		if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
 		if (!strcasecmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
 		if (!strcasecmp(name,"monitor_ping_timeout")) return (int)variables.monitor_ping_timeout;
+		if (!strcasecmp(name,"monitor_read_only_interval")) return (int)variables.monitor_read_only_interval;
+		if (!strcasecmp(name,"monitor_read_only_timeout")) return (int)variables.monitor_read_only_timeout;
 		if (!strcasecmp(name,"monitor_replication_lag_interval")) return (int)variables.monitor_replication_lag_interval;
 		if (!strcasecmp(name,"monitor_replication_lag_timeout")) return (int)variables.monitor_replication_lag_timeout;
 		if (!strcasecmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
@@ -428,6 +434,14 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_ping_timeout")) {
 			sprintf(intbuf,"%d",variables.monitor_ping_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_read_only_interval")) {
+			sprintf(intbuf,"%d",variables.monitor_read_only_interval);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_read_only_timeout")) {
+			sprintf(intbuf,"%d",variables.monitor_read_only_timeout);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_replication_lag_interval")) {
@@ -660,6 +674,24 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 600*1000) {
 				variables.monitor_ping_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_read_only_interval")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv <= 7*24*3600*1000) {
+				variables.monitor_read_only_interval=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_read_only_timeout")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv <= 600*1000) {
+				variables.monitor_read_only_timeout=intv;
 				return true;
 			} else {
 				return false;
@@ -1651,6 +1683,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_connect_timeout=GloMTH->get_variable_int((char *)"monitor_connect_timeout");
 	mysql_thread___monitor_ping_interval=GloMTH->get_variable_int((char *)"monitor_ping_interval");
 	mysql_thread___monitor_ping_timeout=GloMTH->get_variable_int((char *)"monitor_ping_timeout");
+	mysql_thread___monitor_read_only_interval=GloMTH->get_variable_int((char *)"monitor_read_only_interval");
+	mysql_thread___monitor_read_only_timeout=GloMTH->get_variable_int((char *)"monitor_read_only_timeout");
 	mysql_thread___monitor_replication_lag_interval=GloMTH->get_variable_int((char *)"monitor_replication_lag_interval");
 	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");

@@ -35,8 +35,6 @@ static MySQL_Monitor *GloMyMon;
 
 static void state_machine_handler(int fd, short event, void *arg);
 
-// FIXME:
-const int mysql_thread___monitor_read_only_interval=1000;
 /*
 struct state_data {
 	int ST;
@@ -1014,8 +1012,7 @@ __end_monitor_read_only_loop:
 				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
-// FIXME:				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, (repl_lag==-1 ? 0 : repl_lag));
-				
+
 				char *pta[3];
 				char roport[10];
 				char roval[10];
@@ -1025,6 +1022,7 @@ __end_monitor_read_only_loop:
 				sprintf(roval,"%d",read_only);
 				pta[2]=roval;
 				result->add_row(pta);
+
 				delete mmsd;
 			}
 			sqlite3_finalize(statement);
