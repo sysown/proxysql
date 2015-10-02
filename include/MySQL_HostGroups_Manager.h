@@ -138,6 +138,7 @@ class MySQL_HostGroups_Manager {
 	void destroy_MyConn_from_pool(MySQL_Connection *);	
 
 	void replication_lag_action(int, char*, unsigned int, int);
+	void read_only_action(SQLite3_result *result);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

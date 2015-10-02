@@ -823,3 +823,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 	wrunlock();
 	return result;
 }
+
+void MySQL_HostGroups_Manager::read_only_action(SQLite3_result *result) {
+	wrlock();
+	wrunlock();
+}
