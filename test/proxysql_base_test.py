@@ -16,9 +16,8 @@ from proxysql_tests_config import ProxySQL_Tests_Config
 class ProxySQLBaseTest(TestCase):
 
 	SCENARIO = None
-	# TODO(andrei): make it possible to set this to False, and make False
-	# the default value.
-	INTERACTIVE_TEST = True
+	# TODO(andrei): make it possible to turn this to True as well
+	INTERACTIVE_TEST = False
 	# Custom, per-test, config overrides
 	CONFIG_OVERRIDES = {}
 
@@ -188,6 +187,7 @@ class ProxySQLBaseTest(TestCase):
 			shutil.rmtree('/tmp/proxysql-tests/', onerror=cls.onerror)
 		except:
 			pass
+
 		os.mkdir('/tmp/proxysql-tests')
 		os.system("cp -R " + os.path.dirname(__file__) + "/../* /tmp/proxysql-tests")
 		
