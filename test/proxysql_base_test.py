@@ -207,6 +207,8 @@ class ProxySQLBaseTest(TestCase):
 		proxysql_admin_credentials = cls.get_proxysql_admin_connection_credentials()
 		cls.wait_for_mysql_connection_ok(**proxysql_admin_credentials)
 
+		time.sleep(5)
+
 		cls._populate_mysql_containers_with_dump()
 		cls._populate_proxy_configuration_with_backends()
 		cls._start_proxysql_pings()
