@@ -207,6 +207,9 @@ class ProxySQLBaseTest(TestCase):
 		proxysql_admin_credentials = cls.get_proxysql_admin_connection_credentials()
 		cls.wait_for_mysql_connection_ok(**proxysql_admin_credentials)
 
+		# admin_test would be failing without this. Basically it means that
+		# ProxySQL doesn't seem to behave well when starting it and stopping it
+		# immediately after that.
 		time.sleep(5)
 
 		cls._populate_mysql_containers_with_dump()
