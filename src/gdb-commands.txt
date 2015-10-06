@@ -1,3 +1,4 @@
 set pagination off
 target remote 0.0.0.0:2345
 continue
+quit
