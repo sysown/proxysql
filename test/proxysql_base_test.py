@@ -1,4 +1,5 @@
 import os
+import os.path
 import random
 import re
 import shutil
@@ -178,6 +179,10 @@ class ProxySQLBaseTest(TestCase):
 		proxy_admin_connection.close()
 
 	@classmethod
+	def onerror(cls, function, path, excinfo):
+		print("Error while trying to delete %s: %r" % (path, excinfo))
+
+	@classmethod
 	def setUpClass(cls):
 		# Always shutdown docker services because the previous test might have
 		# left them in limbo.
@@ -185,6 +190,7 @@ class ProxySQLBaseTest(TestCase):
 
 		try:
 			shutil.rmtree('/tmp/proxysql-tests/', onerror=cls.onerror)
+			if os.path.exists('/tmp/proxysql-tests'):
 		except:
 			pass
 
