@@ -5,14 +5,12 @@ admin_variables =
 	admin_credentials="admin2:admin2"
 	mysql_ifaces="0.0.0.0:6032"
 	refresh_interval=2000
-	debug=true
 }
 
 mysql_variables =
 {
 	connect_timeout_server=5000
-	connect_timeout_server_error="#2003:Can\'t connect to MySQL server (ProxySQL)"
-	default_charset=30
+	default_charset="utf8"
 	have_compress=false
 	monitor_history=300000
 	monitor_connect_interval=120000
@@ -35,7 +33,6 @@ mysql_variables =
 	server_version="5.1.31"
 	commands_stats=true
 	servers_stats=false
-	session_debug=false
 	stacksize=2097152
 	threads=2
 }

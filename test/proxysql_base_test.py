@@ -1,4 +1,5 @@
 import os
+import os.path
 import random
 import re
 import shutil
@@ -16,9 +17,8 @@ from proxysql_tests_config import ProxySQL_Tests_Config
 class ProxySQLBaseTest(TestCase):
 
 	SCENARIO = None
-	# TODO(andrei): make it possible to set this to False, and make False
-	# the default value.
-	INTERACTIVE_TEST = True
+	# TODO(andrei): make it possible to turn this to True as well
+	INTERACTIVE_TEST = False
 	# Custom, per-test, config overrides
 	CONFIG_OVERRIDES = {}
 
@@ -179,15 +179,21 @@ class ProxySQLBaseTest(TestCase):
 		proxy_admin_connection.close()
 
 	@classmethod
+	def onerror(cls, function, path, excinfo):
+		print("Error while trying to delete %s: %r" % (path, excinfo))
+
+	@classmethod
 	def setUpClass(cls):
 		# Always shutdown docker services because the previous test might have
 		# left them in limbo.
 		cls._shutdown_docker_services()
 
 		try:
-			shutil.rmtree('/tmp/proxysql-tests/', onerror=cls.onerror)
+			if os.path.exists('/tmp/proxysql-tests'):
+				shutil.rmtree('/tmp/proxysql-tests/', onerror=cls.onerror)
 		except:
 			pass
+
 		os.mkdir('/tmp/proxysql-tests')
 		os.system("cp -R " + os.path.dirname(__file__) + "/../* /tmp/proxysql-tests")
 		
@@ -197,11 +203,20 @@ class ProxySQLBaseTest(TestCase):
 			cls._compile_host_proxysql()
 			cls._connect_gdb_to_proxysql_within_container()
 
-		# Sleep for 30 seconds because we want to populate the MySQL containers
-		# with SQL dumps, but there is a race condition because we do not know
-		# when the MySQL daemons inside them have actually started or not.
-		# TODO(andrei): find a better solution
-		time.sleep(30)
+		# First, wait for all backend servers to have their internal MySQL
+		# started up
+		mysql_credentials = cls.get_all_mysql_connection_credentials()
+		for credential in mysql_credentials:
+			cls.wait_for_mysql_connection_ok(**credential)
+		proxysql_credentials = cls.get_proxysql_connection_credentials()
+		cls.wait_for_mysql_connection_ok(**proxysql_credentials)
+		proxysql_admin_credentials = cls.get_proxysql_admin_connection_credentials()
+		cls.wait_for_mysql_connection_ok(**proxysql_admin_credentials)
+
+		# admin_test would be failing without this. Basically it means that
+		# ProxySQL doesn't seem to behave well when starting it and stopping it
+		# immediately after that.
+		time.sleep(5)
 
 		cls._populate_mysql_containers_with_dump()
 		cls._populate_proxy_configuration_with_backends()
@@ -227,19 +242,17 @@ class ProxySQLBaseTest(TestCase):
 		shutil.rmtree('/tmp/proxysql-tests/')
 	
 	@classmethod
-	def run_query_proxysql(cls, query, db, return_result=True,
-							username=None, password=None, port=None):
+	def run_query_proxysql(cls, query, db, 
+							hostname=None, port=None,
+							username=None, password=None,
+							return_result=True):
 		"""Run a query against the ProxySQL proxy and optionally return its
 		results as a set of rows."""
-		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
-		username = username or config.get('ProxySQL', 'username')
-		password = password or config.get('ProxySQL', 'password')
-		port = port or int(config.get('ProxySQL', 'port'))
-		hostname = config.get('ProxySQL', 'hostname')
-		proxy_connection = MySQLdb.connect(hostname,
-											username,
-											password,
-											port=port,
+		credentials = cls.get_proxysql_connection_credentials()
+		proxy_connection = MySQLdb.connect(hostname or credentials['hostname'],
+											username or credentials['username'],
+											password or credentials['password'],
+											port=int(port or credentials['port']),
 											db=db)
 		cursor = proxy_connection.cursor()
 		cursor.execute(query)
@@ -259,19 +272,137 @@ class ProxySQLBaseTest(TestCase):
 		TODO(andrei): revisit db assumption once stats databases from ProxySQL
 		are accessible via the MySQL interface.
 		"""
-		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES) 
+		credentials = cls.get_proxysql_admin_connection_credentials()
+		proxy_connection = MySQLdb.connect(credentials['hostname'],
+											credentials['username'],
+											credentials['password'],
+											port=int(credentials['port']),
+											db='main')
+		cursor = proxy_connection.cursor()
+		cursor.execute(query)
+		if return_result:
+			rows = cursor.fetchall()
+		cursor.close()
+		proxy_connection.close()
+		if return_result:
+			return rows
 
-		return cls.run_query_proxysql(
-			query,
-			# "main" database is hardcoded within the
-			# ProxySQL admin -- it contains the SQLite3
-			# tables with metadata about servers and users
-			"main",
-			return_result,
-			username=config.get('ProxySQL', 'admin_username'),
-			password=config.get('ProxySQL', 'admin_password'),
-			port=int(config.get('ProxySQL', 'admin_port'))
-		)
+	@classmethod
+	def mysql_connection_ok(cls, hostname, port, username, password, schema):
+		"""Checks whether the MySQL server reachable at (hostname, port) is
+		up or not. This is useful for waiting for ProxySQL/MySQL containers to
+		start up correctly (meaning that the daemons running inside them have
+		started to be able to respond to queries).
+		"""
+		try:
+			db = MySQLdb.connect(host=hostname,
+									user=username,
+									passwd=password,
+									db=schema,
+									port=int(port))
+			cursor = db.cursor() 
+			cursor.execute("select @@version_comment limit 1")
+			results = cursor.fetchone()
+			# Check if anything at all is returned
+			if results:
+				return True
+			else:
+				return False
+		except MySQLdb.Error, e:
+			pass
+
+		return False
+
+	@classmethod
+	def wait_for_mysql_connection_ok(cls, hostname, port, username, password,
+									max_retries=500, time_between_retries=1):
+
+		retries = 0
+		result = False
+
+		while (not result) and (retries < max_retries):
+			result = ProxySQLBaseTest.mysql_connection_ok(
+				hostname=hostname,
+				port=port,
+				username=username,
+				password=password,
+				schema="information_schema"
+			)
+			if not result:
+				retries += 1
+				time.sleep(1)
+				print("Trying again to connect to %s:%s (retries=%d)" % (hostname, port, retries))
+
+		return result
+
+	@classmethod
+	def get_all_mysql_connection_credentials(cls, hostgroup=None):
+		# Figure out which are the containers for the specified hostgroup
+		mysql_backends = cls._get_mysql_containers()
+		mysql_backends_in_hostgroup = []
+		for backend in mysql_backends:
+			container_name = backend['Names'][0][1:].upper()
+			backend_hostgroup = cls._extract_hostgroup_from_container_name(container_name)
+
+			mysql_port_exposed=False
+			if not backend.get('Ports'):
+				continue
+			for exposed_port in backend.get('Ports', []):
+				if exposed_port['PrivatePort'] == 3306:
+					mysql_port_exposed = True
+
+			if ((backend_hostgroup == hostgroup) or (hostgroup is None)) and mysql_port_exposed:
+				mysql_backends_in_hostgroup.append(backend)
+
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
+		hostname = config.get('ProxySQL', 'hostname')
+		username = config.get('ProxySQL', 'username')
+		password = config.get('ProxySQL', 'password')
+
+		result = []
+		for container in mysql_backends_in_hostgroup:
+			for exposed_port in container.get('Ports', []):
+				if exposed_port['PrivatePort'] == 3306:
+					mysql_port = exposed_port['PublicPort']
+					result.append({
+						'hostname': hostname,
+						'port': mysql_port,
+						'username': username,
+						'password': password
+					})
+		return result
+
+
+	@classmethod
+	def get_mysql_connection_credentials(cls, hostgroup=0):
+		
+		credentials = cls.get_all_mysql_connection_credentials(hostgroup=hostgroup)
+
+		if len(credentials) == 0:
+			raise Exception('No backends with a publicly exposed port were '
+							'found in hostgroup %d' % hostgroup)
+
+		return random.choice(credentials)
+
+	@classmethod
+	def get_proxysql_connection_credentials(cls):
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES) 
+		return {
+			"hostname": config.get("ProxySQL", "hostname"),
+			"port": config.get("ProxySQL", "port"),
+			"username": config.get("ProxySQL", "username"),
+			"password": config.get("ProxySQL", "password")
+		}
+
+	@classmethod
+	def get_proxysql_admin_connection_credentials(cls):
+		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES) 
+		return {
+			"hostname": config.get("ProxySQL", "hostname"),
+			"port": config.get("ProxySQL", "admin_port"),
+			"username": config.get("ProxySQL", "admin_username"),
+			"password": config.get("ProxySQL", "admin_password")
+		}
 
 	@classmethod
 	def run_query_mysql(cls, query, db, return_result=True, hostgroup=0,
@@ -287,41 +418,11 @@ class ProxySQLBaseTest(TestCase):
 		retrieve the available backends and hostgroups and will pick a backend
 		from the specified hostgroup."""
 
-		# Figure out which are the containers for the specified hostgroup
-		mysql_backends = cls._get_mysql_containers()
-		mysql_backends_in_hostgroup = []
-		for backend in mysql_backends:
-			container_name = backend['Names'][0][1:].upper()
-			backend_hostgroup = cls._extract_hostgroup_from_container_name(container_name)
-
-			mysql_port_exposed=False
-			if not backend.get('Ports'):
-				continue
-			for exposed_port in backend.get('Ports', []):
-				if exposed_port['PrivatePort'] == 3306:
-					mysql_port_exposed = True
-
-			if backend_hostgroup == hostgroup and mysql_port_exposed:
-				mysql_backends_in_hostgroup.append(backend)
-
-		if len(mysql_backends_in_hostgroup) == 0:
-			raise Exception('No backends with a publicly exposed port were '
-							'found in hostgroup %d' % hostgroup)
-
-		# Pick a random container, extract its connection details
-		container = random.choice(mysql_backends_in_hostgroup)
-		for exposed_port in container.get('Ports', []):
-			if exposed_port['PrivatePort'] == 3306:
-				mysql_port = exposed_port['PublicPort']
-
-		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
-		hostname = config.get('ProxySQL', 'hostname')
-		username = username or config.get('ProxySQL', 'username')
-		password = password or config.get('ProxySQL', 'password')
-		mysql_connection = MySQLdb.connect(hostname,
-											username,
-											password,
-											port=mysql_port,
+		credentials = ProxySQLBaseTest.get_mysql_connection_credentials()
+		mysql_connection = MySQLdb.connect(host=credentials['hostname'],
+											user=credentials['username'],
+											passwd=credentials['password'],
+											port=int(credentials['port']),
 											db=db)
 		cursor = mysql_connection.cursor()
 		cursor.execute(query)
