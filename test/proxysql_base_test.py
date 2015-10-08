@@ -46,7 +46,7 @@ class ProxySQLBaseTest(TestCase):
 		"""
 
 		subprocess.call(["docker-compose", "stop"], cwd=cls.SCENARIO)
-		subprocess.call(["docker-compose", "rm", "--force"], cwd=cls.SCENARIO)
+		subprocess.call(["docker-compose", "rm", "-v --force"], cwd=cls.SCENARIO)
 
 	@classmethod
 	def _get_proxysql_container(cls):
