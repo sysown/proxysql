@@ -870,11 +870,12 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	// define queries
 	const char *Q1=(char *)"SELECT hostgroup_id FROM mysql_servers join mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup WHERE hostname='%s' AND port=%d AND status=0";
 	const char *Q2=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
-	const char *Q3=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
+	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
+	const char *Q3B=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q4=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q5=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
 	// define a buffer that will be used for all queries
-	char *query=(char *)malloc(strlen(hostname)+strlen(Q2)+32);
+	char *query=(char *)malloc(strlen(hostname)+strlen(Q3A)+32);
 	sprintf(query,Q1,hostname,port);
 
 	int cols=0;
@@ -908,7 +909,11 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				GloAdmin->save_mysql_servers_runtime_to_database(); // SAVE MYSQL SERVERS FROM RUNTIME
 				sprintf(query,Q2,hostname,port);
 				admindb->execute(query);
-				sprintf(query,Q3,hostname,port);
+				if (mysql_thread___monitor_writer_is_also_reader) {
+					sprintf(query,Q3A,hostname,port);
+				} else {
+					sprintf(query,Q3B,hostname,port);
+				}
 				admindb->execute(query);
 				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 			}
