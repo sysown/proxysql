@@ -1,5 +1,3 @@
-# We're using Ubuntu 14:04 because ProxySQL compilation needs one of the latest
-# g++ compilers. Also, it's a long term release.
 FROM centos:centos7
 MAINTAINER Andrei Ismail <iandrei@gmail.com>
 
