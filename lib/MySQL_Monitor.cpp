@@ -964,10 +964,6 @@ __end_monitor_read_only_loop:
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
-			SQLite3_result *result=new SQLite3_result(3);
-			result->add_column_definition(SQLITE_TEXT,"Host");
-			result->add_column_definition(SQLITE_TEXT,"Port");
-			result->add_column_definition(SQLITE_TEXT,"RO");
 			while (i>0) {
 				i--;
 				int read_only=1; // as a safety mechanism , read_only=1 is the default
@@ -1013,16 +1009,6 @@ __end_monitor_read_only_loop:
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 
-				char *pta[3];
-				char roport[10];
-				char roval[10];
-				pta[0]=mmsd->hostname;
-				sprintf(roport,"%d",mmsd->port);
-				pta[1]=roport;
-				sprintf(roval,"%d",read_only);
-				pta[2]=roval;
-				result->add_row(pta);
-
 				MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only);
 
 				delete mmsd;
@@ -1030,9 +1016,6 @@ __end_monitor_read_only_loop:
 			sqlite3_finalize(statement);
 			free(sds);
 
-			// we now have a resultset we will sent to MyHGM to perform all the switches
-			MyHGM->read_only_action(result);
-			delete result;
 		}
 
 

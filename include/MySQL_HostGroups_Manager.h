@@ -141,7 +141,6 @@ class MySQL_HostGroups_Manager {
 
 	void replication_lag_action(int, char*, unsigned int, int);
 	void read_only_action(char *hostname, int port, int read_only);
-	void read_only_action(SQLite3_result *result);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

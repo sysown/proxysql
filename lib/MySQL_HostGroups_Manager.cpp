@@ -866,11 +866,6 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 	return result;
 }
 
-void MySQL_HostGroups_Manager::read_only_action(SQLite3_result *result) {
-	wrlock();
-	wrunlock();
-}
-
 void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
 	// define queries
 	const char *Q1=(char *)"SELECT hostgroup_id FROM mysql_servers join mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup WHERE hostname='%s' AND port=%d AND status=0";
