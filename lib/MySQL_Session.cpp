@@ -788,6 +788,27 @@ handler_again:
 							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 							//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+
+
+							bool retry_conn=false;
+							switch (myerr) {
+								case 1290: // read-only
+									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+										retry_conn=true;
+									}
+									myds->destroy_MySQL_Connection_From_Pool();
+									myds->fd=0;
+									if (retry_conn) {
+										myds->DSS=STATE_NOT_INITIALIZED;
+										previous_status.push(PROCESSING_QUERY);
+										NEXT_IMMEDIATE(CONNECTING_SERVER);
+									}
+									return -1;
+									break;
+								default:
+									break; // continue normally
+							}
+
 							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 							CurrentQuery.end();
 							GloQPro->delete_QP_out(qpo);
