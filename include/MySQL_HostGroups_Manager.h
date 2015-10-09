@@ -89,6 +89,7 @@ class MyHGC {	// MySQL Host Group Container
 
 class MySQL_HostGroups_Manager {
 	private:
+	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
 	rwlock_t rwlock;
 	PtrArray *MyHostGroups;
@@ -97,6 +98,7 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_create(unsigned int);
 
 	void add(MySrvC *, unsigned int);
+	void purge_mysql_servers_table();
 	void generate_mysql_servers_table();
 	void generate_mysql_replication_hostgroups_table();
 	SQLite3_result *incoming_replication_hostgroups;
@@ -138,6 +140,7 @@ class MySQL_HostGroups_Manager {
 	void destroy_MyConn_from_pool(MySQL_Connection *);	
 
 	void replication_lag_action(int, char*, unsigned int, int);
+	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action(SQLite3_result *result);
 };
 

@@ -1023,6 +1023,8 @@ __end_monitor_read_only_loop:
 				pta[2]=roval;
 				result->add_row(pta);
 
+				MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only);
+
 				delete mmsd;
 			}
 			sqlite3_finalize(statement);

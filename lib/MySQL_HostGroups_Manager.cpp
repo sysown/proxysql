@@ -8,6 +8,7 @@
 //#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0, PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 
+extern ProxySQL_Admin *GloAdmin;
 
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -221,6 +222,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.myconnpoll_push=0;
 	status.myconnpoll_destroy=0;
 	spinlock_rwlock_init(&rwlock);
+	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	mydb->execute(MYHGM_MYSQL_SERVERS);
@@ -237,6 +239,9 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	}
 	delete MyHostGroups;
 	delete mydb;
+	if (admindb) {
+		delete admindb;
+	}
 }
 
 void MySQL_HostGroups_Manager::rdlock() {
@@ -282,6 +287,14 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 }
 
 bool MySQL_HostGroups_Manager::commit() {
+
+	// purge table
+	purge_mysql_servers_table();
+
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+	mydb->execute("DELETE FROM mysql_servers");
+	generate_mysql_servers_table();
+
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -303,6 +316,9 @@ bool MySQL_HostGroups_Manager::commit() {
 		}
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
+
+	mydb->execute("DELETE FROM mysql_servers");
+	generate_mysql_servers_table();
 
 // INSERT OR IGNORE INTO mysql_servers SELECT ... FROM mysql_servers_incoming
 //	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status, compression, max_connections) SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections FROM mysql_servers_incoming\n");
@@ -374,6 +390,24 @@ bool MySQL_HostGroups_Manager::commit() {
 	return true;
 }
 
+
+void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		MySrvC *mysrvc=NULL;
+		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+			mysrvc=myhgc->mysrvs->idx(j);
+			if (mysrvc->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				if (mysrvc->ConnectionsUsed->conns->len==0 && mysrvc->ConnectionsFree->conns->len==0) {
+					// no more connections for OFFLINE_HARD server, removing it
+					mysrvc=(MySrvC *)myhgc->mysrvs->servers->remove_index_fast(j);
+					delete mysrvc;
+				}
+			}
+		}
+	}
+}
+
 void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 	proxy_info("New mysql_servers table\n");
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
@@ -426,6 +460,14 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	wrlock();
+
+	// purge table
+	purge_mysql_servers_table();
+
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+	mydb->execute("DELETE FROM mysql_servers");
+	generate_mysql_servers_table();
+
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -827,4 +869,70 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 void MySQL_HostGroups_Manager::read_only_action(SQLite3_result *result) {
 	wrlock();
 	wrunlock();
+}
+
+void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
+	// define queries
+	const char *Q1=(char *)"SELECT hostgroup_id FROM mysql_servers join mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup WHERE hostname='%s' AND port=%d AND status=0";
+	const char *Q2=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
+	const char *Q3=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
+	const char *Q4=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
+	const char *Q5=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
+	// define a buffer that will be used for all queries
+	char *query=(char *)malloc(strlen(hostname)+strlen(Q2)+32);
+	sprintf(query,Q1,hostname,port);
+
+	int cols=0;
+	char *error=NULL;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	wrlock();
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	wrunlock();
+	int num_rows=0;
+	if (resultset) {
+		num_rows=resultset->rows_count;
+		delete resultset;
+	}
+
+	if (GloAdmin==NULL) {
+		// quick exit
+		free(query);
+		return;
+	}
+
+	if (admindb==NULL) { // we initialize admindb only if needed
+		admindb=new SQLite3DB();
+		admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
+	}
+
+	switch (read_only) {
+		case 0:
+			if (num_rows==0) {
+				// the server has read_only=0 , but we can't find any writer, so we perform a swap
+				GloAdmin->save_mysql_servers_runtime_to_database(); // SAVE MYSQL SERVERS FROM RUNTIME
+				sprintf(query,Q2,hostname,port);
+				admindb->execute(query);
+				sprintf(query,Q3,hostname,port);
+				admindb->execute(query);
+				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+			}
+			break;
+		case 1:
+			if (num_rows) {
+				// the server has read_only=1 , but we find it as writer, so we perform a swap
+				GloAdmin->save_mysql_servers_runtime_to_database(); // SAVE MYSQL SERVERS FROM RUNTIME
+				sprintf(query,Q4,hostname,port);
+				admindb->execute(query);
+				sprintf(query,Q5,hostname,port);
+				admindb->execute(query);
+				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+			}
+			break;
+		default:
+			assert(0);
+			break;
+	}
+
+	free(query);
 }
