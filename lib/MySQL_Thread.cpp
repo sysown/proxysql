@@ -149,6 +149,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_connect_timeout",
 	(char *)"monitor_ping_interval",
 	(char *)"monitor_ping_timeout",
+	(char *)"monitor_read_only_interval",
+	(char *)"monitor_read_only_timeout",
 	(char *)"monitor_replication_lag_interval",
 	(char *)"monitor_replication_lag_timeout",
 	(char *)"monitor_username",
@@ -158,6 +160,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_query_interval",
 	(char *)"monitor_query_timeout",
 	(char *)"monitor_timer_cached",
+	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_transaction_time",
 	(char *)"threshold_query_length",
 	(char *)"threshold_resultset_size",
@@ -213,6 +216,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_connect_timeout=200;
 	variables.monitor_ping_interval=60000;
 	variables.monitor_ping_timeout=100;
+	variables.monitor_read_only_interval=1000;
+	variables.monitor_read_only_timeout=100;
 	variables.monitor_replication_lag_interval=10000;
 	variables.monitor_replication_lag_timeout=1000;
 	variables.monitor_query_interval=60000;
@@ -222,6 +227,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_query_variables=strdup((char *)"SELECT * FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES");
 	variables.monitor_query_status=strdup((char *)"SELECT * FROM INFORMATION_SCHEMA.GLOBAL_STATUS");
 	variables.monitor_timer_cached=true;
+	variables.monitor_writer_is_also_reader=true;
 	variables.max_transaction_time=4*3600*1000;
 	variables.threshold_query_length=512*1024;
 	variables.threshold_resultset_size=4*1024*1024;
@@ -357,11 +363,14 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 		if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
 		if (!strcasecmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
 		if (!strcasecmp(name,"monitor_ping_timeout")) return (int)variables.monitor_ping_timeout;
+		if (!strcasecmp(name,"monitor_read_only_interval")) return (int)variables.monitor_read_only_interval;
+		if (!strcasecmp(name,"monitor_read_only_timeout")) return (int)variables.monitor_read_only_timeout;
 		if (!strcasecmp(name,"monitor_replication_lag_interval")) return (int)variables.monitor_replication_lag_interval;
 		if (!strcasecmp(name,"monitor_replication_lag_timeout")) return (int)variables.monitor_replication_lag_timeout;
 		if (!strcasecmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
 		if (!strcasecmp(name,"monitor_query_timeout")) return (int)variables.monitor_query_timeout;
 		if (!strcasecmp(name,"monitor_timer_cached")) return (int)variables.monitor_timer_cached;
+		if (!strcasecmp(name,"monitor_writer_is_also_reader")) return (int)variables.monitor_writer_is_also_reader;
 	}
 	if (!strcasecmp(name,"shun_on_failures")) return (int)variables.shun_on_failures;
 	if (!strcasecmp(name,"shun_recovery_time")) return (int)variables.shun_recovery_time;
@@ -430,6 +439,14 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			sprintf(intbuf,"%d",variables.monitor_ping_timeout);
 			return strdup(intbuf);
 		}
+		if (!strcasecmp(name,"monitor_read_only_interval")) {
+			sprintf(intbuf,"%d",variables.monitor_read_only_interval);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_read_only_timeout")) {
+			sprintf(intbuf,"%d",variables.monitor_read_only_timeout);
+			return strdup(intbuf);
+		}
 		if (!strcasecmp(name,"monitor_replication_lag_interval")) {
 			sprintf(intbuf,"%d",variables.monitor_replication_lag_interval);
 			return strdup(intbuf);
@@ -448,6 +465,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_timer_cached")) {
 			return strdup((variables.monitor_timer_cached ? "true" : "false"));
+		}
+		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
+			return strdup((variables.monitor_writer_is_also_reader ? "true" : "false"));
 		}
 	}
 	if (!strcasecmp(name,"default_charset")) {
@@ -665,6 +685,24 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 				return false;
 			}
 		}
+		if (!strcasecmp(name,"monitor_read_only_interval")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv <= 7*24*3600*1000) {
+				variables.monitor_read_only_interval=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_read_only_timeout")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv <= 600*1000) {
+				variables.monitor_read_only_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
 		if (!strcasecmp(name,"monitor_replication_lag_interval")) {
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 7*24*3600*1000) {
@@ -708,6 +746,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			}
 			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 				variables.monitor_timer_cached=false;
+				return true;
+			}
+			return false;
+		}
+		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
+			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+				variables.monitor_writer_is_also_reader=true;
+				return true;
+			}
+			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+				variables.monitor_writer_is_also_reader=false;
 				return true;
 			}
 			return false;
@@ -1646,11 +1695,14 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___monitor_query_status) free(mysql_thread___monitor_query_status);
 	mysql_thread___monitor_query_status=GloMTH->get_variable_string((char *)"monitor_query_status");
 	mysql_thread___monitor_timer_cached=(bool)GloMTH->get_variable_int((char *)"monitor_timer_cached");
+	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");
 	mysql_thread___monitor_history=GloMTH->get_variable_int((char *)"monitor_history");
 	mysql_thread___monitor_connect_interval=GloMTH->get_variable_int((char *)"monitor_connect_interval");
 	mysql_thread___monitor_connect_timeout=GloMTH->get_variable_int((char *)"monitor_connect_timeout");
 	mysql_thread___monitor_ping_interval=GloMTH->get_variable_int((char *)"monitor_ping_interval");
 	mysql_thread___monitor_ping_timeout=GloMTH->get_variable_int((char *)"monitor_ping_timeout");
+	mysql_thread___monitor_read_only_interval=GloMTH->get_variable_int((char *)"monitor_read_only_interval");
+	mysql_thread___monitor_read_only_timeout=GloMTH->get_variable_int((char *)"monitor_read_only_timeout");
 	mysql_thread___monitor_replication_lag_interval=GloMTH->get_variable_int((char *)"monitor_replication_lag_interval");
 	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
