@@ -8,6 +8,9 @@
 #define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
 #define STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT   0x00000008
+#define STATUS_MYSQL_CONNECTION_LOCK_TABLES          0x00000010
+#define STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE      0x00000020
+#define STATUS_MYSQL_CONNECTION_GET_LOCK             0x00000040
 
 
 class MySQL_Connection_userinfo {
@@ -82,10 +85,16 @@ class MySQL_Connection {
 
 	void set_status_transaction(bool);
 	void set_status_compression(bool);
+	void set_status_get_lock(bool);
+	void set_status_lock_tables(bool);
+	void set_status_temporary_table(bool);
 	void set_status_prepared_statement(bool);
 	void set_status_user_variable(bool);
 	bool get_status_transaction();
 	bool get_status_compression();
+	bool get_status_get_lock();
+	bool get_status_lock_tables();
+	bool get_status_temporary_table();
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
 	void connect_start();
@@ -114,5 +123,7 @@ class MySQL_Connection {
 	int async_ping(short event);
 	void async_free_result();
 	bool IsActiveTransaction();
+	bool MultiplexDisabled();
+	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

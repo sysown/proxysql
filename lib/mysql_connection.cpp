@@ -214,6 +214,30 @@ void MySQL_Connection::set_status_compression(bool v) {
 	}
 }
 
+void MySQL_Connection::set_status_get_lock(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_GET_LOCK;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_GET_LOCK;
+	}
+}
+
+void MySQL_Connection::set_status_lock_tables(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_LOCK_TABLES;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_LOCK_TABLES;
+	}
+}
+
+void MySQL_Connection::set_status_temporary_table(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
+	}
+}
+
 void MySQL_Connection::set_status_user_variable(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_USER_VARIABLE;
@@ -240,6 +264,18 @@ bool MySQL_Connection::get_status_compression() {
 
 bool MySQL_Connection::get_status_user_variable() {
 	return status_flags & STATUS_MYSQL_CONNECTION_USER_VARIABLE;
+}
+
+bool MySQL_Connection::get_status_get_lock() {
+	return status_flags & STATUS_MYSQL_CONNECTION_GET_LOCK;
+}
+
+bool MySQL_Connection::get_status_lock_tables() {
+	return status_flags & STATUS_MYSQL_CONNECTION_LOCK_TABLES;
+}
+
+bool MySQL_Connection::get_status_temporary_table() {
+	return status_flags & STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
 }
 
 bool MySQL_Connection::get_status_prepared_statement() {
@@ -883,4 +919,44 @@ bool MySQL_Connection::IsActiveTransaction() {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
 	}
 	return ret;
+}
+
+bool MySQL_Connection::MultiplexDisabled() {
+// status_flags stores information about the status of the connection
+// can be used to determine if multiplexing can be enabled or not
+	bool ret=false;
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK) ) {
+		ret=true;
+	}
+	return ret;
+}
+
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
+	if (query_digest_text==NULL) return;
+	if (get_status_user_variable()==false) { // we search for variables only if not already set
+		if (index(query_digest_text,'@')) {
+			set_status_user_variable(true);
+		}
+	}
+	if (get_status_temporary_table()==false) { // we search for temporary if not already set
+		if (!strncasecmp(query_digest_text,"CREATE TEMPORARY TABLE ", strlen("CREATE TEMPORARY TABLE "))) {
+			set_status_temporary_table(true);
+		}
+	}
+	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
+		if (!strncasecmp(query_digest_text,"LOCK TABLES", strlen("LOCK TABLES"))) {
+			set_status_lock_tables(true);
+		}
+	}
+	if (get_status_lock_tables()==true) {
+		if (!strncasecmp(query_digest_text,"UNLOCK TABLES", strlen("UNLOCK TABLES"))) {
+			set_status_lock_tables(false);
+		}
+	}
+	if (get_status_get_lock()==false) { // we search for get_lock if not already set
+		if (strcasestr(query_digest_text,"GET_LOCK(")) {
+			set_status_get_lock(true);
+		}
+	}
 }
