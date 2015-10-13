@@ -1,5 +1,5 @@
 proxysql:
-  build: ../base/proxysql
+  image: proxysql:{{proxysql_image}}
   links:
     - backend1hostgroup0
   ports:
@@ -10,11 +10,12 @@ proxysql:
     # gdbserver
     - "2345:2345"
   volumes:
+    # Sharing the data with 
     - /tmp/proxysql-tests:/opt/proxysql
   privileged: true
 
 backend1hostgroup0:
-  build: mysql
+  image: proxysql:mysql-simple-dump
   environment:
     MYSQL_ROOT_PASSWORD: root
   expose:
