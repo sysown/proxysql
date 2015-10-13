@@ -802,7 +802,7 @@ handler_again:
 							bool retry_conn=false;
 							switch (myerr) {
 								case 1290: // read-only
-									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 										retry_conn=true;
 									}
 									myds->destroy_MySQL_Connection_From_Pool();
