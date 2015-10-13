@@ -1,6 +1,13 @@
 FROM centos:centos7
 MAINTAINER Andrei Ismail <iandrei@gmail.com>
 
+LABEL vendor=proxysql\
+      com.proxysql.type=proxysql\
+      com.proxysql.os=centos7\
+      com.proxysql.interactive=false\
+      com.proxysql.config=simple\
+      com.proxysql.purpose=packaging
+
 RUN yum install -y automake
 RUN yum install -y bzip2
 RUN yum install -y cmake
