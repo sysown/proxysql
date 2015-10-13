@@ -143,6 +143,9 @@ unsigned long long Query_Info::query_parser_update_counters() {
 	return ret;
 }
 
+char * Query_Info::get_digest_text() {
+	return GloQPro->get_digest_text(QueryParserArgs);
+}
 
 void * MySQL_Session::operator new(size_t size) {
 	return l_alloc(size);
@@ -599,7 +602,7 @@ handler_again:
 				if (rc==0) {
 					myconn->async_state_machine=ASYNC_IDLE;
 					//if ((myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+					if ((myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->return_MySQL_Connection_To_Pool();
 					}
 					delete mybe->server_myds;
@@ -711,6 +714,12 @@ handler_again:
 					// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 					//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
 
+
+					// check if multiplexing needs to be disabled
+					char *qdt=CurrentQuery.get_digest_text();
+					if (qdt)
+						myconn->ProcessQueryAndSetStatusFlags(qdt);
+
 					// Support for LAST_INSERT_ID()
 					if (myconn->mysql->insert_id) {
 						last_insert_id=myconn->mysql->insert_id;
@@ -724,7 +733,7 @@ handler_again:
 					CurrentQuery.end();
 					myds->free_mysql_real_query();
 					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->DSS=STATE_NOT_INITIALIZED;
 						myds->return_MySQL_Connection_To_Pool();
 						if (transaction_persistent==true) {
@@ -747,7 +756,7 @@ handler_again:
 							}
 							bool retry_conn=false;
 							proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
 								// transfer to frontend has started, we cannot retry
 								} else {
@@ -769,7 +778,7 @@ handler_again:
 							// client error, serious
 							proxy_error("Detected a broken connection during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
 								// transfer to frontend has started, we cannot retry
 								} else {
@@ -788,6 +797,27 @@ handler_again:
 							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 							//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
+
+
+							bool retry_conn=false;
+							switch (myerr) {
+								case 1290: // read-only
+									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+										retry_conn=true;
+									}
+									myds->destroy_MySQL_Connection_From_Pool();
+									myds->fd=0;
+									if (retry_conn) {
+										myds->DSS=STATE_NOT_INITIALIZED;
+										previous_status.push(PROCESSING_QUERY);
+										NEXT_IMMEDIATE(CONNECTING_SERVER);
+									}
+									return -1;
+									break;
+								default:
+									break; // continue normally
+							}
+
 							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 							CurrentQuery.end();
 							GloQPro->delete_QP_out(qpo);
@@ -798,7 +828,7 @@ handler_again:
 							client_myds->DSS=STATE_SLEEP;
 							myds->free_mysql_real_query();
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								myds->DSS=STATE_NOT_INITIALIZED;
 								myds->return_MySQL_Connection_To_Pool();
 							} else {
@@ -847,7 +877,7 @@ handler_again:
 							// client error, serious
 							proxy_error("Detected a broken connection during change user: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
 							myds->destroy_MySQL_Connection_From_Pool();
@@ -913,7 +943,7 @@ handler_again:
 							// client error, serious
 							proxy_error("Detected a broken connection during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
 							myds->destroy_MySQL_Connection_From_Pool();
@@ -970,7 +1000,7 @@ handler_again:
 							// client error, serious
 							proxy_error("Detected a broken connection during INIT_DB: %d, %s\n", myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
 							myds->destroy_MySQL_Connection_From_Pool();

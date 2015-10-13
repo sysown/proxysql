@@ -45,8 +45,7 @@ class ConfigFileParsingTest(ProxySQLBaseTest):
 				mysql_variables[k[6:]] = v
 
 		self.assertEqual(mysql_variables['connect_timeout_server'], '5000')
-		self.assertEqual(mysql_variables['connect_timeout_server_error'], "#2003:Can\\'t connect to MySQL server (ProxySQL)")
-		self.assertEqual(mysql_variables['default_charset'], '30')
+		self.assertEqual(mysql_variables['default_charset'], 'utf8')
 		self.assertEqual(mysql_variables['have_compress'], 'false')
 		self.assertEqual(mysql_variables['monitor_history'], '300000')
 		self.assertEqual(mysql_variables['monitor_connect_interval'], '120000')
@@ -69,11 +68,9 @@ class ConfigFileParsingTest(ProxySQLBaseTest):
 		self.assertEqual(mysql_variables['server_version'], '5.1.31')
 		self.assertEqual(mysql_variables['commands_stats'], 'true')
 		self.assertEqual(mysql_variables['servers_stats'], 'false')
-		self.assertEqual(mysql_variables['session_debug'], 'false')
 		self.assertEqual(mysql_variables['stacksize'], '2097152')
 		self.assertEqual(mysql_variables['threads'], '2')
 
 		self.assertEqual(admin_variables['admin_credentials'], 'admin2:admin2')
 		self.assertEqual(admin_variables['mysql_ifaces'], '0.0.0.0:6032')
 		self.assertEqual(admin_variables['refresh_interval'], '2000')
-		self.assertEqual(admin_variables['debug'], 'true')

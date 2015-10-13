@@ -893,6 +893,12 @@ void Query_Processor::update_query_digest(void *p, MySQL_Connection_userinfo *ui
 	spin_wrunlock(&digest_rwlock);
 }
 
+char * Query_Processor::get_digest_text(void *p) {
+	if (p==NULL) return NULL;
+	SQP_par_t *qp=(SQP_par_t *)p;
+	return qp->digest_text;
+}
+
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *args) {
 	SQP_par_t *qp=(SQP_par_t *)args;
 	while (libinjection_sqli_tokenize(&qp->sf)) {

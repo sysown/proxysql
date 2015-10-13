@@ -27,5 +27,6 @@ RUN cd /opt/sysbench; ./autogen.sh; ./configure --bindir=/usr/bin; make; make in
 ADD ./proxysql.cnf /etc/
 RUN mkdir -p /var/run/proxysql
 ADD ./compile_and_start_proxysql.sh /tmp/
+RUN chmod +x /tmp/compile_and_start_proxysql.sh
 
 CMD ["/tmp/compile_and_start_proxysql.sh"]

@@ -5,7 +5,7 @@
 
 #define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port))"
-
+#define MYHGM_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , UNIQUE (reader_hostgroup))"
 
 class MySrvConnList;
 class MySrvC;
@@ -89,6 +89,7 @@ class MyHGC {	// MySQL Host Group Container
 
 class MySQL_HostGroups_Manager {
 	private:
+	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
 	rwlock_t rwlock;
 	PtrArray *MyHostGroups;
@@ -97,7 +98,10 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_create(unsigned int);
 
 	void add(MySrvC *, unsigned int);
+	void purge_mysql_servers_table();
 	void generate_mysql_servers_table();
+	void generate_mysql_replication_hostgroups_table();
+	SQLite3_result *incoming_replication_hostgroups;
 
 	public:
 	struct {
@@ -119,8 +123,10 @@ class MySQL_HostGroups_Manager {
 	bool server_add(unsigned int hid, char *add, uint16_t p=3306, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0);
 	bool commit();
 
+	void set_incoming_replication_hostgroups(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
+	SQLite3_result *dump_table_mysql_replication_hostgroups();
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
@@ -134,6 +140,7 @@ class MySQL_HostGroups_Manager {
 	void destroy_MyConn_from_pool(MySQL_Connection *);	
 
 	void replication_lag_action(int, char*, unsigned int, int);
+	void read_only_action(char *hostname, int port, int read_only);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
