@@ -1,5 +1,13 @@
 FROM ubuntu:12.04
 MAINTAINER Andrei Ismail <iandrei@gmail.com>
+
+LABEL vendor=proxysql\
+      com.proxysql.type=proxysql\
+      com.proxysql.os=ubuntu12\
+      com.proxysql.interactive=false\
+      com.proxysql.config=simple\
+      com.proxysql.purpose=packaging
+
 RUN apt-get update && apt-get install -y\
     automake\
     cmake\

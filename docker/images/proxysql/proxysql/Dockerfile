@@ -1,5 +1,13 @@
 FROM ubuntu:14.04
 MAINTAINER Andrei Ismail <iandrei@gmail.com>
+
+LABEL vendor=proxysql\
+      com.proxysql.type=proxysql\
+      com.proxysql.os=ubuntu14\
+      com.proxysql.interactive=false\
+      com.proxysql.config=simple\
+      com.proxysql.purpose=testing
+
 RUN apt-get update && apt-get install -y\
 	automake\
 	cmake\
