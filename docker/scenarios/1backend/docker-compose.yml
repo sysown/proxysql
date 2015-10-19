@@ -11,7 +11,7 @@ proxysql:
     - "2345:2345"
   volumes:
     # Sharing the data with 
-    - /tmp/proxysql-tests:/opt/proxysql
+    - /tmp/proxysql-tests:/tmp/proxysql-src
   privileged: true
 
 backend1hostgroup0:

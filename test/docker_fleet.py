@@ -534,3 +534,34 @@ class DockerFleet(object):
 		mysql_connection.close()
 		if return_result:
 			return rows
+
+	def commit_proxysql_image(self, label):
+		"""Given a Docker image used within the ProxySQL tests, commit it."""
+
+		# Run "docker ps" on the proxysql containers and build a
+		# label -> container_id mapping.
+		args = ["docker", "ps", "--filter", "label=vendor=proxysql"]
+		p = subprocess.Popen(args, stdout=subprocess.PIPE)
+		out, _ = p.communicate()
+		lines = out.split('\n')
+		nonemtpy_lines = [l for l in lines if len(l.strip()) > 0]
+
+		results = nonemtpy_lines[1:]
+		images = {}
+		for (i, r) in enumerate(results):
+			tokens = r.split(' ')
+			nonempty_tokens = [t for t in tokens if len(t.strip()) > 0]
+			images[nonempty_tokens[1]] = nonempty_tokens[0]
+
+		# Having built the mapping, see if the specified image is in the
+		# currently running images. If it is, `docker commit` it.
+		# 
+		# TODO(aismail): improve this to use `docker ps --filter`. Couldn't get
+		# that one to work correctly.
+		key = "proxysql:%s" % label
+		if key in images:
+			args = ["docker", "commit", images[key], key]
+			subprocess.call(args)
+			return True
+		else:
+			return False
