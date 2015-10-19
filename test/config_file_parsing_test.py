@@ -1,9 +1,7 @@
 from proxysql_base_test import ProxySQLBaseTest
 
 class ConfigFileParsingTest(ProxySQLBaseTest):
-
-	SCENARIO = "./scenarios/1backend-complex-config"
-
+	
 	# The complex config scenario includes a configuration file
 	# where most of the values of the configurations are changed in order to
 	# detect whether ProxySQL is actually able to parse them correctly from the

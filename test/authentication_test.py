@@ -6,10 +6,6 @@ from proxysql_base_test import ProxySQLBaseTest
 
 class AuthenticationTest(ProxySQLBaseTest):
 
-	SCENARIO = "./scenarios/1backend"
-
-	def test_existing_user_with_correct_password_works(self):
-		version1 = ProxySQLBaseTest.run_query_mysql(
 								"SELECT @@version_comment LIMIT 1", "test",
 								return_result=True,
 								username="john", password="doe")
