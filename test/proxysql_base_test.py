@@ -41,8 +41,7 @@ class ProxySQLBaseTest(TestCase):
 		#self._stop_proxysql_pings()
 		pass
 
-	@classmethod
-	def run_sysbench_proxysql(cls, threads=4, time=60, db="test",
+	def run_sysbench_proxysql(self, threads=4, time=60, db="test",
 								username=None, password=None, port=None):
 		"""Runs a sysbench test with the given parameters against the given
 		ProxySQL instance.
@@ -52,8 +51,8 @@ class ProxySQLBaseTest(TestCase):
 		container with it.
 		"""
 
-		proxysql_container_id = ProxySQLBaseTest._get_proxysql_container()['Id']
-		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
+		proxysql_container_id = self.docker_fleet.get_proxysql_container()['Id']
+		config = ProxySQL_Tests_Config(overrides=ProxySQLBaseTest.CONFIG_OVERRIDES)
 		hostname = config.get('ProxySQL', 'hostname')
 		username = username or config.get('ProxySQL', 'username')
 		password = password or config.get('ProxySQL', 'password')
@@ -79,12 +78,11 @@ class ProxySQLBaseTest(TestCase):
 					 "--mysql-port=%s" % port
 				 ]
 
-		cls.run_bash_command_within_proxysql(params + ["prepare"])
-		cls.run_bash_command_within_proxysql(params + ["run"])
-		cls.run_bash_command_within_proxysql(params + ["cleanup"])
+		self.run_bash_command_within_proxysql(params + ["prepare"])
+		self.run_bash_command_within_proxysql(params + ["run"])
+		self.run_bash_command_within_proxysql(params + ["cleanup"])
 
-	@classmethod
-	def run_bash_command_within_proxysql(cls, params):
+	def run_bash_command_within_proxysql(self, params):
 		"""Run a bash command given as an array of tokens within the ProxySQL
 		container.
 
@@ -94,12 +92,11 @@ class ProxySQLBaseTest(TestCase):
 		- running various debugging commands against the ProxySQL instance
 		"""
 
-		proxysql_container_id = cls._get_proxysql_container()['Id']
+		proxysql_container_id = self.docker_fleet.get_proxysql_container()['Id']
 		exec_params = ["docker", "exec", proxysql_container_id] + params
 		subprocess.call(exec_params)
 
-	@classmethod
-	def _compile_host_proxysql(cls):
+	def _compile_host_proxysql(self):
 		"""Compile ProxySQL on the Docker host from which we're running the
 		tests.
 
@@ -112,8 +109,7 @@ class ProxySQLBaseTest(TestCase):
 		subprocess.call(["make", "clean"])
 		subprocess.call(["make"])
 
-	@classmethod
-	def _connect_gdb_to_proxysql_within_container(cls):
+	def _connect_gdb_to_proxysql_within_container(self):
 		"""Connect a local gdb running on the docker host to the remote
 		ProxySQL binary for remote debugging.
 
@@ -126,22 +122,20 @@ class ProxySQLBaseTest(TestCase):
 		shut down the process later on.
 		"""
 
-		cls._gdb_process = subprocess.Popen(["gdb", "--command=gdb-commands.txt",
-											 "./proxysql"],
-											cwd="./src")
+		self._gdb_process = subprocess.Popen(["gdb", "--command=gdb-commands.txt",
+												"./proxysql"],
+												cwd="./src")
 
-	@classmethod
-	def _start_proxysql_pings(cls):
+	def _start_proxysql_pings(self):
 		"""During the running of the tests, the test suite will continuously
 		monitor the ProxySQL daemon in order to check that it's up.
 
 		This special thread will do exactly that."""
-		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
-		cls.ping_thread = ProxySQL_Ping_Thread(config)
-		cls.ping_thread.start()
+		config = ProxySQL_Tests_Config(overrides=ProxySQLBaseTest.CONFIG_OVERRIDES)
+		self.ping_thread = ProxySQL_Ping_Thread(config)
+		self.ping_thread.start()
 
-	@classmethod
-	def _stop_proxysql_pings(cls):
+	def _stop_proxysql_pings(self):
 		"""Stop the special thread which pings the ProxySQL daemon."""
 		self.ping_thread.stop()
 		self.ping_thread.join()
