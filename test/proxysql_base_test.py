@@ -1,8 +1,5 @@
 import os
 import os.path
-import random
-import re
-import shutil
 import subprocess
 import time
 from unittest import TestCase
@@ -11,6 +8,7 @@ from docker import Client
 from docker.utils import kwargs_from_env
 import MySQLdb
 
+from docker_fleet import DockerFleet
 from proxysql_ping_thread import ProxySQL_Ping_Thread
 from proxysql_tests_config import ProxySQL_Tests_Config
 
@@ -22,216 +20,20 @@ class ProxySQLBaseTest(TestCase):
 	# Custom, per-test, config overrides
 	CONFIG_OVERRIDES = {}
 
-	@classmethod
-	def _startup_docker_services(cls):
-		"""Start up all the docker services necessary to start this test.
+	def setUp(self):
+		self.docker_fleet = DockerFleet(config_overrides=ProxySQLBaseTest.CONFIG_OVERRIDES)
 
-		They are specified in the docker compose file specified in the variable
-		cls.SCENARIO.
-		"""
+		# TODO(aismail): revive interactive mode
+		#if cls.INTERACTIVE_TEST:
+		#	cls._compile_host_proxysql()
+		#	cls._connect_gdb_to_proxysql_within_container()
+		#self._start_proxysql_pings()
 
-		# We have to perform docker-compose build + docker-compose up,
-		# instead of just doing the latter because of a bug which will give a
-		# 500 internal error for the Docker bug. When this is fixed, we should
-		# remove this first extra step.
-		subprocess.call(["docker-compose", "build"], cwd=cls.SCENARIO)
-		subprocess.call(["docker-compose", "up", "-d"], cwd=cls.SCENARIO)
+	def tearDown(self):
+		# TODO(aismail): revive interactive mode
+		#if cls.INTERACTIVE_TEST:
+		#	cls._gdb_process.wait()
 
-	@classmethod
-	def _shutdown_docker_services(cls):
-		"""Shut down all the docker services necessary to start this test.
-
-		They are specified in the docker compose file specified in the variable
-		cls.SCENARIO.
-		"""
-
-		subprocess.call(["docker-compose", "stop"], cwd=cls.SCENARIO)
-		subprocess.call(["docker-compose", "rm", "-v --force"], cwd=cls.SCENARIO)
-
-	@classmethod
-	def _get_proxysql_container(cls):
-		"""Out of all the started docker containers, select the one which
-		represents the proxy instance.
-
-		Note that this only supports one proxy instance for now. This method
-		relies on interogating the Docker daemon via its REST API.
-		"""
-
-		containers = Client(**kwargs_from_env()).containers()
-		for container in containers:
-			if 'proxysql' in container['Image']:
-				return container
-
-	@classmethod
-	def _get_mysql_containers(cls):
-		"""Out of all the started docker containers, select the ones which
-		represent the MySQL backend instances.
-
-		This method relies on interogating the Docker daemon via its REST API.
-		"""
-
-		result = []
-		containers = Client(**kwargs_from_env()).containers()
-		for container in containers:
-			if 'proxysql' not in container['Image']:
-				result.append(container)
-		return result
-
-	@classmethod
-	def _populate_mysql_containers_with_dump(cls):
-		"""Populates the started MySQL backend containers with the specified
-		SQL dump file.
-
-		The reason for doing this __after__ the containers are started is
-		because we want to keep them as generic as possible.
-		"""
-
-		mysql_containers = cls._get_mysql_containers()
-		# We have already added the SQL dump to the container by using
-		# the ADD mysql command in the Dockerfile for mysql -- check it
-		# out. The standard agreed location is at /tmp/schema.sql.
-		#
-		# Unfortunately we can't do this step at runtime due to limitations
-		# on how transfer between host and container is supposed to work by
-		# design. See the Dockerfile for MySQL for more details.
-		for mysql_container in mysql_containers:
-			container_id = mysql_container['Names'][0][1:]
-			subprocess.call(["docker", "exec", container_id, "bash", "/tmp/import_schema.sh"])
-
-	@classmethod
-	def _extract_hostgroup_from_container_name(cls, container_name):
-		"""MySQL backend containers are named using a naming convention:
-		backendXhostgroupY, where X and Y can be multi-digit numbers.
-		This extracts the value of the hostgroup from the container name.
-
-		I made this choice because I wasn't able to find another easy way to
-		associate arbitrary metadata with a Docker container through the
-		docker compose file.
-		"""
-
-		service_name = container_name.split('_')[1]
-		return int(re.search(r'BACKEND(\d+)HOSTGROUP(\d+)', service_name).group(2))
-
-	@classmethod
-	def _extract_port_number_from_uri(cls, uri):
-		"""Given a Docker container URI (exposed as an environment variable by
-		the host linking mechanism), extract the TCP port number from it."""
-		return int(uri.split(':')[2])
-
-	@classmethod
-	def _get_environment_variables_from_container(cls, container_name):
-		"""Retrieve the environment variables from the given container.
-
-		This is useful because the host linking mechanism will expose
-		connectivity information to the linked hosts by the use of environment
-		variables.
-		"""
-
-		output = Client(**kwargs_from_env()).execute(container_name, 'env')
-		result = {}
-		lines = output.split('\n')
-		for line in lines:
-			line = line.strip()
-			if len(line) == 0:
-				continue
-			(k, v) = line.split('=')
-			result[k] = v
-		return result
-
-	@classmethod
-	def _populate_proxy_configuration_with_backends(cls):
-		"""Populate ProxySQL's admin information with the MySQL backends
-		and their associated hostgroups.
-
-		This is needed because I do not want to hardcode this into the ProxySQL
-		config file of the test scenario, as it leaves more room for quick
-		iteration.
-
-		In order to configure ProxySQL with the correct backends, we are using
-		the MySQL admin interface of ProxySQL, and inserting rows into the
-		`mysql_servers` table, which contains a list of which servers go into
-		which hostgroup.
-		"""
-		config = ProxySQL_Tests_Config(overrides=cls.CONFIG_OVERRIDES)
-		proxysql_container = cls._get_proxysql_container()
-		mysql_containers = cls._get_mysql_containers()
-		environment_variables = cls._get_environment_variables_from_container(
-											 proxysql_container['Names'][0][1:])
-
-		proxy_admin_connection = MySQLdb.connect(config.get('ProxySQL', 'hostname'),
-												config.get('ProxySQL', 'admin_username'),
-												config.get('ProxySQL', 'admin_password'),
-												port=int(config.get('ProxySQL', 'admin_port')))
-		cursor = proxy_admin_connection.cursor()
-
-		for mysql_container in mysql_containers:
-			container_name = mysql_container['Names'][0][1:].upper()
-			port_uri = environment_variables['%s_PORT' % container_name]
-			port_no = cls._extract_port_number_from_uri(port_uri)
-			ip = environment_variables['%s_PORT_%d_TCP_ADDR' % (container_name, port_no)]
-			hostgroup = cls._extract_hostgroup_from_container_name(container_name)
-			cursor.execute("INSERT INTO mysql_servers(hostgroup_id, hostname, port, status) "
-							"VALUES(%d, '%s', %d, 'ONLINE')" %
-							(hostgroup, ip, port_no))
-
-		cursor.execute("LOAD MYSQL SERVERS TO RUNTIME")
-		cursor.close()
-		proxy_admin_connection.close()
-
-	@classmethod
-	def onerror(cls, function, path, excinfo):
-		print("Error while trying to delete %s: %r" % (path, excinfo))
-
-	@classmethod
-	def setUpClass(cls):
-		# Always shutdown docker services because the previous test might have
-		# left them in limbo.
-		cls._shutdown_docker_services()
-
-		try:
-			if os.path.exists('/tmp/proxysql-tests'):
-				shutil.rmtree('/tmp/proxysql-tests/', onerror=cls.onerror)
-		except:
-			pass
-
-		os.mkdir('/tmp/proxysql-tests')
-		os.system("cp -R " + os.path.dirname(__file__) + "/../* /tmp/proxysql-tests")
-		
-		cls._startup_docker_services()
-
-		if cls.INTERACTIVE_TEST:
-			cls._compile_host_proxysql()
-			cls._connect_gdb_to_proxysql_within_container()
-
-		# First, wait for all backend servers to have their internal MySQL
-		# started up
-		mysql_credentials = cls.get_all_mysql_connection_credentials()
-		for credential in mysql_credentials:
-			cls.wait_for_mysql_connection_ok(**credential)
-		proxysql_credentials = cls.get_proxysql_connection_credentials()
-		cls.wait_for_mysql_connection_ok(**proxysql_credentials)
-		proxysql_admin_credentials = cls.get_proxysql_admin_connection_credentials()
-		cls.wait_for_mysql_connection_ok(**proxysql_admin_credentials)
-
-		# admin_test would be failing without this. Basically it means that
-		# ProxySQL doesn't seem to behave well when starting it and stopping it
-		# immediately after that.
-		time.sleep(5)
-
-		cls._populate_mysql_containers_with_dump()
-		cls._populate_proxy_configuration_with_backends()
-		cls._start_proxysql_pings()
-
-	@classmethod
-	def tearDownClass(cls):
-		try:
-			cls.run_query_proxysql_admin("PROXYSQL SHUTDOWN")
-		except:
-			# This will throw an exception because it will forcefully shut down
-			# the connection with the MySQL client.
-			pass
-		if cls.INTERACTIVE_TEST:
-			cls._gdb_process.wait()
 		# It's essential that pings are stopped __after__ the gdb process has
 		# finished. This allows them to keep pinging ProxySQL in the background
 		# while it's stuck waiting for user interaction (user interaction needed
