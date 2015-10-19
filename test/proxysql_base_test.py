@@ -157,3 +157,28 @@ class ProxySQLBaseTest(TestCase):
 		return self.docker_fleet.run_query_mysql(query, db, return_result,
 													hostgroup,
 													username, password)
+
+	def run_in_docker_scenarios(self, f):
+		"""Runs a function in a number of docker scenarios.
+
+		This is a helper for running your test assertions against different
+		configurations without having to go the extra mile.
+		"""
+		
+		scenarios = self.docker_fleet.generate_scenarios()
+		committed_images = set()
+		copy_folder = True
+		delete_folder = True
+		for (i, scenario) in enumerate(scenarios):
+			copy_folder = (i == 0)
+			delete_folder = (i == len(scenarios) - 1)
+
+			folder = self.docker_fleet.start_temp_scenario(scenario, copy_folder)
+			f()
+			if scenario['proxysql_image'] not in committed_images:
+				self.docker_fleet.commit_proxysql_image(scenario['proxysql_image'])
+				committed_images.add(scenario['proxysql_image'])
+			if scenario['mysql_image'] not in committed_images:
+				self.docker_fleet.commit_proxysql_image(scenario['mysql_image'])
+				committed_images.add(scenario['mysql_image'])
+			self.docker_fleet.stop_temp_scenario(folder, delete_folder)
