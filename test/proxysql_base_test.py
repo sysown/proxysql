@@ -41,7 +41,6 @@ class ProxySQLBaseTest(TestCase):
 		#self._stop_proxysql_pings()
 		pass
 
-		shutil.rmtree('/tmp/proxysql-tests/')
 	
 	@classmethod
 	def run_query_proxysql(cls, query, db, 
