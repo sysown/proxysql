@@ -14,6 +14,16 @@ proxysql:
     - /tmp/proxysql-tests:/tmp/proxysql-src
   privileged: true
 
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.config": "simple"
+    "com.proxysql.interactive": "false"
+    "com.proxysql.os": "ubuntu14"
+    "com.proxysql.purpose": "testing"
+    "com.proxysql.type": "proxysql"
+    "vendor": "proxysql"
+
 backend1hostgroup0:
   image: proxysql:mysql-simple-dump
   environment:
@@ -22,3 +32,8 @@ backend1hostgroup0:
     - "3306"
   ports:
     - "13306:3306"
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.type": "mysql"
+    "vendor": "proxysql"
