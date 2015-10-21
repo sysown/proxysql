@@ -51,7 +51,6 @@ class ProxySQLBaseTest(TestCase):
 		container with it.
 		"""
 
-		proxysql_container_id = self.docker_fleet.get_proxysql_container()['Id']
 		config = ProxySQL_Tests_Config(overrides=ProxySQLBaseTest.CONFIG_OVERRIDES)
 		hostname = config.get('ProxySQL', 'hostname')
 		username = username or config.get('ProxySQL', 'username')
@@ -92,7 +91,7 @@ class ProxySQLBaseTest(TestCase):
 		- running various debugging commands against the ProxySQL instance
 		"""
 
-		proxysql_container_id = self.docker_fleet.get_proxysql_container()['Id']
+		proxysql_container_id = self.docker_fleet.get_proxysql_container()
 		exec_params = ["docker", "exec", proxysql_container_id] + params
 		subprocess.call(exec_params)
 
