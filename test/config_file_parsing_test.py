@@ -1,9 +1,10 @@
 from proxysql_base_test import ProxySQLBaseTest
 
+# TODO(aismail): re-enable this test once ProxySQLBaseTest.run_in_docker_scenarios
+# gets some filtering capabilities on which types of scenarios to run, etc.
+"""
 class ConfigFileParsingTest(ProxySQLBaseTest):
-
-	SCENARIO = "./scenarios/1backend-complex-config"
-
+	
 	# The complex config scenario includes a configuration file
 	# where most of the values of the configurations are changed in order to
 	# detect whether ProxySQL is actually able to parse them correctly from the
@@ -18,24 +19,23 @@ class ConfigFileParsingTest(ProxySQLBaseTest):
 		}
 	}
 
-	def test_parse_config_file_to_admin_db(self):
-		"""ProxySQL keeps its configuration in an admin database, so that it
+	def _test_parse_config_file_to_admin_db(self):
+		ProxySQL keeps its configuration in an admin database, so that it
 		is available for inspection at runtime as well.
 
 		For the initial run, the configuration file is parsed into this admin
 		database. We will test that the correct values of the variables
 		exposed in the config file are exposed via the admin interface that
 		is accessible through MySQL.
-		"""
 
-		users = ConfigFileParsingTest.run_query_proxysql_admin("SELECT COUNT(*) FROM mysql_users")
+		users = self.run_query_proxysql_admin("SELECT COUNT(*) FROM mysql_users")
 		self.assertEqual(int(users[0][0]), 2)
 
-		servers = ConfigFileParsingTest.run_query_proxysql_admin("SELECT COUNT(*) FROM mysql_servers")
+		servers = self.run_query_proxysql_admin("SELECT COUNT(*) FROM mysql_servers")
 		# 3 in the config file, 1 auto-populated by the test
 		self.assertEqual(int(servers[0][0]), 4)
 
-		variables = ConfigFileParsingTest.run_query_proxysql_admin("SELECT * FROM global_variables")
+		variables = self.run_query_proxysql_admin("SELECT * FROM global_variables")
 		mysql_variables = {}
 		admin_variables = {}
 		for (k, v) in variables:
@@ -74,3 +74,8 @@ class ConfigFileParsingTest(ProxySQLBaseTest):
 		self.assertEqual(admin_variables['admin_credentials'], 'admin2:admin2')
 		self.assertEqual(admin_variables['mysql_ifaces'], '0.0.0.0:6032')
 		self.assertEqual(admin_variables['refresh_interval'], '2000')
+
+	def test_parse_config_file_to_admin_db(self):
+		self.run_in_docker_scenarios(self._test_parse_config_file_to_admin_db)
+
+"""
