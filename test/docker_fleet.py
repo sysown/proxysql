@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import json
 import os
 from os import path
 import random
@@ -9,8 +10,6 @@ import subprocess
 import tempfile
 import time
 
-from docker import Client
-from docker.utils import kwargs_from_env
 from jinja2 import Template
 import MySQLdb
 
@@ -67,10 +66,7 @@ class DockerFleet(object):
 		for k, v in filters.iteritems():
 			args.append("--filter")
 			args.append("label=%s=%s" % (k, v))
-		p = subprocess.Popen(args, stdout=subprocess.PIPE)
-		out, _ = p.communicate()
-		lines = out.split('\n')
-		nonemtpy_lines = [l for l in lines if len(l.strip()) > 0]
+		nonemtpy_lines = self._get_stdout_as_lines(args)
 		results = nonemtpy_lines[1:]
 		images = []
 		for (i, r) in enumerate(results):
@@ -218,7 +214,7 @@ class DockerFleet(object):
 	def stop_temp_scenario(self, path_to_scenario, delete_folder=True):
 		# Shut down ProxySQL cleanly
 		try:
-			cls.run_query_proxysql_admin("PROXYSQL SHUTDOWN")
+			self.run_query_proxysql_admin("PROXYSQL SHUTDOWN")
 		except:
 			# This will throw an exception because it will forcefully shut down
 			# the connection with the MySQL client.
@@ -236,26 +232,27 @@ class DockerFleet(object):
 		relies on interogating the Docker daemon via its REST API.
 		"""
 
-		containers = Client(**kwargs_from_env()).containers()
-		for container in containers:
-			if container.get('Labels').get('vendor') == 'proxysql':
-				if container['Labels']['com.proxysql.type'] == 'proxysql':
-					return container
+		args = ["docker", "ps",
+				"--filter", "label=vendor=proxysql",
+				"--filter", "label=com.proxysql.type=proxysql",
+				"--format", "{{.ID}}"]
+		return self._get_stdout_as_lines(args)[0]
 
-	def get_mysql_containers(self):
+	def get_mysql_containers(self, hostgroup=None):
 		"""Out of all the started docker containers, select the ones which
 		represent the MySQL backend instances.
 
 		This method relies on interogating the Docker daemon via its REST API.
 		"""
 
-		result = []
-		containers = Client(**kwargs_from_env()).containers()
-		for container in containers:
-			if container.get('Labels').get('vendor') == 'proxysql':
-				if container['Labels']['com.proxysql.type'] == 'mysql':
-					result.append(container)
-		return result
+		args = ["docker", "ps", 
+				"--filter", "label=vendor=proxysql",
+				"--filter", "label=com.proxysql.type=mysql"]
+		if hostgroup is not None:
+			args.append("--filter")
+			args.append("label=com.proxysql.hostgroup=%d" % hostgroup)
+		args.extend(["--format", "{{.ID}}"])
+		return self._get_stdout_as_lines(args)
 
 	def mysql_connection_ok(self, hostname, port, username, password, schema):
 		"""Checks whether the MySQL server reachable at (hostname, port) is
@@ -303,36 +300,9 @@ class DockerFleet(object):
 
 		return result
 
-	def _extract_hostgroup_from_container_name(self, container_name):
-		"""MySQL backend containers are named using a naming convention:
-		backendXhostgroupY, where X and Y can be multi-digit numbers.
-		This extracts the value of the hostgroup from the container name.
-
-		I made this choice because I wasn't able to find another easy way to
-		associate arbitrary metadata with a Docker container through the
-		docker compose file.
-		"""
-
-		service_name = container_name.split('_')[1]
-		return int(re.search(r'BACKEND(\d+)HOSTGROUP(\d+)', service_name).group(2))
-
 	def get_all_mysql_connection_credentials(self, hostgroup=None):
 		# Figure out which are the containers for the specified hostgroup
-		mysql_backends = self.get_mysql_containers()
-		mysql_backends_in_hostgroup = []
-		for backend in mysql_backends:
-			container_name = backend['Names'][0][1:].upper()
-			backend_hostgroup = self._extract_hostgroup_from_container_name(container_name)
-
-			mysql_port_exposed=False
-			if not backend.get('Ports'):
-				continue
-			for exposed_port in backend.get('Ports', []):
-				if exposed_port['PrivatePort'] == 3306:
-					mysql_port_exposed = True
-
-			if ((backend_hostgroup == hostgroup) or (hostgroup is None)) and mysql_port_exposed:
-				mysql_backends_in_hostgroup.append(backend)
+		mysql_backend_ids = self.get_mysql_containers(hostgroup=hostgroup)
 
 		config = ProxySQL_Tests_Config(overrides=self.config_overrides)
 		hostname = config.get('ProxySQL', 'hostname')
@@ -340,16 +310,20 @@ class DockerFleet(object):
 		password = config.get('ProxySQL', 'password')
 
 		result = []
-		for container in mysql_backends_in_hostgroup:
-			for exposed_port in container.get('Ports', []):
-				if exposed_port['PrivatePort'] == 3306:
-					mysql_port = exposed_port['PublicPort']
-					result.append({
-						'hostname': hostname,
-						'port': mysql_port,
-						'username': username,
-						'password': password
-					})
+		for container_id in mysql_backend_ids:
+			metadata = self._docker_inspect(container_id)
+			mysql_port = metadata.get('NetworkSettings', {})\
+									.get('Ports', {})\
+									.get('3306/tcp', [{}])[0]\
+									.get('HostPort', None)
+			if mysql_port is not None:
+				result.append({
+					'hostname': hostname,
+					'port': mysql_port,
+					'username': username,
+					'password': password
+				})
+					
 		return result
 
 	def get_mysql_connection_credentials(self, hostgroup=0):
@@ -388,7 +362,7 @@ class DockerFleet(object):
 		because we want to keep them as generic as possible.
 		"""
 
-		mysql_containers = self.get_mysql_containers()
+		mysql_container_ids = self.get_mysql_containers()
 		# We have already added the SQL dump to the container by using
 		# the ADD mysql command in the Dockerfile for mysql -- check it
 		# out. The standard agreed location is at /tmp/schema.sql.
@@ -396,8 +370,7 @@ class DockerFleet(object):
 		# Unfortunately we can't do this step at runtime due to limitations
 		# on how transfer between host and container is supposed to work by
 		# design. See the Dockerfile for MySQL for more details.
-		for mysql_container in mysql_containers:
-			container_id = mysql_container['Names'][0][1:]
+		for container_id in mysql_container_ids:
 			subprocess.call(["docker", "exec", container_id, "bash", "/tmp/import_schema.sh"])
 
 	def _populate_proxy_configuration_with_backends(self):
@@ -414,10 +387,9 @@ class DockerFleet(object):
 		which hostgroup.
 		"""
 		config = ProxySQL_Tests_Config(overrides=self.config_overrides)
-		proxysql_container = self.get_proxysql_container()
-		mysql_containers = self.get_mysql_containers()
-		environment_variables = self._get_environment_variables_from_container(
-											 proxysql_container['Names'][0][1:])
+		proxysql_container_id = self.get_proxysql_container()
+		mysql_container_ids = self.get_mysql_containers()
+		environment_variables = self._get_environment_variables_from_container(proxysql_container_id)
 
 		proxy_admin_connection = MySQLdb.connect(config.get('ProxySQL', 'hostname'),
 												config.get('ProxySQL', 'admin_username'),
@@ -425,12 +397,13 @@ class DockerFleet(object):
 												port=int(config.get('ProxySQL', 'admin_port')))
 		cursor = proxy_admin_connection.cursor()
 
-		for mysql_container in mysql_containers:
-			container_name = mysql_container['Names'][0][1:].upper()
+		for mysql_container_id in mysql_container_ids:
+			metadata = self._docker_inspect(mysql_container_id)
+			container_name = metadata['Name'][1:].upper()
 			port_uri = environment_variables['%s_PORT' % container_name]
 			port_no = self._extract_port_number_from_uri(port_uri)
 			ip = environment_variables['%s_PORT_%d_TCP_ADDR' % (container_name, port_no)]
-			hostgroup = self._extract_hostgroup_from_container_name(container_name)
+			hostgroup = int(metadata.get('Config', {}).get('Labels', {}).get('com.proxysql.hostgroup'))
 			cursor.execute("INSERT INTO mysql_servers(hostgroup_id, hostname, port, status) "
 							"VALUES(%d, '%s', %d, 'ONLINE')" %
 							(hostgroup, ip, port_no))
@@ -444,17 +417,15 @@ class DockerFleet(object):
 		the host linking mechanism), extract the TCP port number from it."""
 		return int(uri.split(':')[2])
 
-	def _get_environment_variables_from_container(self, container_name):
+	def _get_environment_variables_from_container(self, container_id):
 		"""Retrieve the environment variables from the given container.
 
 		This is useful because the host linking mechanism will expose
 		connectivity information to the linked hosts by the use of environment
 		variables.
 		"""
-
-		output = Client(**kwargs_from_env()).execute(container_name, 'env')
+		lines = self._get_stdout_as_lines(["docker", "exec", container_id, "env"])
 		result = {}
-		lines = output.split('\n')
 		for line in lines:
 			line = line.strip()
 			if len(line) == 0:
@@ -540,12 +511,8 @@ class DockerFleet(object):
 
 		# Run "docker ps" on the proxysql containers and build a
 		# label -> container_id mapping.
-		args = ["docker", "ps", "--filter", "label=vendor=proxysql"]
-		p = subprocess.Popen(args, stdout=subprocess.PIPE)
-		out, _ = p.communicate()
-		lines = out.split('\n')
-		nonemtpy_lines = [l for l in lines if len(l.strip()) > 0]
-
+		nonemtpy_lines = self._get_stdout_as_lines(["docker", "ps", "--filter", "label=vendor=proxysql"])
+		
 		results = nonemtpy_lines[1:]
 		images = {}
 		for (i, r) in enumerate(results):
@@ -562,6 +529,18 @@ class DockerFleet(object):
 		if key in images:
 			args = ["docker", "commit", images[key], key]
 			subprocess.call(args)
+			
 			return True
 		else:
 			return False
+
+	def _get_stdout_as_lines(self, args):
+		p = subprocess.Popen(args, stdout=subprocess.PIPE)
+		out, _ = p.communicate()
+		lines = out.split('\n')
+		nonemtpy_lines = [l for l in lines if len(l.strip()) > 0]
+		return nonemtpy_lines
+
+	def _docker_inspect(self, id):
+		lines = self._get_stdout_as_lines(["docker", "inspect", id])
+		return json.loads("".join(lines))[0]
