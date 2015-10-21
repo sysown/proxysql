@@ -23,29 +23,41 @@ class AuthenticationTest(ProxySQLBaseTest):
 		self.run_in_docker_scenarios(self._test_existing_user_with_correct_password_works)
 
 	def _test_existing_user_with_correct_password_but_not_registerd_within_proxysql_does_not_work(self):
-		self.assert_raises(self.run_query_proxysql, OperationalError,
-							"SELECT @@version_comment LIMIT 1", "test",
-							return_result=True, username="danny", password="white")
+		try:
+			self.run_query_proxysql("SELECT @@version_comment LIMIT 1", "test",
+									return_result=True, 
+									username="danny", password="white")
+			# We shouldn't reach this point successfully, because it means we
+			# managed to authenticate with the wrong password
+			self.assertEqual(1, 0)
+		except OperationalError:
+			self.assertEqual(1, 1)
 
 	def test_existing_user_with_correct_password_but_not_registerd_within_proxysql_does_not_work(self):
 		self.run_in_docker_scenarios(self._test_existing_user_with_correct_password_works)
 
-"""
 	def _test_existing_user_with_incorrect_password_does_not_work(self):
-		self.assert_raises(self.run_query_proxysql, OperationalError,
-							"SELECT @@version_comment LIMIT 1", "test",
-							return_result=True,
-							username="john", password="doe2")
+		try:
+			self.run_query_proxysql("SELECT @@version_comment LIMIT 1", "test",
+									return_result=True,
+									username="john", password="doe2")
+			# We shouldn't reach this point successfully, because it means we
+			# managed to authenticate with the wrong password
+			self.assertEqual(1, 0)
+		except OperationalError:
+			self.assertEqual(1, 1)
 
 	def test_existing_user_with_incorrect_password_does_not_work(self):
 		self.run_in_docker_scenarios(self._test_existing_user_with_incorrect_password_does_not_work)
 
 	def _test_inexisting_user_with_random_password_does_not_work(self):
-		self.assert_raises(self.run_query_proxysql, OperationalError,
-							"SELECT @@version_comment LIMIT 1", "test",
-							return_result=True,
-							username="johnny", password="randomdoe")
+		try:
+			self.run_query_proxysql("SELECT @@version_comment LIMIT 1", "test",
+									return_result=True,
+									username="johnny", password="randomdoe")
+			self.assertEqual(1, 0)
+		except OperationalError:
+			self.assertEqual(1, 1)
 
 	def test_inexisting_user_with_random_password_does_not_work(self):
 		self.run_in_docker_scenarios(self._test_inexisting_user_with_random_password_does_not_work)
-"""
