@@ -37,3 +37,4 @@ backend1hostgroup0:
   labels:
     "com.proxysql.type": "mysql"
     "vendor": "proxysql"
+    "com.proxysql.hostgroup": "0"
