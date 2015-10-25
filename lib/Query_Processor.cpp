@@ -752,7 +752,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
     }
     if (qr->error_msg) {
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->error_msg);
-			proxy_warning("User %s has issued query that has been fintered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
+			proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
       ret->error_msg=strdup(qr->error_msg);
     }
     if (qr->cache_ttl >= 0) {
