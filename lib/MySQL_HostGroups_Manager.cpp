@@ -125,11 +125,18 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	ConnectionsFree=new MySrvConnList(this);
 }
 
-void MySrvC::connect_error() {
+void MySrvC::connect_error(int err_num) {
 	// NOTE: this function operates without any mutex
 	// although, it is not extremely important if any counter is lost
 	// as a single connection failure won't make a significant difference
 	__sync_fetch_and_add(&connect_ERR,1);
+	switch (err_num) {
+		case 1045: // access denied
+			return;
+			break;
+		default:
+			break;
+	}
 	time_t t=time(NULL);
 	if (t!=time_last_detected_error) {
 		time_last_detected_error=t;
