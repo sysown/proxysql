@@ -61,7 +61,15 @@ class DockerFleet(object):
 			subprocess.call(["docker", "build", "-t", "proxysql:%s" % label, "."], cwd=info["dir"])
 
 	def get_docker_images(self, filters):
-		# docker images --filter "label=vendor=proxysql" --filter "label=com.proxysql.purpose=testing"
+		names = filters.pop('names', [])
+		if len(names) == 0:
+			if filters.get('com.proxysql.type') == 'proxysql':
+				config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+				names = config.get('Scenarios', 'default_proxysql_images').split(',')
+			elif filters.get('com.proxysql.type') == 'mysql':
+				config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+				names = config.get('Scenarios', 'default_mysql_images').split(',')
+
 		args = ["docker", "images"]
 		for k, v in filters.iteritems():
 			args.append("--filter")
@@ -72,10 +80,12 @@ class DockerFleet(object):
 		for (i, r) in enumerate(results):
 			tokens = r.split(' ')
 			nonempty_tokens = [t for t in tokens if len(t.strip()) > 0]
-			images.append(nonempty_tokens[1])
+			image = nonempty_tokens[1]
+			if image in names:
+				images.append(image)
 		return images
 
-	def get_docker_scenario_templates(self):
+	def get_docker_scenario_templates(self, scenarios=[]):
 		"""Retrieve the list of docker templates that will be used to generate
 		scenarios.
 
@@ -83,9 +93,17 @@ class DockerFleet(object):
 		the same, the only difference will be the configuration of the machines
 		involved (for example, it might be a different operating system).
 		"""
+		if len(scenarios) == 0:
+			config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+			scenarios = config.get('Scenarios', 'default_scenarios').split(',')
+
 		files = {}
 		dockercompose_path = os.path.dirname(__file__) + "/../docker/scenarios"
 		for item in os.listdir(dockercompose_path):
+			# Filter based on received default scenarios
+			if item not in scenarios:
+				continue
+
 			dir_path = dockercompose_path + os.sep + item
 			if path.isdir(dir_path):
 				dockercomposefile = dir_path + os.sep + "docker-compose.yml"
@@ -98,25 +116,28 @@ class DockerFleet(object):
 						files[item]["contents"] = data=myfile.read()
 		return files
 
-	def generate_scenarios(self, filters={}):
+	def generate_scenarios(self, scenarios=[], proxysql_filters={}, mysql_filters={}):
 		# We have 2 types of docker images - for testing and for packaging.
 		# We will only use the ones for testing, because the others won't have
 		# a running daemon inside.
-		image_filters = copy.deepcopy(filters)
-		image_filters['vendor'] = 'proxysql'
-		image_filters['com.proxysql.purpose'] = 'testing'
 
-		proxysql_filters = copy.deepcopy(image_filters)
-		proxysql_filters['com.proxysql.type'] = 'proxysql'
+		local_proxysql_filters = copy.deepcopy(proxysql_filters)
+		local_proxysql_filters['vendor'] = 'proxysql'
+		local_proxysql_filters['com.proxysql.purpose'] = 'testing'
+		local_proxysql_filters['com.proxysql.type'] = 'proxysql'
 
-		mysql_filters = copy.deepcopy(image_filters)
-		mysql_filters['com.proxysql.type'] = 'proxysql'
+		local_mysql_filters = copy.deepcopy(mysql_filters)
+		local_mysql_filters['vendor'] = 'proxysql'
+		# TODO(aismail): rebuild MySQL image
+		# TODO(aismail): add flag in order to rebuild images to the test suite
+		# local_mysql_filters['com.proxysql.purpose'] = 'testing'
+		local_mysql_filters['com.proxysql.type'] = 'mysql'
 
 		unique_scenarios = {}
 
-		proxysql_images = self.get_docker_images(proxysql_filters)
-		mysql_images = self.get_docker_images(mysql_filters)
-		scenario_templates = self.get_docker_scenario_templates()
+		proxysql_images = self.get_docker_images(local_proxysql_filters)
+		mysql_images = self.get_docker_images(local_mysql_filters)
+		scenario_templates = self.get_docker_scenario_templates(scenarios=scenarios)
 
 		for scenario_label, scenario_info in scenario_templates.iteritems():
 			for proxysql_image in proxysql_images:
@@ -361,7 +382,7 @@ class DockerFleet(object):
 		The reason for doing this __after__ the containers are started is
 		because we want to keep them as generic as possible.
 		"""
-
+		
 		mysql_container_ids = self.get_mysql_containers()
 		# We have already added the SQL dump to the container by using
 		# the ADD mysql command in the Dockerfile for mysql -- check it

@@ -157,14 +157,16 @@ class ProxySQLBaseTest(TestCase):
 													hostgroup,
 													username, password)
 
-	def run_in_docker_scenarios(self, f):
+	def run_in_docker_scenarios(self, f, scenarios=[], proxysql_filters={}, mysql_filters={}):
 		"""Runs a function in a number of docker scenarios.
 
 		This is a helper for running your test assertions against different
 		configurations without having to go the extra mile.
 		"""
 		
-		scenarios = self.docker_fleet.generate_scenarios()
+		scenarios = self.docker_fleet.generate_scenarios(scenarios=scenarios,
+															proxysql_filters=proxysql_filters,
+															mysql_filters=mysql_filters)
 		committed_images = set()
 		copy_folder = True
 		delete_folder = True
