@@ -1,0 +1,109 @@
+proxysql:
+  image: proxysql:{{proxysql_image}}
+  links:
+    - backend1hostgroup0
+    - backend1hostgroup1
+    - backend2hostgroup1
+    - backend3hostgroup1
+    - backend4hostgroup1
+  ports:
+    # ProxySQL admin port for MySQL commands
+    - "6032:6032"
+    # ProxySQL main port
+    - "6033:6033"
+    # gdbserver
+    - "2345:2345"
+  volumes:
+    # Sharing the data with 
+    - /tmp/proxysql-tests:/tmp/proxysql-src
+  privileged: true
+
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.config": "simple"
+    "com.proxysql.interactive": "false"
+    "com.proxysql.os": "ubuntu14"
+    "com.proxysql.purpose": "testing"
+    "com.proxysql.type": "proxysql"
+    "vendor": "proxysql"
+
+backend1hostgroup0:
+  image: proxysql:mysql-simple-dump-replication
+  environment:
+    MYSQL_ROOT_PASSWORD: root
+    MYSQL_SERVER_ID: 1
+  expose:
+    - "3306"
+  ports:
+    - "13306:3306"
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.type": "mysql"
+    "vendor": "proxysql"
+    "com.proxysql.hostgroup": "0"
+
+backend1hostgroup1:
+  image: proxysql:mysql-simple-dump-replication
+  environment:
+    MYSQL_ROOT_PASSWORD: root
+    MYSQL_SERVER_ID: 2
+  expose:
+    - "3306"
+  ports:
+    - "13307:3306"
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.type": "mysql"
+    "vendor": "proxysql"
+    "com.proxysql.hostgroup": "1"
+
+backend2hostgroup1:
+  image: proxysql:mysql-simple-dump-replication
+  environment:
+    MYSQL_ROOT_PASSWORD: root
+    MYSQL_SERVER_ID: 3
+  expose:
+    - "3306"
+  ports:
+    - "13308:3306"
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.type": "mysql"
+    "vendor": "proxysql"
+    "com.proxysql.hostgroup": "1"
+
+backend3hostgroup1:
+  image: proxysql:mysql-simple-dump-replication
+  environment:
+    MYSQL_ROOT_PASSWORD: root
+    MYSQL_SERVER_ID: 4
+  expose:
+    - "3306"
+  ports:
+    - "13309:3306"
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.type": "mysql"
+    "vendor": "proxysql"
+    "com.proxysql.hostgroup": "1"
+
+backend4hostgroup1:
+  image: proxysql:mysql-simple-dump-replication
+  environment:
+    MYSQL_ROOT_PASSWORD: root
+    MYSQL_SERVER_ID: 5
+  expose:
+    - "3306"
+  ports:
+    - "13310:3306"
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.type": "mysql"
+    "vendor": "proxysql"
+    "com.proxysql.hostgroup": "1"
