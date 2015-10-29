@@ -32,7 +32,6 @@ backend1hostgroup0:
   image: proxysql:mysql-simple-dump-replication
   environment:
     MYSQL_ROOT_PASSWORD: root
-    MYSQL_SERVER_ID: 1
   expose:
     - "3306"
   ports:
@@ -43,12 +42,15 @@ backend1hostgroup0:
     "com.proxysql.type": "mysql"
     "vendor": "proxysql"
     "com.proxysql.hostgroup": "0"
+  volumes:
+    - ./master-conf.d:/etc/mysql/conf.d
 
 backend1hostgroup1:
   image: proxysql:mysql-simple-dump-replication
   environment:
     MYSQL_ROOT_PASSWORD: root
-    MYSQL_SERVER_ID: 2
+  links:
+    - backend1hostgroup0
   expose:
     - "3306"
   ports:
@@ -59,12 +61,15 @@ backend1hostgroup1:
     "com.proxysql.type": "mysql"
     "vendor": "proxysql"
     "com.proxysql.hostgroup": "1"
+  volumes:
+    - ./slave1-conf.d:/etc/mysql/conf.d
 
 backend2hostgroup1:
   image: proxysql:mysql-simple-dump-replication
   environment:
     MYSQL_ROOT_PASSWORD: root
-    MYSQL_SERVER_ID: 3
+  links:
+    - backend1hostgroup0
   expose:
     - "3306"
   ports:
@@ -75,12 +80,15 @@ backend2hostgroup1:
     "com.proxysql.type": "mysql"
     "vendor": "proxysql"
     "com.proxysql.hostgroup": "1"
+  volumes:
+    - ./slave2-conf.d:/etc/mysql/conf.d
 
 backend3hostgroup1:
   image: proxysql:mysql-simple-dump-replication
   environment:
     MYSQL_ROOT_PASSWORD: root
-    MYSQL_SERVER_ID: 4
+  links:
+    - backend1hostgroup0
   expose:
     - "3306"
   ports:
@@ -91,12 +99,15 @@ backend3hostgroup1:
     "com.proxysql.type": "mysql"
     "vendor": "proxysql"
     "com.proxysql.hostgroup": "1"
+  volumes:
+    - ./slave3-conf.d:/etc/mysql/conf.d
 
 backend4hostgroup1:
   image: proxysql:mysql-simple-dump-replication
   environment:
     MYSQL_ROOT_PASSWORD: root
-    MYSQL_SERVER_ID: 5
+  links:
+    - backend1hostgroup0
   expose:
     - "3306"
   ports:
@@ -107,3 +118,5 @@ backend4hostgroup1:
     "com.proxysql.type": "mysql"
     "vendor": "proxysql"
     "com.proxysql.hostgroup": "1"
+  volumes:
+    - ./slave4-conf.d:/etc/mysql/conf.d
