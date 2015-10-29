@@ -528,6 +528,34 @@ class DockerFleet(object):
 		if return_result:
 			return rows
 
+	def run_query_mysql_container(self, query, db, container_id, return_result=True):
+		config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+		hostname = config.get('ProxySQL', 'hostname')
+		username = config.get('ProxySQL', 'username')
+		password = config.get('ProxySQL', 'password')
+
+		metadata = self.docker_inspect(container_id)
+		mysql_port = metadata.get('NetworkSettings', {})\
+								.get('Ports', {})\
+								.get('3306/tcp', [{}])[0]\
+								.get('HostPort', None)
+		if mysql_port is not None:
+			mysql_connection = MySQLdb.connect(host=hostname,
+												user=username,
+												passwd=password,
+												port=int(mysql_port),
+												db=db)
+			cursor = mysql_connection.cursor()
+			cursor.execute(query)
+			if return_result:
+				rows = cursor.fetchall()
+			cursor.close()
+			mysql_connection.close()
+			if return_result:
+				return rows
+		else:
+			return None
+
 	def commit_proxysql_image(self, label):
 		"""Given a Docker image used within the ProxySQL tests, commit it."""
 
