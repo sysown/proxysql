@@ -393,7 +393,13 @@ class DockerFleet(object):
 		# on how transfer between host and container is supposed to work by
 		# design. See the Dockerfile for MySQL for more details.
 		for container_id in mysql_container_ids:
-			subprocess.call(["docker", "exec", container_id, "bash", "/tmp/import_schema.sh"])
+			# /tmp/import_schema.sh might fail because there are some MySQL
+			# instances that we're using (especially for slave servers) that
+			# have no schema.
+			try:
+				subprocess.call(["docker", "exec", container_id, "bash", "/tmp/import_schema.sh"])
+			except:
+				continue
 
 	def _populate_proxy_configuration_with_backends(self):
 		"""Populate ProxySQL's admin information with the MySQL backends
