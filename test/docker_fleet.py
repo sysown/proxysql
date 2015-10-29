@@ -221,6 +221,7 @@ class DockerFleet(object):
 			self._create_folder_to_share_proxysql_code_with_container()
 
 		dirname = tempfile.mkdtemp('-proxysql-tests')
+		os.system("cp -R %s/* %s/" % (scenario['scenario_dir'], dirname))
 		filename = "%s/docker-compose.yml" % dirname
 		with open(filename, "wt") as f:
 			f.write(scenario['content'])
