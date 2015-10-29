@@ -333,7 +333,7 @@ class DockerFleet(object):
 
 		result = []
 		for container_id in mysql_backend_ids:
-			metadata = self._docker_inspect(container_id)
+			metadata = self.docker_inspect(container_id)
 			mysql_port = metadata.get('NetworkSettings', {})\
 									.get('Ports', {})\
 									.get('3306/tcp', [{}])[0]\
@@ -411,7 +411,7 @@ class DockerFleet(object):
 		config = ProxySQL_Tests_Config(overrides=self.config_overrides)
 		proxysql_container_id = self.get_proxysql_container()
 		mysql_container_ids = self.get_mysql_containers()
-		environment_variables = self._get_environment_variables_from_container(proxysql_container_id)
+		environment_variables = self.get_environment_variables_from_container(proxysql_container_id)
 
 		proxy_admin_connection = MySQLdb.connect(config.get('ProxySQL', 'hostname'),
 												config.get('ProxySQL', 'admin_username'),
@@ -420,7 +420,7 @@ class DockerFleet(object):
 		cursor = proxy_admin_connection.cursor()
 
 		for mysql_container_id in mysql_container_ids:
-			metadata = self._docker_inspect(mysql_container_id)
+			metadata = self.docker_inspect(mysql_container_id)
 			container_name = metadata['Name'][1:].upper()
 			port_uri = environment_variables['%s_PORT' % container_name]
 			port_no = self._extract_port_number_from_uri(port_uri)
@@ -439,7 +439,7 @@ class DockerFleet(object):
 		the host linking mechanism), extract the TCP port number from it."""
 		return int(uri.split(':')[2])
 
-	def _get_environment_variables_from_container(self, container_id):
+	def get_environment_variables_from_container(self, container_id):
 		"""Retrieve the environment variables from the given container.
 
 		This is useful because the host linking mechanism will expose
@@ -563,6 +563,6 @@ class DockerFleet(object):
 		nonemtpy_lines = [l for l in lines if len(l.strip()) > 0]
 		return nonemtpy_lines
 
-	def _docker_inspect(self, id):
+	def docker_inspect(self, id):
 		lines = self._get_stdout_as_lines(["docker", "inspect", id])
 		return json.loads("".join(lines))[0]
