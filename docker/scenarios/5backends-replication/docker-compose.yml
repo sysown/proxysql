@@ -29,7 +29,7 @@ proxysql:
     "vendor": "proxysql"
 
 backend1hostgroup0:
-  image: proxysql:mysql-simple-dump-replication
+  image: proxysql:mysql-simple-dump
   environment:
     MYSQL_ROOT_PASSWORD: root
   expose:
@@ -46,7 +46,7 @@ backend1hostgroup0:
     - ./master-conf.d:/etc/mysql/conf.d
 
 backend1hostgroup1:
-  image: proxysql:mysql-simple-dump-replication
+  image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
   links:
@@ -65,7 +65,7 @@ backend1hostgroup1:
     - ./slave1-conf.d:/etc/mysql/conf.d
 
 backend2hostgroup1:
-  image: proxysql:mysql-simple-dump-replication
+  image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
   links:
@@ -84,7 +84,7 @@ backend2hostgroup1:
     - ./slave2-conf.d:/etc/mysql/conf.d
 
 backend3hostgroup1:
-  image: proxysql:mysql-simple-dump-replication
+  image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
   links:
@@ -103,7 +103,7 @@ backend3hostgroup1:
     - ./slave3-conf.d:/etc/mysql/conf.d
 
 backend4hostgroup1:
-  image: proxysql:mysql-simple-dump-replication
+  image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
   links:
