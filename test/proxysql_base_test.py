@@ -157,6 +157,24 @@ class ProxySQLBaseTest(TestCase):
 													hostgroup,
 													username, password)
 
+	def run_query_mysql_container(self, query, db, container_id, return_result=True):
+		return self.docker_fleet.run_query_mysql_container(query=query,
+															db=db,
+															container_id=container_id,
+															return_result=return_result)
+
+	def get_proxysql_container(self):
+		return self.docker_fleet.get_proxysql_container()
+
+	def get_mysql_containers(self, hostgroup=0):
+		return self.docker_fleet.get_mysql_containers(hostgroup=hostgroup)
+
+	def get_environment_variables_from_container(self, container_id):
+		return self.docker_fleet.get_environment_variables_from_container(container_id)
+
+	def get_tests_config(self):
+		return ProxySQL_Tests_Config(overrides=ProxySQLBaseTest.CONFIG_OVERRIDES)
+
 	def run_in_docker_scenarios(self, f, scenarios=[], proxysql_filters={}, mysql_filters={}):
 		"""Runs a function in a number of docker scenarios.
 
