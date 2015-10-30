@@ -97,8 +97,9 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 		first_slave = None
 		for slave_container_id in slave_containers:
 			meta = self.docker_inspect(slave_container_id)
-			if 'DNSDOCK_NAME=slave1' in meta['Config']['Env']:
+			if 'NEW_MASTER=True' in meta['Config']['Env']:
 				first_slave = slave_container_id
+				first_slave_ip = meta['NetworkSettings']['IPAddress']
 
 		# Promote slave1 to a master
 		self.run_query_mysql_container('SET GLOBAL read_only=OFF',
@@ -119,7 +120,7 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 			self.run_query_mysql_container('STOP SLAVE',
 											'information_schema',
 											slave_container_id)
-			self.run_query_mysql_container("CHANGE MASTER TO MASTER_HOST = 'slave1.mysql.docker'",
+			self.run_query_mysql_container("CHANGE MASTER TO MASTER_HOST = '%s'" % first_slave_ip,
 											'information_schema',
 											slave_container_id)
 			self.run_query_mysql_container('START SLAVE',
@@ -133,8 +134,8 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 		self.run_query_mysql_container('SET GLOBAL read_only=ON',
 										'information_schema',
 										master_container)
-		q = "CHANGE MASTER TO MASTER_HOST = 'slave1.mysql.docker', MASTER_PORT = 3306, MASTER_USER = '%s', MASTER_PASSWORD = '%s', MASTER_AUTO_POSITION = 1"
-		self.run_query_mysql_container(q % (username, password),
+		q = "CHANGE MASTER TO MASTER_HOST = '%s', MASTER_PORT = 3306, MASTER_USER = '%s', MASTER_PASSWORD = '%s', MASTER_AUTO_POSITION = 1"
+		self.run_query_mysql_container(q % (first_slave_ip, username, password),
 										'information_schema',
 										master_container)
 		self.run_query_mysql_container('RESET SLAVE',
@@ -161,7 +162,7 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 		for slave_container_id in old_slave_containers:
 			meta = self.docker_inspect(slave_container_id)
 			slave_ip = meta['NetworkSettings']['IPAddress']
-			if 'DNSDOCK_NAME=slave1' in meta['Config']['Env']:
+			if 'NEW_MASTER=True' in meta['Config']['Env']:
 				master_ip = slave_ip
 			else:
 				slave_ips.add(slave_ip)
