@@ -152,4 +152,28 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 			self._wait_for_slave_to_catch_up(slave_container_id)
 
 	def _check_slave_promotion_reflected_in_proxysql_admin(self):
-		
+		# Determine mapping from container IDs to IPs
+		old_master_container = self.get_mysql_containers(hostgroup=0)[0]
+		old_slave_containers = self.get_mysql_containers(hostgroup=1)
+		slave_ips = set()
+		old_master_ip = self.docker_inspect(old_master_container)['NetworkSettings']['IPAddress']
+		slave_ips.add(old_master_ip)
+		for slave_container_id in old_slave_containers:
+			meta = self.docker_inspect(slave_container_id)
+			slave_ip = meta['NetworkSettings']['IPAddress']
+			if 'DNSDOCK_NAME=slave1' in meta['Config']['Env']:
+				master_ip = slave_ip
+			else:
+				slave_ips.add(slave_ip)
+
+		rows = self.run_query_proxysql_admin("SELECT * FROM mysql_servers")
+		hostgroups = {}
+		for row in rows:
+			hostgroups[row[1]] = int(row[0])
+
+		# First slave is now a master, thus should be present in the writer hostgroup
+		self.assertEqual(hostgroups[master_ip], 0)
+
+		# The old master, and the other slaves should still be in the slave hostgroup
+		for ip in slave_ips:
+			self.assertEqual(hostgroups[ip], 1)
