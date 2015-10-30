@@ -61,7 +61,15 @@ class DockerFleet(object):
 			subprocess.call(["docker", "build", "-t", "proxysql:%s" % label, "."], cwd=info["dir"])
 
 	def get_docker_images(self, filters):
-		# docker images --filter "label=vendor=proxysql" --filter "label=com.proxysql.purpose=testing"
+		names = filters.pop('names', [])
+		if len(names) == 0:
+			if filters.get('com.proxysql.type') == 'proxysql':
+				config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+				names = config.get('Scenarios', 'default_proxysql_images').split(',')
+			elif filters.get('com.proxysql.type') == 'mysql':
+				config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+				names = config.get('Scenarios', 'default_mysql_images').split(',')
+
 		args = ["docker", "images"]
 		for k, v in filters.iteritems():
 			args.append("--filter")
@@ -72,10 +80,12 @@ class DockerFleet(object):
 		for (i, r) in enumerate(results):
 			tokens = r.split(' ')
 			nonempty_tokens = [t for t in tokens if len(t.strip()) > 0]
-			images.append(nonempty_tokens[1])
+			image = nonempty_tokens[1]
+			if image in names:
+				images.append(image)
 		return images
 
-	def get_docker_scenario_templates(self):
+	def get_docker_scenario_templates(self, scenarios=[]):
 		"""Retrieve the list of docker templates that will be used to generate
 		scenarios.
 
@@ -83,9 +93,17 @@ class DockerFleet(object):
 		the same, the only difference will be the configuration of the machines
 		involved (for example, it might be a different operating system).
 		"""
+		if len(scenarios) == 0:
+			config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+			scenarios = config.get('Scenarios', 'default_scenarios').split(',')
+
 		files = {}
 		dockercompose_path = os.path.dirname(__file__) + "/../docker/scenarios"
 		for item in os.listdir(dockercompose_path):
+			# Filter based on received default scenarios
+			if item not in scenarios:
+				continue
+
 			dir_path = dockercompose_path + os.sep + item
 			if path.isdir(dir_path):
 				dockercomposefile = dir_path + os.sep + "docker-compose.yml"
@@ -98,25 +116,28 @@ class DockerFleet(object):
 						files[item]["contents"] = data=myfile.read()
 		return files
 
-	def generate_scenarios(self, filters={}):
+	def generate_scenarios(self, scenarios=[], proxysql_filters={}, mysql_filters={}):
 		# We have 2 types of docker images - for testing and for packaging.
 		# We will only use the ones for testing, because the others won't have
 		# a running daemon inside.
-		image_filters = copy.deepcopy(filters)
-		image_filters['vendor'] = 'proxysql'
-		image_filters['com.proxysql.purpose'] = 'testing'
 
-		proxysql_filters = copy.deepcopy(image_filters)
-		proxysql_filters['com.proxysql.type'] = 'proxysql'
+		local_proxysql_filters = copy.deepcopy(proxysql_filters)
+		local_proxysql_filters['vendor'] = 'proxysql'
+		local_proxysql_filters['com.proxysql.purpose'] = 'testing'
+		local_proxysql_filters['com.proxysql.type'] = 'proxysql'
 
-		mysql_filters = copy.deepcopy(image_filters)
-		mysql_filters['com.proxysql.type'] = 'proxysql'
+		local_mysql_filters = copy.deepcopy(mysql_filters)
+		local_mysql_filters['vendor'] = 'proxysql'
+		# TODO(aismail): rebuild MySQL image
+		# TODO(aismail): add flag in order to rebuild images to the test suite
+		# local_mysql_filters['com.proxysql.purpose'] = 'testing'
+		local_mysql_filters['com.proxysql.type'] = 'mysql'
 
 		unique_scenarios = {}
 
-		proxysql_images = self.get_docker_images(proxysql_filters)
-		mysql_images = self.get_docker_images(mysql_filters)
-		scenario_templates = self.get_docker_scenario_templates()
+		proxysql_images = self.get_docker_images(local_proxysql_filters)
+		mysql_images = self.get_docker_images(local_mysql_filters)
+		scenario_templates = self.get_docker_scenario_templates(scenarios=scenarios)
 
 		for scenario_label, scenario_info in scenario_templates.iteritems():
 			for proxysql_image in proxysql_images:
@@ -200,6 +221,7 @@ class DockerFleet(object):
 			self._create_folder_to_share_proxysql_code_with_container()
 
 		dirname = tempfile.mkdtemp('-proxysql-tests')
+		os.system("cp -R %s/* %s/" % (scenario['scenario_dir'], dirname))
 		filename = "%s/docker-compose.yml" % dirname
 		with open(filename, "wt") as f:
 			f.write(scenario['content'])
@@ -311,7 +333,7 @@ class DockerFleet(object):
 
 		result = []
 		for container_id in mysql_backend_ids:
-			metadata = self._docker_inspect(container_id)
+			metadata = self.docker_inspect(container_id)
 			mysql_port = metadata.get('NetworkSettings', {})\
 									.get('Ports', {})\
 									.get('3306/tcp', [{}])[0]\
@@ -361,7 +383,7 @@ class DockerFleet(object):
 		The reason for doing this __after__ the containers are started is
 		because we want to keep them as generic as possible.
 		"""
-
+		
 		mysql_container_ids = self.get_mysql_containers()
 		# We have already added the SQL dump to the container by using
 		# the ADD mysql command in the Dockerfile for mysql -- check it
@@ -371,7 +393,13 @@ class DockerFleet(object):
 		# on how transfer between host and container is supposed to work by
 		# design. See the Dockerfile for MySQL for more details.
 		for container_id in mysql_container_ids:
-			subprocess.call(["docker", "exec", container_id, "bash", "/tmp/import_schema.sh"])
+			# /tmp/import_schema.sh might fail because there are some MySQL
+			# instances that we're using (especially for slave servers) that
+			# have no schema.
+			try:
+				subprocess.call(["docker", "exec", container_id, "bash", "/tmp/import_schema.sh"])
+			except:
+				continue
 
 	def _populate_proxy_configuration_with_backends(self):
 		"""Populate ProxySQL's admin information with the MySQL backends
@@ -389,7 +417,7 @@ class DockerFleet(object):
 		config = ProxySQL_Tests_Config(overrides=self.config_overrides)
 		proxysql_container_id = self.get_proxysql_container()
 		mysql_container_ids = self.get_mysql_containers()
-		environment_variables = self._get_environment_variables_from_container(proxysql_container_id)
+		environment_variables = self.get_environment_variables_from_container(proxysql_container_id)
 
 		proxy_admin_connection = MySQLdb.connect(config.get('ProxySQL', 'hostname'),
 												config.get('ProxySQL', 'admin_username'),
@@ -398,7 +426,7 @@ class DockerFleet(object):
 		cursor = proxy_admin_connection.cursor()
 
 		for mysql_container_id in mysql_container_ids:
-			metadata = self._docker_inspect(mysql_container_id)
+			metadata = self.docker_inspect(mysql_container_id)
 			container_name = metadata['Name'][1:].upper()
 			port_uri = environment_variables['%s_PORT' % container_name]
 			port_no = self._extract_port_number_from_uri(port_uri)
@@ -417,7 +445,7 @@ class DockerFleet(object):
 		the host linking mechanism), extract the TCP port number from it."""
 		return int(uri.split(':')[2])
 
-	def _get_environment_variables_from_container(self, container_id):
+	def get_environment_variables_from_container(self, container_id):
 		"""Retrieve the environment variables from the given container.
 
 		This is useful because the host linking mechanism will expose
@@ -506,6 +534,34 @@ class DockerFleet(object):
 		if return_result:
 			return rows
 
+	def run_query_mysql_container(self, query, db, container_id, return_result=True):
+		config = ProxySQL_Tests_Config(overrides=self.config_overrides)
+		hostname = config.get('ProxySQL', 'hostname')
+		username = config.get('ProxySQL', 'username')
+		password = config.get('ProxySQL', 'password')
+
+		metadata = self.docker_inspect(container_id)
+		mysql_port = metadata.get('NetworkSettings', {})\
+								.get('Ports', {})\
+								.get('3306/tcp', [{}])[0]\
+								.get('HostPort', None)
+		if mysql_port is not None:
+			mysql_connection = MySQLdb.connect(host=hostname,
+												user=username,
+												passwd=password,
+												port=int(mysql_port),
+												db=db)
+			cursor = mysql_connection.cursor()
+			cursor.execute(query)
+			if return_result:
+				rows = cursor.fetchall()
+			cursor.close()
+			mysql_connection.close()
+			if return_result:
+				return rows
+		else:
+			return None
+
 	def commit_proxysql_image(self, label):
 		"""Given a Docker image used within the ProxySQL tests, commit it."""
 
@@ -541,6 +597,6 @@ class DockerFleet(object):
 		nonemtpy_lines = [l for l in lines if len(l.strip()) > 0]
 		return nonemtpy_lines
 
-	def _docker_inspect(self, id):
+	def docker_inspect(self, id):
 		lines = self._get_stdout_as_lines(["docker", "inspect", id])
 		return json.loads("".join(lines))[0]
