@@ -8,6 +8,18 @@ from proxysql_base_test import ProxySQLBaseTest
 
 class ReplicationTopologyAwareness(ProxySQLBaseTest):
 
+	def _wait_for_slave_to_catch_up(self, slave_container_id):
+		# Wait for the slave to catch up with the master
+		slave_caught_up = False
+		while not slave_caught_up:
+			slave_status = self.run_query_mysql_container(
+				'SHOW SLAVE STATUS',
+				'information_schema',
+				slave_container_id
+			)
+			slave_caught_up = slave_status[0][44].startswith(
+											'Slave has read all relay log')
+
 	def _start_replication(self):
 		master_container = self.get_mysql_containers(hostgroup=0)[0]
 		slave_containers = self.get_mysql_containers(hostgroup=1)
@@ -27,16 +39,78 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 			q = "CHANGE MASTER TO MASTER_HOST='%s', MASTER_PORT=%s, MASTER_USER='%s', MASTER_PASSWORD='%s', MASTER_AUTO_POSITION = 1" % args
 			self.run_query_mysql_container(q, 'information_schema', slave_container_id)
 			self.run_query_mysql_container('START SLAVE', 'information_schema', slave_container_id)
+			self.run_query_mysql_container('SET GLOBAL read_only=ON', 'information_schema', slave_container_id)
+			self._wait_for_slave_to_catch_up(slave_container_id)
 
-			slave_caught_up = False
-			while not slave_caught_up:
-				slave_status = self.run_query_mysql_container(
-					'SHOW SLAVE STATUS',
-					'information_schema',
-					slave_container_id
-				)
-				slave_caught_up = slave_status[0][44].startswith(
-												'Slave has read all relay log')
+		# Let ProxySQL know that:
+		# - the readers (slaves) are in hostgroup 1
+		# - the writer (master) is in hostgroup 0
+		self.run_query_proxysql_admin("INSERT INTO mysql_replication_hostgroups(writer_hostgroup, reader_hostgroup) VALUES(0, 1)")
+
+	def _promote_first_slave_to_master(self):
+		# Following steps from https://dev.mysql.com/doc/refman/5.6/en/replication-solutions-switch.html
+
+		# Send STOP SLAVE IO_THREAD to all slave
+		master_container = self.get_mysql_containers(hostgroup=0)[0]
+		slave_containers = self.get_mysql_containers(hostgroup=1)
+		for slave_container_id in slave_containers:
+			self.run_query_mysql_container('STOP SLAVE IO_THREAD',
+											'information_schema',
+											slave_container_id)
+			self._wait_for_slave_to_catch_up(slave_container_id)
+
+		# Find out from the metadata which of the slaves is the one to be
+		# promoted as a master
+		first_slave = None
+		for slave_container_id in slave_containers:
+			meta = self.docker_inspect(slave_container_id)
+			if 'DNSDOCK_NAME=slave1' in meta['Config']['Env']:
+				first_slave = slave_container_id
+
+		# Promote slave1 to a master
+		self.run_query_mysql_container('SET GLOBAL read_only=OFF',
+										'information_schema',
+										first_slave)
+		self.run_query_mysql_container('STOP SLAVE',
+										'information_schema',
+										first_slave)
+		self.run_query_mysql_container('RESET MASTER',
+										'information_schema',
+										first_slave)
+
+		# Point the other slaves to the newly elected master
+		for slave_container_id in slave_containers:
+			if slave_container_id == first_slave:
+				continue
+
+			self.run_query_mysql_container('STOP SLAVE',
+											'information_schema',
+											slave_container_id)
+			self.run_query_mysql_container("CHANGE MASTER TO MASTER_HOST = 'slave1.mysql.docker'",
+											'information_schema',
+											slave_container_id)
+			self.run_query_mysql_container('START SLAVE',
+											'information_schema',
+											slave_container_id)
+
+		# Point the old master to the new master (that was previously a slave)
+		config = self.get_tests_config()
+		username = config.get('ProxySQL', 'username')
+		password = config.get('ProxySQL', 'password')
+		self.run_query_mysql_container('SET GLOBAL read_only=ON',
+										'information_schema',
+										master_container)
+		q = "CHANGE MASTER TO MASTER_HOST = 'slave1.mysql.docker', MASTER_PORT = 3306, MASTER_USER = '%s', MASTER_PASSWORD = '%s', MASTER_AUTO_POSITION = 1"
+		self.run_query_mysql_container(q % (username, password),
+										'information_schema',
+										master_container)
+		self.run_query_mysql_container('RESET SLAVE',
+										'information_schema',
+										master_container)
+		self.run_query_mysql_container('START SLAVE',
+										'information_schema',
+										master_container)
+
 
 	def _test_insert_sent_through_proxysql_is_visible_in_slave_servers(self):
 		self._start_replication()
@@ -59,4 +133,13 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 
 	def test_insert_sent_through_proxysql_is_visible_in_slave_servers(self):
 		self.run_in_docker_scenarios(self._test_insert_sent_through_proxysql_is_visible_in_slave_servers,
+									scenarios=['5backends-replication'])
+
+	def _test_promote_slave_to_master_reflected_in_proxysql_admin_tables(self):
+		self._start_replication()
+		time.sleep(5)
+		self._promote_first_slave_to_master()
+
+	def test_promote_slave_to_master_reflected_in_proxysql_admin_tables(self):
+		self.run_in_docker_scenarios(self._test_promote_slave_to_master_reflected_in_proxysql_admin_tables,
 									scenarios=['5backends-replication'])
