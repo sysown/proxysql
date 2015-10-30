@@ -1,3 +1,10 @@
+dnsdock:
+    image: tonistiigi/dnsdock
+    volumes:
+        - /var/run/docker.sock:/run/docker.sock
+    ports:
+        - 172.17.42.1:53:53/udp
+
 proxysql:
   image: proxysql:{{proxysql_image}}
   links:
@@ -32,6 +39,8 @@ backend1hostgroup0:
   image: proxysql:mysql-simple-dump
   environment:
     MYSQL_ROOT_PASSWORD: root
+    DNSDOCK_NAME: master
+    DNSDOCK_IMAGE: mysql
   expose:
     - "3306"
   ports:
@@ -44,11 +53,14 @@ backend1hostgroup0:
     "com.proxysql.hostgroup": "0"
   volumes:
     - ./master-conf.d:/etc/mysql/conf.d
+  dns: 172.17.42.1
 
 backend1hostgroup1:
   image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
+    DNSDOCK_NAME: slave1
+    DNSDOCK_IMAGE: mysql
   links:
     - backend1hostgroup0
   expose:
@@ -63,11 +75,14 @@ backend1hostgroup1:
     "com.proxysql.hostgroup": "1"
   volumes:
     - ./slave1-conf.d:/etc/mysql/conf.d
+  dns: 172.17.42.1
 
 backend2hostgroup1:
   image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
+    DNSDOCK_NAME: slave2
+    DNSDOCK_IMAGE: mysql
   links:
     - backend1hostgroup0
   expose:
@@ -82,11 +97,14 @@ backend2hostgroup1:
     "com.proxysql.hostgroup": "1"
   volumes:
     - ./slave2-conf.d:/etc/mysql/conf.d
+  dns: 172.17.42.1
 
 backend3hostgroup1:
   image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
+    DNSDOCK_NAME: slave3
+    DNSDOCK_IMAGE: mysql
   links:
     - backend1hostgroup0
   expose:
@@ -101,11 +119,14 @@ backend3hostgroup1:
     "com.proxysql.hostgroup": "1"
   volumes:
     - ./slave3-conf.d:/etc/mysql/conf.d
+  dns: 172.17.42.1
 
 backend4hostgroup1:
   image: proxysql:mysql-empty
   environment:
     MYSQL_ROOT_PASSWORD: root
+    DNSDOCK_NAME: slave4
+    DNSDOCK_IMAGE: mysql
   links:
     - backend1hostgroup0
   expose:
@@ -120,3 +141,4 @@ backend4hostgroup1:
     "com.proxysql.hostgroup": "1"
   volumes:
     - ./slave4-conf.d:/etc/mysql/conf.d
+  dns: 172.17.42.1
