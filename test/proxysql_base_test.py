@@ -175,6 +175,9 @@ class ProxySQLBaseTest(TestCase):
 	def get_tests_config(self):
 		return ProxySQL_Tests_Config(overrides=ProxySQLBaseTest.CONFIG_OVERRIDES)
 
+	def docker_inspect(self, container_id):
+		return self.docker_fleet.docker_inspect(container_id)
+
 	def run_in_docker_scenarios(self, f, scenarios=[], proxysql_filters={}, mysql_filters={}):
 		"""Runs a function in a number of docker scenarios.
 
