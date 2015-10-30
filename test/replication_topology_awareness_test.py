@@ -8,6 +8,39 @@ from proxysql_base_test import ProxySQLBaseTest
 
 class ReplicationTopologyAwareness(ProxySQLBaseTest):
 
+	def _test_insert_sent_through_proxysql_is_visible_in_slave_servers(self):
+		self._start_replication()
+
+		random_string = ''.join(random.choice(['a', 'b', 'c', 'd', 'e']) for _ in xrange(10))
+		q = "INSERT INTO strings(value) VALUES('%s')" % random_string
+		self.run_query_proxysql(q, "test")
+
+		# Give slaves the time to catch up
+		time.sleep(5)
+
+		slave_containers = self.get_mysql_containers(hostgroup=1)
+		for slave_container_id in slave_containers:
+			q = "SELECT * FROM strings"
+			rows = self.run_query_mysql_container("SELECT * FROM strings",
+													"test",
+													slave_container_id)
+			self.assertEqual(set([row[0] for row in rows]),
+						 	set(['a', 'ab', 'abc', 'abcd', random_string]))
+
+	def test_insert_sent_through_proxysql_is_visible_in_slave_servers(self):
+		self.run_in_docker_scenarios(self._test_insert_sent_through_proxysql_is_visible_in_slave_servers,
+									scenarios=['5backends-replication'])
+
+	def _test_promote_slave_to_master_reflected_in_proxysql_admin_tables(self):
+		self._start_replication()
+		time.sleep(5)
+		self._promote_first_slave_to_master()
+		self._check_slave_promotion_reflected_in_proxysql_admin()
+
+	def test_promote_slave_to_master_reflected_in_proxysql_admin_tables(self):
+		self.run_in_docker_scenarios(self._test_promote_slave_to_master_reflected_in_proxysql_admin_tables,
+									scenarios=['5backends-replication'])
+
 	def _wait_for_slave_to_catch_up(self, slave_container_id):
 		# Wait for the slave to catch up with the master
 		slave_caught_up = False
@@ -111,35 +144,12 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 										'information_schema',
 										master_container)
 
+		# Wait for the slaves to catch up with the new master
+		new_slaves = set(slave_containers)
+		new_slaves.remove(first_slave)
+		new_slaves.add(master_container)
+		for slave_container_id in new_slaves:
+			self._wait_for_slave_to_catch_up(slave_container_id)
 
-	def _test_insert_sent_through_proxysql_is_visible_in_slave_servers(self):
-		self._start_replication()
-
-		random_string = ''.join(random.choice(['a', 'b', 'c', 'd', 'e']) for _ in xrange(10))
-		q = "INSERT INTO strings(value) VALUES('%s')" % random_string
-		self.run_query_proxysql(q, "test")
-
-		# Give slaves the time to catch up
-		time.sleep(5)
-
-		slave_containers = self.get_mysql_containers(hostgroup=1)
-		for slave_container_id in slave_containers:
-			q = "SELECT * FROM strings"
-			rows = self.run_query_mysql_container("SELECT * FROM strings",
-													"test",
-													slave_container_id)
-			self.assertEqual(set([row[0] for row in rows]),
-						 	set(['a', 'ab', 'abc', 'abcd', random_string]))
-
-	def test_insert_sent_through_proxysql_is_visible_in_slave_servers(self):
-		self.run_in_docker_scenarios(self._test_insert_sent_through_proxysql_is_visible_in_slave_servers,
-									scenarios=['5backends-replication'])
-
-	def _test_promote_slave_to_master_reflected_in_proxysql_admin_tables(self):
-		self._start_replication()
-		time.sleep(5)
-		self._promote_first_slave_to_master()
-
-	def test_promote_slave_to_master_reflected_in_proxysql_admin_tables(self):
-		self.run_in_docker_scenarios(self._test_promote_slave_to_master_reflected_in_proxysql_admin_tables,
-									scenarios=['5backends-replication'])
+	def _check_slave_promotion_reflected_in_proxysql_admin(self):
+		
