@@ -7,7 +7,7 @@
 
 Summary: A high-performance MySQL proxy
 Name: proxysql
-Version: 0.2.0902
+Version: 1.0.1
 Release: 1
 License: GPL+
 Group: Development/Tools
@@ -50,5 +50,7 @@ chkconfig --del %{name}
 %{_sysconfdir}/init.d/%{name}
 
 %changelog
+* Sat Oct 31 2015 Rene Cannao <rene.cannao@gmail.com> 1.0.1
+- Compiles 1.0.1
 * Wed Sep 9 2015  Andrei Ismail <iandrei@gmail.com> 0.2
 - Added support for automatic packaging on Ubuntu 14.04 and CentOS 7.

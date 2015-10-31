@@ -22,9 +22,7 @@ RUN apt-get update && apt-get install -y\
     libssl-dev\
     libtool
 
-RUN apt-get install -y wget unzip
-#RUN cd /opt; git clone https://github.com/sysown/proxysql-0.2.git proxysql
-RUN cd /opt ; wget https://github.com/sysown/proxysql-0.2/archive/1.0.zip ; unzip 1.0.zip ; mv proxysql-0.2-1.0 proxysql
+RUN cd /opt; git clone https://github.com/sysown/proxysql.git proxysql
 RUN cd /opt/proxysql; make clean && make -j
 
 ADD ./proxysql.ctl /opt/proxysql/proxysql.ctl

@@ -44,37 +44,37 @@ clean:
 packages: centos7 ubuntu12 ubuntu14
 .PHONY: packages
 
-centos7: binaries/proxysql-0.2.0902-1.x86_64.rpm
+centos7: binaries/proxysql-1.0.1-1.x86_64.rpm
 .PHONY: centos
 
-ubuntu12: binaries/proxysql_0.2.0902-ubuntu12_amd64.deb
+ubuntu12: binaries/proxysql_1.0.1-ubuntu12_amd64.deb
 .PHONY: ubuntu12
 
-ubuntu14: binaries/proxysql_0.2.0902-ubuntu14_amd64.deb
+ubuntu14: binaries/proxysql_1.0.1-ubuntu14_amd64.deb
 .PHONY: ubuntu14
 
-binaries/proxysql-0.2.0902-1.x86_64.rpm:
+binaries/proxysql-1.0.1-1.x86_64.rpm:
 	# Create CentOS 7 rpm file by creating docker image, running a container and extracting the RPM from the temp container
-	docker build -t centos7_proxysql --no-cache=true ./scenarios/centos7-build
+	docker build -t centos7_proxysql --no-cache=true ./docker/images/proxysql/centos7-build
 	docker run -i --name=centos7_build centos7_proxysql bash &
 	sleep 5
-	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-0.2.0902-1.x86_64.rpm ./binaries
+	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-1.0.1-1.x86_64.rpm ./binaries
 #	docker kill centos7_build
 	docker rm centos7_build
 
-binaries/proxysql_0.2.0902-ubuntu12_amd64.deb:
-	docker build -t ubuntu12_proxysql --no-cache=true ./scenarios/ubuntu-12.04-build
+binaries/proxysql_1.0.1-ubuntu12_amd64.deb:
+	docker build -t ubuntu12_proxysql --no-cache=true ./docker/images/proxysql/ubuntu-12.04-build
 	docker run -i --name=ubuntu12_build ubuntu12_proxysql bash &
 	sleep 5
-	docker cp ubuntu12_build:/opt/proxysql/proxysql_0.2.0902_amd64.deb ./binaries/proxysql_0.2.0902-ubuntu12_amd64.deb
+	docker cp ubuntu12_build:/opt/proxysql/proxysql_1.0.1_amd64.deb ./binaries/proxysql_1.0.1-ubuntu12_amd64.deb
 #	docker kill ubuntu12_build
 	docker rm ubuntu12_build
 
-binaries/proxysql_0.2.0902-ubuntu14_amd64.deb:
-	docker build -t ubuntu14_proxysql --no-cache=true ./scenarios/ubuntu-14.04-build
+binaries/proxysql_1.0.1-ubuntu14_amd64.deb:
+	docker build -t ubuntu14_proxysql --no-cache=true ./docker/images/proxysql/ubuntu-14.04-build
 	docker run -i --name=ubuntu14_build ubuntu14_proxysql bash &
 	sleep 5
-	docker cp ubuntu14_build:/opt/proxysql/proxysql_0.2.0902_amd64.deb ./binaries/proxysql_0.2.0902-ubuntu14_amd64.deb
+	docker cp ubuntu14_build:/opt/proxysql/proxysql_1.0.1_amd64.deb ./binaries/proxysql_1.0.1-ubuntu14_amd64.deb
 #	docker kill ubuntu14_build
 	docker rm ubuntu14_build
 

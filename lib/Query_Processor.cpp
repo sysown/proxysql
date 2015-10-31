@@ -37,8 +37,9 @@ class QP_rule_text_hitsonly {
 class QP_rule_text {
 	public:
 	char **pta;
-	const int num_fields=18;
+	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
+		num_fields=18;
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
