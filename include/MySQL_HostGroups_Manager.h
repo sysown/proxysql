@@ -60,7 +60,7 @@ class MySrvC {	// MySQL Server Container
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag);
 	~MySrvC();
-	void connect_error();
+	void connect_error(int);
 };
 
 class MySrvList {	// MySQL Server List

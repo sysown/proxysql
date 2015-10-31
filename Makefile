@@ -26,11 +26,11 @@ debug:
 
 .PHONY: deps
 deps:
-	cd deps && make -j 20
+	cd deps && make -j 5
 
 .PHONY: lib
 lib:
-	cd lib && make -j 20
+	cd lib && make -j 5
 
 .PHONY: src
 src:

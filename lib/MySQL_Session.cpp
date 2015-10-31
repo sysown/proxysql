@@ -1700,6 +1700,17 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt) {
+	if (qpo->error_msg) {
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"#42000",qpo->error_msg);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+		CurrentQuery.end();
+		GloQPro->delete_QP_out(qpo);
+		qpo=NULL;
+		return true;
+	}
 	if (qpo->new_query) {
 		// the query was rewritten
 		l_free(pkt->size,pkt->ptr);	// free old pkt
