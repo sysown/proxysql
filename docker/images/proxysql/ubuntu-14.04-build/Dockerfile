@@ -1,7 +1,13 @@
-# We're using Ubuntu 14:04 because ProxySQL compilation needs one of the latest
-# g++ compilers. Also, it's a long term release.
 FROM ubuntu:14.04
 MAINTAINER Andrei Ismail <iandrei@gmail.com>
+
+LABEL vendor=proxysql\
+      com.proxysql.type=proxysql\
+      com.proxysql.os=ubuntu14\
+      com.proxysql.interactive=false\
+      com.proxysql.config=simple\
+      com.proxysql.purpose=packaging
+
 RUN apt-get update && apt-get install -y\
     automake\
     cmake\

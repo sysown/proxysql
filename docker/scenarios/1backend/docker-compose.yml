@@ -1,0 +1,40 @@
+proxysql:
+  image: proxysql:{{proxysql_image}}
+  links:
+    - backend1hostgroup0
+  ports:
+    # ProxySQL admin port for MySQL commands
+    - "6032:6032"
+    # ProxySQL main port
+    - "6033:6033"
+    # gdbserver
+    - "2345:2345"
+  volumes:
+    # Sharing the data with 
+    - /tmp/proxysql-tests:/tmp/proxysql-src
+  privileged: true
+
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.config": "simple"
+    "com.proxysql.interactive": "false"
+    "com.proxysql.os": "ubuntu14"
+    "com.proxysql.purpose": "testing"
+    "com.proxysql.type": "proxysql"
+    "vendor": "proxysql"
+
+backend1hostgroup0:
+  image: proxysql:mysql-simple-dump
+  environment:
+    MYSQL_ROOT_PASSWORD: root
+  expose:
+    - "3306"
+  ports:
+    - "13306:3306"
+  # TODO(aismail): remove these hardcoded labels and add them in the template
+  # as a variable by using docker-inspect on the image.
+  labels:
+    "com.proxysql.type": "mysql"
+    "vendor": "proxysql"
+    "com.proxysql.hostgroup": "0"
