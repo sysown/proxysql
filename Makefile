@@ -71,12 +71,24 @@ binaries/proxysql_1.0.1-ubuntu12_amd64.deb:
 	docker rm ubuntu12_build
 
 binaries/proxysql_1.0.1-ubuntu14_amd64.deb:
-	docker build -t ubuntu14_proxysql --no-cache=true ./docker/images/proxysql/ubuntu-14.04-build
-	docker run -i --name=ubuntu14_build ubuntu14_proxysql bash &
-	sleep 5
+	docker stop ubuntu14_build || true
+	docker rm ubuntu14_build || true
+	docker create --name ubuntu14_build renecannao/proxysql:build-ubuntu14 bash -c "while : ; do sleep 10 ; done"
+	docker start ubuntu14_build
+	docker exec ubuntu14_build bash -c "apt-get install -y python"
+	docker exec ubuntu14_build bash -c "cd /opt; git clone https://github.com/sysown/proxysql.git proxysql"
+	docker exec ubuntu14_build bash -c "cd /opt/proxysql; make clean && make -j"
+	docker cp docker/images/proxysql/ubuntu-14.04-build/proxysql.ctl ubuntu14_build:/opt/proxysql/
+	docker exec ubuntu14_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
 	docker cp ubuntu14_build:/opt/proxysql/proxysql_1.0.1_amd64.deb ./binaries/proxysql_1.0.1-ubuntu14_amd64.deb
-#	docker kill ubuntu14_build
+	docker stop ubuntu14_build
 	docker rm ubuntu14_build
+#	docker build -t ubuntu14_proxysql --no-cache=true ./docker/images/proxysql/ubuntu-14.04-build
+#	docker run -i --name=ubuntu14_build ubuntu14_proxysql bash &
+#	sleep 5
+#	docker cp ubuntu14_build:/opt/proxysql/proxysql_1.0.1_amd64.deb ./binaries/proxysql_1.0.1-ubuntu14_amd64.deb
+#	docker kill ubuntu14_build
+#	docker rm ubuntu14_build
 
 
 .PHONY: cleanall
