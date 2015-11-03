@@ -1,0 +1,7 @@
+export ROOTPASS=rootpass
+export REPLPASS=replpass
+export NUMAPPS=2
+export NUMSERVERS=5
+export NUMPROXIES=2
+export USESUDO=sudo
+export DOCNET=`ifconfig docker0| grep "inet addr" | awk -F ':' '{print $2}' | awk '{print $1}'`

@@ -1,5 +1,5 @@
 proxysql:
-  image: proxysql:{{proxysql_image}}
+  image: proxysql:proxysql
   links:
     - backend1hostgroup0
     - backend1hostgroup1

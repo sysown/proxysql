@@ -1,0 +1,23 @@
+. ./vars
+
+declare -a AIPS
+declare -a DIPS
+declare -a PIPS
+
+
+for i in `seq 1 ${NUMSERVERS}` ; do
+	DIPS[$i]=`$USESUDO docker inspect -f '{{.NetworkSettings.IPAddress}}' db$i`
+done
+
+
+for i in `seq 1 ${NUMAPPS}` ; do
+  AIPS[$i]=`$USESUDO docker inspect -f '{{.NetworkSettings.IPAddress}}' app$i`
+done
+
+for i in `seq 1 ${NUMPROXIES}` ; do
+  PIPS[$i]=`$USESUDO docker inspect -f '{{.NetworkSettings.IPAddress}}' proxy$i`
+done
+
+export APP_IPS="${AIPS[*]}"
+export DATABASE_IPS="${DIPS[*]}"
+export PROXY_IPS="${PIPS[*]}"
