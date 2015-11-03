@@ -131,6 +131,7 @@ void MySrvC::connect_error(int err_num) {
 	// as a single connection failure won't make a significant difference
 	__sync_fetch_and_add(&connect_ERR,1);
 	switch (err_num) {
+		case 1044: // access denied
 		case 1045: // access denied
 			return;
 			break;
