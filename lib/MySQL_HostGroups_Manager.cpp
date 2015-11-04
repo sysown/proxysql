@@ -737,7 +737,20 @@ __exit_replication_lag_action:
 	wrunlock();
 }
 
-
+/*
+ * Prepares at most num_conn idle connections in the given hostgroup for
+ * pinging. When -1 is passed as a hostgroup, all hostgroups are examined.
+ *
+ * The resulting idle connections are returned in conn_list. Note that not all
+ * currently idle connections will be returned (some might be purged).
+ *
+ * Connections are purged according to 2 criteria:
+ * - whenever the maximal number of connections for a server is hit, free
+ *   connections will be purged
+ * - also, idle connections that cause the number of free connections to rise
+ *   above a certain percentage of the maximal number of connections will be
+ *   dropped as well
+ */
 int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned long long _max_last_time_used, MySQL_Connection **conn_list, int num_conn) {
 	wrlock();
 	int num_conn_current=0;
@@ -752,7 +765,7 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				mysrvc->ConnectionsFree->drop_all_connections();
 			}
 			
-			// drop idle connections if beyond max_connection
+			// Drop idle connections if beyond max_connection
 			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
 				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
 				delete conn;
@@ -762,7 +775,9 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 			PtrArray *pa=mysrvc->ConnectionsFree->conns;
 			for (k=0; k<(int)pa->len; k++) {
 				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
+				// If the connection is idle ...
 				if (mc->last_time_used < _max_last_time_used) {
+					// Then we will remove it if there are too many idle connections sitting around.
 					if (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
 						// the idle connection are more than mysql_thread___free_connections_pct of max_connections
 						// we will drop this connection instead of pinging it
@@ -770,6 +785,12 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 						delete mc;
 						continue;
 					}
+
+					// If the connection is idle but wasn't dropped, we'll
+					// move it to the returned results (conn_list) in order to
+					// ping it. Keeping them alive by pinging them once in a
+					// while introduces less latency than opening them when
+					// needed.
 					mc=(MySQL_Connection *)pa->remove_index_fast(k);
 					mysrvc->ConnectionsUsed->add(mc);
 					k--;
