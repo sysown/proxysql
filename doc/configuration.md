@@ -28,6 +28,7 @@ Top-level sections:
 * `admin_variables`: contains global variables that control the functionality of the admin interface. [Here](https://github.com/sysown/proxysql/blob/master/doc/global_variables.md#admin-admin_credentials) is the full list of the available variables and their semantics (the ones that start with `admin-`)
 * `mysql_variables`: contains global variables that control the functionality for handling the incoming MySQL traffic. [Here](https://github.com/sysown/proxysql/blob/master/doc/global_variables.md#mysql-commands_stats) is the full list of the available variables and their semantics (the ones that start with `mysql-`)
 * `mysql_servers`: contains rows for the `mysql_servers` table from the admin interface. Basically, these define the backend servers towards which the incoming MySQL traffic is routed. Rows are encoded as per the `.cfg` file format, here is an example:
+	
 	```bash
 	mysql_servers =
 	(
@@ -41,6 +42,7 @@ Top-level sections:
 	```
 	For the available columns of the `mysql_servers` table and their semantics, please check the [associated documentation](https://github.com/sysown/proxysql/blob/master/doc/admin_tables.md#mysql_servers).
 * `mysql_users`: contains rows for the `mysql_users` table from the admin interface. Basically, these define the users which can connect to the proxy, and the users with which the proxy can connect to the backend servers. Rows are encoded as per the `.cfg` file format, here is an example:
+	
 	```bash
 	mysql_users:
 	(
@@ -56,6 +58,7 @@ Top-level sections:
 	```
 	For the available columns of the `mysql_users` table and their semantics, please check the [associated documentation](https://github.com/sysown/proxysql/blob/master/doc/admin_tables.md#mysql_users).
 * `mysql_query_rules`: contains rows for the `mysql_query_rules` table from the admin interface. Basically, these define the rules used to classify and route the incoming MySQL traffic, according to various criteria (patterns matched, user used to run the query, etc.). Rows are encoded as per the `.cfg` file format, here is an example:
+	
 	```bash
 	mysql_query_rules:
 	(
