@@ -81,7 +81,7 @@ $(ODIR):
 	mkdir $(ODIR)
 
 $(LIBPROXYSQLAR):
-	cd $(LDIR) && make
+	cd $(LDIR) && ${MAKE}
 
 default: $(EXECUTABLE)
 
