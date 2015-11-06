@@ -1857,6 +1857,27 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{
+		// Connections
+		pta[0]=(char *)"Server_Connections_aborted";
+		sprintf(buf,"%d",MyHGM->status.server_connections_aborted);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{
+		// Connections
+		pta[0]=(char *)"Server_Connections_connected";
+		sprintf(buf,"%d",MyHGM->status.server_connections_connected);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{
+		// Connections
+		pta[0]=(char *)"Server_Connections_created";
+		sprintf(buf,"%d",MyHGM->status.server_connections_created);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Queries bytes recv
 		pta[0]=(char *)"Queries_backends_bytes_recv";
 		sprintf(buf,"%llu",get_queries_backends_bytes_recv());
