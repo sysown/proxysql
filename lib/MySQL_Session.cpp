@@ -13,6 +13,7 @@
 extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 
 extern MySQL_Authentication *GloMyAuth;
+extern ProxySQL_Admin *GloAdmin;
 
 class KillArgs {
 	public:
@@ -320,6 +321,21 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 		client_myds->PSarrayOUT->add(pkt_2.ptr,pkt_2.size);
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
+	if (pkt->size==strlen((char *)"select USER()")+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
+		char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
+		char *query2=(char *)malloc(strlen(query1)+strlen(client_myds->myconn->userinfo->username)+10);
+		sprintf(query2,query1,client_myds->myconn->userinfo->username);
+		char *error;
+		int cols;
+		int affected_rows;
+		SQLite3_result *resultset;
+		GloAdmin->admindb->execute_statement(query2, &error , &cols , &affected_rows , &resultset);
+		SQLite3_to_MySQL(resultset, error, affected_rows, &client_myds->myprot);
+		delete resultset;
+		free(query2);
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
