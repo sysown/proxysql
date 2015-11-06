@@ -224,6 +224,9 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.client_connections=0;
 	status.client_connections_aborted=0;
 	status.client_connections_created=0;
+	status.server_connections_connected=0;
+	status.server_connections_aborted=0;
+	status.server_connections_created=0;
 	status.myconnpoll_get=0;
 	status.myconnpoll_get_ok=0;
 	status.myconnpoll_get_ping=0;
