@@ -737,6 +737,33 @@ __exit_replication_lag_action:
 	wrunlock();
 }
 
+void MySQL_HostGroups_Manager::drop_all_idle_connections() {
+	// NOTE: the caller should hold wrlock
+	int i, j;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
+				mysrvc->ConnectionsFree->drop_all_connections();
+			}
+
+			// Drop idle connections if beyond max_connection
+			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
+				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
+				delete conn;
+			}
+
+			PtrArray *pa=mysrvc->ConnectionsFree->conns;
+			while (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
+				MySQL_Connection *mc=(MySQL_Connection *)pa->remove_index_fast(0);
+				delete mc;
+			}
+		}
+	}
+}
+
 /*
  * Prepares at most num_conn idle connections in the given hostgroup for
  * pinging. When -1 is passed as a hostgroup, all hostgroups are examined.
@@ -753,6 +780,7 @@ __exit_replication_lag_action:
  */
 int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned long long _max_last_time_used, MySQL_Connection **conn_list, int num_conn) {
 	wrlock();
+	drop_all_idle_connections();
 	int num_conn_current=0;
 	int i,j, k;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -760,31 +788,11 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
-			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
-				mysrvc->ConnectionsFree->drop_all_connections();
-			}
-			
-			// Drop idle connections if beyond max_connection
-			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
-				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
-				delete conn;
-			}
-
-			
 			PtrArray *pa=mysrvc->ConnectionsFree->conns;
 			for (k=0; k<(int)pa->len; k++) {
 				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
 				// If the connection is idle ...
 				if (mc->last_time_used < _max_last_time_used) {
-					// Then we will remove it if there are too many idle connections sitting around.
-					if (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
-						// the idle connection are more than mysql_thread___free_connections_pct of max_connections
-						// we will drop this connection instead of pinging it
-						mc=(MySQL_Connection *)pa->remove_index_fast(k);
-						delete mc;
-						continue;
-					}
 
 					// If the connection is idle but wasn't dropped, we'll
 					// move it to the returned results (conn_list) in order to

@@ -133,6 +133,7 @@ class MySQL_HostGroups_Manager {
 
 	MySQL_Connection * get_MyConn_from_pool(unsigned int);
 
+	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
 	SQLite3_result * SQL3_Connection_Pool();
 

@@ -658,7 +658,7 @@ handler_again:
 				mybe->server_myds->max_connect_time=0;
 			}
 			if (
-				(mybe->server_myds->myconn && mybe->server_myds->myconn!=ASYNC_IDLE && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
+				(mybe->server_myds->myconn && mybe->server_myds->myconn->async_state_machine!=ASYNC_IDLE && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
 				// query timed out
 				||
 				(killed==true) // session was killed by admin
