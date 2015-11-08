@@ -658,7 +658,7 @@ handler_again:
 				mybe->server_myds->max_connect_time=0;
 			}
 			if (
-				(mybe->server_myds->myconn && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
+				(mybe->server_myds->myconn && mybe->server_myds->myconn!=ASYNC_IDLE && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
 				// query timed out
 				||
 				(killed==true) // session was killed by admin
@@ -817,6 +817,10 @@ handler_again:
 
 							bool retry_conn=false;
 							switch (myerr) {
+								case 1317:  // Query execution was interrupted
+									if (killed==true || myds->killed_at) {
+										return -1;
+									}
 								case 1290: // read-only
 									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 										retry_conn=true;
@@ -1105,6 +1109,7 @@ handler_again:
 						status=WAITING_CLIENT_DATA;
 						st=previous_status.top();
 						previous_status.pop();
+						myds->wait_until=0;
 						NEXT_IMMEDIATE(st);
 						break;
 					case -1:
