@@ -74,7 +74,7 @@ class MySQL_Session
 	void handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();	
 
 	bool handler_special_queries(PtrSize_t *);
-
+	void RequestEnd(MySQL_Data_Stream *);
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 

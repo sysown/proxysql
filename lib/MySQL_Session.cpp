@@ -100,7 +100,6 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 }
 
 void Query_Info::end() {
-	end_time=sess->thread->curtime;
 	query_parser_update_counters();
 	query_parser_free();
 	if ((end_time-start_time) > (unsigned int)mysql_thread___long_query_time*1000) {
@@ -469,6 +468,8 @@ __get_pkts_from_client:
 									}
 									rc_break=handler_special_queries(&pkt);
 									if (rc_break==true) {
+										// track also special queries
+										RequestEnd(NULL);
 										break;
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
@@ -727,13 +728,14 @@ handler_again:
 						last_insert_id=myconn->mysql->insert_id;
 					}
 					MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
-					GloQPro->delete_QP_out(qpo);
-					qpo=NULL;
-					myconn->async_free_result();
-					status=WAITING_CLIENT_DATA;
-					client_myds->DSS=STATE_SLEEP;
-					CurrentQuery.end();
-					myds->free_mysql_real_query();
+//					GloQPro->delete_QP_out(qpo);
+//					qpo=NULL;
+//					myconn->async_free_result();
+//					status=WAITING_CLIENT_DATA;
+//					client_myds->DSS=STATE_SLEEP;
+//					CurrentQuery.end();
+//					myds->free_mysql_real_query();
+					RequestEnd(myds);
 					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->DSS=STATE_NOT_INITIALIZED;
@@ -825,14 +827,15 @@ handler_again:
 							}
 
 							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
-							CurrentQuery.end();
-							GloQPro->delete_QP_out(qpo);
-							qpo=NULL;
-							myconn->async_free_result();
+//							CurrentQuery.end();
+//							GloQPro->delete_QP_out(qpo);
+//							qpo=NULL;
+//							myconn->async_free_result();
 							//myds->DSS=STATE_NOT_INITIALIZED;
-							status=WAITING_CLIENT_DATA;
-							client_myds->DSS=STATE_SLEEP;
-							myds->free_mysql_real_query();
+//							status=WAITING_CLIENT_DATA;
+//							client_myds->DSS=STATE_SLEEP;
+//							myds->free_mysql_real_query();
+							RequestEnd(myds);
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1015,12 +1018,13 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-							CurrentQuery.end();
-							myds->free_mysql_real_query();
+//							CurrentQuery.end();
+//							myds->free_mysql_real_query();
 							myds->destroy_MySQL_Connection_From_Pool();
 							myds->fd=0;
-							status=WAITING_CLIENT_DATA;
-							client_myds->DSS=STATE_SLEEP;
+//							status=WAITING_CLIENT_DATA;
+//							client_myds->DSS=STATE_SLEEP;
+							RequestEnd(myds);
 						}
 					} else {
 						// rc==1 , nothing to do for now
@@ -1036,9 +1040,10 @@ handler_again:
 					char buf[256];
 					sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
-					CurrentQuery.end();
-					mybe->server_myds->free_mysql_real_query();
-					client_myds->DSS=STATE_SLEEP;
+//					CurrentQuery.end();
+//					mybe->server_myds->free_mysql_real_query();
+//					client_myds->DSS=STATE_SLEEP;
+					RequestEnd(mybe->server_myds);
 					//enum session_status st;
 					while (previous_status.size()) {
 						previous_status.top();
@@ -1108,9 +1113,10 @@ handler_again:
 								sprintf(buf,"Max connect failure while reaching hostgroup %d", current_hostgroup);
 								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
 							}
-							CurrentQuery.end();
-							myds->free_mysql_real_query();
-							client_myds->DSS=STATE_SLEEP;
+//							CurrentQuery.end();
+//							myds->free_mysql_real_query();
+//							client_myds->DSS=STATE_SLEEP;
+							RequestEnd(myds);
 							while (previous_status.size()) {
 								st=previous_status.top();
 								previous_status.pop();
@@ -1473,12 +1479,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (qpo->error_msg) {
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"#42000",qpo->error_msg);
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
+//		client_myds->DSS=STATE_SLEEP;
+//		status=WAITING_CLIENT_DATA;
 		l_free(pkt->size,pkt->ptr);
-		CurrentQuery.end();
-		GloQPro->delete_QP_out(qpo);
-		qpo=NULL;
+//		CurrentQuery.end();
+//		GloQPro->delete_QP_out(qpo);
+//		qpo=NULL;
+		RequestEnd(NULL);
 		return true;
 	}
 	if (qpo->new_query) {
@@ -1509,11 +1516,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			free(aa);
 			client_myds->PSarrayOUT->copy_add(client_myds->resultset,0,client_myds->resultset->len);
 			while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
-			status=WAITING_CLIENT_DATA;
-			client_myds->DSS=STATE_SLEEP;
-			CurrentQuery.end();
-			GloQPro->delete_QP_out(qpo);
-			qpo=NULL;
+//			status=WAITING_CLIENT_DATA;
+//			client_myds->DSS=STATE_SLEEP;
+//			CurrentQuery.end();
+//			GloQPro->delete_QP_out(qpo);
+//			qpo=NULL;
+			RequestEnd(NULL);
 			return true;
 		}
 	}
@@ -1746,4 +1754,32 @@ unsigned long long MySQL_Session::IdleTime() {
 		unsigned long long last_recv=thread->mypolls.last_recv[idx];
 		unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
     return thread->curtime - last_time;
+}
+
+// this should execute most of the commands executed when a request is finalized
+// this should become the place to hook other functions
+void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
+	// we need to access statistics before calling CurrentQuery.end()
+	// so we track the time here
+	CurrentQuery.end_time=thread->curtime;
+
+	// clean qpo
+	if (qpo) {
+		GloQPro->delete_QP_out(qpo);
+		qpo=NULL;
+	}
+	// if there is an associated myds, clean its status
+	if (myds) {
+		// if there is a mysql connection, clean its status
+		if (myds->myconn) {
+			myds->myconn->async_free_result();
+		}
+		myds->free_mysql_real_query();
+	}
+	// reset status of the session
+	status=WAITING_CLIENT_DATA;
+	// reset status of client data stream
+	client_myds->DSS=STATE_SLEEP;
+	// finalize the query
+	CurrentQuery.end();
 }
