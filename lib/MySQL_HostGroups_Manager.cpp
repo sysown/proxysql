@@ -145,7 +145,7 @@ void MySrvC::connect_error(int err_num) {
 	} else {
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
-			proxy_info("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time);
+			proxy_info("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			status=MYSQL_SERVER_STATUS_SHUNNED;
 			shunned_automatic=true;
 		}
@@ -589,13 +589,13 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 					// try to recover shunned servers
-					if (mysrvc->shunned_automatic && mysql_thread___shun_recovery_time) {
+					if (mysrvc->shunned_automatic && mysql_thread___shun_recovery_time_sec) {
 						time_t t;
 						t=time(NULL);
 						// we do all these changes without locking . We assume the server is not used from long
 						// even if the server is still in used and any of the follow command fails it is not critical
 						// because this is only an attempt to recover a server that is probably dead anyway
-						if ((t - mysrvc->time_last_detected_error) > mysql_thread___shun_recovery_time) {
+						if ((t - mysrvc->time_last_detected_error) > mysql_thread___shun_recovery_time_sec) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							mysrvc->shunned_automatic=false;
 							mysrvc->connect_ERR_at_time_last_detected_error=0;
