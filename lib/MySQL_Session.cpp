@@ -627,7 +627,7 @@ handler_again:
 					return -1;
 				} else {
 					if (rc==-1) {
-						proxy_error("Detected a broken connection during ping\n");
+						proxy_error("Detected a broken connection during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
 						myds->destroy_MySQL_Connection_From_Pool();
 						myds->fd=0;
 						delete mybe->server_myds;
@@ -792,7 +792,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on server %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
@@ -895,7 +895,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during change user: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during change user on %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
@@ -961,7 +961,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
@@ -1018,7 +1018,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during INIT_DB: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during INIT_DB on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;

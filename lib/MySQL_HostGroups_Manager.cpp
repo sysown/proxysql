@@ -145,7 +145,7 @@ void MySrvC::connect_error(int err_num) {
 	} else {
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
-			proxy_info("Shunning server %s:%d with %u errors/sec\n", address, port, connect_ERR_at_time_last_detected_error);
+			proxy_info("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time);
 			status=MYSQL_SERVER_STATUS_SHUNNED;
 			shunned_automatic=true;
 		}
