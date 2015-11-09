@@ -108,6 +108,9 @@ class MySQL_HostGroups_Manager {
 		unsigned long client_connections_aborted;
 		unsigned long client_connections_created;
 		int client_connections;
+		unsigned long server_connections_aborted;
+		unsigned long server_connections_created;
+		unsigned long server_connections_connected;
 		unsigned long myconnpoll_get;
 		unsigned long myconnpoll_get_ok;
 		unsigned long myconnpoll_get_ping;

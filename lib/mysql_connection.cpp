@@ -433,6 +433,7 @@ handler_again:
     	break;
 		case ASYNC_CONNECT_SUCCESSFUL:
 			__sync_fetch_and_add(&parent->connect_OK,1);
+			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			break;
 		case ASYNC_CONNECT_FAILED:
 			parent->connect_error(mysql_errno(mysql));
