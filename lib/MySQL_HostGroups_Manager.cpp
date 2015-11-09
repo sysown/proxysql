@@ -803,23 +803,6 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
 				// If the connection is idle ...
 				if (mc->last_time_used < _max_last_time_used) {
-<<<<<<< HEAD
-					if (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
-						// the idle connection are more than mysql_thread___free_connections_pct of max_connections
-						// we will drop this connection instead of pinging it
-						mc=(MySQL_Connection *)pa->remove_index_fast(k);
-						delete mc;
-						
-						continue;
-					}
-=======
-
-					// If the connection is idle but wasn't dropped, we'll
-					// move it to the returned results (conn_list) in order to
-					// ping it. Keeping them alive by pinging them once in a
-					// while introduces less latency than opening them when
-					// needed.
->>>>>>> master
 					mc=(MySQL_Connection *)pa->remove_index_fast(k);
 					mysrvc->ConnectionsUsed->add(mc);
 					k--;
