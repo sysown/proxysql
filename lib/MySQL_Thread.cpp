@@ -1272,7 +1272,7 @@ struct pollfd * MySQL_Thread::get_pollfd(unsigned int i) {
 }
 
 void MySQL_Thread::poll_listener_add(int sock) {
-	MySQL_Data_Stream *listener_DS = new MySQL_Data_Stream;	
+	MySQL_Data_Stream *listener_DS = new MySQL_Data_Stream();
 	listener_DS->myds_type=MYDS_LISTENER;
 	listener_DS->fd=sock;
 
