@@ -1860,21 +1860,21 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_aborted";
-		sprintf(buf,"%d",MyHGM->status.server_connections_aborted);
+		sprintf(buf,"%lu",MyHGM->status.server_connections_aborted);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_connected";
-		sprintf(buf,"%d",MyHGM->status.server_connections_connected);
+		sprintf(buf,"%lu",MyHGM->status.server_connections_connected);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_created";
-		sprintf(buf,"%d",MyHGM->status.server_connections_created);
+		sprintf(buf,"%lu",MyHGM->status.server_connections_created);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
