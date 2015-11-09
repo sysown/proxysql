@@ -13,6 +13,7 @@
 extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 
 extern MySQL_Authentication *GloMyAuth;
+extern ProxySQL_Admin *GloAdmin;
 
 class KillArgs {
 	public:
@@ -323,6 +324,21 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
+	if (pkt->size==strlen((char *)"select USER()")+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
+		char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
+		char *query2=(char *)malloc(strlen(query1)+strlen(client_myds->myconn->userinfo->username)+10);
+		sprintf(query2,query1,client_myds->myconn->userinfo->username);
+		char *error;
+		int cols;
+		int affected_rows;
+		SQLite3_result *resultset;
+		GloAdmin->admindb->execute_statement(query2, &error , &cols , &affected_rows , &resultset);
+		SQLite3_to_MySQL(resultset, error, affected_rows, &client_myds->myprot);
+		delete resultset;
+		free(query2);
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
 	if ( (pkt->size < 25) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
 		char *name=strndup((char *)pkt->ptr+15,pkt->size-15);
 		const CHARSET_INFO * c = proxysql_find_charset_name(name);
@@ -611,7 +627,7 @@ handler_again:
 					return -1;
 				} else {
 					if (rc==-1) {
-						proxy_error("Detected a broken connection during ping\n");
+						proxy_error("Detected a broken connection during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
 						myds->destroy_MySQL_Connection_From_Pool();
 						myds->fd=0;
 						delete mybe->server_myds;
@@ -642,7 +658,7 @@ handler_again:
 				mybe->server_myds->max_connect_time=0;
 			}
 			if (
-				(mybe->server_myds->myconn && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
+				(mybe->server_myds->myconn && mybe->server_myds->myconn->async_state_machine!=ASYNC_IDLE && mybe->server_myds->wait_until && thread->curtime >= mybe->server_myds->wait_until)
 				// query timed out
 				||
 				(killed==true) // session was killed by admin
@@ -776,7 +792,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on server %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
@@ -801,6 +817,10 @@ handler_again:
 
 							bool retry_conn=false;
 							switch (myerr) {
+								case 1317:  // Query execution was interrupted
+									if (killed==true || myds->killed_at) {
+										return -1;
+									}
 								case 1290: // read-only
 									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 										retry_conn=true;
@@ -875,7 +895,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during change user: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during change user on %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
@@ -941,7 +961,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
@@ -998,7 +1018,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during INIT_DB: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during INIT_DB on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
@@ -1089,6 +1109,7 @@ handler_again:
 						status=WAITING_CLIENT_DATA;
 						st=previous_status.top();
 						previous_status.pop();
+						myds->wait_until=0;
 						NEXT_IMMEDIATE(st);
 						break;
 					case -1:

@@ -51,7 +51,8 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 }
 
 #define queue_destroy(_q) { \
-    free(_q.buffer); \
+	if (_q.buffer) free(_q.buffer); \
+	_q.buffer=NULL; \
 }
 
 #define queue_zero(_q) { \
@@ -231,6 +232,10 @@ void MySQL_Data_Stream::init() {
 		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
 		if (resultset==NULL) resultset = new PtrSizeArray();
 	}
+	if (myds_type!=MYDS_FRONTEND) {
+		queue_destroy(queueIN);
+		queue_destroy(queueOUT);
+	}
 }
 
 // this function initializes a MySQL_Data_Stream with arguments
@@ -407,13 +412,10 @@ int MySQL_Data_Stream::write_to_net_poll() {
 
 
 int MySQL_Data_Stream::read_pkts() {
-	{
-		int rc=0;
-    	int r=0;
-    	while((r=buffer2array())) rc+=r;
-	    return rc;
-
-	}
+	int rc=0;
+	int r=0;
+	while((r=buffer2array())) rc+=r;
+	return rc;
 }
 
 

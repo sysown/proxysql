@@ -146,7 +146,7 @@ void MySrvC::connect_error(int err_num) {
 	} else {
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
-			proxy_info("Shunning server %s:%d with %u errors/sec\n", address, port, connect_ERR_at_time_last_detected_error);
+			proxy_info("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			status=MYSQL_SERVER_STATUS_SHUNNED;
 			shunned_automatic=true;
 		}
@@ -594,13 +594,13 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 					// try to recover shunned servers
-					if (mysrvc->shunned_automatic && mysql_thread___shun_recovery_time) {
+					if (mysrvc->shunned_automatic && mysql_thread___shun_recovery_time_sec) {
 						time_t t;
 						t=time(NULL);
 						// we do all these changes without locking . We assume the server is not used from long
 						// even if the server is still in used and any of the follow command fails it is not critical
 						// because this is only an attempt to recover a server that is probably dead anyway
-						if ((t - mysrvc->time_last_detected_error) > mysql_thread___shun_recovery_time) {
+						if ((t - mysrvc->time_last_detected_error) > mysql_thread___shun_recovery_time_sec) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							mysrvc->shunned_automatic=false;
 							mysrvc->connect_ERR_at_time_last_detected_error=0;
@@ -744,14 +744,11 @@ __exit_replication_lag_action:
 	wrunlock();
 }
 
-
-int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned long long _max_last_time_used, MySQL_Connection **conn_list, int num_conn) {
-	wrlock();
-	int num_conn_current=0;
-	int i,j, k;
+void MySQL_HostGroups_Manager::drop_all_idle_connections() {
+	// NOTE: the caller should hold wrlock
+	int i, j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
@@ -759,27 +756,70 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				__sync_fetch_and_sub(&status.server_connections_created, mysrvc->ConnectionsFree->conns->len);
 				mysrvc->ConnectionsFree->drop_all_connections();
 			}
-			
-			// drop idle connections if beyond max_connection
+
+			// Drop idle connections if beyond max_connection
 			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
 				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
 				delete conn;
 				__sync_fetch_and_sub(&status.server_connections_created, 1);
 			}
 
-			
+			PtrArray *pa=mysrvc->ConnectionsFree->conns;
+			while (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
+				MySQL_Connection *mc=(MySQL_Connection *)pa->remove_index_fast(0);
+				delete mc;
+				__sync_fetch_and_sub(&status.server_connections_created, 1);
+			}
+		}
+	}
+}
+
+/*
+ * Prepares at most num_conn idle connections in the given hostgroup for
+ * pinging. When -1 is passed as a hostgroup, all hostgroups are examined.
+ *
+ * The resulting idle connections are returned in conn_list. Note that not all
+ * currently idle connections will be returned (some might be purged).
+ *
+ * Connections are purged according to 2 criteria:
+ * - whenever the maximal number of connections for a server is hit, free
+ *   connections will be purged
+ * - also, idle connections that cause the number of free connections to rise
+ *   above a certain percentage of the maximal number of connections will be
+ *   dropped as well
+ */
+int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned long long _max_last_time_used, MySQL_Connection **conn_list, int num_conn) {
+	wrlock();
+	drop_all_idle_connections();
+	int num_conn_current=0;
+	int i,j, k;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			PtrArray *pa=mysrvc->ConnectionsFree->conns;
 			for (k=0; k<(int)pa->len; k++) {
 				MySQL_Connection *mc=(MySQL_Connection *)pa->index(k);
+				// If the connection is idle ...
 				if (mc->last_time_used < _max_last_time_used) {
+<<<<<<< HEAD
 					if (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
 						// the idle connection are more than mysql_thread___free_connections_pct of max_connections
 						// we will drop this connection instead of pinging it
 						mc=(MySQL_Connection *)pa->remove_index_fast(k);
 						delete mc;
-						__sync_fetch_and_sub(&status.server_connections_created, 1);
+						
 						continue;
 					}
+=======
+
+					// If the connection is idle but wasn't dropped, we'll
+					// move it to the returned results (conn_list) in order to
+					// ping it. Keeping them alive by pinging them once in a
+					// while introduces less latency than opening them when
+					// needed.
+>>>>>>> master
 					mc=(MySQL_Connection *)pa->remove_index_fast(k);
 					mysrvc->ConnectionsUsed->add(mc);
 					k--;
