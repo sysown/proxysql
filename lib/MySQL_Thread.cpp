@@ -169,7 +169,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
 	(char *)"long_query_time",
-	(char *)"ping_interval_server",
+	(char *)"ping_interval_server_msec",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
 	(char *)"poll_timeout",
@@ -236,7 +236,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.long_query_time=1000;
-	variables.ping_interval_server=10000;
+	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.default_charset=33;
@@ -387,7 +387,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
-	if (!strcasecmp(name,"ping_interval_server")) return (int)variables.ping_interval_server;
+	if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
@@ -538,8 +538,8 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.long_query_time);
 		return strdup(intbuf);
 	}
-	if (!strcasecmp(name,"ping_interval_server")) {
-		sprintf(intbuf,"%d",variables.ping_interval_server);
+	if (!strcasecmp(name,"ping_interval_server_msec")) {
+		sprintf(intbuf,"%d",variables.ping_interval_server_msec);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"ping_timeout_server")) {
@@ -843,10 +843,10 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
-	if (!strcasecmp(name,"ping_interval_server")) {
+	if (!strcasecmp(name,"ping_interval_server_msec")) {
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 7*24*3600*1000) {
-			variables.ping_interval_server=intv;
+			variables.ping_interval_server_msec=intv;
 			return true;
 		} else {
 			return false;
@@ -1323,9 +1323,9 @@ void MySQL_Thread::run() {
 	while (shutdown==0) {
 
 	int num_idles;
-	if (processing_idles==false &&  (last_processing_idles < curtime-mysql_thread___ping_interval_server*1000/10) ) {
+	if (processing_idles==false &&  (last_processing_idles < curtime-mysql_thread___ping_interval_server_msec*1000/10) ) {
 		int i;
-		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
+		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server_msec*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 		for (i=0; i<num_idles; i++) {
 			MySQL_Data_Stream *myds;
 	//		myds=new MySQL_Data_Stream();
@@ -1676,7 +1676,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
-	mysql_thread___ping_interval_server=GloMTH->get_variable_int((char *)"ping_interval_server");
+	mysql_thread___ping_interval_server_msec=GloMTH->get_variable_int((char *)"ping_interval_server_msec");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");
 	mysql_thread___shun_recovery_time_sec=GloMTH->get_variable_int((char *)"shun_recovery_time_sec");

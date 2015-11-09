@@ -261,7 +261,7 @@ class MySQL_Threads_Handler
 		char *monitor_username;
 		char *monitor_password;
 		bool monitor_timer_cached;
-		int ping_interval_server;
+		int ping_interval_server_msec;
 		int ping_timeout_server;
 		int shun_on_failures;
 		int shun_recovery_time_sec;
