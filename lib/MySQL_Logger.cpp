@@ -74,8 +74,8 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 	ev.set_end_time(sess->CurrentQuery.end_time);
 	ev.set_query_digest(GloQPro->get_digest(sess->CurrentQuery.QueryParserArgs));
 	ev.set_query((const char *)sess->CurrentQuery.QueryPointer);
-	ev.set_server(NULL);
-	ev.set_client(NULL);
+	ev.set_server("");
+	ev.set_client("");
 	wrlock();
 	ev.SerializeToOstream(logfile);
 	//*logfile << t << std::endl << id << std::endl << std::endl ;

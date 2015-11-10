@@ -42,6 +42,7 @@ extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
+extern MySQL_Logger *GloMyLogger;
 //#define PANIC(msg)  { perror(msg); return -1; }
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -390,6 +391,9 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL FLUSH LOGS") && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH LOGS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (GloMyLogger) {
+			GloMyLogger->flush_log();
+		}
 		SPA->flush_error_log();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
