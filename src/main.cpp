@@ -354,6 +354,9 @@ void ProxySQL_Main_init_phase2___not_started() {
 
 
 void ProxySQL_Main_init_phase3___start_all() {
+
+	GloMyLogger->set_datadir(GloVars.datadir);
+
 	// load all mysql servers to GloHGH
 	GloAdmin->init_mysql_servers();
 	ProxySQL_Main_init_Query_module();

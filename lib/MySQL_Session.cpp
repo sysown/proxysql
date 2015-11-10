@@ -14,6 +14,7 @@ extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
+extern MySQL_Logger *GloMyLogger;
 
 class KillArgs {
 	public:
@@ -1762,6 +1763,8 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// we need to access statistics before calling CurrentQuery.end()
 	// so we track the time here
 	CurrentQuery.end_time=thread->curtime;
+
+//	GloMyLogger->log_request(CurrentQuery.end_time-CurrentQuery.start_time, 1234);
 
 	// clean qpo
 	if (qpo) {
