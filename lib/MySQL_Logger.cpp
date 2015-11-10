@@ -38,6 +38,7 @@ void MySQL_Logger::flush_log() {
 	wrunlock();
 }
 void MySQL_Logger::flush_log_unlocked() {
+	return;	// FIXME: this line prevents the logger from starting. Here for testing
 	if (logfile) {
 		logfile->flush();
 		logfile->close();
