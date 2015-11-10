@@ -12,14 +12,15 @@ class MySQL_Logger {
 	rwlock_t rwlock;
 	void wrlock();
 	void wrunlock();
-	std::ofstream *logfile;
+	std::fstream *logfile;
 	public:
 	MySQL_Logger();
 	~MySQL_Logger();
 	void flush_log();
 	unsigned int find_next_id();
 	void set_datadir(char *);
-	void log_request(unsigned long long, int);
+	void log_request(MySQL_Session *);
+	void flush();
 };
 
 

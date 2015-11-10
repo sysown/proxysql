@@ -1,7 +1,11 @@
 #include <fstream>
+#include "mysql_logger.pb.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include <dirent.h>
+
+
+extern Query_Processor *GloQPro;
 
 MySQL_Logger::MySQL_Logger() {
 	base_filename=NULL;
@@ -37,10 +41,10 @@ void MySQL_Logger::flush_log() {
 	log_file_id=find_next_id()+1;
 	char *filen=(char *)malloc(strlen(datadir)+strlen(base_filename)+10);
 	sprintf(filen,"%s/%s.%06d",datadir,base_filename,log_file_id);
-	logfile=new std::ofstream();
+	logfile=new std::fstream();
 	logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
 	try {
-		logfile->open(filen);
+		logfile->open(filen , std::ios::out | std::ios::binary);
 		proxy_info("Starting new mysql log file %s\n", filen);
 	}
 	catch (std::ofstream::failure e) {
@@ -59,12 +63,32 @@ void MySQL_Logger::set_datadir(char *s) {
 	flush_log();
 };
 
-void MySQL_Logger::log_request(unsigned long long t, int id) {
+void MySQL_Logger::log_request(MySQL_Session *sess) {
+	if (logfile==NULL) return;
+	mysql_logger::event ev;
+	ev.set_thread_id(sess->thread_session_id);
+	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+	ev.set_username(ui->username);
+	ev.set_schemaname(ui->schemaname);
+	ev.set_start_time(sess->CurrentQuery.start_time);
+	ev.set_end_time(sess->CurrentQuery.end_time);
+	ev.set_query_digest(GloQPro->get_digest(sess->CurrentQuery.QueryParserArgs));
+	ev.set_query((const char *)sess->CurrentQuery.QueryPointer);
+	ev.set_server(NULL);
+	ev.set_client(NULL);
 	wrlock();
-	*logfile << t << std::endl << id << std::endl << std::endl ;
+	ev.SerializeToOstream(logfile);
+	//*logfile << t << std::endl << id << std::endl << std::endl ;
 	wrunlock();
 }
 
+void MySQL_Logger::flush() {
+	wrlock();
+	if (logfile) {
+		logfile->flush();
+	}
+	wrunlock();
+}
 
 unsigned int MySQL_Logger::find_next_id() {
 	int maxidx=0;

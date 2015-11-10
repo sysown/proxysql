@@ -8,7 +8,7 @@
 
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
-
+extern MySQL_Logger *GloMyLogger;
 
 const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	const CHARSET_INFO * c = compiled_charsets;
@@ -1451,6 +1451,11 @@ void MySQL_Thread::run() {
 				mypolls.poll_timeout=100000;
 			}
 		}
+
+
+		// flush mysql log file
+		GloMyLogger->flush();
+
 
 		//this is the only portion of code not protected by a global mutex
 		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
