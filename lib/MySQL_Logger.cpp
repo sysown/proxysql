@@ -14,6 +14,8 @@ MySQL_Logger::MySQL_Logger() {
 	base_filename=(char *)"mysql-log";
 	spinlock_rwlock_init(&rwlock);
 	logfile=NULL;
+	log_file_id=0;
+	max_log_file_size=1024*1024;
 };
 
 MySQL_Logger::~MySQL_Logger() {
@@ -32,13 +34,21 @@ void MySQL_Logger::wrunlock() {
 
 void MySQL_Logger::flush_log() {
 	wrlock();
+	flush_log_unlocked();
+	wrunlock();
+}
+void MySQL_Logger::flush_log_unlocked() {
 	if (logfile) {
 		logfile->flush();
 		logfile->close();
 		delete logfile;
 		logfile=NULL;
 	}
-	log_file_id=find_next_id()+1;
+	if (log_file_id==0) {
+		log_file_id=find_next_id()+1;
+	} else {
+		log_file_id++;
+	}
 	char *filen=(char *)malloc(strlen(datadir)+strlen(base_filename)+10);
 	sprintf(filen,"%s/%s.%06d",datadir,base_filename,log_file_id);
 	logfile=new std::fstream();
@@ -55,7 +65,6 @@ void MySQL_Logger::flush_log() {
 	//int fd=open(filen, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 	free(filen);
 	//close(fd);
-	wrunlock();
 };
 
 void MySQL_Logger::set_datadir(char *s) {
@@ -78,6 +87,10 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 	ev.set_client("");
 	wrlock();
 	ev.SerializeToOstream(logfile);
+	unsigned long curpos=logfile->tellp();
+	if (curpos > max_log_file_size) {
+		flush_log_unlocked();
+	}
 	//*logfile << t << std::endl << id << std::endl << std::endl ;
 	wrunlock();
 }

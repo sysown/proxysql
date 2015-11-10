@@ -17,6 +17,7 @@ class MySQL_Logger {
 	MySQL_Logger();
 	~MySQL_Logger();
 	void flush_log();
+	void flush_log_unlocked();
 	unsigned int find_next_id();
 	void set_datadir(char *);
 	void log_request(MySQL_Session *);
