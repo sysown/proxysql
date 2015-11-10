@@ -118,6 +118,8 @@ MySQL_Threads_Handler *GloMTH;
 MySQL_Monitor *GloMyMon;
 std::thread *MyMon_thread;
 
+MySQL_Logger *GloMyLogger;
+
 
 void * mysql_worker_thread_func(void *arg) {
 
@@ -206,8 +208,10 @@ void ProxySQL_Main_init_main_modules() {
 	GloMTH=NULL;
 	GloMyAuth=NULL;
 	GloMyMon=NULL;
+	GloMyLogger=NULL;
 	MyHGM=new MySQL_HostGroups_Manager();
 	GloMTH=new MySQL_Threads_Handler();
+	GloMyLogger = new MySQL_Logger();
 }
 
 
@@ -296,6 +300,10 @@ void ProxySQL_Main_shutdown_all_modules() {
 	if (GloMTH) {
 		delete GloMTH;
 		GloMTH=NULL;
+	}
+	if (GloMyLogger) {
+		delete GloMyLogger;
+		GloMyLogger=NULL;
 	}
 
 	delete GloAdmin;
