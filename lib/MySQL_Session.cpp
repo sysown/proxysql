@@ -1295,26 +1295,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
-//		int ms_status = 0;
-		switch (status) {
-			case WAITING_CLIENT_DATA:
-				break;
-			case CONNECTING_SERVER:
-			break;
-		case CHANGING_USER_SERVER:
-			break;
-		case PROCESSING_QUERY:
-			break;
-		case PINGING_SERVER:
-			break;
-		case CHANGING_SCHEMA:
-			break;
-		case CHANGING_CHARSET:
-			break;
-		default:
-			assert(0);
-			break;
-		}
 	} else {
 
 
