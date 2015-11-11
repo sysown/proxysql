@@ -1632,6 +1632,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned char *c=(unsigned char *)pkt->ptr+sizeof(mysql_hdr);
 		*c=(unsigned char)_MYSQL_COM_QUERY; // set command type
 		memcpy((unsigned char *)pkt->ptr+sizeof(mysql_hdr)+1,qpo->new_query->data(),qpo->new_query->length()); // copy query
+		CurrentQuery.query_parser_free();
+		CurrentQuery.begin((unsigned char *)pkt->ptr,pkt->size,true);
 		delete qpo->new_query;
 	}
 	if (qpo->cache_ttl>0) {
