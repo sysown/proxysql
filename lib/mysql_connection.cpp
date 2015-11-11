@@ -922,6 +922,14 @@ bool MySQL_Connection::IsActiveTransaction() {
 	return ret;
 }
 
+bool MySQL_Connection::IsAutoCommit() {
+	bool ret=false;
+	if (mysql) {
+		ret = (mysql->server_status & SERVER_STATUS_AUTOCOMMIT);
+	}
+	return ret;
+}
+
 bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not

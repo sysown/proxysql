@@ -123,6 +123,7 @@ class MySQL_Connection {
 	int async_ping(short event);
 	void async_free_result();
 	bool IsActiveTransaction();
+	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 };
