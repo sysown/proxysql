@@ -18,25 +18,22 @@ all:
 	OPTZ="${O2}" ${MAKE} default
 
 .PHONY: default
-default:
-	${MAKE} deps
-	${MAKE} lib
-	${MAKE} src
+default: build_deps build_lib build_src
 
 .PHONY: debug
 debug:
 	OPTZ="${O0}" DEBUG="${ALL_DEBUG}" ${MAKE} default
 
-.PHONY: deps
-deps:
+.PHONY: build_deps
+build_deps:
 	cd deps && CC=${CC} CXX=${CXX} ${MAKE}
 
-.PHONY: lib
-lib:
+.PHONY: build_lib
+build_lib:
 	cd lib && CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
-.PHONY: src
-src:
+.PHONY: build_src
+build_src:
 	cd src && CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
 .PHONY: clean
