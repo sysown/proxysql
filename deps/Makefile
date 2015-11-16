@@ -29,8 +29,8 @@ libinjection: libinjection/libinjection.a
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-3.6.0
 	cd jemalloc && tar -jxf jemalloc-3.6.0.tar.bz2
-	cd jemalloc/jemalloc && ./configure --enable-xmalloc
-	cd jemalloc/jemalloc && CC=cc ${MAKE}
+	cd jemalloc/jemalloc && CFLAGS=-O2 ./configure --enable-xmalloc
+	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
