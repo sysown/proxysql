@@ -9,7 +9,10 @@ NO_DEBUG=
 DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
-export EXTRALINK
+#export EXTRALINK
+MAKEFILE?=Makefile.BSD
+CC?= gcc
+CXX?= g++
 
 all:
 	OPTZ="${O2}" ${MAKE} default
@@ -34,7 +37,7 @@ lib:
 
 .PHONY: src
 src:
-	cd src && CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
 .PHONY: clean
 clean:
