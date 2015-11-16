@@ -14,28 +14,35 @@ MAKEFILE?=Makefile.BSD
 CC?=gcc
 CXX?=g++
 
-all:
-	OPTZ="${O2}" ${MAKE} default
-
 .PHONY: default
 default: build_deps build_lib build_src
 
 .PHONY: debug
-debug:
-	OPTZ="${O0}" DEBUG="${ALL_DEBUG}" ${MAKE} default
+debug: build_deps_debug build_lib_debug build_src_debug
 
 .PHONY: build_deps
 build_deps:
-	cd deps && CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib
 build_lib:
-	cd lib && CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
+	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
 .PHONY: build_src
 build_src:
-	cd src && CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
+	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
+.PHONY: build_deps_debug
+build_deps_debug:
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_debug
+build_lib_debug:
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
+
+.PHONY: build_src_debug
+build_src_debug:
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 .PHONY: clean
 clean:
 	cd lib && ${MAKE} clean
