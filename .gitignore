@@ -77,7 +77,6 @@ deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86/
 deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86_64/
 deps/mariadb-client-library/mariadb_client-2.0.0-src/
 deps/mariadb-client-library/mariadb-connector-c-2.1.0-src/
-deps/protobuf/protobuf-2.6.1/
 
 #glib
 deps/glib/glib-2.40.0/
@@ -93,6 +92,9 @@ deps/libconfig/libconfig-1.4.9/
 
 #re2
 deps/re2/re2/
+
+#protobuf
+deps/protobuf/protobuf-2.6.1/
 
 test/.vagrant
 .DS_Store
