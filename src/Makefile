@@ -70,12 +70,12 @@ _OBJ = main.o proxysql_global.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 $(ODIR)/%.o: %.cpp
-	$(CC) -c -o $@ $< $(CFLAGS) -Wall
+	$(CXX) -c -o $@ $< $(CFLAGS) -Wall
 
 
 
 proxysql: $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
-	$(CC) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CFLAGS) $(LDIRS) $(LIBS)
+	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CFLAGS) $(LDIRS) $(LIBS)
 
 $(ODIR):
 	mkdir $(ODIR)
