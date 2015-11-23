@@ -8,7 +8,7 @@
 
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
-
+extern MySQL_Logger *GloMyLogger;
 
 const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	const CHARSET_INFO * c = compiled_charsets;
@@ -1452,6 +1452,11 @@ void MySQL_Thread::run() {
 			}
 		}
 
+
+		// flush mysql log file
+		GloMyLogger->flush();
+
+
 		//this is the only portion of code not protected by a global mutex
 		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
 		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 > (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout )  );
@@ -1860,21 +1865,21 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_aborted";
-		sprintf(buf,"%d",MyHGM->status.server_connections_aborted);
+		sprintf(buf,"%lu",MyHGM->status.server_connections_aborted);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_connected";
-		sprintf(buf,"%d",MyHGM->status.server_connections_connected);
+		sprintf(buf,"%lu",MyHGM->status.server_connections_connected);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0]=(char *)"Server_Connections_created";
-		sprintf(buf,"%d",MyHGM->status.server_connections_created);
+		sprintf(buf,"%lu",MyHGM->status.server_connections_created);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

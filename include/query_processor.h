@@ -227,6 +227,7 @@ class Query_Processor {
 	bool query_parser_first_comment(Query_Processor_Output *qpo, char *fc);
 	void query_parser_free(void *args);
 	char * get_digest_text(void *args);
+	uint64_t get_digest(void *args);
 
 	void update_query_digest(void *p, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);
 

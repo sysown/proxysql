@@ -1,6 +1,6 @@
 
 
-default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection
+default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection protobuf
 .PHONY: default
 
 
@@ -33,6 +33,15 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
+
+
+protobuf/protobuf/src/.libs/libprotobuf.a:
+	cd protobuf && rm -rf protobuf-2.6.1
+	cd protobuf && tar -zxf protobuf-2.6.1.tar.gz
+	cd protobuf/protobuf && ./configure --disable-shard
+	cd protobuf/protobuf && ${MAKE}
+
+protobuf: protobuf/protobuf/src/.libs/libprotobuf.a
 
 
 

@@ -186,6 +186,12 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 };
 
+bool MySQL_Connection::set_autocommit(bool _ac) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting autocommit %d\n", _ac);
+	options.autocommit=_ac;
+	return _ac;
+}
+
 uint8_t MySQL_Connection::set_charset(uint8_t _c) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
 	options.charset=_c;
@@ -344,7 +350,17 @@ void MySQL_Connection::initdb_cont(short event) {
 	async_exit_status = mysql_select_db_cont(&interr,mysql, mysql_status(event, true));
 }
 
-// FIXME: UTF8 is hardcoded for now, needs to be dynamic
+
+void MySQL_Connection::set_autocommit_start() {
+	PROXY_TRACE();
+	async_exit_status = mysql_autocommit_start(&ret_bool, mysql, options.autocommit);
+}
+
+void MySQL_Connection::set_autocommit_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
+	async_exit_status = mysql_autocommit_cont(&ret_bool, mysql, mysql_status(event, true));
+}
+
 void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
 	const CHARSET_INFO * c = proxysql_find_charset_nr(options.charset);
@@ -581,6 +597,34 @@ handler_again:
 			}
 			break;
 		case ASYNC_QUERY_END:
+			break;
+		case ASYNC_SET_AUTOCOMMIT_START:
+			set_autocommit_start();
+			if (async_exit_status) {
+				next_event(ASYNC_SET_AUTOCOMMIT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_END);
+			}
+			break;
+		case ASYNC_SET_AUTOCOMMIT_CONT:
+			set_autocommit_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_SET_AUTOCOMMIT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_END);
+			}
+			break;
+		case ASYNC_SET_AUTOCOMMIT_END:
+			if (ret_bool) {
+				NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_FAILED);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_AUTOCOMMIT_SUCCESSFUL);
+			}
+			break;
+		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
+			break;
+		case ASYNC_SET_AUTOCOMMIT_FAILED:
+			fprintf(stderr,"%s\n",mysql_error(mysql));
 			break;
 		case ASYNC_SET_NAMES_START:
 			set_names_start();
@@ -857,6 +901,42 @@ int MySQL_Connection::async_select_db(short event) {
 	return 1;
 }
 
+int MySQL_Connection::async_set_autocommit(short event, bool ac) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	switch (async_state_machine) {
+		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_SET_AUTOCOMMIT_FAILED:
+			return -1;
+			break;
+		case ASYNC_IDLE:
+			set_autocommit(ac);
+			async_state_machine=ASYNC_SET_AUTOCOMMIT_START;
+		default:
+			handler(event);
+			break;
+	}
+
+	// check again
+	switch (async_state_machine) {
+		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_SET_AUTOCOMMIT_FAILED:
+			return -1;
+			break;
+		default:
+			return 1;
+			break;
+	}
+	return 1;
+}
+
 int MySQL_Connection::async_set_names(short event, uint8_t c) {
 	PROXY_TRACE();
 	assert(mysql);
@@ -918,6 +998,14 @@ bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
+	}
+	return ret;
+}
+
+bool MySQL_Connection::IsAutoCommit() {
+	bool ret=false;
+	if (mysql) {
+		ret = (mysql->server_status & SERVER_STATUS_AUTOCOMMIT);
 	}
 	return ret;
 }

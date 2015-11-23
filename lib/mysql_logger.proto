@@ -1,0 +1,13 @@
+package mysql_logger;
+
+message event {
+  required uint32 thread_id = 1;
+  required string username = 2;
+  required string schemaname = 3;
+	required uint64 start_time = 4;
+	required uint64 end_time = 5;
+	optional uint64 query_digest = 6;
+  required string query = 7;
+	optional string server = 8;
+	optional string client = 9;
+}

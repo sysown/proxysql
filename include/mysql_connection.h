@@ -61,6 +61,7 @@ class MySQL_Connection {
 		uint8_t protocol_version;
 		uint8_t charset;
 		unsigned int compression_min_length;
+		bool autocommit;
 	} options;
 	uint32_t status_flags;
 	unsigned long long last_time_used;
@@ -81,6 +82,7 @@ class MySQL_Connection {
 //	int assign_mshge(unsigned int);
 	//void set_mshge(MySQL_Hostgroup_Entry *);
 //	void free_mshge();
+	bool set_autocommit(bool);
 	uint8_t set_charset(uint8_t);
 
 	void set_status_transaction(bool);
@@ -103,6 +105,8 @@ class MySQL_Connection {
 	void change_user_cont(short event);
 	void ping_start();
 	void ping_cont(short event);
+	void set_autocommit_start();
+	void set_autocommit_cont(short event);
 	void set_names_start();
 	void set_names_cont(short event);
 	void real_query_start();
@@ -118,11 +122,13 @@ class MySQL_Connection {
 	int async_connect(short event);
 	int async_change_user(short event);
 	int async_select_db(short event);
+	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, uint8_t nr);
 	int async_query(short event, char *stmt, unsigned long length);
 	int async_ping(short event);
 	void async_free_result();
 	bool IsActiveTransaction();
+	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 };
