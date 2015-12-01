@@ -85,11 +85,12 @@ re2: re2/re2/obj/libre2.a
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd jemalloc && rm -rf jemalloc-3.6.0
-	cd mariadb-client-library && rm -rf mariadb_client-2.0.0-src
+	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
 	cd libinjection && ${MAKE} clean
 	cd libevent && rm -rf libevent-2.0.22-stable
+	cd protobuf && rm -rf protobuf-2.6.1
 #	cd sqlite3 && rm -rf sqlite-amalgamation-3080403
 .PHONY: cleanall
 
