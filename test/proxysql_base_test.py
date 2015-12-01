@@ -185,6 +185,8 @@ class ProxySQLBaseTest(TestCase):
 		configurations without having to go the extra mile.
 		"""
 		
+		print('##################### Running test %r' % f)
+
 		scenarios = self.docker_fleet.generate_scenarios(scenarios=scenarios,
 															proxysql_filters=proxysql_filters,
 															mysql_filters=mysql_filters)
@@ -192,6 +194,8 @@ class ProxySQLBaseTest(TestCase):
 		copy_folder = True
 		delete_folder = True
 		for (i, scenario) in enumerate(scenarios):
+			print("******** Running scenario %s (proxysql_image=%s, mysql_image=%s)" % 
+					(scenario['scenario_dir'], scenario['proxysql_image'], scenario['mysql_image']))
 			copy_folder = (i == 0)
 			delete_folder = (i == len(scenarios) - 1)
 
