@@ -1310,6 +1310,13 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	// fix bug #442
+	if (!strncmp("SET SQL_SAFE_UPDATES=1", query_no_space, strlen("SET SQL_SAFE_UPDATES=1"))) {
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		run_query=false;
+		goto __run_query;
+	}
+
 
 //	if (!strncasecmp("RESET MYSQL QUERY DIGEST", query_no_space, strlen("RESET MYSQL QUERY DIGEST"))) {
 //		proxy_info("Received %s command\n", query_no_space);
