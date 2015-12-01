@@ -1317,19 +1317,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
-
-//	if (!strncasecmp("RESET MYSQL QUERY DIGEST", query_no_space, strlen("RESET MYSQL QUERY DIGEST"))) {
-//		proxy_info("Received %s command\n", query_no_space);
-//		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-//		GloQPro->reset_query_digest();
-//		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Setting mysql query digests\n");
-//		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-//		run_query=false;
-//		goto __run_query;
-//	}
-
-
-
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
