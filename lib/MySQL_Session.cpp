@@ -1591,7 +1591,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,2,setStatus,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,2,NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
