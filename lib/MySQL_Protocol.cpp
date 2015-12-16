@@ -833,10 +833,13 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	char last_insert_id_prefix;
 	uint8_t last_insert_id_len=mysql_encode_length(last_insert_id, &last_insert_id_prefix);
 	uint32_t msg_len=( msg ? strlen(msg) : 0 );
+	char msg_prefix;
+	uint8_t msg_len_len=mysql_encode_length(msg_len, &msg_prefix);
 
 	mysql_hdr myhdr;
 	myhdr.pkt_id=sequence_id;
 	myhdr.pkt_length=1+affected_rows_len+last_insert_id_len+sizeof(uint16_t)+sizeof(uint16_t)+msg_len;
+	if (msg_len) myhdr.pkt_length+=msg_len_len;
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
   unsigned char *_ptr=(unsigned char *)l_alloc(size);
   memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
@@ -857,8 +860,10 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	l+=write_encoded_length(_ptr+l, last_insert_id, last_insert_id_len, last_insert_id_prefix);
 	memcpy(_ptr+l, &status, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
-	if (msg) memcpy(_ptr+l, msg, msg_len);
-	
+	if (msg) {
+		l+=write_encoded_length(_ptr+l, msg_len, msg_len_len, msg_prefix);
+		memcpy(_ptr+l, msg, msg_len);
+	}
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		switch ((*myds)->DSS) {
