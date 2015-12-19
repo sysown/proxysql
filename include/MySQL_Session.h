@@ -74,7 +74,7 @@ class MySQL_Session
 	void handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();	
 
 	bool handler_special_queries(PtrSize_t *);
-
+	void RequestEnd(MySQL_Data_Stream *);
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
@@ -87,6 +87,7 @@ class MySQL_Session
 	Query_Processor_Output *qpo;
 	StatCounters *command_counters;
 	int healthy;
+	bool autocommit;
 	bool killed;
 	bool admin;
 	bool max_connections_reached;
@@ -101,6 +102,7 @@ class MySQL_Session
 	int current_hostgroup;
 	int default_hostgroup;
 	int active_transactions;
+	int autocommit_on_hostgroup;
 	char * default_schema;
 	bool schema_locked;
 	bool transaction_persistent;
@@ -159,6 +161,7 @@ class MySQL_Session
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS);
 	unsigned int NumActiveTransactions();
+	int FindOneActiveTransaction();
 	unsigned long long IdleTime();
 
 	void reset_all_backends();

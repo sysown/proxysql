@@ -42,6 +42,7 @@ extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
+extern MySQL_Logger *GloMyLogger;
 //#define PANIC(msg)  { perror(msg); return -1; }
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -390,6 +391,9 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL FLUSH LOGS") && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH LOGS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (GloMyLogger) {
+			GloMyLogger->flush_log();
+		}
 		SPA->flush_error_log();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
@@ -1306,18 +1310,12 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
-
-//	if (!strncasecmp("RESET MYSQL QUERY DIGEST", query_no_space, strlen("RESET MYSQL QUERY DIGEST"))) {
-//		proxy_info("Received %s command\n", query_no_space);
-//		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-//		GloQPro->reset_query_digest();
-//		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Setting mysql query digests\n");
-//		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-//		run_query=false;
-//		goto __run_query;
-//	}
-
-
+	// fix bug #442
+	if (!strncmp("SET SQL_SAFE_UPDATES=1", query_no_space, strlen("SET SQL_SAFE_UPDATES=1"))) {
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		run_query=false;
+		goto __run_query;
+	}
 
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {

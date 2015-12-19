@@ -72,7 +72,7 @@ class MySQL_Protocol {
 //	bool generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, char *schema);
 //	bool generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 //	bool generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
-	bool generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, unsigned int last_insert_id, uint16_t status, uint16_t warnings, char *msg);
+	bool generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg);
 	bool generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message);
 	bool generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status);
 	bool generate_COM_QUIT(bool send, void **ptr, unsigned int *len);

@@ -829,6 +829,7 @@ void Query_Processor::update_query_processor_stats() {
 	}
 };
 
+
 void * Query_Processor::query_parser_init(char *query, int query_length, int flags) {
 	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
 	if (mysql_thread___commands_stats)
@@ -908,6 +909,12 @@ char * Query_Processor::get_digest_text(void *p) {
 	if (p==NULL) return NULL;
 	SQP_par_t *qp=(SQP_par_t *)p;
 	return qp->digest_text;
+}
+
+uint64_t Query_Processor::get_digest(void *args) {
+	if (args==NULL) return 0;
+	SQP_par_t *qp=(SQP_par_t *)args;
+	return qp->digest;
 }
 
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *args) {
