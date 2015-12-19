@@ -93,6 +93,9 @@ deps/libconfig/libconfig-1.4.9/
 #re2
 deps/re2/re2/
 
+#protobuf
+deps/protobuf/protobuf-2.6.1/
+
 test/.vagrant
 .DS_Store
 proxysql-tests.ini

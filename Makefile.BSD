@@ -10,6 +10,9 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
+MAKEFILE?=Makefile.BSD
+CC?=gcc
+CXX?=g++
 
 .PHONY: default
 default: build_deps build_lib build_src
@@ -23,11 +26,11 @@ build_deps:
 
 .PHONY: build_lib
 build_lib:
-	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
 .PHONY: build_src
 build_src:
-	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
 .PHONY: build_deps_debug
 build_deps_debug:
@@ -35,12 +38,11 @@ build_deps_debug:
 
 .PHONY: build_lib_debug
 build_lib_debug:
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 
 .PHONY: build_src_debug
 build_src_debug:
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
-
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} -f Makefile.BSD
 .PHONY: clean
 clean:
 	cd lib && ${MAKE} clean
