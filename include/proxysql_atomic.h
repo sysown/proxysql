@@ -22,7 +22,7 @@ struct _rwlock_t {
 
 static inline unsigned xchg_32(void *ptr, unsigned x) {
     __asm__ __volatile__("xchgl %0,%1"
-                :"=r" ((unsigned) x)
+                :"=r" (x)
                 :"m" (*(volatile unsigned *)ptr), "0" (x)
                 :"memory");
     return x;
