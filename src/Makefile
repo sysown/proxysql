@@ -57,8 +57,16 @@ LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(INJEC
 MYCPPFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG)
 LDFLAGS+=
 #LIBS=-rdynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -lprotobuf -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl $(EXTRALINK)
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -lprotobuf -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl -lcrypto -lssl $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -linjection -levent -lmariadbclient -lprotobuf -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
 #LIBS=-rdynamic -Wl,-Bstatic -lproxysql -ljemalloc -levent $(GLIB_LIB) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+	MYLIBS+= -ldl
+endif
+ifeq ($(UNAME_S),FreeBSD)
+	MYLIBS+= -lexecinfo
+endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 
