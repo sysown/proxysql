@@ -302,10 +302,13 @@ void MySQL_Connection::connect_start() {
 		assert(0);
 	}
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
+	unsigned long client_flags = 0;
+	if (mysql_thread___client_found_rows)
+		client_flags += CLIENT_FOUND_ROWS;
 	if (parent->port) {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, CLIENT_FOUND_ROWS);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, userinfo->password, userinfo->schemaname, parent->port, parent->address, CLIENT_FOUND_ROWS);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, userinfo->password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
 }
