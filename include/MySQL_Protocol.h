@@ -65,22 +65,11 @@ class MySQL_Protocol {
 	// - a pointer to void pointer, used to return the packet if not NULL
 	// - a pointer to unsigned int, used to return the size of the packet if not NULL 
 	// for now,  they all return true
-//	bool generate_pkt_OK(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, unsigned int last_insert_id, uint16_t status, uint16_t warnings, char *msg);
-//	bool generate_pkt_ERR(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message);
-//	bool generate_pkt_EOF(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status);
-//	bool generate_COM_QUIT(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
-//	bool generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, char *schema);
-//	bool generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
-//	bool generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 	bool generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg);
 	bool generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message);
 	bool generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status);
-	bool generate_COM_QUIT(bool send, void **ptr, unsigned int *len);
 //	bool generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema);
 	//bool generate_COM_PING(bool send, void **ptr, unsigned int *len);
-	bool generate_COM_QUERY(bool send, void **ptr, unsigned int *len, char *query);
-	bool generate_COM_RESET_CONNECTION(bool send, void **ptr, unsigned int *len);
-	bool generate_COM_CHANGE_USER(bool send, void **ptr, unsigned int *len);
 
 	bool generate_pkt_auth_switch_request(bool send, void **ptr, unsigned int *len);
 	bool process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len);
@@ -93,8 +82,6 @@ class MySQL_Protocol {
 	uint8_t generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt);
 //	bool generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 	bool generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *thread_id);
-//	bool generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
-	bool generate_pkt_handshake_response(bool send, void **ptr, unsigned int *len);
 //	bool generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 	bool generate_statistics_response(bool send, void **ptr, unsigned int *len);
 
@@ -102,14 +89,9 @@ class MySQL_Protocol {
 	// - a data stream (optionally NULL for some)
 	// - pointer to the packet
 	// - size of the packet 
-//	bool process_pkt_OK(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len);
-//	bool process_pkt_handshake_response(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len);
-//	bool process_pkt_initial_handshake(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len);
-//	bool process_pkt_COM_QUERY(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len);
 	bool process_pkt_OK(unsigned char *pkt, unsigned int len);
 	bool process_pkt_EOF(unsigned char *pkt, unsigned int len);
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
-	bool process_pkt_initial_handshake(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 };

@@ -40,15 +40,6 @@ class MySQL_Session
 {
 	private:
 	std::stack<enum session_status> previous_status;
-//	bool handler___status_CHANGING_SCHEMA(PtrSize_t *);
-	bool handler___status_CHANGING_USER_SERVER(PtrSize_t *);
-//	bool handler___status_CHANGING_CHARSET(PtrSize_t *);
-//	void handler___status_WAITING_SERVER_DATA___STATE_QUERY_SENT(PtrSize_t *);
-//	void handler___status_WAITING_SERVER_DATA___STATE_PING_SENT(PtrSize_t *);
-//	void handler___status_WAITING_SERVER_DATA___STATE_ROW(PtrSize_t *);
-//	void handler___status_WAITING_SERVER_DATA___STATE_EOF1(PtrSize_t *);
-	//void handler___status_CONNECTING_SERVER___STATE_NOT_CONNECTED(PtrSize_t *);
-	//void handler___status_CONNECTING_SERVER___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
@@ -69,9 +60,6 @@ class MySQL_Session
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
-	void handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend();	
-	void handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend();	
-	void handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend();	
 
 	bool handler_special_queries(PtrSize_t *);
 	void RequestEnd(MySQL_Data_Stream *);
