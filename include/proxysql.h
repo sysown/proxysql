@@ -93,7 +93,6 @@
 #ifdef __cplusplus
 extern "C" {
 //int parse_mysql_pkt(unsigned char *, MySQL_Data_Stream *, int);
-//int pkt_handshake_client(unsigned char *, unsigned int);
 #endif /* __cplusplus */
 
 //mysql_data_stream_t * mysql_data_stream_New(mysql_session_t *, int, mysql_backend_t *);
@@ -105,7 +104,6 @@ int connect_socket(char *, int);
 int config_file_is_readable(char *);
 unsigned int CPY3(unsigned char *);
 
-//int pkt_handshake_server(unsigned char *, unsigned int);
 int pkt_ok(unsigned char *, unsigned int);
 int pkt_end(unsigned char *, unsigned int);
 int pkt_com_query(unsigned char *, unsigned int);

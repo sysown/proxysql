@@ -192,108 +192,6 @@ enum MySQL_response_type mysql_response(unsigned char *pkt, unsigned int length)
 			return UNKNOWN_Packet;
 	}
 }
-/*
-//int parse_mysql_pkt(unsigned char *pkt, enum session_states *states, int from_client) {
-int parse_mysql_pkt(unsigned char *pkt, MySQL_Data_Stream *myds, int from_client) {
-	mysql_hdr hdr;
-	unsigned char cmd;
-	unsigned char *payload;
-	enum MySQL_response_type c;
-	payload=pkt+sizeof(mysql_hdr);
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"MySQL Packet length=%d, senquence_id=%d, addr=%p\n", hdr.pkt_length, hdr.pkt_id, payload);
-
-	enum mysql_data_stream_status *DSS=&myds->DSS;
-	switch (*DSS) {
-
-		// client is not connected yet
-		case STATE_NOT_CONNECTED:
-			if (from_client) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			if (pkt_handshake_server(payload, hdr.pkt_length)==PKT_PARSED) {
-				*DSS=STATE_SERVER_HANDSHAKE;
-				return PKT_PARSED;
-			}
-			break;
-
-		// server has sent the handshake
-		case STATE_SERVER_HANDSHAKE:
-			if (!from_client) {
-				return PKT_ERROR;
-			}
-			if (pkt_handshake_client(payload, hdr.pkt_length)==PKT_PARSED) {
-				*DSS=STATE_CLIENT_HANDSHAKE;
-				return PKT_PARSED;
-			}
-			break;
-
-		// client has sent the handshake
-		case STATE_CLIENT_HANDSHAKE:
-			if (from_client) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			break;
-
-		// connection is idle. Client should be send a command
-		case STATE_SLEEP:
-//			if (!from_client) {
-//				return PKT_ERROR;
-//			}
-			cmd=*payload;
-			switch (cmd) {
-				case MYSQL_COM_QUERY:
-					if (pkt_com_query(payload, hdr.pkt_length)==PKT_PARSED) {
-						// *states=STATE_CLIENT_COM_QUERY;
-						return PKT_PARSED;
-					}
-					break;
-			}
-			//break;
-
-
-
-			
-		default:
-		// TO BE REMOVED: begin
-			if (from_client) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				case EOF_Packet:
-					pkt_end(payload, hdr.pkt_length);
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			
-		// TO BE REMOVED: end
-			break;
-	}
-	
-	return PKT_ERROR;
-}
-*/
-
-
 
 int pkt_com_query(unsigned char *pkt, unsigned int length) {
 	unsigned char buf[length];
@@ -306,16 +204,16 @@ int pkt_com_query(unsigned char *pkt, unsigned int length) {
 int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 	if (length < 7) return PKT_ERROR;
 
-   uint64_t affected_rows;
-   uint64_t  insert_id;
-   //uint64_t  status;  // FIXME: uint16_t
-   uint16_t  warns;  // FIXME: uint16_t
-   unsigned char msg[length];
+	uint64_t affected_rows;
+	uint64_t  insert_id;
+#ifdef DEBUG
+	uint16_t  warns;
+#endif /* DEBUG */
+	unsigned char msg[length];
 
 	unsigned int p=0;
 	int rc;
 
-   //field_count = (u_int)*pkt++;
 	pkt++; p++;
 	rc=mysql_decode_length(pkt,&affected_rows);
 	pkt	+= rc; p+=rc;
@@ -324,7 +222,9 @@ int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 	mp->prot_status=CPY2(pkt);
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
+#ifdef DEBUG
 	warns=CPY2(pkt);
+#endif /* DEBUG */
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
 	pkt++;
@@ -346,13 +246,15 @@ int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
 {
 	if(*pkt != 0xFE || length > 5) return PKT_ERROR;
-
+#ifdef DEBUG
 	uint16_t warns = 0;
-	//uint16_t status = 0;
+#endif /* DEBUG */
 
 	if(length > 1) { // 4.1+
 		pkt++;
+#ifdef DEBUG
 		warns    = CPY2(pkt);
+#endif /* DEBUG */
 		pkt    += 2;
 		mp->prot_status  = CPY2(pkt);
 
@@ -371,50 +273,6 @@ int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
 //	}
 
 	return PKT_PARSED;
-}
-
-
-int pkt_handshake_server(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
-	//return PKT_PARSED;
-	if (*pkt != 0x0A || length < 29) return PKT_ERROR;
-
-	uint8_t protocol;
-	uint16_t capabilities;
-	uint8_t charset;
-	//uint16_t status;
-	uint32_t thread_id;
-
-	unsigned char * version;
-	unsigned char * salt1;
-	unsigned char * salt2;
-
-	protocol = *(uint8_t *)pkt;
-	pkt      += sizeof(uint8_t);
-	version   = pkt;
-	pkt      += strlen((char *)version) + 1;
-	thread_id = CPY4(pkt);
-	pkt      += sizeof(uint32_t);
-	salt1     = pkt;
-	pkt      += strlen((char *)salt1) + 1;
-	capabilities = CPY2(pkt);
-	pkt    += sizeof(uint16_t);
-	charset = *(uint8_t *)pkt;
-	pkt    += sizeof(uint8_t);
-	mp->prot_status  = CPY2(pkt);
-	pkt    += 15; // 2 for status, 13 for zero-byte padding
-	salt2   = pkt;
-
-	// FIXME: the next two lines are here just to prevent this: warning: variable ‘salt2’ set but not used [-Wunused-but-set-variable]
-	// salt2 needs to be handled
-	salt2++;
-	salt2 = pkt;
-	
-
-   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, mp->prot_status);
-//   if(op.verbose) unmask_caps(caps);
-
-   return PKT_PARSED;
-
 }
 
 
@@ -444,58 +302,6 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 //	prot_status=0;
 }
 
-int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length) {
-	int ret=PKT_ERROR;
-	uint8_t charset;
-   uint32_t  capabilities;
-   uint32_t  max_pkt;
-   uint32_t  pass_len;
-   unsigned char *user;
-   unsigned char *db;
-   unsigned char pass[128];
-	bool _ret_use_ssl=false; 	
-	int default_hostgroup=-1;
-	bool transaction_persistent;
-
-      capabilities     = CPY4(pkt);
-      pkt     += sizeof(uint32_t);
-      max_pkt  = CPY4(pkt);
-      pkt     += sizeof(uint32_t);
-      charset  = *(uint8_t *)pkt;
-      pkt     += 24;
-      user     = pkt;
-      pkt     += strlen((char *)user) + 1;
-
-      pass_len = (capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
-      memcpy(pass, pkt, pass_len);
-      pass[pass_len] = 0;
-
-      pkt += pass_len;
-      db = (capabilities & CLIENT_CONNECT_WITH_DB ? pkt : 0);
-
-	char reply[SHA_DIGEST_LENGTH+1];
-	reply[SHA_DIGEST_LENGTH]='\0';
-	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
-	if (password==NULL) {
-		ret=PKT_ERROR;
-	} else {
-		if (pass_len==0 && strlen(password)==0) {
-			ret=PKT_PARSED;
-		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=PKT_PARSED;
-			}
-		}
-	}
-  proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u\n",
-            (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset);
-
-	
-   return ret;
-}
-
-
 //int parse_mysql_pkt(unsigned char *pkt, enum session_states *states, int from_client) {
 int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__myds) {
 	unsigned char *pkt=(unsigned char *)PS_entry->ptr;	
@@ -520,21 +326,6 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 		case STATE_NOT_CONNECTED:
 			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
 				return PKT_ERROR;
-			}
-			if (pkt_handshake_server(payload, hdr.pkt_length, this)==PKT_PARSED) {
-				*DSS=STATE_SERVER_HANDSHAKE;
-				return PKT_PARSED;
-			}
-			break;
-
-		// server has sent the handshake
-		case STATE_SERVER_HANDSHAKE:
-			if (from==MYDS_BACKEND) {
-				return PKT_ERROR;
-			}
-			if (pkt_handshake_client(payload, hdr.pkt_length)==PKT_PARSED) {
-				*DSS=STATE_CLIENT_HANDSHAKE;
-				return PKT_PARSED;
 			}
 			break;
 
@@ -1143,8 +934,9 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 
 	uint64_t affected_rows;
 	uint64_t  insert_id;
-	//uint16_t  status;
+#ifdef DEBUG
 	uint16_t  warns;
+#endif /* DEBUG */
 	unsigned char msg[len];
 
 	unsigned int p=0;
@@ -1159,7 +951,9 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 	prot_status=CPY2(pkt);
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
+#ifdef DEBUG
 	warns=CPY2(pkt);
+#endif /* DEBUG */
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
 	pkt++;

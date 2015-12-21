@@ -54,7 +54,6 @@ class MySQL_Protocol {
 		prot_status=0;
 	}
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
-	int pkt_handshake_client(unsigned char *, unsigned int);
 	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);
 //	void generate_server_handshake();
 //	void generate_server_handshake(MySQL_Data_Stream *);
