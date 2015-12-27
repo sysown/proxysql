@@ -18,15 +18,15 @@ class KV_BtreeArray;
 typedef struct __QC_entry_t QC_entry_t;
 
 struct __QC_entry_t {
-	uint64_t key;
-	char *value;
-	KV_BtreeArray *kv;
-	QC_entry_t *self;
-	uint32_t klen;
-	uint32_t length;
-	time_t expire;
-	time_t access;
-	uint32_t ref_count;
+	uint64_t key; // primary key
+	char *value;  // pointer to value
+	KV_BtreeArray *kv; // pointer to the KV_BtreeArray where the entry is stored
+	QC_entry_t *self; // pointer to itself
+	uint32_t klen; // length of the key : FIXME: not sure if still relevant
+	uint32_t length; // length of the value
+	time_t expire; // when the entry will expire: FIXME: should have a millisecond granularity
+	time_t access; // when the entry was read last: FIXME: should have a millisecond granularity
+	uint32_t ref_count; // reference counter
 };
 
 typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
@@ -72,8 +72,8 @@ class Query_Cache {
 	Query_Cache();
 	~Query_Cache();
 	void print_version();
-	bool set(unsigned char *, uint32_t, unsigned char *, uint32_t, time_t);
-	unsigned char * get(const unsigned char *, uint32_t *);
+	bool set(const unsigned char *, uint32_t, unsigned char *, uint32_t, time_t);
+	unsigned char * get(const unsigned char *, const uint32_t, uint32_t *);
 	uint64_t flush();
 };
 #endif /* __CLASS_QUERY_CACHE_H */

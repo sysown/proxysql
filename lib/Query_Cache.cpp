@@ -75,7 +75,7 @@ typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap;
 
 
 
- KV_BtreeArray::KV_BtreeArray() {
+KV_BtreeArray::KV_BtreeArray() {
 	freeable_memory=0;
 	tottopurge=0;
 	spinlock_rwlock_init(&lock);
@@ -259,10 +259,10 @@ Query_Cache::~Query_Cache() {
 
 
 
-unsigned char * Query_Cache::get(const unsigned char *kp, uint32_t *lv) {
+unsigned char * Query_Cache::get(const unsigned char *kp, const uint32_t kl, uint32_t *lv) {
 	unsigned char *result=NULL;
 
-	uint64_t hk=SpookyHash::Hash64(kp,strlen((const char *)kp),0);
+	uint64_t hk=SpookyHash::Hash64(kp, kl,0);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 
 	QC_entry_t *entry=KVs[i].lookup(hk);
@@ -280,7 +280,7 @@ unsigned char * Query_Cache::get(const unsigned char *kp, uint32_t *lv) {
 	return result;
 }
 
-bool Query_Cache::set(unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, time_t expire) {
+bool Query_Cache::set(const unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, time_t expire) {
 	QC_entry_t *entry = (QC_entry_t *)malloc(sizeof(QC_entry_t));
 	entry->klen=kl;
 	entry->length=vl;
@@ -295,7 +295,7 @@ bool Query_Cache::set(unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_
 	} else {
 		entry->expire=QCnow+expire; // expire is seconds
 	}
-	uint64_t hk=SpookyHash::Hash64(kp,strlen((const char *)kp),0);
+	uint64_t hk=SpookyHash::Hash64(kp, kl, 0);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 	entry->key=hk;
 	KVs[i].replace(hk, entry);
