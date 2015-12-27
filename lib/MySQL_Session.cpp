@@ -1807,7 +1807,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 						aa ,
 						client_myds->resultset_length ,
 						thread->curtime/1000 ,
-						thread->curtime/1000 + qpo->cache_ttl*1000
+						thread->curtime/1000 + qpo->cache_ttl
 					);
 					l_free(client_myds->resultset_length,aa);
 					client_myds->resultset_length=0;
