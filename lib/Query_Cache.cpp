@@ -100,13 +100,13 @@ uint64_t KV_BtreeArray::get_data_size() {
 	return r;
 };
 
-void KV_BtreeArray::purge_some(time_t QCnow) {
+void KV_BtreeArray::purge_some(unsigned long long QCnow_ms) {
 	uint64_t ret=0, i, _size=0;
 	QC_entry_t *qce;
   spin_rdlock(&lock);
 	for (i=0; i<ptrArray->len;i++) {
 		qce=(QC_entry_t *)ptrArray->index(i);
-		if (qce->expire==EXPIRE_DROPIT || qce->expire<QCnow) {
+		if (qce->expire_ms==EXPIRE_DROPIT || qce->expire_ms<QCnow_ms) {
 			ret++;
 			_size+=qce->length;
 		}
@@ -119,7 +119,7 @@ void KV_BtreeArray::purge_some(time_t QCnow) {
   	spin_wrlock(&lock);
 		for (i=0; i<ptrArray->len;i++) {
 			qce=(QC_entry_t *)ptrArray->index(i);
-			if ((qce->expire==EXPIRE_DROPIT || qce->expire<QCnow) && (__sync_fetch_and_add(&qce->ref_count,0)<=1)) {
+			if ((qce->expire_ms==EXPIRE_DROPIT || qce->expire_ms<QCnow_ms) && (__sync_fetch_and_add(&qce->ref_count,0)<=1)) {
 				qce=(QC_entry_t *)ptrArray->remove_index_fast(i);
 
 		    btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
@@ -162,7 +162,7 @@ bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
   btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
   lookup = bt_map.find(key);
   if (lookup != bt_map.end()) {
-		lookup->second->expire=EXPIRE_DROPIT;
+		lookup->second->expire_ms=EXPIRE_DROPIT;
 		__sync_fetch_and_sub(&lookup->second->ref_count,1);
 		bt_map.erase(lookup);
  	}
@@ -195,7 +195,7 @@ void KV_BtreeArray::empty() {
 	while (bt_map.size()) {
 		lookup = bt_map.begin();
 		if ( lookup != bt_map.end() ) {
-			lookup->second->expire=EXPIRE_DROPIT;
+			lookup->second->expire_ms=EXPIRE_DROPIT;
 			//const char *f=lookup->first;
 			bt_map.erase(lookup);
 		}
@@ -236,7 +236,7 @@ Query_Cache::Query_Cache() {
 		perror("Incompatible debagging version");
 		exit(EXIT_FAILURE);
 	}
-	QCnow=time(NULL);
+	QCnow_ms=monotonic_time()/1000;
 	size=SHARED_QUERY_CACHE_HASH_TABLES;
 	shutdown=0;
 	purge_loop_time=DEFAULT_purge_loop_time;
@@ -259,7 +259,7 @@ Query_Cache::~Query_Cache() {
 
 
 
-unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, const uint32_t kl, uint32_t *lv) {
+unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, const uint32_t kl, uint32_t *lv, unsigned long long curtime_ms) {
 	unsigned char *result=NULL;
 
 	uint64_t hk=SpookyHash::Hash64(kp, kl, user_hash);
@@ -268,19 +268,19 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 	QC_entry_t *entry=KVs[i].lookup(hk);
 
 	if (entry!=NULL) {
-		time_t t=QCnow;
-		if (entry->expire > t) {
+		unsigned long long t=curtime_ms;
+		if (entry->expire_ms > t) {
 			result=(unsigned char *)malloc(entry->length);
 			memcpy(result,entry->value,entry->length);
 			*lv=entry->length;
-			if (t > entry->access) entry->access=t;
+			if (t > entry->access_ms) entry->access_ms=t;
 		}
 		__sync_fetch_and_sub(&entry->ref_count,1);
 	}
 	return result;
 }
 
-bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, time_t expire) {
+bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, unsigned long long curtime_ms, unsigned long long expire_ms) {
 	QC_entry_t *entry = (QC_entry_t *)malloc(sizeof(QC_entry_t));
 	entry->klen=kl;
 	entry->length=vl;
@@ -289,12 +289,8 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 	entry->value=(char *)malloc(vl);
 	memcpy(entry->value,vp,vl);
 	entry->self=entry;
-	entry->access=QCnow;
-	if (expire > HASH_EXPIRE_MAX) {
-		entry->expire=expire; // expire is a unix timestamp
-	} else {
-		entry->expire=QCnow+expire; // expire is seconds
-	}
+	entry->access_ms=curtime_ms;
+	entry->expire_ms=expire_ms;
 	uint64_t hk=SpookyHash::Hash64(kp, kl, user_hash);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 	entry->key=hk;
@@ -318,12 +314,12 @@ void * Query_Cache::purgeHash_thread(void *) {
 	unsigned int i;
 	while (shutdown==0) {
 		usleep(purge_loop_time);
-		time_t t=time(NULL);
-		QCnow=t;
+		unsigned long long t=monotonic_time()/1000;
+		QCnow_ms=t;
 
 		if (current_used_memory_pct() < purge_threshold_pct_min ) continue;
 		for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-			KVs[i].purge_some(QCnow);
+			KVs[i].purge_some(QCnow_ms);
 		}
 	}
 	return NULL;
