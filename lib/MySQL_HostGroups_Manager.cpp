@@ -660,11 +660,12 @@ MySQL_Connection * MySrvConnList::get_random_MyConn() {
 		conn = new MySQL_Connection();
 		conn->parent=mysrvc;
 		//conn->options.charset=mysrvc->charset;
-		conn->options.server_capabilities=0;
-		if (mysql_thread___have_compress==true && mysrvc->compression) {
-			conn->options.server_capabilities|=CLIENT_COMPRESS;
-			conn->options.compression_min_length=mysrvc->compression;
-		}
+		// deprecating this . #363
+		//conn->options.server_capabilities=0;
+		//if (mysql_thread___have_compress==true && mysrvc->compression) {
+		//	conn->options.server_capabilities|=CLIENT_COMPRESS;
+		//	conn->options.compression_min_length=mysrvc->compression;
+		//}
 		__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return  conn;
