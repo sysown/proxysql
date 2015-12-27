@@ -18,4 +18,19 @@
 #include "proxysql_admin.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
+#undef swap
+#undef min
+#undef max
+#include <memory>
+#include <stdio.h>
+#include <algorithm>
+#include <functional>
+#include <type_traits>
+#include <iosfwd>
+#include <map>
+#include <set>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 //#endif /* __cplusplus */
