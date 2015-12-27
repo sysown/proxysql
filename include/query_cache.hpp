@@ -72,8 +72,8 @@ class Query_Cache {
 	Query_Cache();
 	~Query_Cache();
 	void print_version();
-	bool set(const unsigned char *, uint32_t, unsigned char *, uint32_t, time_t);
-	unsigned char * get(const unsigned char *, const uint32_t, uint32_t *);
+	bool set(uint64_t , const unsigned char *, uint32_t, unsigned char *, uint32_t, time_t);
+	unsigned char * get(uint64_t , const unsigned char *, const uint32_t, uint32_t *);
 	uint64_t flush();
 };
 #endif /* __CLASS_QUERY_CACHE_H */
