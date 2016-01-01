@@ -38,7 +38,7 @@ void MySQL_Logger::flush_log() {
 	wrunlock();
 }
 void MySQL_Logger::flush_log_unlocked() {
-	return;	// FIXME: this line prevents the logger from starting. Here for testing
+	//return;	// FIXME: this line prevents the logger from starting. Here for testing
 	if (logfile) {
 		logfile->flush();
 		logfile->close();
@@ -83,7 +83,13 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 	ev.set_start_time(sess->CurrentQuery.start_time);
 	ev.set_end_time(sess->CurrentQuery.end_time);
 	ev.set_query_digest(GloQPro->get_digest(sess->CurrentQuery.QueryParserArgs));
-	ev.set_query((const char *)sess->CurrentQuery.QueryPointer);
+	char *c=(char *)sess->CurrentQuery.QueryPointer;
+	if (c) {
+		// FIXME: NEEDS LENGTH . Use Bytes
+		ev.set_query(c,sess->CurrentQuery.QueryLength);
+	} else {
+		ev.set_query("");
+	}
 	ev.set_server("");
 	ev.set_client("");
 	wrlock();
