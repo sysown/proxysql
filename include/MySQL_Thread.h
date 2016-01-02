@@ -295,6 +295,8 @@ class MySQL_Threads_Handler
 		uint16_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
+		char *eventslog_filename;
+		int eventslog_filesize;
 	} variables;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;

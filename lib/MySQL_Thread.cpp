@@ -140,6 +140,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_retries_delay",
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
+	(char *)"eventslog_filename",
+	(char *)"eventslog_filesize",
 	(char *)"default_charset",
 	(char *)"free_connections_pct",
 	(char *)"have_compress",
@@ -243,6 +245,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_charset=33;
 	variables.interfaces=strdup((char *)"");
 	variables.server_version=strdup((char *)"5.1.30");
+	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
+	variables.eventslog_filesize=100*1024*1024;
 	variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
@@ -337,6 +341,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 		if (!strcasecmp(name,"monitor_query_status")) return strdup(variables.monitor_query_status);
 	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
+	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
@@ -380,6 +385,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
 	if (!strcasecmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
 	if (!strcasecmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
+	if (!strcasecmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
 	if (!strcasecmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
 	if (!strcasecmp(name,"threshold_resultset_size")) return (int)variables.threshold_resultset_size;
@@ -409,6 +415,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
+	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcasecmp(name,"server_capabilities")) {
@@ -507,6 +514,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"connect_retries_delay")) {
 		sprintf(intbuf,"%d",variables.connect_retries_delay);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"eventslog_filesize")) {
+		sprintf(intbuf,"%d",variables.eventslog_filesize);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"max_transaction_time")) {
@@ -921,6 +932,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"eventslog_filesize")) {
+		int intv=atoi(value);
+		if (intv >= 1024*1024 && intv <= 1*1024*1024*1024) {
+			variables.eventslog_filesize=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -947,6 +967,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		if (vallen) {
 			free(variables.server_version);
 			variables.server_version=strdup(value);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"eventslog_filename")) {
+		if (vallen) {
+			free(variables.eventslog_filename);
+			variables.eventslog_filename=strdup(value);
 			return true;
 		} else {
 			return false;
@@ -1183,6 +1212,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
+	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	free(mysql_threads);
 	mysql_threads=NULL;
 	delete MLM;
@@ -1222,6 +1252,7 @@ MySQL_Thread::~MySQL_Thread() {
 
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
+	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
 
 }
 
@@ -1732,6 +1763,10 @@ void MySQL_Thread::refresh_variables() {
 
 	if (mysql_thread___server_version) free(mysql_thread___server_version);
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
+	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
+	mysql_thread___eventslog_filesize=GloMTH->get_variable_int((char *)"eventslog_filesize");
+	mysql_thread___eventslog_filename=GloMTH->get_variable_string((char *)"eventslog_filename");
+	GloMyLogger->set_base_filename(); // both filename and filesize are set here
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
@@ -1765,6 +1800,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_sessions_connections_handler=NULL;
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___server_version=NULL;
+	mysql_thread___eventslog_filename=NULL;
 
 	status_variables.queries=0;
 	status_variables.queries_slow=0;

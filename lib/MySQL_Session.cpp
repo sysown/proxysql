@@ -92,8 +92,8 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=0;
 	QueryParserArgs=NULL;
 	start_time=sess->thread->curtime;
+	init(_p, len, mysql_header);
 	if (mysql_thread___commands_stats || mysql_thread___query_digests) {
-		init(_p, len, mysql_header);
 		query_parser_init();
 		if (mysql_thread___commands_stats)
 			query_parser_command_type();
@@ -136,6 +136,7 @@ void Query_Info::query_parser_free() {
 
 unsigned long long Query_Info::query_parser_update_counters() {
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
+	if (MyComQueryCmd==MYSQL_COM_QUERY_UNKNOWN) return 0; // this means that it was never initialized
 	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	//l_free(QueryLength+1,QueryPointer);

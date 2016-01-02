@@ -317,7 +317,6 @@ void ProxySQL_Main_init() {
 #else
 	glovars.has_debug=false;
 #endif /* DEBUG */
-	GloVars.global.start_time=monotonic_time();
 	__thr_sfp=l_mem_init();
 
 	{
@@ -508,6 +507,7 @@ int main(int argc, const char * argv[]) {
 
 		} else { /* The daemon */
 
+			GloVars.global.start_time=monotonic_time();
 			if (ProxySQL_daemonize_phase2()==false) {
 				goto finish;
 			}
