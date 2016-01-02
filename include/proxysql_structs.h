@@ -706,6 +706,10 @@ __thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
 
+/* variables used by events log */
+__thread char * mysql_thread___eventslog_filename;
+__thread int mysql_thread___eventslog_filesize;
+
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_history;
 __thread int mysql_thread___monitor_connect_interval;
@@ -764,6 +768,10 @@ extern __thread bool mysql_thread___commands_stats;
 extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
+
+/* variables used by events log */
+extern __thread char * mysql_thread___eventslog_filename;
+extern __thread int mysql_thread___eventslog_filesize;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_history;

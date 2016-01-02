@@ -5,6 +5,7 @@
 
 class MySQL_Logger {
 	private:
+	bool enabled;
 	char *base_filename;
 	char *datadir;
 	unsigned int log_file_id;
@@ -13,6 +14,8 @@ class MySQL_Logger {
 	void wrlock();
 	void wrunlock();
 	std::fstream *logfile;
+	void close_log_unlocked();
+	void open_log_unlocked();
 	public:
 	MySQL_Logger();
 	~MySQL_Logger();
@@ -20,6 +23,7 @@ class MySQL_Logger {
 	void flush_log_unlocked();
 	unsigned int find_next_id();
 	void set_datadir(char *);
+	void set_base_filename();
 	void log_request(MySQL_Session *);
 	void flush();
 };

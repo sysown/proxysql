@@ -8,20 +8,21 @@
 extern Query_Processor *GloQPro;
 
 MySQL_Logger::MySQL_Logger() {
+	enabled=false;
 	base_filename=NULL;
 	datadir=NULL;
-	// FIXME, temp
-	base_filename=(char *)"mysql-log";
+	base_filename=strdup((char *)"");
 	spinlock_rwlock_init(&rwlock);
 	logfile=NULL;
 	log_file_id=0;
-	max_log_file_size=1024*1024;
+	max_log_file_size=100*1024*1024;
 };
 
 MySQL_Logger::~MySQL_Logger() {
 	if (datadir) {
 		free(datadir);
 	}
+	free(base_filename);
 };
 
 void MySQL_Logger::wrlock() {
@@ -37,21 +38,38 @@ void MySQL_Logger::flush_log() {
 	flush_log_unlocked();
 	wrunlock();
 }
-void MySQL_Logger::flush_log_unlocked() {
-	//return;	// FIXME: this line prevents the logger from starting. Here for testing
+
+
+void MySQL_Logger::close_log_unlocked() {
 	if (logfile) {
 		logfile->flush();
 		logfile->close();
 		delete logfile;
 		logfile=NULL;
 	}
+}
+
+void MySQL_Logger::flush_log_unlocked() {
+	if (enabled==false) return;
+	close_log_unlocked();
+	open_log_unlocked();
+}
+
+
+void MySQL_Logger::open_log_unlocked() {
 	if (log_file_id==0) {
 		log_file_id=find_next_id()+1;
 	} else {
 		log_file_id++;
 	}
-	char *filen=(char *)malloc(strlen(datadir)+strlen(base_filename)+10);
-	sprintf(filen,"%s/%s.%06d",datadir,base_filename,log_file_id);
+	char *filen=NULL;
+	if (base_filename[0]=='/') { // absolute path
+		filen=(char *)malloc(strlen(base_filename)+10);
+		sprintf(filen,"/%s.%08d",base_filename,log_file_id);
+	} else { // relative path
+		filen=(char *)malloc(strlen(datadir)+strlen(base_filename)+10);
+		sprintf(filen,"%s/%s.%08d",datadir,base_filename,log_file_id);
+	}
 	logfile=new std::fstream();
 	logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
 	try {
@@ -68,12 +86,36 @@ void MySQL_Logger::flush_log_unlocked() {
 	//close(fd);
 };
 
+void MySQL_Logger::set_base_filename() {
+	// if filename is the same, return
+	wrlock();
+	max_log_file_size=mysql_thread___eventslog_filesize;
+	if (strcmp(base_filename,mysql_thread___eventslog_filename)==0) {
+		wrunlock();
+		return;
+	}
+	// close current log
+	close_log_unlocked();
+	// set file id to 0 , so that find_next_id() will be called
+	log_file_id=0;
+	free(base_filename);
+	base_filename=strdup(mysql_thread___eventslog_filename);
+	if (strlen(base_filename)) {
+		enabled=true;
+		open_log_unlocked();
+	} else {
+		enabled=false;
+	}
+	wrunlock();
+}
+
 void MySQL_Logger::set_datadir(char *s) {
 	datadir=strdup(s);
 	flush_log();
 };
 
 void MySQL_Logger::log_request(MySQL_Session *sess) {
+	if (enabled==false) return;
 	if (logfile==NULL) return;
 	mysql_logger::event ev;
 	ev.set_thread_id(sess->thread_session_id);
@@ -119,7 +161,7 @@ unsigned int MySQL_Logger::find_next_id() {
 	size_t bfl=strlen(base_filename);
 	if ((dir = opendir(datadir)) != NULL) {
 	  while ((ent = readdir (dir)) != NULL) {
-			if (strlen(ent->d_name)==bfl+7) {
+			if (strlen(ent->d_name)==bfl+9) {
 				if (strncmp(ent->d_name,base_filename,bfl)==0) {
 					if (ent->d_name[bfl]=='.') {
 						int idx=atoi(ent->d_name+bfl+1);
