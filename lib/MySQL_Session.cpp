@@ -1607,14 +1607,16 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		delete qpo->new_query;
 	}
 	if (qpo->cache_ttl>0) {
-		client_myds->query_SQL=(unsigned char *)l_alloc(pkt->size-sizeof(mysql_hdr));
-		memcpy(client_myds->query_SQL,(unsigned char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
-		client_myds->query_SQL[pkt->size-sizeof(mysql_hdr)-1]=0;
 		uint32_t resbuf=0;
-		unsigned char *aa=GloQC->get(client_myds->query_SQL,&resbuf);
+		unsigned char *aa=GloQC->get(
+			client_myds->myconn->userinfo->hash,
+			(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
+			client_myds->mysql_real_query.QuerySize ,
+			&resbuf ,
+			thread->curtime/1000
+		);
 		if (aa) {
 			l_free(pkt->size,pkt->ptr);
-			l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
 			client_myds->buffer2resultset(aa,resbuf);
 			free(aa);
 			client_myds->PSarrayOUT->copy_add(client_myds->resultset,0,client_myds->resultset->len);
@@ -1741,10 +1743,17 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 					client_myds->resultset_length=MyRS->resultset_size;
 					unsigned char *aa=client_myds->resultset2buffer(false);
 					while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
-					GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,client_myds->resultset_length,qpo->cache_ttl);
+					GloQC->set(
+						client_myds->myconn->userinfo->hash ,
+						(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
+						client_myds->mysql_real_query.QuerySize ,
+						aa ,
+						client_myds->resultset_length ,
+						thread->curtime/1000 ,
+						thread->curtime/1000 + qpo->cache_ttl
+					);
 					l_free(client_myds->resultset_length,aa);
 					client_myds->resultset_length=0;
-					l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
 				}
 			}
 		}

@@ -105,7 +105,6 @@ class MySQL_Data_Stream
 	PtrSizeArray *PSarrayOUTpending;
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
-	unsigned char * query_SQL;	
 
 	int active_transaction; // 1 if there is an active transaction
 	int active; // data stream is active. If not, shutdown+close needs to be called
