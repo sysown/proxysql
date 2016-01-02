@@ -26,9 +26,11 @@ RE2_IDIR=$(RE2_PATH)
 PROTOBUF_PATH=$(DEPS_PATH)/protobuf/protobuf
 PROTOBUF_IDIR=$(PROTOBUF_PATH)/src
 
+SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
+
 IDIR=../include
 
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(LIBEVENT_IDIR) -I$(PROTOBUF_IDIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(LIBEVENT_IDIR) -I$(PROTOBUF_IDIR) -I$(SQLITE3_DIR)
 
 LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
 
@@ -49,7 +51,7 @@ MYCPPFLAGS=-std=c++11 $(MYCFLAGS)
 default: libproxysql.a
 .PHONY: default
 
-_OBJ = sqlite3.o c_tokenizer.o
+_OBJ = c_tokenizer.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 _OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo proxysql_mem.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo mysql_logger.pb.oo
 OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
@@ -63,8 +65,8 @@ $(ODIR)/%.o: %.c
 $(ODIR)/%.oo: %.cpp
 	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(PROTOBUF_IDIR)/.libs/libprotobuf.a
-	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(PROTOBUF_IDIR)/.libs/libprotobuf.a
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(PROTOBUF_IDIR)/.libs/libprotobuf.a $(SQLITE3_DIR)/sqlite3.o 
+	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(PROTOBUF_IDIR)/.libs/libprotobuf.a $(SQLITE3_DIR)/sqlite3.o
 
 $(ODIR):
 	mkdir $(ODIR)

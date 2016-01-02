@@ -1,6 +1,6 @@
 
 
-default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection protobuf
+default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection protobuf sqlite3
 .PHONY: default
 
 
@@ -57,12 +57,12 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
 
 
-#sqlite3/sqlite3/sqlite3.o:
-#	cd sqlite3 && rm -rf sqlite-amalgamation-3080403
-#	cd sqlite3 && unzip sqlite-amalgamation-3080403.zip
-#	cd sqlite3/sqlite3 && cc -O2 -c -o sqlite3.o sqlite3.c
-#
-#sqlite3: sqlite3/sqlite3/sqlite3.o
+sqlite3/sqlite3/sqlite3.o:
+	cd sqlite3 && rm -rf sqlite-amalgamation-3090200
+	cd sqlite3 && unzip sqlite-amalgamation-3090200.zip
+	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c
+
+sqlite3: sqlite3/sqlite3/sqlite3.o
 
 libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig && rm -rf libconfig-1.4.9
