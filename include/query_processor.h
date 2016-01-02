@@ -229,7 +229,7 @@ class Query_Processor {
 	char * get_digest_text(void *args);
 	uint64_t get_digest(void *args);
 
-	void update_query_digest(void *p, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);
+	void update_query_digest(void *p, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);
 
 	unsigned long long query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, void *p, unsigned long long t);
 
