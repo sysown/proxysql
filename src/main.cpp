@@ -508,6 +508,7 @@ int main(int argc, const char * argv[]) {
 		} else { /* The daemon */
 
 			GloVars.global.start_time=monotonic_time();
+			GloVars.install_signal_handler();
 			if (ProxySQL_daemonize_phase2()==false) {
 				goto finish;
 			}
