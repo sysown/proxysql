@@ -60,6 +60,7 @@ class ProxySQL_GlobalVariables {
 	void process_opts_pre();
 	void process_opts_post();
 	void parse(int argc, const char * argv[]);
+	void install_signal_handler();
 };
 
 /*
