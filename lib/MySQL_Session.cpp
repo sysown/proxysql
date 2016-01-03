@@ -369,6 +369,31 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return true;
 	}
 
+	{ // BEGIN handle COMMIT/ROLLBACK
+		if (
+			( strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0 )
+			||
+			( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 )
+		) {
+			unsigned int nTrx=NumActiveTransactions();
+			if (nTrx) {
+				// there is an active transaction, we must forward the request
+				return false;
+			} else {
+				// there is no active transaction, we will just reply OK
+				client_myds->DSS=STATE_QUERY_SENT_NET;
+				uint16_t setStatus = 0;
+				if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+				client_myds->DSS=STATE_SLEEP;
+				status=WAITING_CLIENT_DATA;
+				l_free(pkt->size,pkt->ptr);
+				return true;
+			}
+		}
+	} // END handle COMMIT/ROLLBACK
+
+// Handle autocommit BEGIN
 	size_t sal=strlen("set autocommit");
 	if ( pkt->size > 7+sal) {
 		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
@@ -444,9 +469,11 @@ __ret_autocommit_OK:
 			}
 		}
 	}
+// Handle autocommit END
 
 	return false;
 }
+
 
 int MySQL_Session::handler() {
 	bool wrong_pass=false;
