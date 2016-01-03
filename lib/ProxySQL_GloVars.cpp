@@ -75,12 +75,14 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	confFile=new ProxySQL_ConfigFile();
+};
+
+void ProxySQL_GlobalVariables::install_signal_handler() {
 	signal(SIGTERM, term_handler);
 	signal(SIGSEGV, crash_handler);
 	signal(SIGABRT, crash_handler);
 	signal(SIGPIPE, SIG_IGN);
-};
-
+}
 
 void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
 	opt->parse(argc, argv);
