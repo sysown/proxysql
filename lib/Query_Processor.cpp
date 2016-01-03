@@ -987,6 +987,12 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *
 					}
 					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
+				case 'R':
+					if (!strcasecmp("ROLLBACK",qp->sf.current->val)) { // ROLLBACK
+						return MYSQL_COM_QUERY_ROLLBACK;
+					}
+					return MYSQL_COM_QUERY_UNKNOWN;
+					break;
 				case 'S':
 					if (!strcasecmp("SELECT",qp->sf.current->val)) { // SELECT
 						return MYSQL_COM_QUERY_SELECT;

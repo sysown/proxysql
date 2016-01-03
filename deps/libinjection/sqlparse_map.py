@@ -822,6 +822,7 @@ KEYWORDS = {
 # needs review
 'RIGHT'                       : 'n',
 'RLIKE'                       : 'o',
+'ROLLBACK'                      : 'T',
 'ROUND'                       : 'f',
 'ROW'                        : 'f',
 'ROW_COUNT'                   : 'f',
