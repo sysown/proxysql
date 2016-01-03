@@ -1949,6 +1949,42 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Queries autocommit
+		pta[0]=(char *)"Com_autocommit";
+		sprintf(buf,"%llu",MyHGM->status.autocommit_cnt);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries filtered autocommit
+		pta[0]=(char *)"Com_autocommit_filtered";
+		sprintf(buf,"%llu",MyHGM->status.autocommit_cnt_filtered);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries commit
+		pta[0]=(char *)"Com_commit";
+		sprintf(buf,"%llu",MyHGM->status.commit_cnt);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries filtered commit
+		pta[0]=(char *)"Com_commit_filtered";
+		sprintf(buf,"%llu",MyHGM->status.commit_cnt_filtered);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries rollback
+		pta[0]=(char *)"Com_rollback";
+		sprintf(buf,"%llu",MyHGM->status.rollback_cnt);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries filtered rollback
+		pta[0]=(char *)"Com_rollback_filtered";
+		sprintf(buf,"%llu",MyHGM->status.rollback_cnt_filtered);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Queries
 		pta[0]=(char *)"Questions";
 		sprintf(buf,"%llu",get_total_queries());

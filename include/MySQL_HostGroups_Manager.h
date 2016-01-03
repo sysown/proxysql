@@ -116,6 +116,12 @@ class MySQL_HostGroups_Manager {
 		unsigned long myconnpoll_get_ping;
 		unsigned long myconnpoll_push;
 		unsigned long myconnpoll_destroy;
+		unsigned long long autocommit_cnt;
+		unsigned long long commit_cnt;
+		unsigned long long rollback_cnt;
+		unsigned long long autocommit_cnt_filtered;
+		unsigned long long commit_cnt_filtered;
+		unsigned long long rollback_cnt_filtered;
 	} status;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();

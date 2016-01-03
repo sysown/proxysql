@@ -375,6 +375,12 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			||
 			( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 )
 		) {
+			char c=((char *)pkt->ptr)[5];
+			if (c=='c' || c=='C') {
+				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
+			} else {
+				__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
+			}
 			unsigned int nTrx=NumActiveTransactions();
 			if (nTrx) {
 				// there is an active transaction, we must forward the request
@@ -388,6 +394,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 				client_myds->DSS=STATE_SLEEP;
 				status=WAITING_CLIENT_DATA;
 				l_free(pkt->size,pkt->ptr);
+				if (c=='c' || c=='C') {
+					__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
+				} else {
+					__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
+				}
 				return true;
 			}
 		}
@@ -397,6 +408,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	size_t sal=strlen("set autocommit");
 	if ( pkt->size > 7+sal) {
 		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
+			__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 			unsigned int i;
 			bool eq=false;
 			int fd=-1; // first digit
@@ -465,6 +477,7 @@ __ret_autocommit_OK:
 				client_myds->DSS=STATE_SLEEP;
 				status=WAITING_CLIENT_DATA;
 				l_free(pkt->size,pkt->ptr);
+				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 				return true;
 			}
 		}

@@ -233,6 +233,12 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.myconnpoll_get_ping=0;
 	status.myconnpoll_push=0;
 	status.myconnpoll_destroy=0;
+	status.autocommit_cnt=0;
+	status.commit_cnt=0;
+	status.rollback_cnt=0;
+	status.autocommit_cnt_filtered=0;
+	status.commit_cnt_filtered=0;
+	status.rollback_cnt_filtered=0;
 	spinlock_rwlock_init(&rwlock);
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
