@@ -62,7 +62,7 @@ static int total_read_only__num_active_connections=0;
 
 
 struct cmp_str {
-	bool operator()(char const *a, char const *b)
+	bool operator()(char const *a, char const *b) const
 	{
 		return strcmp(a, b) < 0;
 	}
@@ -88,7 +88,7 @@ MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
 }
 
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) {
-	std::map<char *, std::list<MYSQL *>* >::iterator it;
+	std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
 	//it = my_connections.find(std::make_pair(hostname,port));
 	char *buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
@@ -108,7 +108,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 
 void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYSQL *my) {
 	size++;
-	std::map<char *, std::list<MYSQL *>* >::iterator it;
+	std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
 	char * buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
 	it = my_connections.find(buf);

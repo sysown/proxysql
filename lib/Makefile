@@ -32,16 +32,19 @@ IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_I
 
 LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
 
-LIBS=-rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
+#LIBS=-rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
+#LIBS=-Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
 
 ODIR= obj
 
-CC=gcc
-CPP=g++
+#CC=gcc
+#CPP=g++
 #CC=clang
 
-CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
-CPPFLAGS=-std=c++0x $(CFLAGS) $(LDIRS) $(LIBS)
+#CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
+#CPPFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
+MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall
+MYCPPFLAGS=-std=c++11 $(MYCFLAGS)
 
 default: libproxysql.a
 .PHONY: default
@@ -52,13 +55,13 @@ _OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo 
 OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
 
 %.ko: %.cpp
-	$(CPP) -fPIC -c -o $@ $< $(CPPFLAGS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
 $(ODIR)/%.o: %.c
-	$(CC) -fPIC -c -o $@ $< $(CFLAGS)
+	$(CC) -fPIC -c -o $@ $< $(MYCFLAGS) $(CFLAGS)
 
 $(ODIR)/%.oo: %.cpp
-	$(CPP) -fPIC -c -o $@ $< $(CPPFLAGS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
 libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(PROTOBUF_IDIR)/.libs/libprotobuf.a
 	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(PROTOBUF_IDIR)/.libs/libprotobuf.a

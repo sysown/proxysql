@@ -1333,36 +1333,6 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 }
 
 
-bool MySQL_Session::handler___status_CHANGING_USER_SERVER(PtrSize_t *pkt) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: CHANGING_USER_SERVER - UNKNWON\n");
-	if (mybe->server_myds->myprot.process_pkt_OK((unsigned char *)pkt->ptr,pkt->size)==true) {
-		l_free(pkt->size,pkt->ptr);
-		mybe->server_myds->DSS=STATE_READY;
-		//mybe->myconn=server_myds->myconn;
-		status=WAITING_SERVER_DATA;
-		unsigned int k;
-		PtrSize_t pkt2;
-		for (k=0; k<mybe->server_myds->PSarrayOUTpending->len;) {
-			mybe->server_myds->PSarrayOUTpending->remove_index(0,&pkt2);
-			mybe->server_myds->PSarrayOUT->add(pkt2.ptr, pkt2.size);
-			mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-		}
-		// set prepared statement processing
-		mybe->server_myds->myconn->processing_prepared_statement_prepare=client_myds->myconn->processing_prepared_statement_prepare;
-		return true;
-	} else {
-		l_free(pkt->size,pkt->ptr);	
-		set_unhealthy();
-		//mybe->myconn=server_myds->myconn;
-		// if we reach here, server_myds->DSS should be STATE_QUERY_SENT , therefore the connection to the backend should be dropped anyway
-		// although we enforce this here
-		mybe->server_myds->myconn->reusable=false;
-		return false;
-	}
-	return false;
-}
-
-
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *pkt) {
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
@@ -1757,33 +1727,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 	}
 }
-
-void MySQL_Session::handler___client_DSS_QUERY_SENT___send_INIT_DB_to_backend() {
-	mybe->server_myds->move_from_OUT_to_OUTpending();
-	mybe->server_myds->myconn->userinfo->set_schemaname(client_myds->myconn->userinfo->schemaname,strlen(client_myds->myconn->userinfo->schemaname));
-	status=CHANGING_SCHEMA;
-	mybe->server_myds->DSS=STATE_MARIADB_INITDB;
-	mybe->server_myds->myconn->async_state_machine=ASYNC_INITDB_START;
-	mybe->server_myds->myconn->handler(0);
-}
-
-void MySQL_Session::handler___client_DSS_QUERY_SENT___send_SET_NAMES_to_backend() {
-	mybe->server_myds->move_from_OUT_to_OUTpending();
-	mybe->server_myds->myconn->set_charset(client_myds->myconn->options.charset);
-	mybe->server_myds->DSS=STATE_MARIADB_SET_NAMES;
-	mybe->server_myds->myconn->async_state_machine=ASYNC_SET_NAMES_START;
-	mybe->server_myds->myconn->handler(0);
-	status=CHANGING_CHARSET;
-}
-
-void MySQL_Session::handler___client_DSS_QUERY_SENT___send_CHANGE_USER_to_backend() {
-	mybe->server_myds->move_from_OUT_to_OUTpending();
-	mybe->server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
-	mybe->server_myds->myprot.generate_COM_CHANGE_USER(true,NULL,NULL);
-	mybe->server_myds->DSS=STATE_QUERY_SENT_DS;
-	status=CHANGING_USER_SERVER;
-}
-
 
 void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS) {
 	if (MyRS) {

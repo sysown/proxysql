@@ -82,15 +82,6 @@ void proxy_compute_sha1_hash_multi(uint8 *digest, const char *buf1, int len1, co
   SHA1_Update(&sha1_context, buf1, len1);
   SHA1_Update(&sha1_context, buf2, len2);
   SHA1_Final(digest, &sha1_context);
-  
-/*
-  GChecksum *sha1_context=g_checksum_new(G_CHECKSUM_SHA1);
-  g_checksum_update(sha1_context, (const unsigned char *)buf1, len1);
-  g_checksum_update(sha1_context, (const unsigned char *)buf2, len2);
-  size_t s=SHA_DIGEST_LENGTH;
-  g_checksum_get_digest(sha1_context,digest,&s);
-  g_checksum_free(sha1_context);
-*/
 }
 
 
@@ -101,14 +92,6 @@ void proxy_compute_sha1_hash(uint8 *digest, const char *buf, int len) {
   SHA1_Init(&sha1_context);
   SHA1_Update(&sha1_context, buf, len);
   SHA1_Final(digest, &sha1_context);
-
-/*  
-  GChecksum *sha1_context=g_checksum_new(G_CHECKSUM_SHA1);
-  g_checksum_update(sha1_context, (const unsigned char *)buf, len);
-  size_t s=SHA_DIGEST_LENGTH;
-  g_checksum_get_digest(sha1_context,digest,&s);
-  g_checksum_free(sha1_context);
-*/
 }
 
 void proxy_compute_two_stage_sha1_hash(const char *password, size_t pass_len, uint8 *hash_stage1, uint8 *hash_stage2) {
@@ -209,108 +192,6 @@ enum MySQL_response_type mysql_response(unsigned char *pkt, unsigned int length)
 			return UNKNOWN_Packet;
 	}
 }
-/*
-//int parse_mysql_pkt(unsigned char *pkt, enum session_states *states, int from_client) {
-int parse_mysql_pkt(unsigned char *pkt, MySQL_Data_Stream *myds, int from_client) {
-	mysql_hdr hdr;
-	unsigned char cmd;
-	unsigned char *payload;
-	enum MySQL_response_type c;
-	payload=pkt+sizeof(mysql_hdr);
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"MySQL Packet length=%d, senquence_id=%d, addr=%p\n", hdr.pkt_length, hdr.pkt_id, payload);
-
-	enum mysql_data_stream_status *DSS=&myds->DSS;
-	switch (*DSS) {
-
-		// client is not connected yet
-		case STATE_NOT_CONNECTED:
-			if (from_client) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			if (pkt_handshake_server(payload, hdr.pkt_length)==PKT_PARSED) {
-				*DSS=STATE_SERVER_HANDSHAKE;
-				return PKT_PARSED;
-			}
-			break;
-
-		// server has sent the handshake
-		case STATE_SERVER_HANDSHAKE:
-			if (!from_client) {
-				return PKT_ERROR;
-			}
-			if (pkt_handshake_client(payload, hdr.pkt_length)==PKT_PARSED) {
-				*DSS=STATE_CLIENT_HANDSHAKE;
-				return PKT_PARSED;
-			}
-			break;
-
-		// client has sent the handshake
-		case STATE_CLIENT_HANDSHAKE:
-			if (from_client) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			break;
-
-		// connection is idle. Client should be send a command
-		case STATE_SLEEP:
-//			if (!from_client) {
-//				return PKT_ERROR;
-//			}
-			cmd=*payload;
-			switch (cmd) {
-				case MYSQL_COM_QUERY:
-					if (pkt_com_query(payload, hdr.pkt_length)==PKT_PARSED) {
-						// *states=STATE_CLIENT_COM_QUERY;
-						return PKT_PARSED;
-					}
-					break;
-			}
-			//break;
-
-
-
-			
-		default:
-		// TO BE REMOVED: begin
-			if (from_client) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				case EOF_Packet:
-					pkt_end(payload, hdr.pkt_length);
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			
-		// TO BE REMOVED: end
-			break;
-	}
-	
-	return PKT_ERROR;
-}
-*/
-
-
 
 int pkt_com_query(unsigned char *pkt, unsigned int length) {
 	unsigned char buf[length];
@@ -323,16 +204,16 @@ int pkt_com_query(unsigned char *pkt, unsigned int length) {
 int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 	if (length < 7) return PKT_ERROR;
 
-   uint64_t affected_rows;
-   uint64_t  insert_id;
-   //uint64_t  status;  // FIXME: uint16_t
-   uint16_t  warns;  // FIXME: uint16_t
-   unsigned char msg[length];
+	uint64_t affected_rows;
+	uint64_t  insert_id;
+#ifdef DEBUG
+	uint16_t  warns;
+#endif /* DEBUG */
+	unsigned char msg[length];
 
 	unsigned int p=0;
 	int rc;
 
-   //field_count = (u_int)*pkt++;
 	pkt++; p++;
 	rc=mysql_decode_length(pkt,&affected_rows);
 	pkt	+= rc; p+=rc;
@@ -341,7 +222,9 @@ int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 	mp->prot_status=CPY2(pkt);
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
+#ifdef DEBUG
 	warns=CPY2(pkt);
+#endif /* DEBUG */
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
 	pkt++;
@@ -363,13 +246,15 @@ int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
 int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
 {
 	if(*pkt != 0xFE || length > 5) return PKT_ERROR;
-
+#ifdef DEBUG
 	uint16_t warns = 0;
-	//uint16_t status = 0;
+#endif /* DEBUG */
 
 	if(length > 1) { // 4.1+
 		pkt++;
+#ifdef DEBUG
 		warns    = CPY2(pkt);
+#endif /* DEBUG */
 		pkt    += 2;
 		mp->prot_status  = CPY2(pkt);
 
@@ -388,50 +273,6 @@ int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
 //	}
 
 	return PKT_PARSED;
-}
-
-
-int pkt_handshake_server(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
-	//return PKT_PARSED;
-	if (*pkt != 0x0A || length < 29) return PKT_ERROR;
-
-	uint8_t protocol;
-	uint16_t capabilities;
-	uint8_t charset;
-	//uint16_t status;
-	uint32_t thread_id;
-
-	unsigned char * version;
-	unsigned char * salt1;
-	unsigned char * salt2;
-
-	protocol = *(uint8_t *)pkt;
-	pkt      += sizeof(uint8_t);
-	version   = pkt;
-	pkt      += strlen((char *)version) + 1;
-	thread_id = CPY4(pkt);
-	pkt      += sizeof(uint32_t);
-	salt1     = pkt;
-	pkt      += strlen((char *)salt1) + 1;
-	capabilities = CPY2(pkt);
-	pkt    += sizeof(uint16_t);
-	charset = *(uint8_t *)pkt;
-	pkt    += sizeof(uint8_t);
-	mp->prot_status  = CPY2(pkt);
-	pkt    += 15; // 2 for status, 13 for zero-byte padding
-	salt2   = pkt;
-
-	// FIXME: the next two lines are here just to prevent this: warning: variable ‘salt2’ set but not used [-Wunused-but-set-variable]
-	// salt2 needs to be handled
-	salt2++;
-	salt2 = pkt;
-	
-
-   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, mp->prot_status);
-//   if(op.verbose) unmask_caps(caps);
-
-   return PKT_PARSED;
-
 }
 
 
@@ -461,58 +302,6 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 //	prot_status=0;
 }
 
-int MySQL_Protocol::pkt_handshake_client(unsigned char *pkt, unsigned int length) {
-	int ret=PKT_ERROR;
-	uint8_t charset;
-   uint32_t  capabilities;
-   uint32_t  max_pkt;
-   uint32_t  pass_len;
-   unsigned char *user;
-   unsigned char *db;
-   unsigned char pass[128];
-	bool _ret_use_ssl=false; 	
-	int default_hostgroup=-1;
-	bool transaction_persistent;
-
-      capabilities     = CPY4(pkt);
-      pkt     += sizeof(uint32_t);
-      max_pkt  = CPY4(pkt);
-      pkt     += sizeof(uint32_t);
-      charset  = *(uint8_t *)pkt;
-      pkt     += 24;
-      user     = pkt;
-      pkt     += strlen((char *)user) + 1;
-
-      pass_len = (capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
-      memcpy(pass, pkt, pass_len);
-      pass[pass_len] = 0;
-
-      pkt += pass_len;
-      db = (capabilities & CLIENT_CONNECT_WITH_DB ? pkt : 0);
-
-	char reply[SHA_DIGEST_LENGTH+1];
-	reply[SHA_DIGEST_LENGTH]='\0';
-	char *password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
-	if (password==NULL) {
-		ret=PKT_ERROR;
-	} else {
-		if (pass_len==0 && strlen(password)==0) {
-			ret=PKT_PARSED;
-		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=PKT_PARSED;
-			}
-		}
-	}
-  proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u\n",
-            (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset);
-
-	
-   return ret;
-}
-
-
 //int parse_mysql_pkt(unsigned char *pkt, enum session_states *states, int from_client) {
 int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__myds) {
 	unsigned char *pkt=(unsigned char *)PS_entry->ptr;	
@@ -537,21 +326,6 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 		case STATE_NOT_CONNECTED:
 			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
 				return PKT_ERROR;
-			}
-			if (pkt_handshake_server(payload, hdr.pkt_length, this)==PKT_PARSED) {
-				*DSS=STATE_SERVER_HANDSHAKE;
-				return PKT_PARSED;
-			}
-			break;
-
-		// server has sent the handshake
-		case STATE_SERVER_HANDSHAKE:
-			if (from==MYDS_BACKEND) {
-				return PKT_ERROR;
-			}
-			if (pkt_handshake_client(payload, hdr.pkt_length)==PKT_PARSED) {
-				*DSS=STATE_CLIENT_HANDSHAKE;
-				return PKT_PARSED;
 			}
 			break;
 
@@ -626,98 +400,6 @@ static unsigned char protocol_version=10;
 //static uint8_t server_language=33;
 static uint16_t server_status=1;
 //static char *mysql_server_version = (char *)"5.1.30";
-
-/*
-//void MySQL_Protocol::generate_server_handshake(MySQL_Data_Stream *myds) {
-void MySQL_Protocol::generate_server_handshake() {
-	(*myds)->DSS=STATE_SERVER_HANDSHAKE;
-  //proxy_mysql_thread_t *thrLD=pthread_getspecific(tsd_key);
-  proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
-  mysql_hdr myhdr;
-  myhdr.pkt_id=0;
-  //myhdr.pkt_length=sizeof(glovars.protocol_version)
-  myhdr.pkt_length=sizeof(protocol_version)
-  //  + (strlen(glovars.mysql_server_version)+1)
-    + (strlen(mysql_server_version)+1)
-    + sizeof(uint32_t)  // thread_id
-    + 8  // scramble1
-    + 1  // 0x00
-    //+ sizeof(glovars.server_capabilities)
-    //+ sizeof(glovars.server_language)
-    //+ sizeof(glovars.server_status)
-    + sizeof(server_capabilities)
-    + sizeof(server_language)
-    + sizeof(server_status)
-    + 3 // unknown stuff
-    + 10 // filler
-    + 12 // scramble2
-    + 1  // 0x00
-    + (strlen("mysql_native_password")+1);
-
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  //mypkt->data=g_slice_alloc0(mypkt->length);
-  //mypkt->data=l_alloc0(thrLD->sfp, mypkt->length);
-  unsigned char *ptr=(unsigned char *)l_alloc(size);
-  memcpy(ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(ptr, &myhdr);
-  int l;
-  l=sizeof(mysql_hdr);
-  //srand(pthread_self());
-  //uint32_t thread_id=rand()%100000;
-  //uint32_t thread_id=__sync_fetch_and_add(&glovars.thread_id,1);
-  uint32_t thread_id=pthread_self();
-
-  rand_struct rand_st;
-  //randominit(&rand_st,rand(),rand());
-  rand_st.max_value= 0x3FFFFFFFL;
-  rand_st.max_value_dbl=0x3FFFFFFFL;
-  rand_st.seed1=rand()%rand_st.max_value;
-  rand_st.seed2=rand()%rand_st.max_value;
-
-  memcpy(ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
-  memcpy(ptr+l, mysql_server_version, strlen(mysql_server_version)); l+=strlen(mysql_server_version)+1;
-  memcpy(ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
-#ifdef MARIADB_BASE_VERSION
-  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
-#else
-  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+0,8,(struct rand_struct *)&rand_st);
-#endif
-
-  int i;
-  for (i=0;i<8;i++) {
-    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
-      (*myds)->myconn->myconn.scramble_buff[i]='a';
-    }
-  }
-
-  memcpy(ptr+l, (*myds)->myconn->myconn.scramble_buff+0, 8); l+=8;
-  l+=1; //0x00
-  memcpy(ptr+l,&server_capabilities, sizeof(server_capabilities)); l+=sizeof(server_capabilities);
-  memcpy(ptr+l,&server_language, sizeof(server_language)); l+=sizeof(server_language);
-  memcpy(ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-  memcpy(ptr+l,"\x0f\x80\x15",3); l+=3;
-  l+=10; //filler
-  //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
-#ifdef MARIADB_BASE_VERSION
-  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
-#else
-  proxy_create_random_string((*myds)->myconn->myconn.scramble_buff+8,12,(struct rand_struct *)&rand_st);
-#endif
-  //create_random_string(scramble_buf+8,12,&rand_st);
-
-  for (i=8;i<20;i++) {
-    if ((*myds)->myconn->myconn.scramble_buff[i]==0) {
-      (*myds)->myconn->myconn.scramble_buff[i]='a';
-    }
-  }
-
-  memcpy(ptr+l, (*myds)->myconn->myconn.scramble_buff+8, 12); l+=12;
-  l+=1; //0x00
-  memcpy(ptr+l,"mysql_native_password",strlen("mysql_native_password"));
-	(*myds)->PSarrayOUT->add((void *)ptr,size);
-}
-*/
-
 
 //bool MySQL_Protocol::generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
 bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigned int *len) {
@@ -876,113 +558,6 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				assert(0);
 		}
 	}
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-#ifdef DEBUG
-	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-#endif
-	return true;
-}
-
-//bool MySQL_Protocol::generate_COM_QUIT(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_COM_QUIT(bool send, void **ptr, unsigned int *len) {
-	mysql_hdr myhdr;
-	myhdr.pkt_id=0;
-	myhdr.pkt_length=1;
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(_ptr, &myhdr);
-  int l=sizeof(mysql_hdr);
-	_ptr[l]=0x01; l++;
-	
-	if (send==true) {
-		(*myds)->PSarrayOUT->add((void *)_ptr,size);
-	}
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-	return true;
-}
-
-//bool MySQL_Protocol::generate_COM_INIT_DB(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, char *schema) {
-//bool MySQL_Protocol::generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema) {
-//	uint32_t schema_len=strlen(schema);
-//	mysql_hdr myhdr;
-//	myhdr.pkt_id=0;
-//	myhdr.pkt_length=1+schema_len;
-//  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-//  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-//  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-//  //Copy4B(_ptr, &myhdr);
-//	int l=sizeof(mysql_hdr);
-//	_ptr[l]=0x02; l++;
-//	memcpy(_ptr+l, schema, schema_len);
-//	
-//	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-//	if (len) { *len=size; }
-//	if (ptr) { *ptr=(void *)_ptr; }
-//#ifdef DEBUG
-//	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-//#endif
-//	return true;
-//}
-
-bool MySQL_Protocol::generate_COM_QUERY(bool send, void **ptr, unsigned int *len, char *query) {
-	uint32_t query_len=strlen(query);
-	mysql_hdr myhdr;
-	myhdr.pkt_id=0;
-	myhdr.pkt_length=1+query_len;
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(_ptr, &myhdr);
-  int l=sizeof(mysql_hdr);
-	_ptr[l]=0x03; l++;
-	memcpy(_ptr+l, query, query_len);
-	
-	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-#ifdef DEBUG
-	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-#endif
-	return true;
-}
-
-//bool MySQL_Protocol::generate_COM_PING(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-//bool MySQL_Protocol::generate_COM_PING(bool send, void **ptr, unsigned int *len) {
-//	mysql_hdr myhdr;
-//	myhdr.pkt_id=0;
-//	myhdr.pkt_length=1;
-//  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-//  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-//  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-//  //Copy4B(_ptr, &myhdr);
-//  int l=sizeof(mysql_hdr);
-//	_ptr[l]=0x0e; l++;
-//	
-//	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-//	if (len) { *len=size; }
-//	if (ptr) { *ptr=(void *)_ptr; }
-//#ifdef DEBUG
-//	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-//#endif
-//	return true;
-//}
-
-//bool MySQL_Protocol::generate_COM_RESET_CONNECTION(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_COM_RESET_CONNECTION(bool send, void **ptr, unsigned int *len) {
-	mysql_hdr myhdr;
-	myhdr.pkt_id=0;
-	myhdr.pkt_length=1;
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(_ptr, &myhdr);
-  int l=sizeof(mysql_hdr);
-	_ptr[l]=0x1f; l++;
-	
-	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG
@@ -1206,147 +781,6 @@ uint8_t MySQL_Protocol::generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int
 	return pkt_sid;
 }
 
-
-//bool MySQL_Protocol::generate_pkt_handshake_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_pkt_handshake_response(bool send, void **ptr, unsigned int *len) {
-  proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating response handshake pkt\n");
-  mysql_hdr myhdr;
-  myhdr.pkt_id=1;
-
-	uint32_t capabilities = CLIENT_LONG_PASSWORD | CLIENT_FOUND_ROWS | CLIENT_LONG_FLAG | CLIENT_CONNECT_WITH_DB | CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS ;
-
-	// enable compression
-	assert(sess);
-	assert(sess->mybe);	
-	assert(sess->mybe->server_myds);	
-	MySQL_Connection *myconn=sess->mybe->server_myds->myconn;
-	assert(myconn);
-	if (myconn->options.compression_min_length) {
-		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
-			capabilities|=CLIENT_COMPRESS;
-		}
-	}
-
-	uint32_t max_allowed_packet=1*1024*1024;
-	assert(sess);
-	assert(sess->client_myds);
-	assert(sess->client_myds->myconn);
-	uint8_t charset=sess->client_myds->myconn->options.charset;
-	uint8_t _tmp;
-/*
-  pkt     += sizeof(mysql_hdr);
-  capabilities     = CPY4(pkt);
-  pkt     += sizeof(uint32_t);
-  max_pkt  = CPY4(pkt);
-  pkt     += sizeof(uint32_t);
-  charset  = *(uint8_t *)pkt;
-  pkt     += 24;
-  user     = pkt;
-  pkt     += strlen((char *)user) + 1;
-
-  pass_len = (capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
-  memcpy(pass, pkt, pass_len);
-  pass[pass_len] = 0;
-
-  pkt += pass_len;
-  db = (capabilities & CLIENT_CONNECT_WITH_DB ? pkt : 0);
-*/
-	
-	myhdr.pkt_length= 0
-		+ sizeof(uint32_t) // capabilities
-		+ sizeof(uint32_t) // max_allowed_packet
-		+ sizeof(uint8_t)	 // charset
-		+ 23							 // padding
-		+ strlen(userinfo->username)+1 // user
-		+ ( strlen(userinfo->password) ? 21 : 1 )
-		+ strlen(userinfo->schemaname) + 1
-		+ strlen((char *)"mysql_native_password") + 1;
-
-	//MYSQL &myc=(*myds)->myconn->myconn;
-
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  //Copy4B(_ptr, &myhdr);
-  int l=sizeof(mysql_hdr);
-	memcpy(_ptr+l,&capabilities,sizeof(uint32_t)); l+=sizeof(uint32_t);
-	memcpy(_ptr+l,&max_allowed_packet,sizeof(uint32_t)); l+=sizeof(uint32_t);
-	_ptr[l]=charset; l++;
-	memset(_ptr+l,0,23); l+=23;
-	_tmp=strlen(userinfo->username);
-	//_ptr[l]=_tmp; l++;
-	if (_tmp) {
-		memcpy(_ptr+l,userinfo->username,_tmp); l+=_tmp;
-	}
-	_ptr[l++]=0;
-	if (strlen(userinfo->password)) {
-		_ptr[l++]=20;
-		char reply[SHA_DIGEST_LENGTH+1];
-  	reply[SHA_DIGEST_LENGTH]='\0';
-    proxy_scramble(reply, (*myds)->myconn->scramble_buff, userinfo->password);
-		memcpy(_ptr+l,reply,20); l+=20;
-	} else {
-		_ptr[l++]=0;
-	}
-	_tmp=strlen(userinfo->schemaname);
-	memcpy(_ptr+l,userinfo->schemaname,_tmp+1);
-	l+=_tmp+1;
-	memcpy(_ptr+l,(char *)"mysql_native_password",strlen((char *)"mysql_native_password")+1);
-
-	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-#ifdef DEBUG
-	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-#endif
-
-	return true;
-}
-
-bool MySQL_Protocol::generate_COM_CHANGE_USER(bool send, void **ptr, unsigned int *len) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating response handshake pkt\n");
-	mysql_hdr myhdr;
-	myhdr.pkt_id=0;
-	uint8_t _tmp;
-
-
-	myhdr.pkt_length= 1 // COM_CHANGE_USER
-		+ strlen(userinfo->username)+1 // user
-		+ ( strlen(userinfo->password) ? 21 : 1 )
-		+ strlen(userinfo->schemaname) + 1;
-
-	unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-	unsigned char *_ptr=(unsigned char *)l_alloc(size);
-	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-	int l=sizeof(mysql_hdr);
-	_ptr[l++]=0x11; // COM_CHANGE_USER
-	_tmp=strlen(userinfo->username);
-	if (_tmp) {
-		memcpy(_ptr+l,userinfo->username,_tmp); l+=_tmp;
-	}
-	_ptr[l++]=0;
-	if (strlen(userinfo->password)) {
-		_ptr[l++]=20;
-		char reply[SHA_DIGEST_LENGTH+1];
-		reply[SHA_DIGEST_LENGTH]='\0';
-		proxy_scramble(reply, (*myds)->myconn->scramble_buff, userinfo->password);
-		memcpy(_ptr+l,reply,20); l+=20;
-	} else {
-		_ptr[l++]=0;
-	}
-	_tmp=strlen(userinfo->schemaname);
-	memcpy(_ptr+l,userinfo->schemaname,_tmp+1);
-
-	if (send==true) { (*myds)->PSarrayOUT->add((void *)_ptr,size); }
-	if (len) { *len=size; }
-	if (ptr) { *ptr=(void *)_ptr; }
-#ifdef DEBUG
-	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
-#endif
-
-	return true;
-}
-
 bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, unsigned int *len) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating auth switch request pkt\n");
   mysql_hdr myhdr;
@@ -1500,8 +934,9 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 
 	uint64_t affected_rows;
 	uint64_t  insert_id;
-	//uint16_t  status;
+#ifdef DEBUG
 	uint16_t  warns;
+#endif /* DEBUG */
 	unsigned char msg[len];
 
 	unsigned int p=0;
@@ -1516,7 +951,9 @@ bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
 	prot_status=CPY2(pkt);
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
+#ifdef DEBUG
 	warns=CPY2(pkt);
+#endif /* DEBUG */
 	pkt+=sizeof(uint16_t);
 	p+=sizeof(uint16_t);
 	pkt++;
@@ -1560,82 +997,6 @@ bool MySQL_Protocol::process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len)
 	return ret;
 }
 
-//bool MySQL_Protocol::process_pkt_initial_handshake(MySQL_Data_Stream *myds, unsigned char *pkt, unsigned int len) {
-bool MySQL_Protocol::process_pkt_initial_handshake(unsigned char *pkt, unsigned int len) {
-	//return PKT_PARSED;
-	bool ret=false;
-	mysql_hdr hdr;
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	//Copy4B(&hdr,pkt);
-	pkt     += sizeof(mysql_hdr);
-	//MYSQL &myc=(*myds)->myconn->myconn;
-
-	if (*pkt != 0x0A || len < 33) {
-		goto exit_process_pkt_initial_handshake;
-	}
-	uint8_t protocol;
-	uint16_t capabilities_lower;
-	uint16_t capabilities_upper;
-	uint32_t capabilities;
-	uint8_t charset;
-	//uint16_t status;
-	uint32_t thread_id;
-
-	unsigned char * version;
-	unsigned char * salt1;
-	unsigned char * salt2;
-
-	protocol = *(uint8_t *)pkt;
-	pkt      += sizeof(uint8_t);
-	version   = pkt;
-	pkt      += strlen((char *)version) + 1;
-	thread_id = CPY4(pkt);
-	pkt      += sizeof(uint32_t);
-	salt1     = pkt;
-	pkt      += strlen((char *)salt1) + 1;
-	capabilities_lower = CPY2(pkt);
-	pkt    += sizeof(uint16_t);
-	charset = *(uint8_t *)pkt;
-	pkt    += sizeof(uint8_t);
-	prot_status  = CPY2(pkt);
-	pkt    += sizeof(uint16_t);
-	capabilities_upper = CPY2(pkt);
-	pkt    += sizeof(uint16_t);
-	pkt    += 11;
-	salt2   = pkt;
-
-	// FIXME: the next two lines are here just to prevent this: warning: variable ‘salt2’ set but not used [-Wunused-but-set-variable]
-	// salt2 needs to be handled
-	salt2++;
-	salt2 = pkt;
-	
-	capabilities=capabilities_upper << 16;
-	capabilities+=capabilities_lower;
-
-   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake <proto:%u ver:\"%s\" thd:%d cap:%d char:%d status:%d>\n", protocol, version, thread_id, capabilities, charset, prot_status);
-//   if(op.verbose) unmask_caps(caps);
-
-
-
-	(*myds)->myconn->options.server_capabilities=capabilities;
-	//myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
-	//myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
-	//const_cast<charset_info_st *>(myc.charset)->nr=charset;
-	//myc.thread_id=thread_id;
-	//myc.server_version=l_strdup((const char *)version);
-	(*myds)->myconn->options.server_version=strdup((const char *)version);
-	(*myds)->myconn->options.protocol_version=protocol;
-	(*myds)->myconn->options.charset=charset;
-	
-	memcpy((*myds)->myconn->scramble_buff,(const char *)salt1,strlen((char *)salt1));
-	memcpy((*myds)->myconn->scramble_buff+strlen((char *)salt1),(const char *)salt2,strlen((char *)salt2));	
-
-	ret=true;
-
-exit_process_pkt_initial_handshake:
-   return ret;
-
-}
 
 bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
@@ -1740,28 +1101,6 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	//if (password) free(password);
 	if (password) l_free_string(password);
 
-/*
-  //cur+=1;
-//  g_free(sess->mysql_username);
-	free(userinfo->username);
- 	//unsigned char *_ptr=pkt+cur;
-	user=pkt+cur;
-  //sess->mysql_username=g_strdup(ptr);
-  cur+=strlen((const char *)user);
-  cur+=2;
-  //memcpy(sess->scramble_buf,mypkt->data+cur,20);
-  memcpy((*myds)->myconn->scramble_buff, pkt+cur, 20);	
-  cur+=20;
-  //g_free(sess->mysql_schema_cur);
-  //ptr=mypkt->data+cur;
-	db=pkt+cur;  
-	//sess->mysql_schema_cur=g_strdup(ptr);
-	userinfo->username=strdup((const char *)user);
-  //  userinfo->password=strdup((const char *)password);
-  if (strlen((char *)db)) userinfo->set_schemaname((char *)db,strlen((char *)db)); // FIXME: buggy
-  proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "CHANGE USER: Username %s , schema %s\n" , userinfo->username, userinfo->schemaname);
-*/
-//  ret=true;
 	return ret;
 }
 
@@ -1862,21 +1201,6 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	if (use_ssl) return true;
 
 	if (ret==true) {
-		//MYSQL &myc=(*myds)->myconn->myconn;
-		//myc.user=strdup((const char *)user);
-		//if (password) myc.passwd=strdup(password);
-		//if (db) myc.db=strdup((const char *)db);
-/*
-		myc.user=l_strdup((const char *)user);
-		if (password) myc.passwd=l_strdup(password);
-		if (db) myc.db=l_strdup((const char *)db);
-*/
-		//myc.server_capabilities=capabilities;
-		//myc.charset=(const charset_info_st *)malloc(sizeof(struct charset_info_st));
-//		myc.charset=(const charset_info_st *)l_alloc(sizeof(struct charset_info_st));
-		//onst_cast<charset_info_st *>(myc.charset)->nr=charset;
-		//myds->myconn->myconn
-
 
 		(*myds)->myconn->options.max_allowed_pkt=max_pkt;
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
@@ -1895,9 +1219,6 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	//l_free(len,pkt);
 	return ret;
 }
-
-//uint16_t get_status(unsigned char *pkt, unsigned int len) {
-//}
 
 
 MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my) {
