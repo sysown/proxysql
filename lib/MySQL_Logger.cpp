@@ -1,5 +1,4 @@
 #include <fstream>
-#include "mysql_logger.pb.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include <dirent.h>

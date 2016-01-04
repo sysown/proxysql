@@ -1,6 +1,6 @@
 
 
-default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection protobuf sqlite3
+default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection sqlite3
 .PHONY: default
 
 
@@ -33,16 +33,6 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
-
-
-protobuf/protobuf/src/.libs/libprotobuf.a:
-	cd protobuf && rm -rf protobuf-2.6.1
-	cd protobuf && tar -zxf protobuf-2.6.1.tar.gz
-	cd protobuf/protobuf && ./configure --disable-shard
-	cd protobuf/protobuf && ${MAKE}
-
-protobuf: protobuf/protobuf/src/.libs/libprotobuf.a
-
 
 
 mariadb-client-library/mariadb_client/include/my_config.h:
@@ -90,7 +80,6 @@ cleanall:
 	cd re2 && rm -rf re2
 	cd libinjection && ${MAKE} clean
 	cd libevent && rm -rf libevent-2.0.22-stable
-	cd protobuf && rm -rf protobuf-2.6.1
 #	cd sqlite3 && rm -rf sqlite-amalgamation-3080403
 .PHONY: cleanall
 
