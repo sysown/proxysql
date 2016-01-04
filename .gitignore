@@ -45,6 +45,7 @@ oldcode/tests/connect_speed
 proxysql
 binaries/*deb
 binaries/*rpm
+tools/eventslog_reader_sample
 
 #core
 core

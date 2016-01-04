@@ -5,6 +5,94 @@
 #include <dirent.h>
 
 
+static uint8_t mysql_encode_length(uint64_t len, unsigned char *hd) {
+	if (len < 251) return 1;
+	if (len < 65536) { if (hd) { *hd=0xfc; }; return 3; }
+	if (len < 16777216) { if (hd) { *hd=0xfd; }; return 4; }
+	if (hd) { *hd=0xfe; }
+	return 9;
+}
+
+static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t len, char prefix) {
+	if (len==1) {
+		*p=(char)val;
+		return 1;
+	}
+	*p=prefix;
+	p++;
+	memcpy(p,&val,len-1);
+	return len;
+}
+
+MySQL_Event::MySQL_Event (uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest) {
+	thread_id=_thread_id;
+	username=_username;
+	schemaname=_schemaname;
+	start_time=_start_time;
+	end_time=_end_time;
+	query_digest=_query_digest;
+}
+
+void MySQL_Event::set_query(const char *ptr, int len) {
+	query_ptr=(char *)ptr;
+	query_len=len;
+}
+
+uint64_t MySQL_Event::write(std::fstream *f) {
+	uint64_t total_bytes=0;
+	total_bytes+=mysql_encode_length(thread_id, NULL);
+	username_len=strlen(username);
+	total_bytes+=mysql_encode_length(username_len,NULL)+username_len;
+	schemaname_len=strlen(schemaname);
+	total_bytes+=mysql_encode_length(schemaname_len,NULL)+schemaname_len;
+
+	total_bytes+=mysql_encode_length(start_time,NULL);
+	total_bytes+=mysql_encode_length(end_time,NULL);
+	total_bytes+=mysql_encode_length(query_digest,NULL);
+
+	total_bytes+=mysql_encode_length(query_len,NULL)+query_len;
+
+	// write total length , fixed size
+	f->write((const char *)&total_bytes,sizeof(uint64_t));
+	//char prefix;
+	uint8_t len;
+
+	len=mysql_encode_length(thread_id,buf);
+	write_encoded_length(buf,thread_id,len,buf[0]);
+	f->write((char *)buf,len);
+
+	len=mysql_encode_length(username_len,buf);
+	write_encoded_length(buf,username_len,len,buf[0]);
+	f->write((char *)buf,len);
+	f->write(username,username_len);
+
+	len=mysql_encode_length(schemaname_len,buf);
+	write_encoded_length(buf,schemaname_len,len,buf[0]);
+	f->write((char *)buf,len);
+	f->write(schemaname,schemaname_len);
+
+	len=mysql_encode_length(start_time,buf);
+	write_encoded_length(buf,start_time,len,buf[0]);
+	f->write((char *)buf,len);
+
+	len=mysql_encode_length(end_time,buf);
+	write_encoded_length(buf,end_time,len,buf[0]);
+	f->write((char *)buf,len);
+
+	len=mysql_encode_length(query_digest,buf);
+	write_encoded_length(buf,query_digest,len,buf[0]);
+	f->write((char *)buf,len);
+
+	len=mysql_encode_length(query_len,buf);
+	write_encoded_length(buf,query_len,len,buf[0]);
+	f->write((char *)buf,len);
+	if (query_len) {
+		f->write(query_ptr,query_len);
+	}
+
+	return total_bytes;
+}
+
 extern Query_Processor *GloQPro;
 
 MySQL_Logger::MySQL_Logger() {
@@ -117,30 +205,30 @@ void MySQL_Logger::set_datadir(char *s) {
 void MySQL_Logger::log_request(MySQL_Session *sess) {
 	if (enabled==false) return;
 	if (logfile==NULL) return;
-	mysql_logger::event ev;
-	ev.set_thread_id(sess->thread_session_id);
+
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
-	ev.set_username(ui->username);
-	ev.set_schemaname(ui->schemaname);
-	ev.set_start_time(sess->CurrentQuery.start_time);
-	ev.set_end_time(sess->CurrentQuery.end_time);
-	ev.set_query_digest(GloQPro->get_digest(sess->CurrentQuery.QueryParserArgs));
+
+	MySQL_Event me(sess->thread_session_id,ui->username,ui->schemaname,sess->CurrentQuery.start_time,sess->CurrentQuery.end_time,GloQPro->get_digest(sess->CurrentQuery.QueryParserArgs));
 	char *c=(char *)sess->CurrentQuery.QueryPointer;
 	if (c) {
-		// FIXME: NEEDS LENGTH . Use Bytes
-		ev.set_query(c,sess->CurrentQuery.QueryLength);
+		me.set_query(c,sess->CurrentQuery.QueryLength);
 	} else {
-		ev.set_query("");
+		me.set_query("",0);
 	}
+
+/*
 	ev.set_server("");
 	ev.set_client("");
+*/
+
 	wrlock();
-	ev.SerializeToOstream(logfile);
+
+	me.write(logfile);
+
 	unsigned long curpos=logfile->tellp();
 	if (curpos > max_log_file_size) {
 		flush_log_unlocked();
 	}
-	//*logfile << t << std::endl << id << std::endl << std::endl ;
 	wrunlock();
 }
 
