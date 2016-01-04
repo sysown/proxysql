@@ -16,8 +16,10 @@ The most commonly used scenarios.py commands are:
 """
 import os
 import subprocess
+import sys
 
 from docopt import docopt
+import nose
 
 from test.docker_fleet import DockerFleet
 
@@ -57,6 +59,10 @@ def stop():
     with open(PROXYSQL_SCENARIO_FILE, 'rt') as f:
         dirname = ''.join(f.readlines()).strip()
         DockerFleet().stop_temp_scenario(dirname, delete_folder=True)
+    try:
+        os.remove(PROXYSQL_SCENARIO_FILE)
+    except:
+        pass
 
 def _build_image(image, dir):
     subprocess.call(["docker", "rmi", "-f", "proxysql:%s" % image])
@@ -87,6 +93,9 @@ def build_image(image):
         dockerfiles = DockerFleet().get_dockerfiles_for_mysql()
         for image in dockerfiles.iterkeys():
             _build_image(image, dockerfiles[image]['dir'])
+
+def test():
+    nose.run(argv=['.'])
 
 if __name__ == '__main__':
 
@@ -140,3 +149,9 @@ if __name__ == '__main__':
             build_image(args['<args>'][0])
         else:
             build_image('all')
+
+    elif args['<command>'] == 'test':
+        if (not os.path.exists(PROXYSQL_SCENARIO_FILE)):
+            print("There doesn't seem to be a running scenario. Aborting.")
+        else:
+            test()
