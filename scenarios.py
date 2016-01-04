@@ -21,6 +21,8 @@ from docopt import docopt
 
 from test.docker_fleet import DockerFleet
 
+PROXYSQL_SCENARIO_FILE = '/tmp/proxysql-scenario.txt'
+
 def scenarios_list():
     templates = DockerFleet().get_docker_scenario_templates()
     scenario_names = sorted(templates.keys())
@@ -39,13 +41,22 @@ def mysql_images():
     for image in images:
         print('%s @ %s' % (image, os.path.abspath(dockerfiles[image]['dir'])))
 
-def start(scenario, proxysql_version, mysql_version):
-    # TODO(andrei): store somewhere details so that we don't need to pass
-    # any args to stop(), making it easier
-    pass
+def start(scenario, proxysql_image, mysql_image):
+    docker_fleet = DockerFleet()
+    scenario_info = docker_fleet.generate_scenarios(
+        scenarios=[scenario],
+        proxysql_filters={'names': [proxysql_image]},
+        mysql_filters={'names': [mysql_image]}
+    )[0]
+    dirname = docker_fleet.start_temp_scenario(scenario_info, copy_folder=True)
+    with open(PROXYSQL_SCENARIO_FILE, 'wt') as f:
+        f.write(dirname)
+    return dirname
 
 def stop():
-    pass
+    with open(PROXYSQL_SCENARIO_FILE, 'rt') as f:
+        dirname = ''.join(f.readlines()).strip()
+        DockerFleet().stop_temp_scenario(dirname, delete_folder=True)
 
 def _build_image(image, dir):
     subprocess.call(["docker", "rmi", "-f", "proxysql:%s" % image])
@@ -91,9 +102,39 @@ if __name__ == '__main__':
     elif args['<command>'] == 'mysql_images':
         mysql_images()
     elif args['<command>'] == 'start':
-        start()
+        if len(args['<args>']) >= 1:
+            scenario = args['<args>'][0]
+        else:
+            # Default value for the scenario parameter: '1backend'
+            scenario = '1backend'
+
+        if len(args['<args>']) >= 2:
+            proxysql_image = args['<args>'][1].split('=')[1]
+        else:
+            # Default value for the proxysql_image parameter: 'proxysql'
+            proxysql_image = 'proxysql'
+
+        if len(args['<args>']) >= 3:
+            mysql_image = args['<args>'][2].split('=')[1]
+        else:
+            # Default value for the mysql_image parameter: 'mysql-simple-dump'
+            mysql_image = 'mysql-simple-dump'
+
+        if (os.path.exists(PROXYSQL_SCENARIO_FILE)):
+            print("Is there another scenario running? If not, delete %s" %
+                  PROXYSQL_SCENARIO_FILE)
+        else:
+            dirname = start(scenario, proxysql_image, mysql_image)
+            print("Scenario started successfully at path %s" % dirname)
+
     elif args['<command>'] == 'stop':
-        stop()
+        if (not os.path.exists(PROXYSQL_SCENARIO_FILE)):
+            print("There is no scenario running or file %s has been removed" %
+                  PROXYSQL_SCENARIO_FILE)
+        else:
+            stop()
+            print("Scenario stopped successfully")
+
     elif args['<command>'] == 'build_image':
         if len(args['<args>']) > 0:
             build_image(args['<args>'][0])
