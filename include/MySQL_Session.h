@@ -100,7 +100,6 @@ class MySQL_Session
 	int pending_connect;
 	Query_Info CurrentQuery;
 	//void *query_parser_args;
-	unsigned long long pause;
 	unsigned long long pause_until;
 	//MySQL_Session_userinfo userinfo_client;
 	//MySQL_Session_userinfo userinfo_server;

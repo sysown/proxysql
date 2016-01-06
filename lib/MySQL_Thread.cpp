@@ -1698,8 +1698,7 @@ void MySQL_Thread::process_all_sessions() {
 			n--;
 			delete sess;
 		} else {
-			if (sess->to_process==1 || sess->pause<=curtime ) {
-				if (sess->pause <= curtime ) sess->pause=0;
+			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
 					if (rc==-1 || sess->killed==true) {
