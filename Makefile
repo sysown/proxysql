@@ -10,6 +10,7 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
+CURVER=v1.1.1
 
 .PHONY: default
 default: build_deps build_lib build_src
@@ -49,41 +50,41 @@ clean:
 packages: centos7 ubuntu14 debian7 debian8
 .PHONY: packages
 
-centos7: binaries/proxysql-1.0.1-1.x86_64.rpm
+centos7: binaries/proxysql-${CURVER}-1.x86_64.rpm
 .PHONY: centos
 
-ubuntu14: binaries/proxysql_1.1.0-ubuntu14_amd64.deb
+ubuntu14: binaries/proxysql_${CURVER}-ubuntu14_amd64.deb
 .PHONY: ubuntu14
 
-debian7: binaries/proxysql_1.1.0-debian7_amd64.deb
+debian7: binaries/proxysql_${CURVER}-debian7_amd64.deb
 .PHONY: debian7
 
-debian8: binaries/proxysql_1.1.0-debian8_amd64.deb
+debian8: binaries/proxysql_${CURVER}-debian8_amd64.deb
 .PHONY: debian8
 
-binaries/proxysql-1.0.1-1.x86_64.rpm:
+binaries/proxysql-${CURVER}-1.x86_64.rpm:
 	# Create CentOS 7 rpm file by creating docker image, running a container and extracting the RPM from the temp container
 	docker build -t centos7_proxysql --no-cache=true ./docker/images/proxysql/centos7-build
 	docker run -i --name=centos7_build centos7_proxysql bash &
 	sleep 5
-	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-1.0.1-1.x86_64.rpm ./binaries
+	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries
 #	docker kill centos7_build
 	docker rm centos7_build
 
-binaries/proxysql_1.1.0-ubuntu14_amd64.deb:
+binaries/proxysql_1.1.1-ubuntu14_amd64.deb:
 	docker stop ubuntu14_build || true
 	docker rm ubuntu14_build || true
 	docker create --name ubuntu14_build renecannao/proxysql:build-ubuntu14 bash -c "while : ; do sleep 10 ; done"
 	docker start ubuntu14_build
-	docker exec ubuntu14_build bash -c "cd /opt; git clone https://github.com/sysown/proxysql.git proxysql"
+	docker exec ubuntu14_build bash -c "cd /opt; git clone -b v1.1.1 https://github.com/sysown/proxysql.git proxysql"
 	docker exec ubuntu14_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} -j 4"
 	docker cp docker/images/proxysql/ubuntu-14.04-build/proxysql.ctl ubuntu14_build:/opt/proxysql/
 	docker exec ubuntu14_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
-	docker cp ubuntu14_build:/opt/proxysql/proxysql_1.1.0_amd64.deb ./binaries/proxysql_1.1.0-ubuntu14_amd64.deb
+	docker cp ubuntu14_build:/opt/proxysql/proxysql_1.1.1_amd64.deb ./binaries/proxysql_1.1.1-ubuntu14_amd64.deb
 	docker stop ubuntu14_build
 	docker rm ubuntu14_build
 
-binaries/proxysql_1.1.0-debian7_amd64.deb:
+binaries/proxysql_1.1.1-debian7_amd64.deb:
 	docker stop debian7_build || true
 	docker rm debian7_build || true
 	docker create --name debian7_build renecannao/proxysql:build-debian7 bash -c "while : ; do sleep 10 ; done"
@@ -92,20 +93,20 @@ binaries/proxysql_1.1.0-debian7_amd64.deb:
 	docker exec debian7_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} -j 4"
 	docker cp docker/images/proxysql/debian-7.8-build/proxysql.ctl debian7_build:/opt/proxysql/
 	docker exec debian7_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
-	docker cp debian7_build:/opt/proxysql/proxysql_1.1.0_amd64.deb ./binaries/proxysql_1.1.0-debian7_amd64.deb
+	docker cp debian7_build:/opt/proxysql/proxysql_1.1.1_amd64.deb ./binaries/proxysql_1.1.1-debian7_amd64.deb
 	docker stop debian7_build
 	docker rm debian7_build
 
-binaries/proxysql_1.1.0-debian8_amd64.deb:
+binaries/proxysql_${CURVER}-debian8_amd64.deb:
 	docker stop debian8_build || true
 	docker rm debian8_build || true
 	docker create --name debian8_build renecannao/proxysql:build-debian8 bash -c "while : ; do sleep 10 ; done"
 	docker start debian8_build
-	docker exec debian8_build bash -c "cd /opt; git clone https://github.com/sysown/proxysql.git proxysql"
+	docker exec debian8_build bash -c "cd /opt; git clone -b ${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec debian8_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} -j 4"
 	docker cp docker/images/proxysql/debian-8.2-build/proxysql.ctl debian8_build:/opt/proxysql/
 	docker exec debian8_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
-	docker cp debian8_build:/opt/proxysql/proxysql_1.1.0_amd64.deb ./binaries/proxysql_1.1.0-debian8_amd64.deb
+	docker cp debian8_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-debian8_amd64.deb
 	docker stop debian8_build
 	docker rm debian8_build
 
