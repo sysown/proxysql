@@ -94,8 +94,8 @@ def build_image(image):
         for image in dockerfiles.iterkeys():
             _build_image(image, dockerfiles[image]['dir'])
 
-def test():
-    nose.run(argv=['.'])
+def test(argv):
+    nose.run(argv=argv)
 
 if __name__ == '__main__':
 
@@ -154,4 +154,7 @@ if __name__ == '__main__':
         if (not os.path.exists(PROXYSQL_SCENARIO_FILE)):
             print("There doesn't seem to be a running scenario. Aborting.")
         else:
-            test()
+            if len(args['<args>']) > 0:
+                test(args['<args>'])
+            else:
+                test(['.'])
