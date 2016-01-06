@@ -405,7 +405,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 
 // Handle autocommit BEGIN
 	size_t sal=strlen("set autocommit");
-	if ( pkt->size > 7+sal) {
+	if ( pkt->size >= 7+sal) {
 		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
 			__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
 			unsigned int i;
