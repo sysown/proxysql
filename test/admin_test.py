@@ -4,7 +4,7 @@ from MySQLdb import OperationalError
 
 class AdminTest(ProxySQLBaseTest):
 
-	def _test_stop_main_thread(self):
+	def test_stop_main_thread(self):
 		try:
 			# This test will just assert that PROXYSQL STOP works correctly
 			# Since September 2015, the behaviour has been changed - PROXYSQL STOP
@@ -14,6 +14,3 @@ class AdminTest(ProxySQLBaseTest):
 			self.assertEqual(0, 1)
 		except OperationalError:
 			self.assertEqual(1, 1)
-
-	def test_stop_main_thread(self):
-		self.run_in_docker_scenarios(self._test_stop_main_thread)

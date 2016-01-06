@@ -6,6 +6,7 @@ import time
 
 from proxysql_base_test import ProxySQLBaseTest
 
+"""
 class ReplicationTopologyAwareness(ProxySQLBaseTest):
 
 	def _test_insert_sent_through_proxysql_is_visible_in_slave_servers(self):
@@ -178,3 +179,4 @@ class ReplicationTopologyAwareness(ProxySQLBaseTest):
 		# The old master, and the other slaves should still be in the slave hostgroup
 		for ip in slave_ips:
 			self.assertEqual(hostgroups[ip], 1)
+"""
