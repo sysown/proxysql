@@ -2,8 +2,5 @@ from proxysql_base_test import ProxySQLBaseTest
 
 class SysBenchTest(ProxySQLBaseTest):
 
-	def _test_proxy_doesnt_crash_under_mild_sysbench_load(self):
-		self.run_sysbench_proxysql()
-
 	def test_proxy_doesnt_crash_under_mild_sysbench_load(self):
-		self.run_in_docker_scenarios(self._test_proxy_doesnt_crash_under_mild_sysbench_load)
+		self.run_sysbench_proxysql()

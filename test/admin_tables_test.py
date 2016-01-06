@@ -5,7 +5,7 @@ from proxysql_base_test import ProxySQLBaseTest
 
 class AdminTablesTest(ProxySQLBaseTest):
 
-	def _test_monitor_tables_locking_errors(self):
+	def test_monitor_tables_locking_errors(self):
 		"""Test that intensive read/write operations to the MySQL Monitor tables
 		do not trigger locking errors.
 
@@ -32,6 +32,3 @@ class AdminTablesTest(ProxySQLBaseTest):
 		# If we reached this point without an error, it means that the test
 		# has passed.
 		self.assertEqual(1, 1)
-
-	def test_monitor_tables_locking_errors(self):
-		self.run_in_docker_scenarios(self._test_monitor_tables_locking_errors)
