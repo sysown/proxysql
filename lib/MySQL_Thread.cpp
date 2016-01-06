@@ -1361,9 +1361,6 @@ void MySQL_Thread::run() {
 	int rc;
 	//int arg_on=1;
 
-
-	unsigned long long oldtime=monotonic_time();
-
 	curtime=monotonic_time();
 
 	spin_wrlock(&thread_mutex);
@@ -1517,22 +1514,26 @@ void MySQL_Thread::run() {
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
-		curtime=monotonic_time();
+		//curtime=monotonic_time();
 
 		spin_wrlock(&thread_mutex);
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 		
 		curtime=monotonic_time();
+		if (curtime > last_maintenance_time + 200000) { // hardcoded value for now
+			last_maintenance_time=curtime;
+			maintenance_loop=true;
+		} else {
+			maintenance_loop=false;
+		}
 
 		// update polls statistics
 		mypolls.loops++;
 		mypolls.loop_counters->incr(curtime/1000000);
 
-		if (curtime>(oldtime+(mysql_thread___poll_timeout*1000))) {
-			oldtime=curtime;
+		if (maintenance_loop) {
 			GloQPro->update_query_processor_stats();
 		}
-
 			if (rc == -1 && errno == EINTR)
 				// poll() timeout, try again
 				continue;
@@ -1678,16 +1679,18 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
-		unsigned int numTrx=0;
-		unsigned long long sess_time = sess->IdleTime();
-		if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
-			numTrx = sess->NumActiveTransactions();
-			if (numTrx) {
-				// the session has idle transactions, kill it
-				if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
-			} else {
-				// the session is idle, kill it
-				if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+		if (maintenance_loop) {
+			unsigned int numTrx=0;
+			unsigned long long sess_time = sess->IdleTime();
+			if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+				numTrx = sess->NumActiveTransactions();
+				if (numTrx) {
+					// the session has idle transactions, kill it
+					if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
+				} else {
+					// the session is idle, kill it
+					if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+				}
 			}
 		}
 		if (sess->healthy==0) {
@@ -1801,6 +1804,9 @@ MySQL_Thread::MySQL_Thread() {
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___server_version=NULL;
 	mysql_thread___eventslog_filename=NULL;
+
+	last_maintenance_time=0;
+	maintenance_loop=true;
 
 	status_variables.queries=0;
 	status_variables.queries_slow=0;
