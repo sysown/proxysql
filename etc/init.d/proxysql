@@ -14,6 +14,9 @@ DATADIR="/var/run/proxysql"
 OPTS="-c /etc/proxysql.cnf -D $DATADIR"
 PIDFILE="$DATADIR/proxysql.pid"
 
+ulimit -n 102400
+ulimit -c 1073741824
+
 getpid() {
   if [ -f $PIDFILE ]
   then
