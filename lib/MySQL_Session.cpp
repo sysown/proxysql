@@ -941,6 +941,7 @@ handler_again:
 										return -1;
 									}
 								case 1290: // read-only
+								case 1047: // WSREP has not yet prepared node for application use
 									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 										retry_conn=true;
 									}
