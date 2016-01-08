@@ -40,6 +40,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.1.0-src.tar.gz
 	cd mariadb-client-library/mariadb_client && cmake .
 	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
