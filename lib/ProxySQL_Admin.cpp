@@ -93,6 +93,7 @@ static char * admin_variables_names[]= {
   (char *)"telnet_stats_ifaces",
   (char *)"mysql_ifaces",
   (char *)"refresh_interval",
+	(char *)"read_only",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -289,6 +290,22 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
 bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+	if (query_no_space_length==strlen("PROXYSQL READONLY") && !strncasecmp("PROXYSQL READONLY",query_no_space, query_no_space_length)) {
+		// this command enables admin_read_only , so the admin module is in read_only mode
+		proxy_info("Received PROXYSQL READONLY command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->set_read_only(true);
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+	if (query_no_space_length==strlen("PROXYSQL READWRITE") && !strncasecmp("PROXYSQL READWRITE",query_no_space, query_no_space_length)) {
+		// this command disables admin_read_only , so the admin module won't be in read_only mode
+		proxy_info("Received PROXYSQL WRITE command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->set_read_only(false);
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
 	if (query_no_space_length==strlen("PROXYSQL START") && !strncasecmp("PROXYSQL START",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL START command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1344,6 +1361,17 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 
+	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'read_only'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'read_only'"))) {
+		l_free(query_length,query);
+		char *q=(char *)"SELECT 'read_only' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-read_only'";
+		query_length=strlen(q)+5;
+		query=(char *)l_alloc(query_length);
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		bool ro=SPA->get_read_only();
+		sprintf(query,q,( ro ? "ON" : "OFF"));
+		goto __run_query;
+	}
+
 
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -1541,7 +1569,13 @@ __run_query:
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->stats==false) {
-			SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			if (SPA->get_read_only()) { // disable writes if the admin interface is in read_only mode
+				SPA->admindb->execute("PRAGMA query_only = ON");
+				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+				SPA->admindb->execute("PRAGMA query_only = OFF");
+			} else {
+				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			}
 		} else {
 			SPA->statsdb->execute("PRAGMA query_only = ON");
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1848,6 +1882,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	//variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
 	//variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
+	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -2282,6 +2317,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"read_only")) {
+		return strdup((variables.admin_read_only ? "true" : "false"));
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -2442,6 +2480,17 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"read_only")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.admin_read_only=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.admin_read_only=false;
+			return true;
+		}
+		return false;
 	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
