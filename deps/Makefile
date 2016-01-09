@@ -41,6 +41,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library/mariadb_client && cmake .
 	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mysql_async.c < ../mysql_async.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}
 # cd mariadb-client-library/mariadb_client/include && make my_config.h

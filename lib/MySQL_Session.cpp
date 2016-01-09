@@ -742,7 +742,7 @@ handler_again:
 				} else {
 					if (rc==-1) {
 						proxy_error("Detected a broken connection during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
-						myds->destroy_MySQL_Connection_From_Pool();
+						myds->destroy_MySQL_Connection_From_Pool(false);
 						myds->fd=0;
 						delete mybe->server_myds;
 						mybe->server_myds=NULL;
@@ -898,7 +898,7 @@ handler_again:
 									retry_conn=true;
 								}
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -920,7 +920,7 @@ handler_again:
 									retry_conn=true;
 								}
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -945,7 +945,7 @@ handler_again:
 									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 										retry_conn=true;
 									}
-									myds->destroy_MySQL_Connection_From_Pool();
+									myds->destroy_MySQL_Connection_From_Pool(true);
 									myds->fd=0;
 									if (retry_conn) {
 										myds->DSS=STATE_NOT_INITIALIZED;
@@ -1021,7 +1021,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1037,7 +1037,7 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(true);
 							myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
@@ -1077,7 +1077,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1093,7 +1093,7 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-								myds->destroy_MySQL_Connection_From_Pool();
+								myds->destroy_MySQL_Connection_From_Pool(true);
 								myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
@@ -1133,7 +1133,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1149,7 +1149,7 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-								myds->destroy_MySQL_Connection_From_Pool();
+								myds->destroy_MySQL_Connection_From_Pool(true);
 								myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
@@ -1190,7 +1190,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1208,7 +1208,7 @@ handler_again:
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 //							CurrentQuery.end();
 //							myds->free_mysql_real_query();
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(true);
 							myds->fd=0;
 //							status=WAITING_CLIENT_DATA;
 //							client_myds->DSS=STATE_SLEEP;
@@ -1239,10 +1239,10 @@ handler_again:
 					}
 					if (mybe->server_myds->myconn) {
 						//mybe->server_myds->destroy_MySQL_Connection();
-						mybe->server_myds->destroy_MySQL_Connection_From_Pool();
+						mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 					}
 					mybe->server_myds->max_connect_time=0;
-					NEXT_IMMEDIATE(WAITING_CLIENT_DATA);					
+					NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
 				}
 			}
 			if (mybe->server_myds->myconn==NULL) {
@@ -1288,7 +1288,7 @@ handler_again:
 						if (myds->connect_retries_on_failure >0 ) {
 							myds->connect_retries_on_failure--;
 							//myds->destroy_MySQL_Connection();
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
 						} else {
 							int myerr=mysql_errno(myconn->mysql);
@@ -1310,7 +1310,7 @@ handler_again:
 								previous_status.pop();
 							}
 							//myds->destroy_MySQL_Connection();
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool( myerr ? true : false );
 							myds->max_connect_time=0;
 							NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
 						}

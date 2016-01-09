@@ -39,6 +39,7 @@ class MySQL_Connection {
 	short wait_events;
 	unsigned long long timeout;
 	char scramble_buff[40];
+	bool send_quit;
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
 	int interr;	// integer return
 	my_bool ret_bool;

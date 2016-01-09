@@ -184,10 +184,11 @@ class MySQL_Data_Stream
 
 	void return_MySQL_Connection_To_Pool();
 	
-	void destroy_MySQL_Connection_From_Pool() {
+	void destroy_MySQL_Connection_From_Pool(bool sq) {
 		MySQL_Connection *mc=myconn;
 		detach_connection();
 		unplug_backend();
+		mc->send_quit=sq;
 		MyHGM->destroy_MyConn_from_pool(mc);
 	}
 	void free_mysql_real_query();	

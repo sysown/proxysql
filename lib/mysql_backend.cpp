@@ -30,7 +30,7 @@ void MySQL_Backend::reset() {
 			//server_myds->myconn=NULL;
 			//server_myds->unplug_backend();
 		} else {
-			server_myds->destroy_MySQL_Connection_From_Pool();
+			server_myds->destroy_MySQL_Connection_From_Pool(true);
 			//MyHGM->destroy_MyConn_from_pool(server_myds->myconn);
 			//server_myds->myconn=NULL;
 		}

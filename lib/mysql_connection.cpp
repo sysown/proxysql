@@ -139,6 +139,7 @@ MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
+	send_quit=true;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -169,7 +170,10 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 	if (mysql) {
 		async_free_result();
-		mysql_close(mysql);
+		if (send_quit) {
+			mysql_close_start(mysql);
+		}
+		mysql_close_no_command(mysql);
 		mysql=NULL;
 	}
 //	// FIXME: with the use of mysql client library , this part should be gone.
