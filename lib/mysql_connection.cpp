@@ -172,8 +172,9 @@ MySQL_Connection::~MySQL_Connection() {
 		async_free_result();
 		if (send_quit) {
 			mysql_close_start(mysql);
+		} else {
+			mysql_close_no_command(mysql);
 		}
-		mysql_close_no_command(mysql);
 		mysql=NULL;
 	}
 //	// FIXME: with the use of mysql client library , this part should be gone.
