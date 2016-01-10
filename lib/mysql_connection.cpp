@@ -171,7 +171,7 @@ MySQL_Connection::~MySQL_Connection() {
 	if (mysql) {
 		async_free_result();
 		if (send_quit) {
-			mysql_close_start(mysql);
+			mysql_close(mysql);
 		} else {
 			mysql_close_no_command(mysql);
 		}
