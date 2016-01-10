@@ -1258,6 +1258,11 @@ handler_again:
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				int rc;
+				if (default_hostgroup<0) {
+					// we are connected to a Admin module backend
+					// we pretend to set a user variable to disable multiplexing
+					myconn->set_status_user_variable(true);
+				}
 				enum session_status st=status;
 				if (mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE) {
 					st=previous_status.top();
