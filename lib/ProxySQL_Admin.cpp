@@ -2334,7 +2334,7 @@ void ProxySQL_Admin::add_credentials(char *type, char *credentials, int hostgrou
 #else
 void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 #endif /* DEBUG */
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Removing adding %s credentials: %s\n", type, credentials);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credentials: %s\n", type, credentials);
 	tokenizer_t tok = tokenizer( credentials, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
 	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
@@ -2343,7 +2343,7 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		c_split_2(token, ":", &user, &pass);
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
 		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,0); // FIXME: seems to work, but it needs extra care. See issue #255 and #256. This is just for admin module
+			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,1000);
 		}
 		free(user);
 		free(pass);
@@ -2377,6 +2377,12 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	size_t vallen=strlen(value);
 
 	if (!strcasecmp(name,"admin_credentials")) {
+		// always (re)add monitor user
+		if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
+			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
+				GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
+			}
+		}
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
@@ -2989,6 +2995,7 @@ void ProxySQL_Admin::__refresh_users() {
 	add_admin_users();
 	__add_active_users(USERNAME_BACKEND);
 	__add_active_users(USERNAME_FRONTEND);
+	set_variable((char *)"admin_credentials",(char *)"");
 }
 
 void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
@@ -3034,7 +3041,7 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1";
+	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0";
 	char *query=(char *)malloc(strlen(str)+15);
 	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);

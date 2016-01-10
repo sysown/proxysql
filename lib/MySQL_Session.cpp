@@ -801,23 +801,26 @@ handler_again:
 			} else {
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
-				if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
-					if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
-						previous_status.push(PROCESSING_QUERY);
-						NEXT_IMMEDIATE(CHANGING_USER_SERVER);
+				// these checks need to be performed only if we connect to a real mysql_server
+				if (default_hostgroup>=0) {
+					if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
+						if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
+							previous_status.push(PROCESSING_QUERY);
+							NEXT_IMMEDIATE(CHANGING_USER_SERVER);
+						}
+						if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
+							previous_status.push(PROCESSING_QUERY);
+							NEXT_IMMEDIATE(CHANGING_SCHEMA);
+						}
 					}
-					if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
+					if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 						previous_status.push(PROCESSING_QUERY);
-						NEXT_IMMEDIATE(CHANGING_SCHEMA);
+						NEXT_IMMEDIATE(CHANGING_CHARSET);
 					}
-				}
-				if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
-					previous_status.push(PROCESSING_QUERY);
-					NEXT_IMMEDIATE(CHANGING_CHARSET);
-				}
-				if (autocommit != mybe->server_myds->myconn->IsAutoCommit()) {
-					previous_status.push(PROCESSING_QUERY);
-					NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+					if (autocommit != mybe->server_myds->myconn->IsAutoCommit()) {
+						previous_status.push(PROCESSING_QUERY);
+						NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+					}
 				}
 				status=PROCESSING_QUERY;
 				mybe->server_myds->max_connect_time=0;
@@ -1427,8 +1430,8 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	if ( 
 		(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) 
-		&&
-		( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) )
+//		&&
+		//( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) || strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 ) // FIXME: maybe this check is not necessary
 	)	{
 		if (default_hostgroup<0 && admin==true) {
 			if (default_hostgroup==STATS_HOSTGROUP) {
