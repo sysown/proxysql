@@ -11,7 +11,7 @@
 #               firewalling, throttling, real time analysis, error-free failover
 
 OLDDATADIR="/var/run/proxysql"
-DATADIR="/var/proxysql/proxysql"
+DATADIR="/var/lib/proxysql"
 OPTS="-c /etc/proxysql.cnf -D $DATADIR"
 PIDFILE="$DATADIR/proxysql.pid"
 
