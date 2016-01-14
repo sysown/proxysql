@@ -134,6 +134,7 @@ void MySrvC::connect_error(int err_num) {
 	switch (err_num) {
 		case 1044: // access denied
 		case 1045: // access denied
+		case 1049: //Unknown databas
 			return;
 			break;
 		default:
