@@ -7,6 +7,7 @@
 #define PROXYSQL_LISTEN_LEN 1024
 
 extern Query_Processor *GloQPro;
+extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 
@@ -1745,6 +1746,13 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_username=GloMTH->get_variable_string((char *)"monitor_username");
 	if (mysql_thread___monitor_password) free(mysql_thread___monitor_password);
 	mysql_thread___monitor_password=GloMTH->get_variable_string((char *)"monitor_password");
+
+	if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
+		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
+			GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
+		}
+	}
+
 	if (mysql_thread___monitor_query_variables) free(mysql_thread___monitor_query_variables);
 	mysql_thread___monitor_query_variables=GloMTH->get_variable_string((char *)"monitor_query_variables");
 	if (mysql_thread___monitor_query_status) free(mysql_thread___monitor_query_status);

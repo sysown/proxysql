@@ -32,6 +32,7 @@ class ProxySQL_Admin {
 		char *mysql_ifaces;
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
+		bool admin_read_only;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -88,6 +89,8 @@ class ProxySQL_Admin {
 	SQLite3DB *monitordb;	// in memory
 	void print_version();
 	bool init();
+	bool get_read_only() { return variables.admin_read_only; }
+	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();
