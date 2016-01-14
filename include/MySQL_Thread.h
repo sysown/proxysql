@@ -282,6 +282,7 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		bool client_found_rows;
+		bool multiplexing;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;

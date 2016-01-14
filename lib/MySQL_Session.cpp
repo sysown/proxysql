@@ -732,8 +732,10 @@ handler_again:
 				if (rc==0) {
 					myconn->async_state_machine=ASYNC_IDLE;
 					//if ((myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->return_MySQL_Connection_To_Pool();
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
 					}
 					delete mybe->server_myds;
 					mybe->server_myds=NULL;
@@ -871,7 +873,7 @@ handler_again:
 //					myds->free_mysql_real_query();
 					RequestEnd(myds);
 					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->DSS=STATE_NOT_INITIALIZED;
 						myds->return_MySQL_Connection_To_Pool();
 						if (transaction_persistent==true) {
@@ -972,7 +974,7 @@ handler_again:
 //							myds->free_mysql_real_query();
 							RequestEnd(myds);
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+							if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								myds->DSS=STATE_NOT_INITIALIZED;
 								myds->return_MySQL_Connection_To_Pool();
 							} else {

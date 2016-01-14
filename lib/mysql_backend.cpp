@@ -23,7 +23,7 @@ void MySQL_Backend::reset() {
 	if (server_myds && server_myds->myconn) {
 		//if (server_myds->DSS==STATE_READY && server_myds->myconn->reusable==true && ((server_myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 		MySQL_Connection *mc=server_myds->myconn;
-		if ((server_myds->DSS==STATE_MARIADB_GENERIC || server_myds->DSS==STATE_READY) && mc->reusable==true && mc->IsActiveTransaction()==false && mc->MultiplexDisabled()==false) {
+		if (mysql_thread___multiplexing && (server_myds->DSS==STATE_MARIADB_GENERIC || server_myds->DSS==STATE_READY) && mc->reusable==true && mc->IsActiveTransaction()==false && mc->MultiplexDisabled()==false) {
 			server_myds->myconn->last_time_used=server_myds->sess->thread->curtime;
 			server_myds->return_MySQL_Connection_To_Pool();
 			//MyHGM->push_MyConn_to_pool(server_myds->myconn);
