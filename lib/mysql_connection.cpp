@@ -701,7 +701,9 @@ handler_again:
 
 
 void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
+#ifdef DEBUG
 	int fd;
+#endif /* DEBUG */
 	wait_events=0;
 
 	if (async_exit_status & MYSQL_WAIT_READ)
@@ -709,9 +711,15 @@ void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
 	if (async_exit_status & MYSQL_WAIT_WRITE)
 		wait_events|= POLLOUT;
 	if (wait_events)
+#ifdef DEBUG
 		fd= mysql_get_socket(mysql);
+#else
+		mysql_get_socket(mysql);
+#endif /* DEBUG */
 	else
+#ifdef DEBUG
 		fd= -1;
+#endif /* DEBUG */
 	if (async_exit_status & MYSQL_WAIT_TIMEOUT) {
 	timeout=10000;
 	//tv.tv_sec= 0;

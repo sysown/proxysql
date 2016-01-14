@@ -1343,8 +1343,10 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	if (mybe && mybe->server_myds) {
 	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
+#ifdef DEBUG
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
+#endif /* DEBUG */
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
 	} else {
 

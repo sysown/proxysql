@@ -1576,7 +1576,9 @@ void MySQL_Thread::run() {
 			if (myds==NULL) {
 				if (mypolls.fds[n].revents) {
 					unsigned char c;
-					read(mypolls.fds[n].fd, &c, 1);	// read just one byte , no need for error handling
+					if (read(mypolls.fds[n].fd, &c, 1)==-1) {// read just one byte
+						proxy_error("Error during read from signal_all_threads()\n");
+					}
 					proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
 					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
 					if (c) {
@@ -2191,7 +2193,9 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 		int fd=thr->pipefd[1];
-		write(fd,&c,1);
+		if (write(fd,&c,1)==-1) {
+			proxy_error("Error during write in signal_all_threads()\n");
+		}
 	}
 }
 
