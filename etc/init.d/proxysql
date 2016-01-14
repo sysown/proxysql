@@ -67,7 +67,7 @@ start() {
 		then
 			if [ ! -f $DATADIR/proxysql.db ]
 			then
-				mv -iav $OLDDATADIR/proxysql.db $DATADIR/proxysql.db
+				mv -iv $OLDDATADIR/proxysql.db $DATADIR/proxysql.db
 			fi
 		fi
 	 	proxysql $OPTS
