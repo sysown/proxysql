@@ -732,8 +732,10 @@ handler_again:
 				if (rc==0) {
 					myconn->async_state_machine=ASYNC_IDLE;
 					//if ((myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->return_MySQL_Connection_To_Pool();
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
 					}
 					delete mybe->server_myds;
 					mybe->server_myds=NULL;
@@ -871,7 +873,7 @@ handler_again:
 //					myds->free_mysql_real_query();
 					RequestEnd(myds);
 					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->DSS=STATE_NOT_INITIALIZED;
 						myds->return_MySQL_Connection_To_Pool();
 						if (transaction_persistent==true) {
@@ -914,7 +916,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on server %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
@@ -932,7 +934,7 @@ handler_again:
 							}
 							return -1;
 						} else {
-							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 							//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
 
@@ -972,7 +974,7 @@ handler_again:
 //							myds->free_mysql_real_query();
 							RequestEnd(myds);
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+							if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								myds->DSS=STATE_NOT_INITIALIZED;
 								myds->return_MySQL_Connection_To_Pool();
 							} else {
@@ -1341,8 +1343,10 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	if (mybe && mybe->server_myds) {
 	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
+#ifdef DEBUG
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
+#endif /* DEBUG */
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
 	} else {
 

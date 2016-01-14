@@ -19,7 +19,7 @@ RUN cd /opt; git clone https://github.com/akopytov/sysbench.git
 RUN cd /opt/sysbench; ./autogen.sh; ./configure --bindir=/usr/bin; make; make install
 
 ADD ./proxysql.cnf /etc/
-RUN mkdir -p /var/run/proxysql
+RUN mkdir -p /var/lib/proxysql
 ADD ./compile_and_start_proxysql.sh /tmp/
 RUN chmod +x /tmp/compile_and_start_proxysql.sh
 

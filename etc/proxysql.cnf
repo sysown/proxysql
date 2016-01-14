@@ -6,7 +6,7 @@
 
 
 
-datadir="/var/run/proxysql"
+datadir="/var/lib/proxysql"
 
 admin_variables=
 {
