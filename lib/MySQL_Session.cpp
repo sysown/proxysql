@@ -916,7 +916,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on server %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
@@ -934,7 +934,7 @@ handler_again:
 							}
 							return -1;
 						} else {
-							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 							//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
 
