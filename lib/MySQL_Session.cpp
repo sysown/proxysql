@@ -290,120 +290,44 @@ void MySQL_Session::writeout() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
 
-bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
-	if (pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
-		char buf[16];
-		sprintf(buf,"%u",last_insert_id);
-		unsigned int nTrx=NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-		MySQL_Data_Stream *myds=client_myds;
-		MySQL_Protocol *myprot=&client_myds->myprot;
-		myds->DSS=STATE_QUERY_SENT_DS;
-		int sid=1;
-		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
-		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL); sid++;
-		myds->DSS=STATE_COLUMN_DEFINITION;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
-		char **p=(char **)malloc(sizeof(char*)*1);
-		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
-		l[0]=strlen(buf);;
-		p[0]=buf;
-		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
-		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
-		myds->DSS=STATE_SLEEP;
-		l_free(pkt->size,pkt->ptr);
-		return true;
-	}
-	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
-		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
-		PtrSize_t pkt_2;
-		pkt_2.size=PROXYSQL_VERSION_COMMENT_LEN;
-		pkt_2.ptr=l_alloc(pkt_2.size);
-		memcpy(pkt_2.ptr,PROXYSQL_VERSION_COMMENT,pkt_2.size);
-		status=WAITING_CLIENT_DATA;
-		client_myds->DSS=STATE_SLEEP;
-		client_myds->PSarrayOUT->add(pkt_2.ptr,pkt_2.size);
-		l_free(pkt->size,pkt->ptr);
-		return true;
-	}
-	if (pkt->size==strlen((char *)"select USER()")+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
-		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
-		char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
-		char *query2=(char *)malloc(strlen(query1)+strlen(client_myds->myconn->userinfo->username)+10);
-		sprintf(query2,query1,client_myds->myconn->userinfo->username);
-		char *error;
-		int cols;
-		int affected_rows;
-		SQLite3_result *resultset;
-		GloAdmin->admindb->execute_statement(query2, &error , &cols , &affected_rows , &resultset);
-		SQLite3_to_MySQL(resultset, error, affected_rows, &client_myds->myprot);
-		delete resultset;
-		free(query2);
-		l_free(pkt->size,pkt->ptr);
-		return true;
-	}
-	if ( (pkt->size < 25) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
-		char *name=strndup((char *)pkt->ptr+15,pkt->size-15);
-		const CHARSET_INFO * c = proxysql_find_charset_name(name);
-		client_myds->DSS=STATE_QUERY_SENT_NET;
-		if (!c) {
-			char *m=(char *)"Unknown character set: '%s'";
-			char *errmsg=(char *)malloc(strlen(name)+strlen(m));
-			sprintf(errmsg,m,name);
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"#42000",errmsg);
-			free(errmsg);
+
+bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
+	if (
+		( strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0 )
+		||
+		( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 )
+	) {
+		char c=((char *)pkt->ptr)[5];
+		if (c=='c' || c=='C') {
+			__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
 		} else {
-			client_myds->myconn->set_charset(c->nr);
-			unsigned int nTrx=NumActiveTransactions();
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
+		}
+		unsigned int nTrx=NumActiveTransactions();
+		if (nTrx) {
+			// there is an active transaction, we must forward the request
+			return false;
+		} else {
+			// there is no active transaction, we will just reply OK
+			client_myds->DSS=STATE_QUERY_SENT_NET;
+			uint16_t setStatus = 0;
 			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-		}
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
-		l_free(pkt->size,pkt->ptr);
-		free(name);
-		return true;
-	}
-
-	{ // BEGIN handle COMMIT/ROLLBACK
-		if (
-			( strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0 )
-			||
-			( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 )
-		) {
-			char c=((char *)pkt->ptr)[5];
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			l_free(pkt->size,pkt->ptr);
 			if (c=='c' || c=='C') {
-				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
+				__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
 			} else {
-				__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
+				__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
 			}
-			unsigned int nTrx=NumActiveTransactions();
-			if (nTrx) {
-				// there is an active transaction, we must forward the request
-				return false;
-			} else {
-				// there is no active transaction, we will just reply OK
-				client_myds->DSS=STATE_QUERY_SENT_NET;
-				uint16_t setStatus = 0;
-				if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-				client_myds->DSS=STATE_SLEEP;
-				status=WAITING_CLIENT_DATA;
-				l_free(pkt->size,pkt->ptr);
-				if (c=='c' || c=='C') {
-					__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
-				} else {
-					__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
-				}
-				return true;
-			}
+			return true;
 		}
-	} // END handle COMMIT/ROLLBACK
+	}
+	return false;
+}
 
-// Handle autocommit BEGIN
+bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	size_t sal=strlen("set autocommit");
 	if ( pkt->size >= 7+sal) {
 		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
@@ -481,7 +405,86 @@ __ret_autocommit_OK:
 			}
 		}
 	}
-// Handle autocommit END
+	return false;
+}
+
+bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+	if (pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
+		char buf[16];
+		sprintf(buf,"%u",last_insert_id);
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		MySQL_Data_Stream *myds=client_myds;
+		MySQL_Protocol *myprot=&client_myds->myprot;
+		myds->DSS=STATE_QUERY_SENT_DS;
+		int sid=1;
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL); sid++;
+		myds->DSS=STATE_COLUMN_DEFINITION;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		char **p=(char **)malloc(sizeof(char*)*1);
+		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+		l[0]=strlen(buf);;
+		p[0]=buf;
+		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+		myds->DSS=STATE_ROW;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		myds->DSS=STATE_SLEEP;
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
+	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
+		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
+		PtrSize_t pkt_2;
+		pkt_2.size=PROXYSQL_VERSION_COMMENT_LEN;
+		pkt_2.ptr=l_alloc(pkt_2.size);
+		memcpy(pkt_2.ptr,PROXYSQL_VERSION_COMMENT,pkt_2.size);
+		status=WAITING_CLIENT_DATA;
+		client_myds->DSS=STATE_SLEEP;
+		client_myds->PSarrayOUT->add(pkt_2.ptr,pkt_2.size);
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
+	if (pkt->size==strlen((char *)"select USER()")+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
+		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
+		char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
+		char *query2=(char *)malloc(strlen(query1)+strlen(client_myds->myconn->userinfo->username)+10);
+		sprintf(query2,query1,client_myds->myconn->userinfo->username);
+		char *error;
+		int cols;
+		int affected_rows;
+		SQLite3_result *resultset;
+		GloAdmin->admindb->execute_statement(query2, &error , &cols , &affected_rows , &resultset);
+		SQLite3_to_MySQL(resultset, error, affected_rows, &client_myds->myprot);
+		delete resultset;
+		free(query2);
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
+	if ( (pkt->size < 25) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
+		char *name=strndup((char *)pkt->ptr+15,pkt->size-15);
+		const CHARSET_INFO * c = proxysql_find_charset_name(name);
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		if (!c) {
+			char *m=(char *)"Unknown character set: '%s'";
+			char *errmsg=(char *)malloc(strlen(name)+strlen(m));
+			sprintf(errmsg,m,name);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"#42000",errmsg);
+			free(errmsg);
+		} else {
+			client_myds->myconn->set_charset(c->nr);
+			unsigned int nTrx=NumActiveTransactions();
+			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		}
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+		free(name);
+		return true;
+	}
 
 	return false;
 }

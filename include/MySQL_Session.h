@@ -62,6 +62,8 @@ class MySQL_Session
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
 	bool handler_special_queries(PtrSize_t *);
+	bool handler_CommitRollback(PtrSize_t *);
+	bool handler_SetAutocommit(PtrSize_t *);
 	void RequestEnd(MySQL_Data_Stream *);
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
