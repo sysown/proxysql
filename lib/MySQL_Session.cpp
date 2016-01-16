@@ -291,6 +291,7 @@ void MySQL_Session::writeout() {
 }
 
 
+// FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	if (
 		( strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0 )
@@ -327,6 +328,8 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	return false;
 }
 
+
+// FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	size_t sal=strlen("set autocommit");
 	if ( pkt->size >= 7+sal) {
