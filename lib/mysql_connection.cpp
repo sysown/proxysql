@@ -152,6 +152,7 @@ MySQL_Connection::MySQL_Connection() {
 	status_flags=0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
+	options.autocommit=true;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
