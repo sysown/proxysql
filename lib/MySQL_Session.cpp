@@ -1694,6 +1694,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			current_hostgroup=qpo->destination_hostgroup;
 		}
 	}
+/*
 	if (autocommit_on_hostgroup >= 0) {
 		// the query is a "set autocommit=0"
 		// we set current_hostgroup=autocommit_on_hostgroup if possible
@@ -1704,6 +1705,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 		autocommit_on_hostgroup=-1;	// at the end, always reset autocommit_on_hostgroup to -1
 	}
+*/
 	return false;
 }
 
