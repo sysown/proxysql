@@ -16,6 +16,8 @@ extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
 
+extern SQLite3Server *GloSQL3Server;
+
 class KillArgs {
 	public:
 	char *username;
@@ -192,6 +194,8 @@ MySQL_Session::MySQL_Session() {
 	transaction_persistent_hostgroup=-1;
 	transaction_persistent=false;
 	active_transactions=0;
+
+	is_SQLite3Server=false;
 }
 
 MySQL_Session::~MySQL_Session() {
@@ -632,9 +636,15 @@ __get_pkts_from_client:
 									mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
+									if (is_SQLite3Server) {
 									// this is processed by the admin module
-									admin_func(this, GloAdmin, &pkt);
-									l_free(pkt.size,pkt.ptr);
+										admin_func(this, (ProxySQL_Admin *)GloSQL3Server, &pkt);
+										l_free(pkt.size,pkt.ptr);
+									} else {
+									// this is processed by the admin module
+										admin_func(this, GloAdmin, &pkt);
+										l_free(pkt.size,pkt.ptr);
+									}
 								}
 								break;
 							case _MYSQL_COM_CHANGE_USER:

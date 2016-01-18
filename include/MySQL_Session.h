@@ -80,6 +80,7 @@ class MySQL_Session
 	bool autocommit;
 	bool killed;
 	bool admin;
+	bool is_SQLite3Server;
 	bool max_connections_reached;
 	int user_max_connections;
 	bool client_authenticated;

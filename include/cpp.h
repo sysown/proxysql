@@ -16,6 +16,7 @@
 #include "configfile.hpp"
 #include "query_processor.h"
 #include "proxysql_admin.h"
+#include "SQLite3Server.hpp"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
 #undef swap
