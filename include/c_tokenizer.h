@@ -10,6 +10,10 @@
 #define FIRST_COMMENT_MAX_LENGTH  1024
 #endif /* FIRST_COMMENT_MAX_LENGTH */
 
+#ifndef QUERY_DIGEST_MAX_LENGTH
+#define QUERY_DIGEST_MAX_LENGTH  7000
+#endif /* QUERY_DIGEST_MAX_LENGTH */
+
 typedef struct
 {
 	char*       s;

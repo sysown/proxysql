@@ -159,9 +159,13 @@ static char is_digit_string(char *f, char *t)
 }
 
 
-char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment){
+char *mysql_query_digest_and_first_comment(char *s, int _len, char *first_comment){
 	int i = 0;
 
+	int len = _len;
+	if (_len > QUERY_DIGEST_MAX_LENGTH) {
+		len = QUERY_DIGEST_MAX_LENGTH;
+	}
 	char *r = (char *) malloc(len + SIZECHAR);
 
 	char *p_r = r;
