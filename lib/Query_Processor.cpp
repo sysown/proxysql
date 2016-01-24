@@ -791,7 +791,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 __exit_process_mysql_query:
 	// FIXME : there is too much data being copied around
 	l_free(len+1,query);
-	if (qp && qp->first_comment[0]) {
+	if (qp && qp->first_comment) {
 		// we have a comment to parse
 		query_parser_first_comment(ret, qp->first_comment);
 	}
@@ -845,13 +845,13 @@ void * Query_Processor::query_parser_init(char *query, int query_length, int fla
 		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
-	qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
-	qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
+	//qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
+	//qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, qp->first_comment);
+		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment);
 		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
 #ifdef DEBUG
-		if (strlen(qp->first_comment)) {
+		if (qp->first_comment && strlen(qp->first_comment)) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
 		}
 #endif /* DEBUG */
@@ -1100,7 +1100,8 @@ void Query_Processor::query_parser_free(void *args) {
 		qp->digest_text=NULL;
 	}
 	if (qp->first_comment) {
-		l_free(FIRST_COMMENT_MAX_LENGTH,qp->first_comment);
+		free(qp->first_comment);
+		qp->first_comment=NULL;
 	}
 	free(qp);
 };

@@ -159,7 +159,7 @@ static char is_digit_string(char *f, char *t)
 }
 
 
-char *mysql_query_digest_and_first_comment(char *s, int _len, char *first_comment){
+char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comment){
 	int i = 0;
 
 	char cur_comment[FIRST_COMMENT_MAX_LENGTH];
@@ -265,12 +265,15 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char *first_commen
 				}
 				if (fc==1) {
 					if (fc_len<FIRST_COMMENT_MAX_LENGTH-1) {
-						first_comment[fc_len]= !is_space_char(*s) ? *s : ' ';
+						if (*first_comment==NULL) {
+							*first_comment=(char *)malloc(FIRST_COMMENT_MAX_LENGTH);
+						}
+						*first_comment[fc_len]= !is_space_char(*s) ? *s : ' ';
 						fc_len++;
 					}
 					if (prev_char == '*' && *s == '/') {
 						if (fc_len>=2) fc_len-=2;
-						first_comment[fc_len]=0;
+						*first_comment[fc_len]=0;
 						fc=2;
 					}
 				}
