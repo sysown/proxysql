@@ -4,7 +4,8 @@
 #include "cpp.h"
 
 
-typedef btree::btree_map<uint64_t, void *> BtMap_query_digest;
+//typedef btree::btree_map<uint64_t, void *> BtMap_query_digest;
+typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 
 enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_ALTER_TABLE,
@@ -188,7 +189,8 @@ class Query_Processor {
 	enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args);
 
 	rwlock_t digest_rwlock;
-	BtMap_query_digest digest_bt_map;
+	//BtMap_query_digest digest_bt_map;
+	umap_query_digest digest_umap;
 
 	protected:
 	rwlock_t rwlock;

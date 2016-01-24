@@ -581,7 +581,8 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
-	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	//for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row();
 		result->add_row(pta);
@@ -605,14 +606,16 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
-	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	//for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row();
 		result->add_row(pta);
 		qds->free_row(pta);
 		delete qds;
 	}
-	digest_bt_map.erase(digest_bt_map.begin(),digest_bt_map.end());
+	//digest_bt_map.erase(digest_bt_map.begin(),digest_bt_map.end());
+	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 	spin_wrunlock(&digest_rwlock);
 	return result;
 }
@@ -897,16 +900,20 @@ void Query_Processor::update_query_digest(void *p, int hid, MySQL_Connection_use
 
 	QP_query_digest_stats *qds;	
 
-	btree::btree_map<uint64_t, void *>::iterator it;
-	it=digest_bt_map.find(qp->digest_total);
-	if (it != digest_bt_map.end()) {
+	//btree::btree_map<uint64_t, void *>::iterator it;
+	//it=digest_bt_map.find(qp->digest_total);
+	//if (it != digest_bt_map.end()) {
+	std::unordered_map<uint64_t, void *>::iterator it;
+	it=digest_umap.find(qp->digest_total);
+	if (it != digest_umap.end()) {
 		// found
 		qds=(QP_query_digest_stats *)it->second;
 		qds->add_time(t,n);
 	} else {
 		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
 		qds->add_time(t,n);
-		digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
+		//digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
+		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
 	}
 
 	spin_wrunlock(&digest_rwlock);
