@@ -20,7 +20,7 @@ class Query_Info {
 	MySQL_Session *sess;
 	unsigned long long start_time;
 	unsigned long long end_time;
-	void *QueryParserArgs;
+	SQP_par_t QueryParserArgs;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
 	unsigned char *QueryPointer;
 	int QueryLength;

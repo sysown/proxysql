@@ -238,6 +238,7 @@ typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
+typedef struct __SQP_query_parser_t SQP_par_t;
 //typedef struct _mysql_server_t mysql_server_t;
 
 #endif /* PROXYSQL_TYPEDEFS */
@@ -292,6 +293,16 @@ struct _mysql_server_t {
 	enum proxysql_server_status status;
 };
 */
+
+struct __SQP_query_parser_t {
+	sfilter sf;
+	uint64_t digest;
+	char *digest_text;
+	char *first_comment;
+	uint64_t digest_total;
+};
+
+
 
 struct _PtrSize_t {
   void *ptr;

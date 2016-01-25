@@ -186,7 +186,7 @@ class Query_Processor {
 
 
 	private:
-	enum MYSQL_COM_QUERY_command __query_parser_command_type(void *args);
+	enum MYSQL_COM_QUERY_command __query_parser_command_type(SQP_par_t *qp);
 
 	rwlock_t digest_rwlock;
 	//BtMap_query_digest digest_bt_map;
@@ -224,16 +224,16 @@ class Query_Processor {
 
 	void update_query_processor_stats();
 
-	void * query_parser_init(char *query, int query_length, int flags);
-	enum MYSQL_COM_QUERY_command query_parser_command_type(void *args);
+	void query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags);
+	enum MYSQL_COM_QUERY_command query_parser_command_type(SQP_par_t *qp);
 	bool query_parser_first_comment(Query_Processor_Output *qpo, char *fc);
-	void query_parser_free(void *args);
-	char * get_digest_text(void *args);
-	uint64_t get_digest(void *args);
+	void query_parser_free(SQP_par_t *qp);
+	char * get_digest_text(SQP_par_t *qp);
+	uint64_t get_digest(SQP_par_t *qp);
 
-	void update_query_digest(void *p, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);
+	void update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);
 
-	unsigned long long query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, void *p, unsigned long long t);
+	unsigned long long query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t);
 
 	SQLite3_result * get_stats_commands_counters();
 	SQLite3_result * get_query_digests();

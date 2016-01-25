@@ -74,13 +74,14 @@ Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
-	QueryParserArgs=NULL;
+	QueryParserArgs.digest_text=NULL;
+	QueryParserArgs.first_comment=NULL;
 }
 
 Query_Info::~Query_Info() {
-	if (QueryParserArgs) {
-		GloQPro->query_parser_free(QueryParserArgs);
-	}
+	//if (QueryParserArgs) {
+	GloQPro->query_parser_free(&QueryParserArgs);
+	//}
 	if (QueryPointer) {
 		//l_free(QueryLength+1,QueryPointer);
 	}
@@ -90,7 +91,9 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
-	QueryParserArgs=NULL;
+	//QueryParserArgs=NULL;
+	QueryParserArgs.digest_text=NULL;
+	QueryParserArgs.first_comment=NULL;
 	start_time=sess->thread->curtime;
 	init(_p, len, mysql_header);
 	if (mysql_thread___commands_stats || mysql_thread___query_digests) {
@@ -114,30 +117,31 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	//memcpy(QueryPointer,(mysql_header ? _p+5 : _p),QueryLength);
 	QueryPointer=(mysql_header ? _p+5 : _p);
 	//QueryPointer[QueryLength]=0;
-	QueryParserArgs=NULL;
+	//QueryParserArgs=NULL;
 	MyComQueryCmd=MYSQL_COM_QUERY_UNKNOWN;
 }
 
 void Query_Info::query_parser_init() {
-	QueryParserArgs=GloQPro->query_parser_init((char *)QueryPointer,QueryLength,0);
+	//QueryParserArgs=GloQPro->query_parser_init((char *)QueryPointer,QueryLength,0);
+	GloQPro->query_parser_init(&QueryParserArgs,(char *)QueryPointer,QueryLength,0);
 }
 
 enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
-	MyComQueryCmd=GloQPro->query_parser_command_type(QueryParserArgs);
+	MyComQueryCmd=GloQPro->query_parser_command_type(&QueryParserArgs);
 	return MyComQueryCmd;
 }
 
 void Query_Info::query_parser_free() {
-	if (QueryParserArgs) {
-		GloQPro->query_parser_free(QueryParserArgs);
-		QueryParserArgs=NULL;
-	}
+	//if (QueryParserArgs) {
+	GloQPro->query_parser_free(&QueryParserArgs);
+	//QueryParserArgs=NULL;
+	//}
 }
 
 unsigned long long Query_Info::query_parser_update_counters() {
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	if (MyComQueryCmd==MYSQL_COM_QUERY_UNKNOWN) return 0; // this means that it was never initialized
-	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, QueryParserArgs, end_time-start_time);
+	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	//l_free(QueryLength+1,QueryPointer);
 	QueryPointer=NULL;
@@ -146,7 +150,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
 }
 
 char * Query_Info::get_digest_text() {
-	return GloQPro->get_digest_text(QueryParserArgs);
+	return GloQPro->get_digest_text(&QueryParserArgs);
 }
 
 void * MySQL_Session::operator new(size_t size) {

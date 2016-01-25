@@ -207,7 +207,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 
-	MySQL_Event me(sess->thread_session_id,ui->username,ui->schemaname,sess->CurrentQuery.start_time,sess->CurrentQuery.end_time,GloQPro->get_digest(sess->CurrentQuery.QueryParserArgs));
+	MySQL_Event me(sess->thread_session_id,ui->username,ui->schemaname,sess->CurrentQuery.start_time,sess->CurrentQuery.end_time,GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs));
 	char *c=(char *)sess->CurrentQuery.QueryPointer;
 	if (c) {
 		me.set_query(c,sess->CurrentQuery.QueryLength);

@@ -5,8 +5,6 @@
 #include "re2/regexp.h"
 #include "proxysql.h"
 #include "cpp.h"
-#include "../deps/libinjection/libinjection.h"
-#include "../deps/libinjection/libinjection_sqli.h"
 
 #include "SpookyV2.h"
 
@@ -69,6 +67,7 @@ class QP_rule_text {
 	}
 };
 
+/*
 struct __SQP_query_parser_t {
 	sfilter sf;
 	uint64_t digest;
@@ -78,7 +77,7 @@ struct __SQP_query_parser_t {
 };
 
 typedef struct __SQP_query_parser_t SQP_par_t;
-
+*/
 class QP_query_digest_stats {
 	public:
 	uint64_t digest;
@@ -626,8 +625,8 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	Query_Processor_Output *ret=NULL;
 	ret=new Query_Processor_Output();
 	SQP_par_t *qp=NULL;
-	if (qi && qi->QueryParserArgs) {
-		qp=(SQP_par_t *)qi->QueryParserArgs;
+	if (qi) {
+		qp=(SQP_par_t *)&qi->QueryParserArgs;
 	}
 	unsigned int len=size-sizeof(mysql_hdr)-1;
 	char *query=(char *)l_alloc(len+1);
@@ -839,8 +838,8 @@ void Query_Processor::update_query_processor_stats() {
 };
 
 
-void * Query_Processor::query_parser_init(char *query, int query_length, int flags) {
-	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
+void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags) {
+	//SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
 	if (mysql_thread___commands_stats)
 		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
@@ -856,20 +855,20 @@ void * Query_Processor::query_parser_init(char *query, int query_length, int fla
 		}
 #endif /* DEBUG */
 	}
-	return (void *)qp;
+	//return (void *)qp;
 };
 
-enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(void *args) {
-	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(args);
+enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_t *qp) {
+	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(qp);
 	//_thr_commands_counters[ret]++;
 	return ret;
 }
 
-unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, void *p, unsigned long long t) {
+unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
-	SQP_par_t *qp=(SQP_par_t *)p;
+	//SQP_par_t *qp=(SQP_par_t *)p;
 
 	if (qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
@@ -896,8 +895,8 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	return ret;
 }
 
-void Query_Processor::update_query_digest(void *p, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
-	SQP_par_t *qp=(SQP_par_t *)p;
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
+	//SQP_par_t *qp=(SQP_par_t *)p;
 	spin_wrlock(&digest_rwlock);
 
 	QP_query_digest_stats *qds;	
@@ -921,20 +920,20 @@ void Query_Processor::update_query_digest(void *p, int hid, MySQL_Connection_use
 	spin_wrunlock(&digest_rwlock);
 }
 
-char * Query_Processor::get_digest_text(void *p) {
-	if (p==NULL) return NULL;
-	SQP_par_t *qp=(SQP_par_t *)p;
+char * Query_Processor::get_digest_text(SQP_par_t *qp) {
+	if (qp==NULL) return NULL;
+	//SQP_par_t *qp=(SQP_par_t *)p;
 	return qp->digest_text;
 }
 
-uint64_t Query_Processor::get_digest(void *args) {
-	if (args==NULL) return 0;
-	SQP_par_t *qp=(SQP_par_t *)args;
+uint64_t Query_Processor::get_digest(SQP_par_t *qp) {
+	if (qp==NULL) return 0;
+	//SQP_par_t *qp=(SQP_par_t *)args;
 	return qp->digest;
 }
 
-enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *args) {
-	SQP_par_t *qp=(SQP_par_t *)args;
+enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_par_t *qp) {
+	//SQP_par_t *qp=(SQP_par_t *)args;
 	while (libinjection_sqli_tokenize(&qp->sf)) {
 		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
 			char c1=toupper(qp->sf.current->val[0]);
@@ -1095,8 +1094,8 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 }
 
 
-void Query_Processor::query_parser_free(void *args) {
-	SQP_par_t *qp=(SQP_par_t *)args;
+void Query_Processor::query_parser_free(SQP_par_t *qp) {
+	//SQP_par_t *qp=(SQP_par_t *)args;
 	if (qp->digest_text) {
 		free(qp->digest_text);
 		qp->digest_text=NULL;
@@ -1105,5 +1104,5 @@ void Query_Processor::query_parser_free(void *args) {
 		free(qp->first_comment);
 		qp->first_comment=NULL;
 	}
-	free(qp);
+	//free(qp);
 };
