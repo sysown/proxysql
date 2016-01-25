@@ -874,8 +874,10 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	if (qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
 		uint64_t hash2;
-		SpookyHash *myhash=new SpookyHash();
-		myhash->Init(19,3);
+		//SpookyHash *myhash=new SpookyHash();
+		//myhash->Init(19,3);
+		SpookyHash myhash;
+		myhash.Init(19,3);
 		assert(sess);
 		assert(sess->client_myds);
 		assert(sess->client_myds->myconn);
@@ -883,12 +885,12 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 		assert(ui->username);
 		assert(ui->schemaname);
-		myhash->Update(ui->username,strlen(ui->username));
-		myhash->Update(&qp->digest,sizeof(qp->digest));
-		myhash->Update(ui->schemaname,strlen(ui->schemaname));
-		myhash->Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
-		myhash->Final(&qp->digest_total,&hash2);
-		delete myhash;
+		myhash.Update(ui->username,strlen(ui->username));
+		myhash.Update(&qp->digest,sizeof(qp->digest));
+		myhash.Update(ui->schemaname,strlen(ui->schemaname));
+		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
+		myhash.Final(&qp->digest_total,&hash2);
+		//delete myhash;
 		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime);
 	}
 	return ret;
