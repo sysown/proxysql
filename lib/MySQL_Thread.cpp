@@ -980,13 +980,9 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 	}
 	if (!strcasecmp(name,"eventslog_filename")) {
-		if (vallen) {
-			free(variables.eventslog_filename);
-			variables.eventslog_filename=strdup(value);
-			return true;
-		} else {
-			return false;
-		}
+		free(variables.eventslog_filename);
+		variables.eventslog_filename=strdup(value);
+		return true;
 	}
 	if (!strcasecmp(name,"server_capabilities")) {
 		int intv=atoi(value);
