@@ -7,6 +7,7 @@
 #define PROXYSQL_LISTEN_LEN 1024
 
 extern Query_Processor *GloQPro;
+extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 
@@ -165,6 +166,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_timer_cached",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_transaction_time",
+	(char *)"multiplexing",
 	(char *)"threshold_query_length",
 	(char *)"threshold_resultset_size",
 	(char *)"wait_timeout",
@@ -253,6 +255,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.have_compress=true;
 	variables.client_found_rows=true;
 	variables.commands_stats=true;
+	variables.multiplexing=true;
 	variables.query_digests=true;
 	variables.sessions_sort=true;
 	variables.servers_stats=true;
@@ -399,6 +402,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcasecmp(name,"client_found_rows")) return (int)variables.client_found_rows;
+	if (!strcasecmp(name,"multiplexing")) return (int)variables.multiplexing;
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
@@ -586,6 +590,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"client_found_rows")) {
 		return strdup((variables.client_found_rows ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"multiplexing")) {
+		return strdup((variables.multiplexing ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"commands_stats")) {
 		return strdup((variables.commands_stats ? "true" : "false"));
@@ -1074,6 +1081,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"multiplexing")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.multiplexing=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.multiplexing=false;
+			return true;
+		}
+		return false;
+	}
 	if (!strcasecmp(name,"commands_stats")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.commands_stats=true;
@@ -1361,9 +1379,6 @@ void MySQL_Thread::run() {
 	int rc;
 	//int arg_on=1;
 
-
-	unsigned long long oldtime=monotonic_time();
-
 	curtime=monotonic_time();
 
 	spin_wrlock(&thread_mutex);
@@ -1517,22 +1532,26 @@ void MySQL_Thread::run() {
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
-		curtime=monotonic_time();
+		//curtime=monotonic_time();
 
 		spin_wrlock(&thread_mutex);
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 		
 		curtime=monotonic_time();
+		if (curtime > last_maintenance_time + 200000) { // hardcoded value for now
+			last_maintenance_time=curtime;
+			maintenance_loop=true;
+		} else {
+			maintenance_loop=false;
+		}
 
 		// update polls statistics
 		mypolls.loops++;
 		mypolls.loop_counters->incr(curtime/1000000);
 
-		if (curtime>(oldtime+(mysql_thread___poll_timeout*1000))) {
-			oldtime=curtime;
+		if (maintenance_loop) {
 			GloQPro->update_query_processor_stats();
 		}
-
 			if (rc == -1 && errno == EINTR)
 				// poll() timeout, try again
 				continue;
@@ -1557,7 +1576,9 @@ void MySQL_Thread::run() {
 			if (myds==NULL) {
 				if (mypolls.fds[n].revents) {
 					unsigned char c;
-					read(mypolls.fds[n].fd, &c, 1);	// read just one byte , no need for error handling
+					if (read(mypolls.fds[n].fd, &c, 1)==-1) {// read just one byte
+						proxy_error("Error during read from signal_all_threads()\n");
+					}
 					proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
 					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
 					if (c) {
@@ -1678,16 +1699,18 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
-		unsigned int numTrx=0;
-		unsigned long long sess_time = sess->IdleTime();
-		if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
-			numTrx = sess->NumActiveTransactions();
-			if (numTrx) {
-				// the session has idle transactions, kill it
-				if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
-			} else {
-				// the session is idle, kill it
-				if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+		if (maintenance_loop) {
+			unsigned int numTrx=0;
+			unsigned long long sess_time = sess->IdleTime();
+			if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+				numTrx = sess->NumActiveTransactions();
+				if (numTrx) {
+					// the session has idle transactions, kill it
+					if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
+				} else {
+					// the session is idle, kill it
+					if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+				}
 			}
 		}
 		if (sess->healthy==0) {
@@ -1695,8 +1718,7 @@ void MySQL_Thread::process_all_sessions() {
 			n--;
 			delete sess;
 		} else {
-			if (sess->to_process==1 || sess->pause<=curtime ) {
-				if (sess->pause <= curtime ) sess->pause=0;
+			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
 					if (rc==-1 || sess->killed==true) {
@@ -1743,6 +1765,13 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_username=GloMTH->get_variable_string((char *)"monitor_username");
 	if (mysql_thread___monitor_password) free(mysql_thread___monitor_password);
 	mysql_thread___monitor_password=GloMTH->get_variable_string((char *)"monitor_password");
+
+	if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
+		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
+			GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
+		}
+	}
+
 	if (mysql_thread___monitor_query_variables) free(mysql_thread___monitor_query_variables);
 	mysql_thread___monitor_query_variables=GloMTH->get_variable_string((char *)"monitor_query_variables");
 	if (mysql_thread___monitor_query_status) free(mysql_thread___monitor_query_status);
@@ -1775,6 +1804,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
+	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
@@ -1801,6 +1831,9 @@ MySQL_Thread::MySQL_Thread() {
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___server_version=NULL;
 	mysql_thread___eventslog_filename=NULL;
+
+	last_maintenance_time=0;
+	maintenance_loop=true;
 
 	status_variables.queries=0;
 	status_variables.queries_slow=0;
@@ -2160,7 +2193,9 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 		int fd=thr->pipefd[1];
-		write(fd,&c,1);
+		if (write(fd,&c,1)==-1) {
+			proxy_error("Error during write in signal_all_threads()\n");
+		}
 	}
 }
 

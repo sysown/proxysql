@@ -10,9 +10,13 @@
 #               It provides advanced features like connection pool, query routing and rewrite,
 #               firewalling, throttling, real time analysis, error-free failover
 
-DATADIR="/var/run/proxysql"
+OLDDATADIR="/var/run/proxysql"
+DATADIR="/var/lib/proxysql"
 OPTS="-c /etc/proxysql.cnf -D $DATADIR"
 PIDFILE="$DATADIR/proxysql.pid"
+
+ulimit -n 102400
+ulimit -c 1073741824
 
 getpid() {
   if [ -f $PIDFILE ]
@@ -59,6 +63,13 @@ start() {
   getpid
   if [ "X$pid" = "X" ]
    then
+		if [ -f $OLDDATADIR/proxysql.db ]
+		then
+			if [ ! -f $DATADIR/proxysql.db ]
+			then
+				mv -iv $OLDDATADIR/proxysql.db $DATADIR/proxysql.db
+			fi
+		fi
 	 	proxysql $OPTS
 		if [ "$?" = "0" ]; then
 			echo "DONE!"

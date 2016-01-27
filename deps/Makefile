@@ -40,6 +40,8 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.1.0-src.tar.gz
 	cd mariadb-client-library/mariadb_client && cmake .
 	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mysql_async.c < ../mysql_async.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
@@ -48,8 +50,6 @@ mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
 
 
 sqlite3/sqlite3/sqlite3.o:
-	cd sqlite3 && rm -rf sqlite-amalgamation-3090200
-	cd sqlite3 && unzip sqlite-amalgamation-3090200.zip
 	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
@@ -80,6 +80,6 @@ cleanall:
 	cd re2 && rm -rf re2
 	cd libinjection && ${MAKE} clean
 	cd libevent && rm -rf libevent-2.0.22-stable
-#	cd sqlite3 && rm -rf sqlite-amalgamation-3080403
+	cd sqlite3/sqlite3 && rm -rf *.o
 .PHONY: cleanall
 

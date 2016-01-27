@@ -134,6 +134,7 @@ void MySrvC::connect_error(int err_num) {
 	switch (err_num) {
 		case 1044: // access denied
 		case 1045: // access denied
+		case 1049: //Unknown databas
 			return;
 			break;
 		default:
@@ -703,10 +704,10 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 	mysrvc->ConnectionsUsed->remove(c);
-	delete c;
 	status.myconnpoll_destroy++;
 	status.server_connections_created--;
 	wrunlock();
+	delete c;
 }
 
 

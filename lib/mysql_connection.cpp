@@ -139,6 +139,7 @@ MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
+	send_quit=true;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -151,6 +152,7 @@ MySQL_Connection::MySQL_Connection() {
 	status_flags=0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
+	options.autocommit=true;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -169,7 +171,11 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 	if (mysql) {
 		async_free_result();
-		mysql_close(mysql);
+		if (send_quit) {
+			mysql_close(mysql);
+		} else {
+			mysql_close_no_command(mysql);
+		}
 		mysql=NULL;
 	}
 //	// FIXME: with the use of mysql client library , this part should be gone.
@@ -696,7 +702,9 @@ handler_again:
 
 
 void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
+#ifdef DEBUG
 	int fd;
+#endif /* DEBUG */
 	wait_events=0;
 
 	if (async_exit_status & MYSQL_WAIT_READ)
@@ -704,9 +712,15 @@ void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
 	if (async_exit_status & MYSQL_WAIT_WRITE)
 		wait_events|= POLLOUT;
 	if (wait_events)
+#ifdef DEBUG
 		fd= mysql_get_socket(mysql);
+#else
+		mysql_get_socket(mysql);
+#endif /* DEBUG */
 	else
+#ifdef DEBUG
 		fd= -1;
+#endif /* DEBUG */
 	if (async_exit_status & MYSQL_WAIT_TIMEOUT) {
 	timeout=10000;
 	//tv.tv_sec= 0;

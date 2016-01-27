@@ -1,0 +1,9 @@
+@@ -805,7 +805,7 @@
+   int res;
+ 
+   /* It is legitimate to have NULL sock argument, which will do nothing. */
+-  if (sock)
++  if (sock && sock->net.vio)
+   {
+     res= mysql_close_slow_part_start(sock);
+     /* If we need to block, return now and do the rest in mysql_close_cont(). */

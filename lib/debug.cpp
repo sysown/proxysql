@@ -9,8 +9,10 @@
 #endif /* DEBUG_EXTERN */
 #endif /* DEBUG */
 
+#ifdef DEBUG
 static unsigned long long pretime=0;
 static spinlock debug_spinlock;
+#endif /* DEBUG */
 
 static inline unsigned long long debug_monotonic_time() {
 	struct timespec ts;

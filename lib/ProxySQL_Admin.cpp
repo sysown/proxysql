@@ -93,6 +93,7 @@ static char * admin_variables_names[]= {
   (char *)"telnet_stats_ifaces",
   (char *)"mysql_ifaces",
   (char *)"refresh_interval",
+	(char *)"read_only",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -289,6 +290,22 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
 bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+	if (query_no_space_length==strlen("PROXYSQL READONLY") && !strncasecmp("PROXYSQL READONLY",query_no_space, query_no_space_length)) {
+		// this command enables admin_read_only , so the admin module is in read_only mode
+		proxy_info("Received PROXYSQL READONLY command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->set_read_only(true);
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+	if (query_no_space_length==strlen("PROXYSQL READWRITE") && !strncasecmp("PROXYSQL READWRITE",query_no_space, query_no_space_length)) {
+		// this command disables admin_read_only , so the admin module won't be in read_only mode
+		proxy_info("Received PROXYSQL WRITE command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->set_read_only(false);
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
 	if (query_no_space_length==strlen("PROXYSQL START") && !strncasecmp("PROXYSQL START",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL START command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1344,6 +1361,17 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 
+	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'read_only'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'read_only'"))) {
+		l_free(query_length,query);
+		char *q=(char *)"SELECT 'read_only' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-read_only'";
+		query_length=strlen(q)+5;
+		query=(char *)l_alloc(query_length);
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		bool ro=SPA->get_read_only();
+		sprintf(query,q,( ro ? "ON" : "OFF"));
+		goto __run_query;
+	}
+
 
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -1541,7 +1569,13 @@ __run_query:
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->stats==false) {
-			SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			if (SPA->get_read_only()) { // disable writes if the admin interface is in read_only mode
+				SPA->admindb->execute("PRAGMA query_only = ON");
+				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+				SPA->admindb->execute("PRAGMA query_only = OFF");
+			} else {
+				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			}
 		} else {
 			SPA->statsdb->execute("PRAGMA query_only = ON");
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1848,6 +1882,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	//variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
 	//variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
+	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -2282,6 +2317,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"read_only")) {
+		return strdup((variables.admin_read_only ? "true" : "false"));
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -2296,7 +2334,7 @@ void ProxySQL_Admin::add_credentials(char *type, char *credentials, int hostgrou
 #else
 void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 #endif /* DEBUG */
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Removing adding %s credentials: %s\n", type, credentials);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credentials: %s\n", type, credentials);
 	tokenizer_t tok = tokenizer( credentials, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
 	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
@@ -2305,7 +2343,7 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		c_split_2(token, ":", &user, &pass);
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
 		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,0); // FIXME: seems to work, but it needs extra care. See issue #255 and #256. This is just for admin module
+			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,1000);
 		}
 		free(user);
 		free(pass);
@@ -2339,6 +2377,12 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	size_t vallen=strlen(value);
 
 	if (!strcasecmp(name,"admin_credentials")) {
+		// always (re)add monitor user
+		if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
+			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
+				GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
+			}
+		}
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
@@ -2442,6 +2486,17 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"read_only")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.admin_read_only=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.admin_read_only=false;
+			return true;
+		}
+		return false;
 	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
@@ -2940,6 +2995,7 @@ void ProxySQL_Admin::__refresh_users() {
 	add_admin_users();
 	__add_active_users(USERNAME_BACKEND);
 	__add_active_users(USERNAME_FRONTEND);
+	set_variable((char *)"admin_credentials",(char *)"");
 }
 
 void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
@@ -2985,7 +3041,7 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1";
+	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0";
 	char *query=(char *)malloc(strlen(str)+15);
 	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);

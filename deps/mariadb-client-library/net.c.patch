@@ -1,0 +1,21 @@
+@@ -224,16 +224,16 @@
+   /* see conc-71: we need to check the socket status first:
+      if the socket is dead we set net->error, so net_flush
+      will report an error */
+-  while (net_check_socket_status(net->vio->sd))
+-  {
++//  while (net_check_socket_status(net->vio->sd))
++//  {
+     /* vio_read returns size_t. so casting to long is required to check for -1 */
+-    if ((long)vio_read(net->vio, (gptr)net->buff, (size_t) net->max_packet) <= 0)
++/*    if ((long)vio_read(net->vio, (gptr)net->buff, (size_t) net->max_packet) <= 0)
+     {
+       net->error= 2;
+       DBUG_PRINT("info", ("socket disconnected"));
+       DBUG_VOID_RETURN;
+     }
+-  }
++  } */
+   net->compress_pkt_nr= net->pkt_nr=0;				/* Ready for new command */
+   net->write_pos=net->buff;
+   DBUG_VOID_RETURN;

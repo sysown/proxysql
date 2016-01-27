@@ -152,7 +152,8 @@ class MySQL_Thread
 
 	int pipefd[2];
 	unsigned long long curtime;
-
+	unsigned long long last_maintenance_time;
+	bool maintenance_loop;
 	ProxySQL_Poll mypolls;
 	pthread_t thread_id;
 	int shutdown;
@@ -281,6 +282,7 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		bool client_found_rows;
+		bool multiplexing;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
