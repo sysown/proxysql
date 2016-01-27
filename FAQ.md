@@ -126,6 +126,7 @@ mysql> INSERT INTO mysql_users (username, password) VALUES ('user1', '123456');
 
 Now you can connect with that user and run queries, if you like:
 
+```
 $ mysql -u user1 -p123456 -h 127.0.0.1 -P6033
 Warning: Using a password on the command line interface can be insecure.
 Welcome to the MySQL monitor.  Commands end with ; or \g.
