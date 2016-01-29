@@ -268,6 +268,15 @@ void MySQL_Connection::set_status_prepared_statement(bool v) {
 	}
 }
 
+// this function disables multiplexing because of bug https://mariadb.atlassian.net/browse/MDEV-8338
+void MySQL_Connection::set_status_bug_mdev_8338(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_MDEV_8338;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_MDEV_8338;
+	}
+}
+
 bool MySQL_Connection::get_status_transaction() {
 	return status_flags & STATUS_MYSQL_CONNECTION_TRANSACTION;
 }
@@ -294,6 +303,10 @@ bool MySQL_Connection::get_status_temporary_table() {
 
 bool MySQL_Connection::get_status_prepared_statement() {
 	return status_flags & STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
+}
+
+bool MySQL_Connection::get_status_bug_mdev_8338() {
+	return status_flags & STATUS_MYSQL_CONNECTION_MDEV_8338;
 }
 
 // non blocking API
@@ -1036,7 +1049,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_MDEV_8338) ) {
 		ret=true;
 	}
 	return ret;
@@ -1068,6 +1081,17 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (get_status_get_lock()==false) { // we search for get_lock if not already set
 		if (strcasestr(query_digest_text,"GET_LOCK(")) {
 			set_status_get_lock(true);
+		}
+	}
+	if (mysql_thread___bug_mdev_8338) {
+		if (get_status_bug_mdev_8338()==false) { // we only analyze the queries if the flag isn't set already
+			if (
+				strcasestr(query_digest_text,"NOW()")
+				||
+				strcasestr(query_digest_text,"CURDATE()")
+			) {
+				set_status_bug_mdev_8338(true);
+			}
 		}
 	}
 }

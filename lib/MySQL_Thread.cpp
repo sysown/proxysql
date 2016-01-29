@@ -182,6 +182,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"sessions_sort",
+	(char *)"bug_mdev_8338",
 	(char *)"commands_stats",
 	(char *)"query_digests",
 	(char *)"servers_stats",
@@ -258,6 +259,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.multiplexing=true;
 	variables.query_digests=true;
 	variables.sessions_sort=true;
+	variables.bug_mdev_8338=false;
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
 #ifdef DEBUG
@@ -406,6 +408,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
+	if (!strcasecmp(name,"bug_mdev_8338")) return (int)variables.bug_mdev_8338;
 	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcasecmp(name,"default_reconnect")) return (int)variables.default_reconnect;
 	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
@@ -602,6 +605,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		return strdup((variables.sessions_sort ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"bug_mdev_8338")) {
+		return strdup((variables.bug_mdev_8338 ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
@@ -1117,6 +1123,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.sessions_sort=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"bug_mdev_8338")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.bug_mdev_8338=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.bug_mdev_8338=false;
 			return true;
 		}
 		return false;
@@ -1804,6 +1821,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
+	mysql_thread___bug_mdev_8338=(bool)GloMTH->get_variable_int((char *)"bug_mdev_8338");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 #ifdef DEBUG
