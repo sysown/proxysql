@@ -94,6 +94,7 @@ static char * admin_variables_names[]= {
   (char *)"mysql_ifaces",
   (char *)"refresh_interval",
 	(char *)"read_only",
+	(char *)"version",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -1372,6 +1373,16 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'version'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'version'"))) {
+		l_free(query_length,query);
+		char *q=(char *)"SELECT 'version' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-version'";
+		query_length=strlen(q)+20;
+		query=(char *)l_alloc(query_length);
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		sprintf(query,q,PROXYSQL_VERSION);
+		goto __run_query;
+	}
+
 
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -1883,6 +1894,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	//variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
+	variables.admin_version=(char *)PROXYSQL_VERSION;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -2308,6 +2320,7 @@ char **ProxySQL_Admin::get_variables_list() {
 char * ProxySQL_Admin::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
+	if (!strcasecmp(name,"version")) return s_strdup(variables.admin_version);
 	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
 	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
@@ -2482,6 +2495,13 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (intv > 100 && intv < 100000) {
 			variables.refresh_interval=intv;
 			__admin_refresh_interval=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"version")) {
+		if (strcasecmp(value,(char *)PROXYSQL_VERSION)==0) {
 			return true;
 		} else {
 			return false;

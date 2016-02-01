@@ -33,6 +33,7 @@ class ProxySQL_Admin {
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
+		char * admin_version;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
