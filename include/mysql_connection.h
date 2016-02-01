@@ -134,5 +134,6 @@ class MySQL_Connection {
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
+	void optimize();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

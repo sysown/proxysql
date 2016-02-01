@@ -1095,3 +1095,17 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		}
 	}
 }
+
+void MySQL_Connection::optimize() {
+	if (mysql->net.max_packet > 65536) { // FIXME: temporary, maybe for very long time . This needs to become a global variable
+		if ( ( mysql->net.buff == mysql->net.read_pos ) &&  ( mysql->net.read_pos == mysql->net.write_pos ) ) {
+			free(mysql->net.buff);
+			mysql->net.max_packet=8192;
+			mysql->net.buff=(unsigned char *)malloc(mysql->net.max_packet);
+			memset(mysql->net.buff,0,mysql->net.max_packet);
+			mysql->net.read_pos=mysql->net.buff;
+			mysql->net.write_pos=mysql->net.buff;
+			mysql->net.buff_end=mysql->net.buff+mysql->net.max_packet;
+		}
+	}
+}
