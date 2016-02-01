@@ -644,13 +644,13 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			}
 		}
 		if (!strcasecmp(name,"monitor_password")) {
-			if (vallen) {
-				free(variables.monitor_password);
-				variables.monitor_password=strdup(value);
-				return true;
-			} else {
-				return false;
-			}
+//			if (vallen) {
+			free(variables.monitor_password);
+			variables.monitor_password=strdup(value);
+			return true;
+//			} else {
+//				return false;
+//			}
 		}
 		if (!strcasecmp(name,"monitor_query_variables")) {
 			if (vallen) {
