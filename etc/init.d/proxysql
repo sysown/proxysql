@@ -1,14 +1,16 @@
 #!/bin/bash 
 #
-# Provides : proxysql
-# Required-Start : $local_fs
-# Required-Stop  : $local_fs
-# Default-Start     : 2 3 4 5
-# Default-Stop      : 0 1 6
-# Short-Description : High Performance Advanced Proxy for MySQL
-# Description : High Performance and Advanced Proxy for MySQL and forks.
-#               It provides advanced features like connection pool, query routing and rewrite,
-#               firewalling, throttling, real time analysis, error-free failover
+### BEGIN INIT INFO
+# Provides:          proxysql
+# Required-Start:    $local_fs
+# Required-Stop:     $local_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: High Performance Advanced Proxy for MySQL
+# Description :      High Performance and Advanced Proxy for MySQL and forks.
+#                    It provides advanced features like connection pool, query routing and rewrite,
+#                    firewalling, throttling, real time analysis, error-free failover
+### END INIT INFO
 
 OLDDATADIR="/var/run/proxysql"
 DATADIR="/var/lib/proxysql"
