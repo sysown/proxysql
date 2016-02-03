@@ -331,7 +331,7 @@ bool MySQL_HostGroups_Manager::commit() {
 			proxy_warning("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
 			MySrvC *mysrvc=(MySrvC *)ptr;
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
-			__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
+			//__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
 			mysrvc->ConnectionsFree->drop_all_connections();
 		}
 	}
@@ -706,7 +706,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 	mysrvc->ConnectionsUsed->remove(c);
 	status.myconnpoll_destroy++;
-	status.server_connections_connected--;
+	//status.server_connections_connected--;
 	wrunlock();
 	delete c;
 }
@@ -762,7 +762,7 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
-				__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
+				//__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
 				mysrvc->ConnectionsFree->drop_all_connections();
 			}
 
@@ -770,14 +770,14 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
 				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
 				delete conn;
-				__sync_fetch_and_sub(&status.server_connections_connected, 1);
+				//__sync_fetch_and_sub(&status.server_connections_connected, 1);
 			}
 
 			PtrArray *pa=mysrvc->ConnectionsFree->conns;
 			while (pa->len > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
 				MySQL_Connection *mc=(MySQL_Connection *)pa->remove_index_fast(0);
 				delete mc;
-				__sync_fetch_and_sub(&status.server_connections_connected, 1);
+				//__sync_fetch_and_sub(&status.server_connections_connected, 1);
 			}
 		}
 	}
@@ -856,14 +856,14 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
-				__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
+				//__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
 				mysrvc->ConnectionsFree->drop_all_connections();
 			}
 			// drop idle connections if beyond max_connection
 			while (mysrvc->ConnectionsFree->conns->len && mysrvc->ConnectionsUsed->conns->len+mysrvc->ConnectionsFree->conns->len > mysrvc->max_connections) {
 				MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
 				delete conn;
-				__sync_fetch_and_sub(&status.server_connections_connected, 1);
+				//__sync_fetch_and_sub(&status.server_connections_connected, 1);
 			}
 			char buf[1024];
 			char **pta=(char **)malloc(sizeof(char *)*colnum);

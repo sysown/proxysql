@@ -468,7 +468,6 @@ handler_again:
 		case ASYNC_CONNECT_END:
 			if (!ret_mysql) {
 				// always increase the counter
-				__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 				proxy_error("Failed to mysql_real_connect() on %s:%d , %d: %s\n", parent->address, parent->port, mysql_errno(mysql), mysql_error(mysql));
     		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
@@ -476,6 +475,7 @@ handler_again:
 			}
     	break;
 		case ASYNC_CONNECT_SUCCESSFUL:
+			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
 			break;
 		case ASYNC_CONNECT_FAILED:
