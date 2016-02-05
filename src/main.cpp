@@ -103,7 +103,7 @@ static volatile int load_;
 
 __thread l_sfp *__thr_sfp=NULL;
 
-const char *malloc_conf = "xmalloc:true,lg_tcache_max:17";
+const char *malloc_conf = "xmalloc:true,lg_tcache_max:15";
 
 int listen_fd;
 int socket_fd;
