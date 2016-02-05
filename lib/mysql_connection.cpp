@@ -177,6 +177,7 @@ MySQL_Connection::~MySQL_Connection() {
 			mysql_close(mysql);
 		} else {
 			mysql_close_no_command(mysql);
+			shutdown(fd, SHUT_RDWR);
 		}
 		mysql=NULL;
 	}
