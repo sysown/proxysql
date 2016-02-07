@@ -14,7 +14,7 @@ static void term_handler(int sig) {
 
 void crash_handler(int sig) {
 #ifdef DEBUG
-	malloc_stats_print(NULL, NULL, "");
+//	malloc_stats_print(NULL, NULL, "");
 #endif
 	void *arr[20];
 	size_t s;
@@ -23,14 +23,15 @@ void crash_handler(int sig) {
 
 	fprintf(stderr, "Error: signal %d:\n", sig);
 	backtrace_symbols_fd(arr, s, STDERR_FILENO);
-#ifdef SYS_gettid
+//#ifdef SYS_gettid
 	// try to generate a core dump signaling again the thread
 	signal(sig, SIG_DFL);
-	pid_t tid;
-	tid = syscall(SYS_gettid);
-	kill(tid, sig);
-#endif /* SYS_gettid */
-	exit(EXIT_FAILURE);
+//	pid_t tid;
+//	tid = syscall(SYS_gettid);
+	pthread_kill(pthread_self(), sig);
+	//kill(tid, sig);
+//#endif /* SYS_gettid */
+//	exit(EXIT_FAILURE);
 }
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {

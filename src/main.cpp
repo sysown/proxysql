@@ -531,12 +531,16 @@ gotofork:
 			exit(EXIT_FAILURE);
 		}
 
-		if (pid) {
+		if (pid) { /* The parent */
 
 			if (ProxySQL_daemonize_phase3()==false) {
 				goto gotofork;
 			}
 
+		} else { /* The daemon */
+
+			GloVars.global.start_time=monotonic_time();
+			GloVars.install_signal_handler();
 		}
 	}
 
