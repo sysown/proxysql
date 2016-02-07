@@ -489,7 +489,7 @@ int main(int argc, const char * argv[]) {
 
 	ProxySQL_Main_init();
 	ProxySQL_Main_process_global_variables(argc, argv);
-
+	GloVars.global.start_time=monotonic_time(); // always initialize it
 
 	if (GloVars.global.foreground==false) {
 
