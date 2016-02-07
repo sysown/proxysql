@@ -1,4 +1,4 @@
-@@ -2192,6 +2192,16 @@
+@@ -2192,6 +2192,17 @@
      my_free(mysql->options.extension->ssl_crlpath, MYF(MY_ALLOW_ZERO_PTR));
      if(hash_inited(&mysql->options.extension->connect_attrs))
        hash_free(&mysql->options.extension->connect_attrs);
@@ -6,7 +6,8 @@
 +			struct mysql_async_context *ctxt;
 +			if ((ctxt = mysql->options.extension->async_context) != 0) {
 +				//if (ctxt->active==0) {
-+					my_context_destroy(&ctxt->async_context);
++					if (&ctxt->async_context)
++						my_context_destroy(&ctxt->async_context);
 +					my_free((gptr)ctxt, MYF(0));
 +					mysql->options.extension->async_context=NULL;
 +				//}
@@ -15,7 +16,7 @@
    }
    my_free((gptr)mysql->options.extension, MYF(MY_ALLOW_ZERO_PTR));
    /* clear all pointer */
-@@ -2256,6 +2266,36 @@
+@@ -2256,6 +2267,36 @@
  
      /* reset the connection in all active statements 
         todo: check stmt->mysql in mysql_stmt* functions ! */
