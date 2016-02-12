@@ -1061,7 +1061,13 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (query_digest_text==NULL) return;
 	if (get_status_user_variable()==false) { // we search for variables only if not already set
 		if (index(query_digest_text,'@')) {
-			set_status_user_variable(true);
+			if (
+				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
+				&&
+				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
+			) {
+				set_status_user_variable(true);
+			}
 		}
 	}
 	if (get_status_temporary_table()==false) { // we search for temporary if not already set
