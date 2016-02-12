@@ -1357,6 +1357,15 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		}
 	}
 
+	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
+		l_free(query_length,query);
+		char *q=(char *)"SELECT '%s' AS '@@version'";
+		query_length=strlen(q)+20;
+		query=(char *)l_alloc(query_length);
+		sprintf(query,q,PROXYSQL_VERSION);
+		goto __run_query;
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
@@ -1378,7 +1387,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		char *q=(char *)"SELECT 'version' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-version'";
 		query_length=strlen(q)+20;
 		query=(char *)l_alloc(query_length);
-		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
 	}
