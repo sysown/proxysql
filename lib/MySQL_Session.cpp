@@ -957,6 +957,7 @@ handler_again:
 									}
 								case 1290: // read-only
 								case 1047: // WSREP has not yet prepared node for application use
+								case 1053: // Server shutdown in progress
 									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 										retry_conn=true;
 									}
