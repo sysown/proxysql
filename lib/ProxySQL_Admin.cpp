@@ -2111,6 +2111,7 @@ bool ProxySQL_Admin::is_command(std::string s) {
 	return true;
 };
 
+
 void ProxySQL_Admin::dump_mysql_collations() {
 	const CHARSET_INFO * c = compiled_charsets;
 	char buf[1024];
