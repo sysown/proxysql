@@ -63,6 +63,7 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 	sqlite3_stmt *statement;
 	*error=NULL;
 	bool ret=false;
+	proxy_info("executing: %s\n", str);
 	if(sqlite3_prepare_v2(db, str, -1, &statement, 0) != SQLITE_OK) {
 		*error=strdup(sqlite3_errmsg(db));
 		goto __exit_execute_statement;

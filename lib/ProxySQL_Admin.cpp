@@ -1173,6 +1173,23 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	return result;
 }
 
+char *parse_destination(char *query){
+        char *method=(char *)"TO";
+	char *pch=strstr(query, method);
+	if (pch){
+	    return pch+3;
+	}
+	return NULL;
+}
+
+char *parse_source(char *query){
+        char *method=(char *)"FROM";
+	char *pch=strstr(query, method);
+	if (pch){
+	    return pch+5;
+	}
+	return NULL;
+}
 
 void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *pkt) {
 
@@ -1338,6 +1355,29 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			goto __run_query;
 		}
 	}
+
+	if(!strncasecmp("CHECKSUM TABLE ", query_no_space, 15)){
+		proxy_debug(PROXYSQL_DEBUG_ADMIN, 4, "Received CHECKSUM command\n");
+		char *source=parse_source(query_no_space);
+		char *tablename;
+		if (source){
+                	int tablename_length=query_no_space_length-strlen(source)-20;
+                        tablename=(char *)malloc(tablename_length);
+			strncpy(tablename, query_no_space+15, tablename_length);
+		} else {
+			tablename=query_no_space+15;
+		}
+		char *error=NULL;
+		char *checksum_result=SPA->table_checksum(tablename, source, &error);
+		if (error) {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, error);
+		} else {
+			char *q=(char *)"SELECT '%s' AS 'table', '%s' AS 'checksum'";
+			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum_result)+20);
+			sprintf(query,q,tablename,checksum_result);
+			goto __run_query;
+		}
+        }
 
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
@@ -1547,6 +1587,7 @@ __run_query:
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
 		}
+		proxy_info("%s", query);
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 	}
@@ -2072,6 +2113,9 @@ bool ProxySQL_Admin::is_command(std::string s) {
 };
 
 
+
+
+
 void ProxySQL_Admin::dump_mysql_collations() {
 	const CHARSET_INFO * c = compiled_charsets;
 	char buf[1024];
@@ -2258,6 +2302,68 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		free(varnames[i]);
 	}
 	free(varnames);
+}
+
+char *ProxySQL_Admin::table_checksum(char *tablename, char *source, char **err){
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	char *q1=(char *)"SELECT * FROM %s ORDER BY rowid";
+	char *q2=(char *)malloc(strlen(q1)+strlen(tablename));
+	SQLite3_result *resultset=NULL;
+	sprintf(q2, q1, tablename);
+	if (source && !strncasecmp(source,"DISK", 4)){
+		configdb->execute_statement(q2, &error, &cols, &affected_rows, &resultset); 
+	} else{
+		admindb->execute_statement(q2, &error, &cols, &affected_rows, &resultset);
+	}
+	if (error) {
+		*err=strdup(error);
+		proxy_error("Error on %s: %s\n", q2, error);
+		free(error);
+		return (char *)"NULL";
+	} else if (resultset->rows_count>0) {
+		int tot_l=0;
+		int tot_s=0;
+                char *large_buff[resultset->rows_count];
+		int column_length=resultset->columns;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			char *buffs[column_length];
+			int local_s=0;
+			for (int i=0; i<column_length;i++){
+				if (r->fields[i]){
+					int l=strlen(r->fields[i]);
+					local_s+=l;
+					buffs[i]=(char *)malloc(strlen(r->fields[i])+1);
+					strncpy(buffs[i], r->fields[i], strlen(r->fields[i]));
+				} else {
+					buffs[i]=(char *)"";
+					local_s+=1;
+				}
+			}
+			large_buff[tot_l]=(char *)malloc(local_s+1);
+			for (int i=0; i<column_length; i++){
+				strncat(large_buff[tot_l], buffs[i], strlen(buffs[i]));
+			}
+			tot_s+=local_s;
+			tot_l++;
+		}
+		char *result_str=(char *)malloc(tot_s+1);
+		for (int i=0; i<tot_l; i++){
+ 			strncat(result_str, large_buff[i], strlen(large_buff[i]));
+		}
+
+		if (resultset) delete resultset;
+		uint32 hash=SpookyHash::Hash32(result_str,strlen(result_str),0);
+		free(result_str);
+		char *checksum=(char *)malloc(16);
+		sprintf(checksum, "%x", hash);
+		return checksum;
+	} else {
+		free(error);
+		return (char *)"NULL";
+	}
 }
 
 char **ProxySQL_Admin::get_variables_list() {

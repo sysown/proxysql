@@ -65,7 +65,6 @@ class ProxySQL_Admin {
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
-
 	char **get_variables_list();
 	char *get_variable(char *name);
 	bool set_variable(char *name, char *value);
@@ -120,7 +119,9 @@ class ProxySQL_Admin {
 	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 
-
+	
+	char *table_checksum(char *tablename, char *source, char **err);
+	
 	void stats___mysql_query_rules();
 	void stats___mysql_query_digests();
 	void stats___mysql_query_digests_reset();
