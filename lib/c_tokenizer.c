@@ -268,12 +268,15 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						if (*first_comment==NULL) {
 							*first_comment=(char *)malloc(FIRST_COMMENT_MAX_LENGTH);
 						}
-						*first_comment[fc_len]= !is_space_char(*s) ? *s : ' ';
+						char *c=*first_comment+fc_len;
+						*c = !is_space_char(*s) ? *s : ' ';
 						fc_len++;
 					}
 					if (prev_char == '*' && *s == '/') {
 						if (fc_len>=2) fc_len-=2;
-						*first_comment[fc_len]=0;
+						char *c=*first_comment+fc_len;
+						*c=0;
+						//*first_comment[fc_len]=0;
 						fc=2;
 					}
 				}
