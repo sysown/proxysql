@@ -1587,7 +1587,6 @@ __run_query:
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
 		}
-		proxy_info("%s", query);
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 	}
@@ -2111,10 +2110,6 @@ bool ProxySQL_Admin::is_command(std::string s) {
 	}
 	return true;
 };
-
-
-
-
 
 void ProxySQL_Admin::dump_mysql_collations() {
 	const CHARSET_INFO * c = compiled_charsets;
