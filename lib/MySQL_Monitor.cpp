@@ -1163,7 +1163,7 @@ __end_monitor_replication_lag_loop:
 						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 						if (row) {
 							repl_lag=-1;
-							if (row[j]) {
+							if (row[j]) { // if Seconds_Behind_Master is not NULL
 								repl_lag=atoi(row[j]);
 							}
 						}
@@ -1182,7 +1182,8 @@ __end_monitor_replication_lag_loop:
 				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
-				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, (repl_lag==-1 ? 0 : repl_lag));
+				//MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, (repl_lag==-1 ? 0 : repl_lag));
+				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
 				delete mmsd;
 			}
 			sqlite3_finalize(statement);

@@ -731,8 +731,8 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 					if (
-						(current_replication_lag==-1 )
-						||
+//						(current_replication_lag==-1 )
+//						||
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
 					) {
 						proxy_info("Shunning server %s:%d with replication lag of %d second\n", address, port, current_replication_lag);
