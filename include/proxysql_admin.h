@@ -115,6 +115,7 @@ class ProxySQL_Admin {
 	void flush_mysql_query_rules__from_disk_to_memory();	
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
+	bool save_mysql_servers_to_cluster();
 	char * load_mysql_query_rules_to_runtime();
 	void save_mysql_query_rules_from_runtime();
 

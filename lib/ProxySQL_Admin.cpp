@@ -787,6 +787,18 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
+
+		if (query_no_space_length==strlen("SAVE MYSQL SERVERS TO CLUSTER") && !strncasecmp("SAVE MYSQL SERVERS TO CLUSTER", query_no_space, query_no_space_length)) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Pushed mysql servers from RUNTIME to cluster\n");
+			bool success = SPA->save_mysql_servers_to_cluster();
+			if (success) {
+				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			} else {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, NULL);
+			}
+		}
 	}
 
 	// Will add a new command here to push mysql query rule runtime config to cluster.
@@ -3264,6 +3276,14 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (resultset) delete resultset;
 }
 
+
+// Gets a copy of the runtime mysql servers config and passes is to an external script for distribution to other
+// ProxySQL instances.
+bool ProxySQL_Admin::save_mysql_servers_to_cluster() {
+	// TODO read runtime mysql servers config and pass it to external script for distribution
+	// TODO return an error message instead of bool
+	return true;
+}
 
 char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	char *error=NULL;
