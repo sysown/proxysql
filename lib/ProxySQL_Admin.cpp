@@ -692,6 +692,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	}
 
+	// Will add a new command here to push mysql servers runtime config to cluster.
+	// Was thinking of 'SAVE MYSQL SERVERS TO CLUSTER'.
 	if ((query_no_space_length>19) && ( (!strncasecmp("SAVE MYSQL SERVERS ", query_no_space, 19)) || (!strncasecmp("LOAD MYSQL SERVERS ", query_no_space, 19))) ) {
 
 		if (
@@ -787,6 +789,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 
+	// Will add a new command here to push mysql query rule runtime config to cluster.
+	// Was thinking of 'SAVE MYSQL QUERY RULES TO CLUSTER'.
 	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL QUERY RULES ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL QUERY RULES ", query_no_space, 23))) ) {
 
 		if (
