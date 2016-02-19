@@ -272,7 +272,6 @@ class MySQL_Threads_Handler
 		int connect_timeout_server_max;
 		int free_connections_pct;
 		bool sessions_sort;
-		bool bug_mdev_8338;
 		char *default_schema;
 		char *interfaces;
 		char *server_version;
