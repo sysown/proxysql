@@ -1116,7 +1116,6 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 		*err=strdup(error);
 		free(error);
 		if (resultset) delete resultset;
-
 		free(tn);
 		return NULL;
 	}
@@ -1366,11 +1365,18 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		}
 
 		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL VARIABLES") && !strncasecmp("CHECKSUM DISK MYSQL VARIABLES", query_no_space, strlen(query_no_space))){
-			char *q=(char *)"SELECT * FROM global_variables ORDER BY variable_name";
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
 			tablename=(char *)"MYSQL VARIABLES";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 
 		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space))){
+                        char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
+                        tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
+                        SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+
+                }
 
 		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS", query_no_space, strlen(query_no_space)))
 		||
@@ -1407,10 +1413,20 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MEM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))
 		||
 		(strlen(query_no_space)==strlen("CHECKSUM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))){
-			char *q=(char *)"SELECT * FROM global_variables ORDER BY variable_name";
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
 			tablename=(char *)"MYSQL VARIABLES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+                ||
+                (strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+                ||
+                (strlen(query_no_space)==strlen("CHECKSUM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+                        char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
+                        tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
+                        SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+                }
 
 		if (error) {
 			proxy_error("Error: %s\n", error);
