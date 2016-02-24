@@ -1173,6 +1173,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	return result;
 }
 
+
 void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *pkt) {
 
 	char *error=NULL;
