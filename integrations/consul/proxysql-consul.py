@@ -6,6 +6,7 @@ import os
 import requests
 import sys
 
+import MySQLdb
 
 USAGE = """
 proxysql-consul put config config_type
@@ -14,10 +15,15 @@ proxysql-consul put config config_type
 CFG_PATH = '/etc/proxysql-consul.cfg'
 CFG_CONSUL_IFACE = 'consul_iface'
 CFG_CONSUL_PORT = 'consul_port'
+CFG_PROXY_IFACE = 'proxysql_admin_iface'
+CFG_PROXY_PORT = 'proxysql_admin_port'
+CFG_PROXY_USERNAME = 'proxysql_admin_username'
+CFG_PROXY_PASSWORD = 'proxysql_admin_password'
 
 # Proxysql config types to Consul key mapping
-TYPE_TO_KEY = {
-        'mysql_servers': 'proxysql/mysql_serverss'
+TABLE_TO_KEY = {
+        'mysql_servers': 'proxysql/mysql_servers',
+        'global_variables': 'proxysql/global_variables'
         }
 
 config = {}
@@ -32,17 +38,34 @@ def read_config():
     # TODO validate config
 
 
-def write_data(proxysql_cfg, proxysql_cfg_type):
-    if proxysql_cfg_type not in TYPE_TO_KEY:
-        print 'Unknown config type. Exiting.'
-        exit(1)
-    key = TYPE_TO_KEY[proxysql_cfg_type]
+def fetch_proxysql_config(table):
+    admin_connection = MySQLdb.connect(config[CFG_PROXY_IFACE],
+            config[CFG_PROXY_USERNAME],
+            config[CFG_PROXY_PASSWORD],
+            port=config[CFG_PROXY_PORT],
+            db='main')
+    cursor = admin_connection.cursor()
+    cursor.execute('SELECT * FROM %s' % table)
+    rows = cursor.fetchall()
+    cursor.close()
+    admin_connection.close()
+    return rows 
 
+
+def put_config(table):
+    if table not in TABLE_TO_KEY:
+        print 'Unknown config table. Exiting.'
+        exit(1)
+
+    rows = fetch_proxysql_config(table)
+    rows_json = json.dumps(rows)
+
+    key = TABLE_TO_KEY[table]
     consul_iface = config[CFG_CONSUL_IFACE]
     consul_port = config[CFG_CONSUL_PORT]
 
     url = 'http://%s:%s/v1/kv/%s' % (consul_iface, consul_port, key)
-    r = requests.put(url, data=proxysql_cfg)
+    r = requests.put(url, data=rows_json)
     print r.status_code
 
 
@@ -83,10 +106,9 @@ if __name__ == '__main__':
 
     if len(sys.argv) > 1:
         mode = sys.argv[1]
-        if mode == 'put' and len(sys.argv) > 3:
-            key = sys.argv[2]
-            value = sys.argv[3]
-            write_data(key, value)
+        if mode == 'put' and len(sys.argv) > 2:
+            table = sys.argv[2]
+            put_config(table)
             exit(0)
         elif mode == 'update':
             update_config()
