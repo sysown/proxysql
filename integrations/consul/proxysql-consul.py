@@ -15,7 +15,7 @@ CFG_CONSUL_PORT = 'consul_port'
 
 # Proxysql config types to Consul key mapping
 TYPE_TO_KEY = {
-        'mysql_servers': 'mysql_servers'
+        'mysql_servers': 'proxysql/mysql_servers'
         }
 
 config = {}
