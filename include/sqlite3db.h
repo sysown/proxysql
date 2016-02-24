@@ -3,8 +3,6 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-
-
 //struct _sqlite3row_t {
 //};
 
@@ -85,11 +83,15 @@ class SQLite3_result {
 	public:
 	int columns;
 	int rows_count;
+	char *checksum();
+	int64_t raw_checksum();
+
 	std::vector<SQLite3_column *> column_definition;
 	std::vector<SQLite3_row *> rows;
 	SQLite3_result() {
 		columns=0;
 	};
+
 	void add_column_definition(int a, const char *b) {
 		SQLite3_column *cf=new SQLite3_column(a,b);
 		column_definition.push_back(cf);
@@ -111,6 +113,7 @@ class SQLite3_result {
 		rows_count++;
 		return SQLITE_ROW;
 	};
+
 	SQLite3_result(sqlite3_stmt *stmt) {
 		rows_count=0;
 		columns=sqlite3_column_count(stmt);

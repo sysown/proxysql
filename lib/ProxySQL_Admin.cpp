@@ -1116,6 +1116,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 		*err=strdup(error);
 		free(error);
 		if (resultset) delete resultset;
+
 		free(tn);
 		return NULL;
 	}
@@ -1171,24 +1172,6 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	result->add_row(pta);
 	free(tn);
 	return result;
-}
-
-char *parse_destination(char *query){
-        char *method=(char *)"TO";
-	char *pch=strstr(query, method);
-	if (pch){
-	    return pch+3;
-	}
-	return NULL;
-}
-
-char *parse_source(char *query){
-        char *method=(char *)"FROM";
-	char *pch=strstr(query, method);
-	if (pch){
-	    return pch+5;
-	}
-	return NULL;
 }
 
 void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *pkt) {
@@ -1356,27 +1339,92 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		}
 	}
 
-	if(!strncasecmp("CHECKSUM TABLE ", query_no_space, 15)){
+	if(!strncasecmp("CHECKSUM ", query_no_space, 9)){
 		proxy_debug(PROXYSQL_DEBUG_ADMIN, 4, "Received CHECKSUM command\n");
-		char *source=parse_source(query_no_space);
-		char *tablename;
-		if (source){
-                	int tablename_length=query_no_space_length-strlen(source)-20;
-                        tablename=(char *)malloc(tablename_length);
-			strncpy(tablename, query_no_space+15, tablename_length);
-		} else {
-			tablename=query_no_space+15;
-		}
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+                SQLite3_result *resultset=NULL;
+		char *tablename=NULL;
 		char *error=NULL;
-		char *checksum_result=SPA->table_checksum(tablename, source, &error);
-		if (error) {
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, error);
-		} else {
-			char *q=(char *)"SELECT '%s' AS 'table', '%s' AS 'checksum'";
-			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum_result)+20);
-			sprintf(query,q,tablename,checksum_result);
-			goto __run_query;
+		int affected_rows=0;
+		int cols=0;
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL SERVERS") && !strncasecmp("CHECKSUM DISK MYSQL SERVERS", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
+			tablename=(char *)"MYSQL SERVERS";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL USERS") && !strncasecmp("CHECKSUM DISK MYSQL USERS", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM mysql_users ORDER BY username";
+			tablename=(char *)"MYSQL USERS";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL QUERY RULES") && !strncasecmp("CHECKSUM DISK MYSQL QUERY RULES", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM mysql_query_rules ORDER BY rule_id";
+			tablename=(char *)"MYSQL QUERY RULES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL VARIABLES") && !strncasecmp("CHECKSUM DISK MYSQL VARIABLES", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM global_variables ORDER BY variable_name";
+			tablename=(char *)"MYSQL VARIABLES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL SERVERS") && !strncasecmp("CHECKSUM MEM MYSQL SERVERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL SERVERS") && !strncasecmp("CHECKSUM MYSQL SERVERS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
+			tablename=(char *)"MYSQL SERVERS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL USERS") && !strncasecmp("CHECKSUM MEMORY MYSQL USERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL USERS") && !strncasecmp("CHECKSUM MEM MYSQL USERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL USERS") && !strncasecmp("CHECKSUM MYSQL USERS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_users ORDER BY username";
+			tablename=(char *)"MYSQL USERS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MEMORY MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MEM MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_query_rules ORDER BY rule_id";
+			tablename=(char *)"MYSQL QUERY RULES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL VARIABLES") && !strncasecmp("CHECKSUM MEMORY MYSQL VARIABLES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MEM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM global_variables ORDER BY variable_name";
+			tablename=(char *)"MYSQL VARIABLES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if (error) {
+			proxy_error("Error: %s\n", error);
+			char buf[1024];
+			sprintf(buf,"%s", error);
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, buf);
+			run_query=false;
+		} else if (resultset) {
+			char *q=(char *)"SELECT '%s' AS 'table', '%s' AS 'checksum'";
+			char *checksum=(char *)resultset->checksum();
+			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum)+1);
+			sprintf(query,q,tablename,checksum);
+		}
+		goto __run_query;
         }
 
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
@@ -2298,68 +2346,6 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		free(varnames[i]);
 	}
 	free(varnames);
-}
-
-char *ProxySQL_Admin::table_checksum(char *tablename, char *source, char **err){
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	char *q1=(char *)"SELECT * FROM %s ORDER BY rowid";
-	char *q2=(char *)malloc(strlen(q1)+strlen(tablename));
-	SQLite3_result *resultset=NULL;
-	sprintf(q2, q1, tablename);
-	if (source && !strncasecmp(source,"DISK", 4)){
-		configdb->execute_statement(q2, &error, &cols, &affected_rows, &resultset); 
-	} else{
-		admindb->execute_statement(q2, &error, &cols, &affected_rows, &resultset);
-	}
-	if (error) {
-		*err=strdup(error);
-		proxy_error("Error on %s: %s\n", q2, error);
-		free(error);
-		return (char *)"NULL";
-	} else if (resultset->rows_count>0) {
-		int tot_l=0;
-		int tot_s=0;
-                char *large_buff[resultset->rows_count];
-		int column_length=resultset->columns;
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			char *buffs[column_length];
-			int local_s=0;
-			for (int i=0; i<column_length;i++){
-				if (r->fields[i]){
-					int l=strlen(r->fields[i]);
-					local_s+=l;
-					buffs[i]=(char *)malloc(strlen(r->fields[i])+1);
-					strncpy(buffs[i], r->fields[i], strlen(r->fields[i]));
-				} else {
-					buffs[i]=(char *)"";
-					local_s+=1;
-				}
-			}
-			large_buff[tot_l]=(char *)malloc(local_s+1);
-			for (int i=0; i<column_length; i++){
-				strncat(large_buff[tot_l], buffs[i], strlen(buffs[i]));
-			}
-			tot_s+=local_s;
-			tot_l++;
-		}
-		char *result_str=(char *)malloc(tot_s+1);
-		for (int i=0; i<tot_l; i++){
- 			strncat(result_str, large_buff[i], strlen(large_buff[i]));
-		}
-
-		if (resultset) delete resultset;
-		uint32 hash=SpookyHash::Hash32(result_str,strlen(result_str),0);
-		free(result_str);
-		char *checksum=(char *)malloc(16);
-		sprintf(checksum, "%x", hash);
-		return checksum;
-	} else {
-		free(error);
-		return (char *)"NULL";
-	}
 }
 
 char **ProxySQL_Admin::get_variables_list() {
