@@ -1,10 +1,13 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include <errno.h>
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <time.h>
 #include <string.h>
 #include <assert.h>
@@ -692,8 +695,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	}
 
-	// Will add a new command here to push mysql servers runtime config to cluster.
-	// Was thinking of 'SAVE MYSQL SERVERS TO CLUSTER'.
 	if ((query_no_space_length>19) && ( (!strncasecmp("SAVE MYSQL SERVERS ", query_no_space, 19)) || (!strncasecmp("LOAD MYSQL SERVERS ", query_no_space, 19))) ) {
 
 		if (
@@ -3282,7 +3283,37 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 bool ProxySQL_Admin::save_mysql_servers_to_cluster() {
 	// TODO read runtime mysql servers config and pass it to external script for distribution
 	// TODO return an error message instead of bool
-	return true;
+	char *config = (char *)"test config";
+	char *type = (char *)"mysql_servers";
+	int status_code = save_config_to_cluster(config, type);
+	return status_code == 0;
+}
+
+// Runs external middleman passing it the given config and the config type.
+int ProxySQL_Admin::save_config_to_cluster(char *config, char *type) {
+	pid_t pid = fork();
+	if (pid == 0) {
+		// child
+		errno = 0;
+		int exec_status = execl("/usr/local/bin/middleman.sh", "/usr/local/bin/middleman.sh", config, type, (char *) 0);
+		if (exec_status == -1) {
+			proxy_error("Exec failed for config save script with errno: %d.\n", errno);
+		}
+		_exit(0);
+	} else if (pid < 0) {
+		// failed to fork
+		proxy_error("Failed to fork for saving config.\n");
+		return -1;
+	} else {
+		// parent
+		int status_code;
+		waitpid(pid, &status_code, 0);
+		if (!WIFEXITED(status_code)) {
+			proxy_error("Config save script exited with an error: %d.\n", WEXITSTATUS(status_code));
+		}
+		proxy_info("Config save script exited with status code: %d.\n", status_code);
+		return status_code;
+	}
 }
 
 char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
