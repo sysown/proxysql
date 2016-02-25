@@ -168,7 +168,7 @@ cleanall:
 	rm binaries/*deb || true
 	rm binaries/*rpm || true
 
-install: src/proxysql
+install: src/proxysql install-proxysql-consul
 	install -m 0755 src/proxysql /usr/local/bin
 	install -m 0600 etc/proxysql.cnf /etc
 	install -m 0755 etc/init.d/proxysql /etc/init.d
@@ -176,10 +176,20 @@ install: src/proxysql
 	update-rc.d proxysql defaults
 .PHONY: install
 
-uninstall:
+install-proxysql-consul:
+	install -m 0755 integrations/consul/proxysql-consul /usr/local/bin
+	install -m 0600 integrations/consul/proxysql-consul.cnf /etc
+.PHONY: install-proxysql-consul
+
+uninstall: uninstall-proxysql-consul
 	rm /etc/init.d/proxysql
 	rm /etc/proxysql.cnf
 	rm /usr/local/bin/proxysql
 	rmdir /var/lib/proxysql 2>/dev/null || true
 	update-rc.d proxysql remove
 .PHONY: uninstall
+
+uninstall-proxysql-consul:
+	rm /usr/local/bin/proxysql-consul
+	rm /etc/proxysql-consul.cnf
+.PHONY: uninstall-proxysql-consul

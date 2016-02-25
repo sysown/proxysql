@@ -3313,7 +3313,7 @@ int ProxySQL_Admin::save_config_to_cluster(char *tablename) {
 	if (pid == 0) {
 		// child
 		errno = 0;
-		int exec_status = execl("/usr/local/bin/proxysql-consul.py", "/usr/local/bin/proxysql-consul.py", "put", tablename, (char *) 0);
+		int exec_status = execlp("/usr/local/bin/proxysql-consul", "/usr/local/bin/proxysql-consul", "put", tablename, (char *) 0);
 		if (exec_status == -1) {
 			proxy_error("Exec failed for config save script with errno: %d.\n", errno);
 		}

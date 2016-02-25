@@ -1,0 +1,8 @@
+{
+  "consul_iface": "127.0.0.1",
+  "consul_port": "8500",
+  "proxysql_admin_iface": "127.0.0.1",
+  "proxysql_admin_port": 6032,
+  "proxysql_admin_username": "admin",
+  "proxysql_admin_password": "admin"
+}
