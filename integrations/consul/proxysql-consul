@@ -5,15 +5,18 @@ import json
 import os
 import requests
 import sys
+import uuid
 
 import MySQLdb
 
-USAGE = """
+USAGE = """Usage:
 proxysql-consul put tablename
 proxysql update < config
 """
 
 CFG_PATH = '/etc/proxysql-consul.cnf'
+CFG_UUID_FILE = 'uuid_file'
+CFG_UUID = 'uuid'
 CFG_CONSUL_IFACE = 'consul_iface'
 CFG_CONSUL_PORT = 'consul_port'
 CFG_PROXY_IFACE = 'proxysql_admin_iface'
@@ -49,6 +52,24 @@ def read_config():
     # TODO validate config
 
 
+def read_uuid():
+    """
+    Reads the UUID identifying this script instance from a file store. If the
+    file does not exist creates it and writes a new UUID.
+
+    Puts the UUID in the config dictionary.
+    """
+    uuid_file_path = config[CFG_UUID_FILE]
+
+    if not os.path.isfile(uuid_file_path):
+        _uuid = str(uuid.uuid4())
+        with open(uuid_file_path, 'w') as uuid_file:
+            uuid_file.write(_uuid)
+    else:
+        with open(uuid_file_path, 'r') as uuid_file:
+            _uuid = uuid_file.read()
+    config[CFG_UUID] = _uuid
+
 def fetch_proxysql_config(table):
     admin_connection = MySQLdb.connect(config[CFG_PROXY_IFACE],
             config[CFG_PROXY_USERNAME],
@@ -80,6 +101,7 @@ def put_config(table):
     consul_data = {}
     consul_data['table'] = table
     consul_data['rows'] = rows
+    consul_data['uuid'] = config[CFG_UUID]
     consul_data_json = json.dumps(consul_data)
 
     key = TABLE_TO_KEY[table]
@@ -88,6 +110,7 @@ def put_config(table):
 
     url = 'http://%s:%s/v1/kv/%s' % (consul_iface, consul_port, key)
     r = requests.put(url, data=consul_data_json)
+    print 'Configs pushed successfully.'
 
 
 def build_multivalue_insert(table, rows):
@@ -158,24 +181,30 @@ def update_config():
     proxysql_config = json.loads(proxysql_config_json)
     table = proxysql_config['table']
     rows = proxysql_config['rows']
+    _uuid = proxysql_config['uuid']
+    
     if not rows:
         print 'Empty config set for table: %s.' % table
         return
+    if _uuid == config[CFG_UUID]:
+        print 'Ignoring self update.'
+        return
+    
     update_proxysql_config(table, rows)
+    print 'Configs updated successfully.'
 
 if __name__ == '__main__':
     read_config()
+    read_uuid()
 
     if len(sys.argv) > 1:
         mode = sys.argv[1]
         if mode == 'put' and len(sys.argv) > 2:
             table = sys.argv[2]
             put_config(table)
-            print 'Configs pushed successfully.'
             exit(0)
         elif mode == 'update':
             update_config()
-            print 'Configs updated successfully.'
             exit(0)
 
     print USAGE
