@@ -9,7 +9,8 @@ import sys
 import MySQLdb
 
 USAGE = """
-proxysql-consul put config config_type
+proxysql-consul put tablename
+proxysql update < config
 """
 
 CFG_PATH = '/etc/proxysql-consul.cfg'
@@ -23,7 +24,17 @@ CFG_PROXY_PASSWORD = 'proxysql_admin_password'
 # Proxysql config types to Consul key mapping
 TABLE_TO_KEY = {
         'mysql_servers': 'proxysql/mysql_servers',
-        'global_variables': 'proxysql/global_variables'
+        'mysql_query_rules': 'proxysql/mysql_query_rules'
+        }
+
+SAVE_QUERY_BY_TABLE = {
+        'mysql_servers': 'SAVE MYSQL SERVERS TO MEMORY',
+        'mysql_query_rules': 'SAVE MYSQL QUERY RULES TO MEMORY'
+        }
+
+LOAD_QUERY_BY_TABLE = {
+        'mysql_servers': 'LOAD MYSQL SERVERS FROM MEMORY',
+        'mysql_query_rules': 'LOAD MYSQL QUERY RULES FROM MEMORY'
         }
 
 config = {}
@@ -44,6 +55,14 @@ def fetch_proxysql_config(table):
             config[CFG_PROXY_PASSWORD],
             port=config[CFG_PROXY_PORT],
             db='main')
+
+    # save runtime config to memory so we can read them
+    cursor = admin_connection.cursor()
+    save_query = SAVE_QUERY_BY_TABLE[table]
+    cursor.execute(save_query)
+    cursor.close()
+
+    # read runtime config from memory
     cursor = admin_connection.cursor()
     cursor.execute('SELECT * FROM %s' % table)
     rows = cursor.fetchall()
@@ -85,13 +104,24 @@ def update_proxysql_config(table, rows):
             config[CFG_PROXY_PASSWORD],
             port=config[CFG_PROXY_PORT],
             db='main')
+    
+    # clear table
     cursor = admin_connection.cursor()
     cursor.execute('DELETE FROM %s' % table)
     cursor.close()
+    
+    # insert values from Consul
     insert_query = build_multivalue_insert(table, rows)
     cursor = admin_connection.cursor()
     cursor.execute(insert_query)
     cursor.close()
+
+    # commit changes to runtine
+    load_query = LOAD_QUERY_BY_TABLE[table]
+    cursor = admin_connection.cursor()
+    cursor.execute(load_query)
+    cursor.close()
+
     admin_connection.close()
 
 
@@ -126,7 +156,12 @@ def update_config():
 
     proxysql_config_json = base64.b64decode(updated_value['Value'])
     proxysql_config = json.loads(proxysql_config_json)
-    update_proxysql_config(proxysql_config['table'], proxysql_config['rows'])
+    table = proxysql_config['table']
+    rows = proxysql_config['rows']
+    if not rows:
+        print 'Empty config set for table: %s.' % table
+        return
+    update_proxysql_config(table, rows)
 
 if __name__ == '__main__':
     read_config()
@@ -136,9 +171,11 @@ if __name__ == '__main__':
         if mode == 'put' and len(sys.argv) > 2:
             table = sys.argv[2]
             put_config(table)
+            print 'Configs pushed successfully.'
             exit(0)
         elif mode == 'update':
             update_config()
+            print 'Configs updated successfully.'
             exit(0)
 
     print USAGE
