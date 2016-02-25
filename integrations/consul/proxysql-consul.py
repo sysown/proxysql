@@ -58,15 +58,41 @@ def put_config(table):
         exit(1)
 
     rows = fetch_proxysql_config(table)
-    rows_json = json.dumps(rows)
+    consul_data = {}
+    consul_data['table'] = table
+    consul_data['rows'] = rows
+    consul_data_json = json.dumps(consul_data)
 
     key = TABLE_TO_KEY[table]
     consul_iface = config[CFG_CONSUL_IFACE]
     consul_port = config[CFG_CONSUL_PORT]
 
     url = 'http://%s:%s/v1/kv/%s' % (consul_iface, consul_port, key)
-    r = requests.put(url, data=rows_json)
-    print r.status_code
+    r = requests.put(url, data=consul_data_json)
+
+
+def build_multivalue_insert(table, rows):
+    # add quotes arround all values to make them strings in the sql query
+    quoted_values = [['"' + x + '"' for x in row] for row in rows]
+    # join each row in a values() group
+    row_join = [','.join(x) for x in quoted_values]
+    query = 'INSERT INTO %s VALUES(%s)' % (table, '),('.join(row_join))
+    return query
+
+def update_proxysql_config(table, rows):
+    admin_connection = MySQLdb.connect(config[CFG_PROXY_IFACE],
+            config[CFG_PROXY_USERNAME],
+            config[CFG_PROXY_PASSWORD],
+            port=config[CFG_PROXY_PORT],
+            db='main')
+    cursor = admin_connection.cursor()
+    cursor.execute('DELETE FROM %s' % table)
+    cursor.close()
+    insert_query = build_multivalue_insert(table, rows)
+    cursor = admin_connection.cursor()
+    cursor.execute(insert_query)
+    cursor.close()
+    admin_connection.close()
 
 
 def update_config():
@@ -98,8 +124,9 @@ def update_config():
         print 'Failed to determine updated config from Consul data'
         exit(1)
 
-    proxysql_config = base64.b64decode(updated_value['Value'])
-    print proxysql_config
+    proxysql_config_json = base64.b64decode(updated_value['Value'])
+    proxysql_config = json.loads(proxysql_config_json)
+    update_proxysql_config(proxysql_config['table'], proxysql_config['rows'])
 
 if __name__ == '__main__':
     read_config()
