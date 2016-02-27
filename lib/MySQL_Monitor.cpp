@@ -88,6 +88,7 @@ MySQL_Monitor_Connection_Pool::MySQL_Monitor_Connection_Pool() {
 }
 
 MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
+	purge_missing_servers(NULL);
 }
 
 void MySQL_Monitor_Connection_Pool::purge_missing_servers(SQLite3_result *resultset) {
@@ -100,6 +101,9 @@ void MySQL_Monitor_Connection_Pool::purge_missing_servers(SQLite3_result *result
 	std::list<MYSQL *> *purge_lst=NULL;
 	purge_lst=new std::list<MYSQL *>;
 	pthread_mutex_lock(&mutex);
+	if (resultset==NULL) {
+		goto __purge_all;
+	}
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		// for each host configured ...
 		SQLite3_row *r=*it;
@@ -118,6 +122,7 @@ void MySQL_Monitor_Connection_Pool::purge_missing_servers(SQLite3_result *result
 			}
 		}
 	}
+__purge_all:
 	std::map<char *, std::list<MYSQL *>*>::iterator it;
 	//std::map<std::string, std::map<std::string, std::string>>::iterator it_type;
 	for(it = my_connections.begin(); it != my_connections.end(); it++) {
@@ -640,6 +645,7 @@ MySQL_Monitor::~MySQL_Monitor() {
 	delete tables_defs_monitor;
 	delete monitordb;
 	delete admindb;
+	delete My_Conn_Pool;
 };
 
 
