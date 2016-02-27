@@ -815,6 +815,10 @@ __sleep_monitor_connect_loop:
 			usleep(st);
 		}
 	}
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr=NULL;
+	}
 	return NULL;
 }
 
@@ -950,6 +954,10 @@ __sleep_monitor_ping_loop:
 			}
 			usleep(st);
 		}
+	}
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr=NULL;
 	}
 	return NULL;
 }
@@ -1126,6 +1134,10 @@ __sleep_monitor_read_only:
 			usleep(st);
 		}
 	}
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr=NULL;
+	}
 	return NULL;
 }
 
@@ -1297,6 +1309,10 @@ __sleep_monitor_replication_lag:
 			usleep(st);
 		}
 	}
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr=NULL;
+	}
 	return NULL;
 }
 
@@ -1325,5 +1341,9 @@ void * MySQL_Monitor::run() {
 	monitor_ping_thread->join();
 	monitor_read_only_thread->join();
 	monitor_replication_lag_thread->join();
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr=NULL;
+	}
 	return NULL;
 };
