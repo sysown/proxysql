@@ -116,7 +116,7 @@ class ProxySQL_Admin {
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
-	void save_mysql_query_rules_from_runtime();
+	void save_mysql_query_rules_from_runtime(bool);
 
 	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
