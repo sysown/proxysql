@@ -138,6 +138,14 @@ __purge_all:
 					lst->pop_front();
 					purge_lst->push_back(my);
 				}
+			} else {
+				// try to keep maximum 2 free connections
+				// dropping all the others
+				while(lst->size() > 2) {
+					my=lst->front();
+					lst->pop_front();
+					purge_lst->push_back(my);
+				}
 			}
 		}
 	}
