@@ -958,7 +958,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 		case 0:
 			if (num_rows==0) {
 				// the server has read_only=0 , but we can't find any writer, so we perform a swap
-				GloAdmin->save_mysql_servers_runtime_to_database(); // SAVE MYSQL SERVERS FROM RUNTIME
+				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
 				sprintf(query,Q2,hostname,port);
 				admindb->execute(query);
 				if (mysql_thread___monitor_writer_is_also_reader) {
@@ -973,7 +973,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 		case 1:
 			if (num_rows) {
 				// the server has read_only=1 , but we find it as writer, so we perform a swap
-				GloAdmin->save_mysql_servers_runtime_to_database(); // SAVE MYSQL SERVERS FROM RUNTIME
+				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
 				sprintf(query,Q4,hostname,port);
 				admindb->execute(query);
 				sprintf(query,Q5,hostname,port);

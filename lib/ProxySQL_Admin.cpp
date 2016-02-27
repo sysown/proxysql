@@ -62,6 +62,10 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , UNIQUE (reader_hostgroup))"
+
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
 #define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , db VARCHAR , cli_host VARCHAR , cli_port VARCHAR , hostgroup VARCHAR , l_srv_host VARCHAR , l_srv_port VARCHAR , srv_host VARCHAR , srv_port VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR)"
@@ -780,7 +784,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->save_mysql_servers_runtime_to_database();
+			SPA->save_mysql_servers_runtime_to_database(false);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -965,6 +969,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_global=false;
 	bool dump_global_variables=false;
 
+	bool runtime_mysql_servers=false;
+
 	if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
 		// SHOW PROCESSLIST
@@ -982,6 +988,15 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	if (admin) {
 		if (strstr(query_no_space,"global_variables"))
 			{ dump_global_variables=true; refresh=true; }
+		if (strstr(query_no_space,"runtime_")) {
+			if (
+				strstr(query_no_space,"runtime_mysql_servers")
+				||
+				strstr(query_no_space,"runtime_mysql_replication_hostgroups")
+			) {
+				runtime_mysql_servers=true; refresh=true;
+			}
+		}
 	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
@@ -1001,6 +1016,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (dump_global_variables) {
 				flush_admin_variables___runtime_to_database(admindb, false, false, false);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false);
+			}
+			if (runtime_mysql_servers) {
+				save_mysql_servers_runtime_to_database(true);
 			}
 		}
 		pthread_mutex_unlock(&admin_mutex);
@@ -1394,7 +1412,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence')");
+		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -1959,7 +1977,9 @@ bool ProxySQL_Admin::init() {
 	tables_defs_config=new std::vector<table_def_t *>;
 
 	insert_into_tables_defs(tables_defs_admin,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_servers", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -3153,16 +3173,25 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 	free(ads);
 }
 
-void ProxySQL_Admin::save_mysql_servers_runtime_to_database() {
+void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	char *query=NULL;
 	SQLite3_result *resultset=NULL;
 	// dump mysql_servers
-	query=(char *)"DELETE FROM main.mysql_servers";
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_servers";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_servers";
+	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
 	resultset=MyHGM->dump_table_mysql_servers();
 	if (resultset) {
-		char *q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s)";
+		char *q=NULL;
+		if (_runtime) {
+			q=(char *)"INSERT INTO runtime_mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s)";
+		} else {
+			q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s)";
+		}
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+strlen(r->fields[7])+16);
@@ -3176,12 +3205,21 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database() {
 	resultset=NULL;
 
 	// dump mysql_replication_hostgroups
-	query=(char *)"DELETE FROM main.mysql_replication_hostgroups";
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_replication_hostgroups";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_replication_hostgroups";
+	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
 	resultset=MyHGM->dump_table_mysql_replication_hostgroups();
 	if (resultset) {
-		char *q=(char *)"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s)";
+		char *q=NULL;
+		if (_runtime) {
+			q=(char *)"INSERT INTO runtime_mysql_replication_hostgroups VALUES(%s,%s)";
+		} else {
+			q=(char *)"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s)";
+		}
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+16);
