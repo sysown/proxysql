@@ -289,7 +289,9 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 		unsigned int i;
 		for (i=0;i<num_threads;i++) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc));
+			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc)) {
+				usleep(100); // pause a bit
+			}
 /*		
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_change,0,1)) { cpu_relax_pa(); }
 			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_change,0)==1) { cpu_relax_pa(); }
