@@ -429,7 +429,6 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
-	proxy_info("New mysql_servers table\n");
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
