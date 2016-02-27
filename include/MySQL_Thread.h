@@ -138,11 +138,12 @@ class MySQL_Thread
 {
 
 	private:
-  MySQL_Connection **my_idle_conns;
+	MySQL_Connection **my_idle_conns;
+  //MySQL_Connection **my_idle_conns;
   //MySQL_Data_Stream **my_idle_myds;
   bool processing_idles;
   unsigned long long last_processing_idles;
-  PtrArray *mysql_sessions_connections_handler;
+  //PtrArray *mysql_sessions_connections_handler;
 
 
 	protected:
@@ -184,7 +185,7 @@ class MySQL_Thread
   void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
   void process_all_sessions();
   void refresh_variables();
-  void process_all_sessions_connections_handler();
+  //void process_all_sessions_connections_handler();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
   void unregister_session_connection_handler(int idx, bool _new=false);
   //void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);

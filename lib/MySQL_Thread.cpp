@@ -1261,13 +1261,6 @@ MySQL_Thread::~MySQL_Thread() {
 			}
 		delete mysql_sessions;
 	}
-	if (mysql_sessions_connections_handler) {
-		while(mysql_sessions_connections_handler->len) {
-			MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->remove_index_fast(0);
-				delete sess;
-			}
-		delete mysql_sessions_connections_handler;
-	}
 	unsigned int i;
 	for (i=0;i<mypolls.len;i++) {
 		if (
@@ -1329,12 +1322,6 @@ bool MySQL_Thread::init() {
 	int i;
 	mysql_sessions = new PtrArray();
 	assert(mysql_sessions);
-	mysql_sessions_connections_handler = new PtrArray();
-	assert(mysql_sessions_connections_handler);
-	for (i=0; i<SESSIONS_FOR_CONNECTIONS_HANDLER;i++) {
-		MySQL_Session *sess=new MySQL_Session();
-		register_session_connection_handler(sess, false);
-	}
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	memset(my_idle_conns,0,sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
@@ -1639,7 +1626,7 @@ void MySQL_Thread::run() {
 		process_all_sessions();
 
 
-		process_all_sessions_connections_handler();
+		//process_all_sessions_connections_handler();
 
 	}
 }
@@ -1843,7 +1830,6 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_sessions=NULL;
 	processing_idles=false;
 	last_processing_idles=0;
-	mysql_sessions_connections_handler=NULL;
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___server_version=NULL;
 	mysql_thread___eventslog_filename=NULL;
@@ -1857,7 +1843,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.queries_backends_bytes_recv=0;
 }
 
-
+/*
 void MySQL_Thread::process_all_sessions_connections_handler() {
 	unsigned int n;
 	int rc;
@@ -1881,27 +1867,17 @@ void MySQL_Thread::process_all_sessions_connections_handler() {
 		}
 	}
 }
-
+*/
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
-	if (mysql_sessions_connections_handler==NULL) return;
 	_sess->thread=this;
 	_sess->connections_handler=true;
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session for connection handler\n", _sess->thread, _sess);
-	if (_new) {
-		mysql_sessions->add(_sess);
-	} else {
-		mysql_sessions_connections_handler->add(_sess);
-	}	
+	assert(_new);
+	mysql_sessions->add(_sess);
 }
 
 void MySQL_Thread::unregister_session_connection_handler(int idx, bool _new) {
-	if (mysql_sessions_connections_handler==NULL) return;
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions_connections_handler->index(idx));
-	if (_new) {
-		mysql_sessions->remove_index_fast(idx);
-	} else {
-		mysql_sessions_connections_handler->remove_index_fast(idx);
-	}
+	assert(_new);
+	mysql_sessions->remove_index_fast(idx);
 }
 
 
