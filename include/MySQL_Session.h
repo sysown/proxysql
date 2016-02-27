@@ -34,6 +34,7 @@ class Query_Info {
 	void begin(unsigned char *_p, int len, bool mysql_header=false);
 	void end();
 	char *get_digest_text();
+	bool is_select_NOT_for_update();
 };
 
 class MySQL_Session

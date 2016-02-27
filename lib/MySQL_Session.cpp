@@ -153,6 +153,28 @@ char * Query_Info::get_digest_text() {
 	return GloQPro->get_digest_text(&QueryParserArgs);
 }
 
+bool Query_Info::is_select_NOT_for_update() {
+	// to avoid an expensive strlen() on the digest_text, we consider only the real query
+	if (QueryPointer==NULL) {
+		return false;
+	}
+	if (QueryLength<7) {
+		return false;
+	}
+	if (strncasecmp((char *)QueryPointer,(char *)"SELECT ",7)) {
+		return false;
+	}
+	// if we arrive till here, it is a SELECT
+	if (QueryLength>=17) {
+		char *p=(char *)QueryPointer;
+		p+=QueryLength-11;
+		if (strncasecmp(p," FOR UPDATE",11)==0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void * MySQL_Session::operator new(size_t size) {
 	return l_alloc(size);
 }
@@ -388,6 +410,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 
 				if (fd==0) {
 					autocommit=false;	// we set it, no matter if already set or not
+/*
 					if (nTrx) {
 						// there is an active transaction, we need to forward it
 						// because this can potentially close the transaction
@@ -398,6 +421,11 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 						// just return OK
 						goto __ret_autocommit_OK;
 					}
+*/
+					// it turned out I was wrong
+					// set autocommit=0 has no effect if there is an acrive transaction
+					// therefore, we never forward set autocommit = 0
+					goto __ret_autocommit_OK;
 				}
 __ret_autocommit_OK:
 				client_myds->DSS=STATE_QUERY_SENT_NET;
@@ -416,6 +444,14 @@ __ret_autocommit_OK:
 }
 
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+
+	if (handler_SetAutocommit(pkt) == true) {
+		return true;
+	}
+	if (handler_CommitRollback(pkt) == true) {
+		return true;
+	}
+
 	if (pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		char buf[16];
 		sprintf(buf,"%u",last_insert_id);
@@ -830,8 +866,19 @@ handler_again:
 						NEXT_IMMEDIATE(CHANGING_CHARSET);
 					}
 					if (autocommit != mybe->server_myds->myconn->IsAutoCommit()) {
-						previous_status.push(PROCESSING_QUERY);
-						NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+						// see case #485
+						if (mysql_thread___enforce_autocommit_on_reads == false) {
+							// enforce_autocommit_on_reads is disabled
+							// we need to check if it is a SELECT not FOR UPDATE
+							if (CurrentQuery.is_select_NOT_for_update()==false) {
+								previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+							}
+						} else {
+							// in every other cases, enforce autocommit
+							previous_status.push(PROCESSING_QUERY);
+							NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+						}
 					}
 				}
 				status=PROCESSING_QUERY;
