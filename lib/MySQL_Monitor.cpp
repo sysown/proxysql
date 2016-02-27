@@ -70,6 +70,7 @@ struct cmp_str {
 
 class MySQL_Monitor_Connection_Pool {
 	private:
+	pthread_mutex_t mutex;
 	int size;
 	//std::map<std::pair<char *, std::list<MYSQL *>* > my_connections;
 	std::map<char *, std::list<MYSQL *>* , cmp_str> my_connections;
@@ -82,6 +83,7 @@ class MySQL_Monitor_Connection_Pool {
 
 MySQL_Monitor_Connection_Pool::MySQL_Monitor_Connection_Pool() {
 	size=0;
+	pthread_mutex_init(&mutex,NULL);
 }
 
 MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
@@ -92,6 +94,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 	//it = my_connections.find(std::make_pair(hostname,port));
 	char *buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
+	pthread_mutex_lock(&mutex);
 	it = my_connections.find(buf);
 	free(buf);
 	if (it != my_connections.end()) {
@@ -100,9 +103,11 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 			MYSQL *ret=lst->front();
 			lst->pop_front();
 			size--;
+			pthread_mutex_unlock(&mutex);
 			return ret;
 		}
 	}
+	pthread_mutex_unlock(&mutex);
 	return NULL;
 }
 
@@ -111,6 +116,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 	std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
 	char * buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
+	pthread_mutex_lock(&mutex);
 	it = my_connections.find(buf);
 	std::list<MYSQL *> *lst=NULL;
 	if (it==my_connections.end()) {
@@ -121,6 +127,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 		lst=it->second;
 	}
 	lst->push_back(my);
+	pthread_mutex_unlock(&mutex);
 }
 
 enum MySQL_Monitor_State_Data_Task_Type {
