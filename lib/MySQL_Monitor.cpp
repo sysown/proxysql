@@ -711,6 +711,13 @@ void * MySQL_Monitor::monitor_connect() {
 		unsigned int glover;
 		t1=monotonic_time();
 
+		glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			next_loop_at=0;
+		}
+
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_connect_loop;
 		}
@@ -723,13 +730,6 @@ void * MySQL_Monitor::monitor_connect() {
 		connect__num_active_connections=0;
 		// create libevent base
 		libevent_base= event_base_new();
-
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			mysql_thr->refresh_variables();
-			//proxy_error("%s\n", "MySQL_Monitor - CONNECT - refreshing variables");
-		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -836,8 +836,15 @@ void * MySQL_Monitor::monitor_ping() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
+		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE status!='OFFLINE_HARD'";
 		t1=monotonic_time();
+
+		glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			next_loop_at=0;
+		}
 
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_ping_loop;
@@ -851,13 +858,6 @@ void * MySQL_Monitor::monitor_ping() {
 		ping__num_active_connections=0;
 		// create libevent base
 		libevent_base= event_base_new();
-
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			mysql_thr->refresh_variables();
-			//proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
-		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -969,8 +969,15 @@ void * MySQL_Monitor::monitor_read_only() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup";
+		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD'";
 		t1=monotonic_time();
+
+		glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			next_loop_at=0;
+		}
 
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_read_only;
@@ -984,13 +991,6 @@ void * MySQL_Monitor::monitor_read_only() {
 		read_only__num_active_connections=0;
 		// create libevent base
 		libevent_base= event_base_new();
-
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			mysql_thr->refresh_variables();
-			//proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
-		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 //		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1147,6 +1147,13 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
 		t1=monotonic_time();
 
+		glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			next_loop_at=0;
+		}
+
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_replication_lag;
 		}
@@ -1159,13 +1166,6 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		replication_lag__num_active_connections=0;
 		// create libevent base
 		libevent_base= event_base_new();
-
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			mysql_thr->refresh_variables();
-			//proxy_error("%s\n","MySQL_Monitor - PING - refreshing variables");
-		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 //		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
