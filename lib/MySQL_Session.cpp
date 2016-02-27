@@ -208,7 +208,7 @@ MySQL_Session::MySQL_Session() {
 	//server_myds=NULL;
 	to_process=0;
 	mybe=NULL;
-	mybes= new (true) PtrArray(4,true);
+	mybes= new PtrArray(4);
 	set_status(NONE);
 
 	CurrentQuery.sess=this;

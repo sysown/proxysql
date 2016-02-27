@@ -878,7 +878,8 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 		+ 20 // scramble
 		+ 1; // 00
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc0(size);
+  unsigned char *_ptr=(unsigned char *)malloc(size);
+	memset(_ptr,0,size);
   memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
   int l;
   l=sizeof(mysql_hdr);
@@ -927,7 +928,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
   //mypkt->data=g_slice_alloc0(mypkt->length);
   //mypkt->data=l_alloc0(thrLD->sfp, mypkt->length);
-  unsigned char *_ptr=(unsigned char *)l_alloc0(size);
+  unsigned char *_ptr=(unsigned char *)malloc(size);
+	memset(_ptr,0,size);
   memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
   //Copy4B(_ptr, &myhdr);
   int l;
@@ -1187,7 +1189,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		/*if (pass_len) */ userinfo->password=strdup((const char *)"");
 	}
 	//if (password) free(password);
-	if (password) l_free_string(password);
+	if (password) {
+		free(password);
+		password=NULL;
+	}
 
 	return ret;
 }
@@ -1302,7 +1307,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		if (pass_len) userinfo->password=strdup((const char *)"");
 	}
 	//if (password) free(password);
-	if (password) l_free_string(password);
+	if (password) {
+		free(password);
+		password=NULL;
+	}
 
 	//l_free(len,pkt);
 	return ret;
