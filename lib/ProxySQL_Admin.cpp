@@ -1615,7 +1615,7 @@ __run_query:
 void *child_mysql(void *arg) {
 
 	int client = *(int *)arg;
-	__thr_sfp=l_mem_init();
+//	__thr_sfp=l_mem_init();
 
 	GloMTH->wrlock();
 	mysql_thread___server_version=GloMTH->get_variable((char *)"server_version");
@@ -1696,7 +1696,7 @@ __exit_child_mysql:
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	delete mysql_thr;	
-	l_mem_destroy(__thr_sfp);	
+//	l_mem_destroy(__thr_sfp);	
 	return NULL;
 }
 

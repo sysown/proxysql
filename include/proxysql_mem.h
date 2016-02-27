@@ -31,7 +31,7 @@ struct _l_super_free_pool_t {
 };
 
 #endif
-extern __thread l_sfp *__thr_sfp;
+//extern __thread l_sfp *__thr_sfp;
 
 l_sfp * l_mem_init();
 void l_mem_destroy(l_sfp *);
@@ -45,10 +45,10 @@ void __l_free(l_sfp *, size_t, void *);
 #ifndef L_STACK
 #define L_STACK
 
-#define l_alloc(s) __l_alloc(__thr_sfp,s)
-#define l_free(s,p) __l_free(__thr_sfp,s,p)
-//#define l_alloc(s) malloc(s)
-//#define l_free(s,p) free(p)
+//#define l_alloc(s) __l_alloc(__thr_sfp,s)
+//#define l_free(s,p) __l_free(__thr_sfp,s,p)
+#define l_alloc(s) malloc(s)
+#define l_free(s,p) free(p)
 
 static inline void l_stack_push (l_stack **s, void *p) {
   l_stack *d=(l_stack *)p;
@@ -72,10 +72,12 @@ static inline char * l_strdup(const char *s) {
 	return r;
 }
 
+/*
 static inline void l_free_string(const char *s) {
 	size_t len=strlen(s)+1;
 	l_free(len,(char *)s);
 }
+*/
 
 
 
