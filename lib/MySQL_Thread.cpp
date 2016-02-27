@@ -1393,19 +1393,9 @@ void MySQL_Thread::run() {
 		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server_msec*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 		for (i=0; i<num_idles; i++) {
 			MySQL_Data_Stream *myds;
-	//		myds=new MySQL_Data_Stream();
 			MySQL_Connection *mc=my_idle_conns[i];
-//			myds->myconn=mc;
-	//		myds->attach_connection(mc);
-	//		myds->assign_fd_from_mysql_conn();
-	//		myds->myds_type=MYDS_BACKEND;
-			//MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(i);
 			MySQL_Session *sess=new MySQL_Session();
-	//		myds->sess=sess;
-	//		myds->init();
-	//		my_idle_myds[i]=myds;
 			sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
-	//		sess->mybe->server_myds=myds;
 
 			myds=sess->mybe->server_myds;
 			myds->attach_connection(mc);
@@ -1626,7 +1616,6 @@ void MySQL_Thread::run() {
 		process_all_sessions();
 
 
-		//process_all_sessions_connections_handler();
 
 	}
 }
@@ -1843,31 +1832,6 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.queries_backends_bytes_recv=0;
 }
 
-/*
-void MySQL_Thread::process_all_sessions_connections_handler() {
-	unsigned int n;
-	int rc;
-	for (n=0; n<mysql_sessions_connections_handler->len; n++) {
-		MySQL_Session *sess=(MySQL_Session *)mysql_sessions_connections_handler->index(n);
-			//FIX_PING
-		if (sess->to_process==1) {
-			assert(sess->status!=NONE);
-			rc=sess->handler();
-			sess->to_process=0;
-			if (rc==-1) {
-				unregister_session_connection_handler(n, false);
-				n--;
-				delete sess;
-				//sess=new MySQL_Session();
-				//mysql_sessions_connections_handler->pdata[n]=sess;
-				
-			} else {
-				sess->to_process=0;
-			}
-		}
-	}
-}
-*/
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
 	_sess->thread=this;
 	_sess->connections_handler=true;
