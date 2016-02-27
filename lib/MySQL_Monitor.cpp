@@ -79,6 +79,7 @@ class MySQL_Monitor_Connection_Pool {
 	~MySQL_Monitor_Connection_Pool();
 	MYSQL * get_connection(char *hostname, int port);
 	void put_connection(char *hostname, int port, MYSQL *my);
+	void purge_missing_servers(SQLite3_result *resultset);
 };
 
 MySQL_Monitor_Connection_Pool::MySQL_Monitor_Connection_Pool() {
@@ -87,6 +88,72 @@ MySQL_Monitor_Connection_Pool::MySQL_Monitor_Connection_Pool() {
 }
 
 MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
+}
+
+void MySQL_Monitor_Connection_Pool::purge_missing_servers(SQLite3_result *resultset) {
+#define POLLUTE_LENGTH 8
+	char pollute_buf[POLLUTE_LENGTH];
+	srand(monotonic_time());
+	for (int i=0; i<POLLUTE_LENGTH; i++) {
+		pollute_buf[i]=(char)rand();
+	}
+	std::list<MYSQL *> *purge_lst=NULL;
+	purge_lst=new std::list<MYSQL *>;
+	pthread_mutex_lock(&mutex);
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		// for each host configured ...
+		SQLite3_row *r=*it;
+		char *buf=(char *)malloc(16+strlen(r->fields[0]));
+		sprintf(buf,"%s:%s",r->fields[0],r->fields[1]);
+		std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it2;
+		it2 = my_connections.find(buf); // find the host
+		free(buf);
+		if (it2 != my_connections.end()) { // if the host exists
+			std::list<MYSQL *> *lst=it2->second;
+			std::list<MYSQL *>::const_iterator it3;
+			for (it3 = lst->begin(); it3 != lst->end(); ++it3) {
+				MYSQL *my=*it3;
+				memcpy(my->net.buff,pollute_buf,8); // pollute this buffer
+				//
+			}
+		}
+	}
+	std::map<char *, std::list<MYSQL *>*>::iterator it;
+	//std::map<std::string, std::map<std::string, std::string>>::iterator it_type;
+	for(it = my_connections.begin(); it != my_connections.end(); it++) {
+		std::list<MYSQL *> *lst=it->second;
+		if (!lst->empty()) {
+			std::list<MYSQL *>::const_iterator it3;
+			it3=lst->begin();
+			MYSQL *my=*it3;
+			if (memcmp(my->net.buff,pollute_buf,8)) {
+				// the buffer is not polluted, it means it didn't match previously
+				while(!lst->empty()) {
+					my=lst->front();
+					lst->pop_front();
+					purge_lst->push_back(my);
+				}
+			}
+		}
+	}
+	pthread_mutex_unlock(&mutex);
+	char quit_buff[5];
+	memset(quit_buff,0,5);
+	quit_buff[0]=1;
+	quit_buff[4]=1;
+
+	// close all idle connections
+	while (!purge_lst->empty()) {
+		MYSQL *my=purge_lst->front();
+		purge_lst->pop_front();
+		int fd=my->net.fd;
+		int wb=write(fd,quit_buff,5);
+		fd+=wb; // dummy, to make compiler happy
+		fd-=wb; // dummy, to make compiler happy
+		mysql_close_no_command(my);
+		shutdown(fd, SHUT_RDWR);
+	}
+	delete purge_lst;
 }
 
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) {
@@ -104,6 +171,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 			lst->pop_front();
 			size--;
 			pthread_mutex_unlock(&mutex);
+			memset(ret->net.buff,0,8); // reset what was polluted
 			return ret;
 		}
 	}
@@ -663,6 +731,7 @@ void * MySQL_Monitor::monitor_connect() {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_connect_loop;
 		} else {
+			GloMyMon->My_Conn_Pool->purge_missing_servers(resultset);
 			if (resultset->rows_count==0) {
 				goto __end_monitor_connect_loop;
 			}
