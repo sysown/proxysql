@@ -64,6 +64,9 @@ static void static_ev_handler_telnet(struct mg_connection *nc, int ev, void *ev_
 }
 
 ProxySQL_HTTP::ProxySQL_HTTP() {
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mgr = (struct mg_mgr *)malloc(sizeof(struct mg_mgr));
 	mg_mgr_init(mgr, NULL);
 	telnet_nc=mg_bind(mgr, "1234", static_ev_handler_telnet);
@@ -75,6 +78,7 @@ ProxySQL_HTTP::ProxySQL_HTTP() {
 ProxySQL_HTTP::~ProxySQL_HTTP() {
 	mg_mgr_free(mgr);
 	free(mgr);
+	delete mysql_thr;
 }
 
 void ProxySQL_HTTP::run() {
