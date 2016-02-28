@@ -55,7 +55,7 @@ sqlite3/sqlite3/sqlite3.o:
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
 mongoose/mongoose/mongoose.o:
-	cd mongoose/mongoose && ${CC} -O2 -c -o mongoose.o mongoose.c
+	cd mongoose/mongoose && ${CC} -DMG_ENABLE_THREADS -O2 -c -o mongoose.o mongoose.c
 
 mongoose: mongoose/mongoose/mongoose.o
 

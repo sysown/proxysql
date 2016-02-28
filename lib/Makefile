@@ -63,8 +63,8 @@ $(ODIR)/%.o: %.c
 $(ODIR)/%.oo: %.cpp
 	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o 
-	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o 
+	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o
 
 $(ODIR):
 	mkdir $(ODIR)

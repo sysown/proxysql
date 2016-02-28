@@ -120,6 +120,8 @@ std::thread *MyMon_thread;
 
 MySQL_Logger *GloMyLogger;
 
+ProxySQL_HTTP *GloHTTP;
+std::thread *GloHTTP_thread;
 
 void * mysql_worker_thread_func(void *arg) {
 
@@ -209,6 +211,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyAuth=NULL;
 	GloMyMon=NULL;
 	GloMyLogger=NULL;
+	GloHTTP=NULL;
 	MyHGM=new MySQL_HostGroups_Manager();
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
@@ -256,6 +259,13 @@ void ProxySQL_Main_init_MySQL_Monitor_module() {
 	GloMyMon->print_version();
 }
 
+void ProxySQL_Main_init_ProxySQL_HTTP_module() {
+	// start ProxySQL_HTTP
+	GloHTTP = new ProxySQL_HTTP();
+	GloHTTP_thread = new std::thread(&ProxySQL_HTTP::run,GloHTTP);
+	//GloHTTP->print_version();
+}
+
 void ProxySQL_Main_join_all_threads() {
 	if (GloMTH) {
 		GloMTH->shutdown_threads();
@@ -271,6 +281,10 @@ void ProxySQL_Main_join_all_threads() {
 	// join GloMyMon thread
 	if (GloMyMon) {
 		MyMon_thread->join();
+	}
+	// join GloHTTP thread
+	if (GloHTTP) {
+		GloHTTP_thread->join();
 	}
 
 	// join GloQC thread
@@ -304,6 +318,10 @@ void ProxySQL_Main_shutdown_all_modules() {
 	if (GloMyLogger) {
 		delete GloMyLogger;
 		GloMyLogger=NULL;
+	}
+	if (GloHTTP) {
+		delete GloHTTP;
+		GloHTTP=NULL;
 	}
 
 	delete GloAdmin;
@@ -367,6 +385,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 
 	GloMTH->start_listeners();
 	ProxySQL_Main_init_MySQL_Monitor_module();
+	ProxySQL_Main_init_ProxySQL_HTTP_module();
 }
 
 
