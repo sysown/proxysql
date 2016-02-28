@@ -1,6 +1,6 @@
 
 
-default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection sqlite3
+default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection sqlite3 mongoose
 .PHONY: default
 
 
@@ -53,6 +53,11 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
+
+mongoose/mongoose/mongoose.o:
+	cd mongoose/mongoose && ${CC} -O2 -c -o mongoose.o mongoose.c
+
+mongoose: mongoose/mongoose/mongoose.o
 
 libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig && rm -rf libconfig-1.4.9
