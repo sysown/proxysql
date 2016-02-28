@@ -1497,8 +1497,8 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	if ( 
 		(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) 
-//		&&
-		//( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) || strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 ) // FIXME: maybe this check is not necessary
+		&&
+		( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) || strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 ) // Do not delete this line. See bug #492
 	)	{
 		if (default_hostgroup<0 && admin==true) {
 			if (default_hostgroup==STATS_HOSTGROUP) {
