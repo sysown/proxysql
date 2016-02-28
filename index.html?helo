@@ -1,6 +1,0 @@
-GET /?helo HTTP/1.1
-User-Agent: Wget/1.15 (linux-gnu)
-Accept: */*
-Host: 127.0.0.1:1234
-Connection: Keep-Alive
-
