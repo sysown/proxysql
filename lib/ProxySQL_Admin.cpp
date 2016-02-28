@@ -22,6 +22,9 @@
 #define SELECT_DB_USER "select DATABASE(), USER() limit 1"
 #define SELECT_DB_USER_LEN 33
 
+#define READ_ONLY_OFF "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0e\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x03\x4f\x46\x46\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
+#define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
+
 char *s_strdup(char *s) {
 	char *ret=NULL;
 	if (s) {
@@ -1248,6 +1251,31 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 
+	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'read_only'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'read_only'"))) {
+		l_free(query_length,query);
+		char *q=(char *)"SELECT 'read_only' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-read_only'";
+		query_length=strlen(q)+5;
+		query=(char *)l_alloc(query_length);
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		bool ro=SPA->get_read_only();
+		//sprintf(query,q,( ro ? "ON" : "OFF"));
+		PtrSize_t pkt_2;
+		if (ro) {
+			pkt_2.size=110;
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			memcpy(pkt_2.ptr,READ_ONLY_ON,pkt_2.size);
+		} else {
+			pkt_2.size=111;
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			memcpy(pkt_2.ptr,READ_ONLY_OFF,pkt_2.size);
+		}
+		sess->status=WAITING_CLIENT_DATA;
+		sess->client_myds->DSS=STATE_SLEEP;
+		sess->client_myds->PSarrayOUT->add(pkt_2.ptr,pkt_2.size);
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (sess->stats==false) {
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
@@ -1397,17 +1425,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
 
-
-	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'read_only'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'read_only'"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT 'read_only' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-read_only'";
-		query_length=strlen(q)+5;
-		query=(char *)l_alloc(query_length);
-		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		bool ro=SPA->get_read_only();
-		sprintf(query,q,( ro ? "ON" : "OFF"));
-		goto __run_query;
-	}
 
 	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'version'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'version'"))) {
 		l_free(query_length,query);
