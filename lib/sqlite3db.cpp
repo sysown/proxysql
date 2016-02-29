@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "SpookyV2.h"
 
 #define USLEEP_SQLITE_LOCKED 100
 
@@ -176,4 +177,34 @@ void SQLite3DB::wrlock() {
 
 void SQLite3DB::wrunlock() {
 	spin_wrunlock(&rwlock);
+}
+
+int64_t SQLite3_result::raw_checksum() {
+	if (this->rows_count==0) return 0;
+	uint64_t hash1, hash2;
+	SpookyHash myhash;
+	myhash.Init(19,3);
+
+	for (std::vector<SQLite3_row *>::iterator it=rows.begin() ; it!=rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		for (int i=0; i<columns;i++) {
+			if (r->fields[i]) {
+				myhash.Update(r->fields[i],r->sizes[i]);
+			} else {
+				myhash.Update("",0);
+			}
+		}
+	}
+	myhash.Final(&hash1, &hash2);
+	return hash1;
+}
+
+
+char *SQLite3_result::checksum() {
+	uint64_t hash1=raw_checksum();
+	char buf[128];
+	uint32_t d32[2];
+	memcpy(&d32,&hash1,sizeof(hash1));
+	sprintf(buf,"0x%X%X", d32[0], d32[1]);
+	return strdup(buf);
 }

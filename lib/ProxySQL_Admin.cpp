@@ -1365,6 +1365,110 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
 	}
+	if(!strncasecmp("CHECKSUM ", query_no_space, 9)){
+		proxy_debug(PROXYSQL_DEBUG_ADMIN, 4, "Received CHECKSUM command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+                SQLite3_result *resultset=NULL;
+		char *tablename=NULL;
+		char *error=NULL;
+		int affected_rows=0;
+		int cols=0;
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL SERVERS") && !strncasecmp("CHECKSUM DISK MYSQL SERVERS", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
+			tablename=(char *)"MYSQL SERVERS";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL USERS") && !strncasecmp("CHECKSUM DISK MYSQL USERS", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM mysql_users ORDER BY username";
+			tablename=(char *)"MYSQL USERS";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL QUERY RULES") && !strncasecmp("CHECKSUM DISK MYSQL QUERY RULES", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM mysql_query_rules ORDER BY rule_id";
+			tablename=(char *)"MYSQL QUERY RULES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL VARIABLES") && !strncasecmp("CHECKSUM DISK MYSQL VARIABLES", query_no_space, strlen(query_no_space))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
+			tablename=(char *)"MYSQL VARIABLES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+
+		}
+
+		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space))){
+                        char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
+                        tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
+                        SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+
+                }
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL SERVERS") && !strncasecmp("CHECKSUM MEM MYSQL SERVERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL SERVERS") && !strncasecmp("CHECKSUM MYSQL SERVERS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
+			tablename=(char *)"MYSQL SERVERS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL USERS") && !strncasecmp("CHECKSUM MEMORY MYSQL USERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL USERS") && !strncasecmp("CHECKSUM MEM MYSQL USERS", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL USERS") && !strncasecmp("CHECKSUM MYSQL USERS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_users ORDER BY username";
+			tablename=(char *)"MYSQL USERS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MEMORY MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MEM MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_query_rules ORDER BY rule_id";
+			tablename=(char *)"MYSQL QUERY RULES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL VARIABLES") && !strncasecmp("CHECKSUM MEMORY MYSQL VARIABLES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MEM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))
+		||
+		(strlen(query_no_space)==strlen("CHECKSUM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
+			tablename=(char *)"MYSQL VARIABLES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+                ||
+                (strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+                ||
+                (strlen(query_no_space)==strlen("CHECKSUM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+                        char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
+                        tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
+                        SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+                }
+
+		if (error) {
+			proxy_error("Error: %s\n", error);
+			char buf[1024];
+			sprintf(buf,"%s", error);
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, buf);
+			run_query=false;
+		} else if (resultset) {
+			char *q=(char *)"SELECT '%s' AS 'table', '%s' AS 'checksum'";
+			char *checksum=(char *)resultset->checksum();
+			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum)+1);
+			sprintf(query,q,tablename,checksum);
+		}
+		goto __run_query;
+	}
 
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
