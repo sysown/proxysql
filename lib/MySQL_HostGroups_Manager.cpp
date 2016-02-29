@@ -229,6 +229,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.server_connections_connected=0;
 	status.server_connections_aborted=0;
 	status.server_connections_created=0;
+	status.servers_table_version=0;
 	status.myconnpoll_get=0;
 	status.myconnpoll_get_ok=0;
 	status.myconnpoll_get_ping=0;
@@ -279,6 +280,10 @@ void MySQL_HostGroups_Manager::wrlock() {
 
 void MySQL_HostGroups_Manager::wrunlock() {
 	spin_wrunlock(&rwlock);
+}
+
+unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
+	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
 
 // add a new row in mysql_servers_incoming
@@ -403,6 +408,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	generate_mysql_servers_table();
 	generate_mysql_replication_hostgroups_table();
 
+	__sync_fetch_and_add(&status.servers_table_version,1);
 	wrunlock();
 	if (GloMTH) {
 		GloMTH->signal_all_threads(1);

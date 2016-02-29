@@ -1986,6 +1986,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Slow queries
+		pta[0]=(char *)"Servers_table_version";
+		sprintf(buf,"%u",MyHGM->get_servers_table_version());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	free(pta);
 	return result;
 }
