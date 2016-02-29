@@ -24,10 +24,11 @@ RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
 
 SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
+MONGOOSE_DIR=$(DEPS_PATH)/mongoose/mongoose
 
 IDIR=../include
 
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(LIBEVENT_IDIR) -I$(SQLITE3_DIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(LIBEVENT_IDIR) -I$(SQLITE3_DIR) -I$(MONGOOSE_DIR)
 
 LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
 
@@ -50,7 +51,7 @@ default: libproxysql.a
 
 _OBJ = c_tokenizer.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
-_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo
+_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo ProxySQL_HTTP.oo
 OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
 
 %.ko: %.cpp
@@ -62,8 +63,8 @@ $(ODIR)/%.o: %.c
 $(ODIR)/%.oo: %.cpp
 	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o 
-	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o 
+	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o
 
 $(ODIR):
 	mkdir $(ODIR)

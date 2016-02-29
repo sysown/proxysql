@@ -275,6 +275,7 @@ class SQLite3_result;
 //class MySQL_Hostgroup;
 //class MySQL_HostGroups_Handler;
 class MySQL_HostGroups_Manager;
+class ProxySQL_HTTP;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
