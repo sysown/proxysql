@@ -1423,7 +1423,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	if(!strncasecmp("CHECKSUM ", query_no_space, 9)){
 		proxy_debug(PROXYSQL_DEBUG_ADMIN, 4, "Received CHECKSUM command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-                SQLite3_result *resultset=NULL;
+		SQLite3_result *resultset=NULL;
 		char *tablename=NULL;
 		char *error=NULL;
 		int affected_rows=0;
@@ -1450,15 +1450,13 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
 			tablename=(char *)"MYSQL VARIABLES";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-
 		}
 
 		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space))){
-                        char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
-                        tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
-                        SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-
-                }
+			char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
+			tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
 
 		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS", query_no_space, strlen(query_no_space)))
 		||
@@ -1501,14 +1499,14 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		}
 
 		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
-                ||
-                (strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
-                ||
-                (strlen(query_no_space)==strlen("CHECKSUM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))){
-                        char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
-                        tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
-                        SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
-                }
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
+			tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
 
 		if (error) {
 			proxy_error("Error: %s\n", error);
@@ -1521,6 +1519,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			char *checksum=(char *)resultset->checksum();
 			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum)+1);
 			sprintf(query,q,tablename,checksum);
+			free(checksum);
 		}
 		goto __run_query;
 	}
