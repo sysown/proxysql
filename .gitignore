@@ -3,6 +3,7 @@
 *.ko
 *.oo
 *.pyc
+lib/obj/*
 
 # Libraries
 *.lib

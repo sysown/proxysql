@@ -51,8 +51,11 @@ default: libproxysql.a
 
 _OBJ = c_tokenizer.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
-_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo ProxySQL_HTTP.oo
+_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo
 OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
+
+_OBJ_MG = ProxySQL_HTTP.oo2
+OBJ_MG = $(patsubst %,$(ODIR)/%,$(_OBJ_MG))
 
 %.ko: %.cpp
 	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
@@ -60,11 +63,14 @@ OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
 $(ODIR)/%.o: %.c
 	$(CC) -fPIC -c -o $@ $< $(MYCFLAGS) $(CFLAGS)
 
+$(ODIR)/%.oo2: %.cpp
+	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS) -DMG_ENABLE_SSL -DMD5_HEADER_DEFINED
+
 $(ODIR)/%.oo: %.cpp
 	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o 
-	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(OBJ_MG) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o 
+	ar rcs $@ $(OBJ) $(OBJ_CPP) $(OBJ_MG) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o $(MONGOOSE_DIR)/mongoose.o
 
 $(ODIR):
 	mkdir $(ODIR)

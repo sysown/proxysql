@@ -1,7 +1,15 @@
 #include "ProxySQL_HTTP.hpp"
 
+#include "proxysql.h"
+#include "cpp.h"
+#undef INVALID_SOCKET
+#undef closesocket
 #include "mongoose.h"
+
 #include <time.h>
+
+
+extern MySQL_Threads_Handler *GloMTH;
 
 typedef struct _aadata {
 	time_t start;
@@ -11,7 +19,6 @@ typedef struct _aadata {
 static void static_ev_handler_http(struct mg_connection *nc, int ev, void *ev_data) {
 	struct http_message *hm = NULL;
 	aadata *a=NULL;
-	time_t t;
 	double dt;
 	//printf("%d\n",ev);
 	switch (ev) {
@@ -38,7 +45,6 @@ static void static_ev_handler_http(struct mg_connection *nc, int ev, void *ev_da
 //			mg_printf(nc, "%s","HTTP/1.0 501 Not Implemented\r\n""Content-Length: 0\r\n\r\n");
 			break;
 		case MG_EV_TIMER:
-			t=time(NULL);
 			a=(aadata *)nc->user_data;
 			printf("%s\n",a->hm->uri.p);
 			mg_printf(nc, "%s","HTTP/1.0 501 Not Implemented\r\n""Content-Length: 0\r\n\r\n");		
@@ -64,8 +70,7 @@ static void static_ev_handler_telnet(struct mg_connection *nc, int ev, void *ev_
 }
 
 ProxySQL_HTTP::ProxySQL_HTTP() {
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	mysql_thr = new MySQL_Thread();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mgr = (struct mg_mgr *)malloc(sizeof(struct mg_mgr));
 	mg_mgr_init(mgr, NULL);
