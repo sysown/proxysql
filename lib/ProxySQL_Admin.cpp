@@ -1440,6 +1440,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 			char *checksum=(char *)resultset->checksum();
 			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum)+1);
 			sprintf(query,q,tablename,checksum);
+			free(checksum);
 		}
 		goto __run_query;
         }
