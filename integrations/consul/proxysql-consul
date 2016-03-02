@@ -121,6 +121,7 @@ def put_config_to_consul(table):
 
     url = 'http://%s:%s/v1/kv/%s' % (consul_iface, consul_port, key)
     r = requests.put(url, data=consul_data_json)
+    r.raise_for_status()
     print 'Configs pushed successfully.'
 
 
