@@ -54,16 +54,16 @@ LOAD_QUERY_BY_TABLE = {
 config = {}
 
 
-def read_config():
+def read_config_from_file():
     global config
     with open(CFG_PATH) as config_file:
         config_data = config_file.read()
     config = json.loads(config_data)
 
-    # TODO validate config
+    # TODO(ipruanche) validate config
 
 
-def read_uuid():
+def read_uuid_from_file():
     """
     Reads the UUID identifying this script instance from a file store. If the
     file does not exist creates it and writes a new UUID.
@@ -103,7 +103,7 @@ def fetch_proxysql_config(table):
     return rows 
 
 
-def put_config(table):
+def put_config_to_consul(table):
     if table not in TABLE_TO_KEY:
         print 'Unknown config table. Exiting.'
         exit(1)
@@ -132,7 +132,7 @@ def build_multivalue_insert(table, rows):
     query = 'INSERT INTO %s VALUES(%s)' % (table, '),('.join(row_join))
     return query
 
-def update_proxysql_config(table, rows):
+def update_proxysql_runtime_config(table, rows):
     admin_connection = MySQLdb.connect(config[CFG_PROXY_IFACE],
             config[CFG_PROXY_USERNAME],
             config[CFG_PROXY_PASSWORD],
@@ -201,16 +201,16 @@ def update_config():
         print 'Ignoring self update.'
         return
     
-    update_proxysql_config(table, rows)
+    update_proxysql_runtime_config(table, rows)
     print 'Configs updated successfully.'
 
 if __name__ == '__main__':
     arguments = docopt(__doc__, version='proxysql-consul 1.0')
-    read_config()
-    read_uuid()
+    read_config_from_file()
+    read_uuid_from_file()
 
     if arguments['put']:
-        put_config(arguments['<table>'])
+        put_config_to_consul(arguments['<table>'])
     elif arguments['update']:
         update_config()
 
