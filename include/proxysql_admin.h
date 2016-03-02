@@ -112,11 +112,15 @@ class ProxySQL_Admin {
 	void flush_mysql_servers__from_memory_to_disk();
 	void flush_mysql_servers__from_disk_to_memory();
 	void flush_mysql_query_rules__from_memory_to_disk();	
-	void flush_mysql_query_rules__from_disk_to_memory();	
+	void flush_mysql_query_rules__from_disk_to_memory();
+	bool save_mysql_query_rules_to_cluster();
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
+	bool save_mysql_servers_to_cluster();
 	char * load_mysql_query_rules_to_runtime();
 	void save_mysql_query_rules_from_runtime(bool);
+
+	int save_config_to_cluster(char *tablename);
 
 	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
