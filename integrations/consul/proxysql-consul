@@ -41,6 +41,11 @@ TABLE_TO_KEY = {
         'mysql_query_rules': 'proxysql/mysql_query_rules'
         }
 
+RUNTIME_TABLE_BY_TABLE = {
+        'mysql_servers': 'runtime_mysql_servers',
+        'mysql_query_rules': 'runtime_mysql_query_rules'
+        }
+
 SAVE_QUERY_BY_TABLE = {
         'mysql_servers': 'SAVE MYSQL SERVERS TO MEMORY',
         'mysql_query_rules': 'SAVE MYSQL QUERY RULES TO MEMORY'
@@ -81,22 +86,16 @@ def read_uuid_from_file():
             _uuid = uuid_file.read()
     config[CFG_UUID] = _uuid
 
-def fetch_proxysql_config(table):
+def read_proxysql_runtime_config(table):
     admin_connection = MySQLdb.connect(config[CFG_PROXY_IFACE],
             config[CFG_PROXY_USERNAME],
             config[CFG_PROXY_PASSWORD],
             port=config[CFG_PROXY_PORT],
             db='main')
 
-    # save runtime config to memory so we can read them
-    cursor = admin_connection.cursor()
-    save_query = SAVE_QUERY_BY_TABLE[table]
-    cursor.execute(save_query)
-    cursor.close()
-
     # read runtime config from memory
     cursor = admin_connection.cursor()
-    cursor.execute('SELECT * FROM %s' % table)
+    cursor.execute('SELECT * FROM %s' % RUNTIME_TABLE_BY_TABLE[table])
     rows = cursor.fetchall()
     cursor.close()
     admin_connection.close()
@@ -108,7 +107,7 @@ def put_config_to_consul(table):
         print 'Unknown config table. Exiting.'
         exit(1)
 
-    rows = fetch_proxysql_config(table)
+    rows = read_proxysql_runtime_config(table)
     consul_data = {}
     consul_data['table'] = table
     consul_data['rows'] = rows
