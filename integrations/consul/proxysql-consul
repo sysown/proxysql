@@ -1,5 +1,20 @@
 #!/usr/bin/env python
 
+"""
+Usage:
+  proxysql-consul put <table> [--config-file=<config-file>]
+  proxysql-consul update [--config-file=<config-file>]
+  proxysql-consul (-h | --help)
+
+Options:
+  -h --help
+        Show this screen.
+  --config-file=<config-file>
+        Path to config file [default: /etc/proxysql-consul.cnf].
+
+"""
+
+from docopt import docopt
 import base64
 import json
 import os
@@ -9,10 +24,6 @@ import uuid
 
 import MySQLdb
 
-USAGE = """Usage:
-proxysql-consul put tablename
-proxysql update < config
-"""
 
 CFG_PATH = '/etc/proxysql-consul.cnf'
 CFG_UUID_FILE = 'uuid_file'
@@ -194,18 +205,12 @@ def update_config():
     print 'Configs updated successfully.'
 
 if __name__ == '__main__':
+    arguments = docopt(__doc__, version='proxysql-consul 1.0')
     read_config()
     read_uuid()
 
-    if len(sys.argv) > 1:
-        mode = sys.argv[1]
-        if mode == 'put' and len(sys.argv) > 2:
-            table = sys.argv[2]
-            put_config(table)
-            exit(0)
-        elif mode == 'update':
-            update_config()
-            exit(0)
+    if arguments['put']:
+        put_config(arguments['<table>'])
+    elif arguments['update']:
+        update_config()
 
-    print USAGE
-    exit(1)
