@@ -107,6 +107,7 @@ static char * admin_variables_names[]= {
 	(char *)"refresh_interval",
 	(char *)"read_only",
 	(char *)"version",
+	(char *)"proxysql_consul_path",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -2513,6 +2514,7 @@ char * ProxySQL_Admin::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
 	if (!strcasecmp(name,"version")) return s_strdup(variables.admin_version);
+	if (!strcasecmp(name,"proxysql_consul_path")) return s_strdup(variables.proxysql_consul_path);
 	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
 	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
@@ -2694,6 +2696,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	}
 	if (!strcasecmp(name,"version")) {
 		if (strcasecmp(value,(char *)PROXYSQL_VERSION)==0) {
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name, "proxysql_consul_path")) {
+		if (vallen) {
+			if (variables.proxysql_consul_path)
+				free(variables.proxysql_consul_path);
+			variables.proxysql_consul_path=strdup(value);
 			return true;
 		} else {
 			return false;
@@ -3491,7 +3503,8 @@ int ProxySQL_Admin::save_config_to_cluster(char *tablename) {
 	if (pid == 0) {
 		// child
 		errno = 0;
-		int exec_status = execlp("/usr/local/bin/proxysql-consul", "/usr/local/bin/proxysql-consul", "put", tablename, (char *) 0);
+		char *proxysql_consul_path = get_variable((char *)"proxysql_consul_path");
+		int exec_status = execlp(proxysql_consul_path, proxysql_consul_path, "put", tablename, (char *) 0);
 		if (exec_status == -1) {
 			proxy_error("Exec failed for config save script with errno: %d.\n", errno);
 		}
