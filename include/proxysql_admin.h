@@ -34,7 +34,7 @@ class ProxySQL_Admin {
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
 		char *admin_version;
-		char *proxysql_consul_path;
+		char *proxysql_consul_script_path;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
