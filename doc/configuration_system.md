@@ -181,3 +181,16 @@ So, for example, these two commands are equivalent:
 * SAVE ADMIN VARIABLES TO MEMORY
 * SAVE ADMIN VARIABLES TO MEM
   
+# Pushing configuration to a cluster
+
+This feature allows an easy way of syncronizing configuration over multiple ProxySQL instances. Read this document to find out how to configure a ProxySQL cluster: - TODO(iprunache) add ref to cluster doc.
+
+Connecting through the admin interface to a master ProxySQL instance will allow you to run commands that will copy a runtime configuration from the master instace to all other instances in the cluster. This process uses the admin interface on receiving servers so the configuration will be first written to the memory database then loaded to the runtime structures.
+
+For handling MySQL servers:
+* SAVE MYSQL SERVERS TO CLUSTER
+  * copies MySQL servers configuration from runtime data structures to the runtime data structures on all ProxySQL servers configured to be part of a cluster
+
+For handling MySQL query rules:
+* SAVE MYSQL QUERY RULES TO CLUSTER
+  * copies MySQL query rules configuration from runtime data structures to the runtime data structures on all ProxySQL servers configured to be part of a cluster
