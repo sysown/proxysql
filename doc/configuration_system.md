@@ -5,6 +5,7 @@ ProxySQL has a complex but easy to use configuration system suited to serve the 
 * allow easy automated updates to the configuration (this is because some ProxySQL users use it in larger setups with automated provisioning). There is a MySQL-compatible admin interface for this purpose
 * allow as many configuration items as possible to be modified at runtime, without restarting the daemon
 * allow easy rollbacks of wrong configurations
+* allow pushing configs to all ProxySQL instances in a cluster
 
 This is achieved using a multi-layer configuration system where settings are moved from one layer to another.
 The 3 layers of the configuration system are described in the picture below:
@@ -24,9 +25,9 @@ The 3 layers of the configuration system are described in the picture below:
         |           |        \
     [3] |       [4] |         \ [5]
         |          \|/         \
-+-------------------------+  +-------------------------+
-|          DISK           |  |       CONFIG FILE       |
-+-------------------------+  +-------------------------+
++-------------------------+  +-------------------------+  +-------------------------+
+|          DISK           |  |       CONFIG FILE       |  |         CLUSTER         |
++-------------------------+  +-------------------------+  +-------------------------+
 
 ```
 
@@ -50,9 +51,11 @@ mysql> select * from global_variables limit 3;
 * mysql_collations -- the list of MySQL collations available for the proxy to work with. These are extracted directly from the client library.
 * [only available in debug builds] debug_levels -- the list of types of debug statements that ProxySQL emits together with their verbosity levels. This allows us to easily configure at runtime what kind of statements we have in the log in order to debug different problems. This is available only in debug builds because it can affect performance 
 
-__DISK__ and __CONFIG FILE__
+__DISK__, __CONFIG FILE__ and __CLUSTER__
 
 __DISK__ represents an on-disk SQLite3 database, with the default location at `$(DATADIR)/proxysql.db`. Across restarts, the in-memory configs that were not persisted will be lost, therefore it is important to persist the configuration into __DISK__ . __CONFIG__ file is the classical config file, and we'll see the relationship between it and the other configuration layers in the next section.
+
+__CLUSTER__ represents a distributed data store that can be used to push configuration from a master ProxySQL to all other servers in a ProxySQL cluster. The admin interface can be used to run MySQL commands that would copy runtime configuration from the local ProxySQL instance to the runtime of all other ProxySQL servers in a cluster.
 
 In the following sections, we'll describe the lifecycle of each of these layers for the basic operations that the daemon goes through: starting up for the first time, starting up, restarting, shutting down, etc.
 
@@ -177,3 +180,4 @@ Note: the above command allows the following shortname :
 So, for example, these two commands are equivalent:
 * SAVE ADMIN VARIABLES TO MEMORY
 * SAVE ADMIN VARIABLES TO MEM
+  
