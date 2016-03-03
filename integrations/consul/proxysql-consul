@@ -153,26 +153,31 @@ def build_multivalue_insert(table, rows):
     query = 'INSERT INTO %s VALUES(%s)' % (table, '),('.join(row_join))
     return query
 
-def update_proxysql_runtime_config(table, rows):
+def update_proxysql_runtime_config(config_name, rows_by_table):
     admin_connection = MySQLdb.connect(config[CFG_PROXY_IFACE],
             config[CFG_PROXY_USERNAME],
             config[CFG_PROXY_PASSWORD],
             port=config[CFG_PROXY_PORT],
             db='main')
-    
-    # clear table
-    cursor = admin_connection.cursor()
-    cursor.execute('DELETE FROM %s' % table)
-    cursor.close()
-    
-    # insert values from Consul
-    insert_query = build_multivalue_insert(table, rows)
-    cursor = admin_connection.cursor()
-    cursor.execute(insert_query)
-    cursor.close()
+
+    for table_name in rows_by_table.keys():
+        rows = rows_by_table[table_name]
+        if not rows:
+            continue
+
+        # clear table
+        cursor = admin_connection.cursor()
+        cursor.execute('DELETE FROM %s' % table_name)
+        cursor.close()
+        
+        # insert values from Consul
+        insert_query = build_multivalue_insert(table_name, rows)
+        cursor = admin_connection.cursor()
+        cursor.execute(insert_query)
+        cursor.close()
 
     # commit changes to runtine
-    load_query = LOAD_QUERY_BY_CONFIG_NAME[table]
+    load_query = LOAD_QUERY_BY_CONFIG_NAME[config_name]
     cursor = admin_connection.cursor()
     cursor.execute(load_query)
     cursor.close()
@@ -189,18 +194,15 @@ def update_config():
     updated_config = json.loads(updated_config_json)
 
     # TODO(iprunache) update JSON structure to support multi table configs
-    config_name = udpated_config['config_name']
-    rows = updated_config['rows']
+    config_name = updated_config['config_name']
+    rows_by_table = updated_config['tables']
     _uuid = updated_config['uuid']
     
-    if not rows:
-        print 'Empty config set for table: %s.' % table
-        return
     if _uuid == config[CFG_UUID]:
         print 'Ignoring self update.'
         return
     
-    update_proxysql_runtime_config(config_name, rows)
+    update_proxysql_runtime_config(config_name, rows_by_table)
     print 'Configs updated successfully.'
 
 # TODO(iprunache) rename to read_consul_data and extract data processing to
@@ -247,5 +249,5 @@ if __name__ == '__main__':
     if arguments['put']:
         put_config_to_consul(arguments['<config-name>'])
     elif arguments['update']:
-        read_consul_data()
+        update_config()
 
