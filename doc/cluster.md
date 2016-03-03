@@ -14,12 +14,51 @@ When the ProxySQL master instance receives a command to save one of its runtime 
 
 Other Consul agents in the cluster are watching for changes to keys prefixed with `proxysql/`. When a watched key changes value Consul runs `proxyql-consul` as a handler which reads the data that has changed. `proxysql-consul` determines which tables need to be updated and then connects to the local ProxySQL instance through the admin interface and overwrites the tables in the memory database with the new content. It then loads the configuration to runtime.
 
+`proxysql-consul` generates an unique identifier the first time it is run and stores it on disk to be read for subsequent runs. This id is used uniquely identify instances and to prevent applying configuration on the same machine that pushed it.
+
 # How to configure it
-+ install Consul
-+ configure Consul
-+ running Consul
-+ install proxysql-consul
-+ configure proxysql-consul
+#### Consul
+To install Consul it's best to follow [Consul's own installation guide](https://www.consul.io/intro/getting-started/install.html). Read how to run the agent and how to configure agents for making a cluster.
+
+For integration with ProxySQL a watch needs to be added to Consul's config file:
+```json
+{
+  "watches": [
+    {
+      "type": "keyprefix",
+      "prefix": "proxysql/",
+      "handler": "proxysql-consul update"
+    }
+  ]
+}
+```
+`proxysql-consul` is installed together with ProxySQL by default in `/usr/local/bin/` but any absolute path can be specified in the watch handler.
+
+If you're running ProxySQL with `sudo` you'll also need to start the consul agent with `sudo`.
+
+#### proxysql-consul
+Running `sudo make install` to install ProxySQL also installs `proxysql-consul` in `/usr/local/bin` and puts a default `proxysql-consul.cnf` at `/etc/proxysql.cnf`.
+
+`proxysql-consul` looks for its configuration file at `/etc/proxysql.cnf` which contains a JSON documnet. The default configuration looks like this:
+```json
+{
+  "uuid_file": "/var/lib/proxysql/proxysql-consul.uuid",
+  "consul_iface": "127.0.0.1",
+  "consul_port": "8500",
+  "proxysql_admin_iface": "127.0.0.1",
+  "proxysql_admin_port": 6032,
+  "proxysql_admin_username": "admin",
+  "proxysql_admin_password": "admin"
+}
+```
+Description of `proxysql-consul` configuration fields:
+- `uuid_file` - path to file where to store unique id of instance "/var/lib/proxysql/proxysql-consul.uuid",
+- `consul_iface` - address of local Consul HTTP interface
+- `consul_port` - port of local Consul HTTP interface
+- `proxysql_admin_iface` - address of local ProxySQL admin interface
+- `proxysql_admin_port` - port of local ProxySQL admin interface
+- `proxysql_admin_username` - username used to login to the ProxySQL admin interface
+- `proxysql_admin_password` - password used to login to the ProxySQL admin interface
 
 #Troubleshooting
 + where to look for proxysql-consul output
