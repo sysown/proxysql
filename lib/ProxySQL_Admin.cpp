@@ -1,13 +1,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#include <errno.h>
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/time.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <time.h>
 #include <string.h>
 #include <assert.h>
@@ -797,19 +794,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
-
-		if (query_no_space_length==strlen("SAVE MYSQL SERVERS TO CLUSTER") && !strncasecmp("SAVE MYSQL SERVERS TO CLUSTER", query_no_space, query_no_space_length)) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Pushed mysql servers from RUNTIME to cluster\n");
-			bool success = SPA->save_mysql_servers_to_cluster();
-			if (success) {
-				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-			} else {
-				SPA->send_MySQL_ERR(&sess->client_myds->myprot, NULL);
-			}
-			return false;
-		}
 	}
 
 	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL QUERY RULES ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL QUERY RULES ", query_no_space, 23))) ) {
@@ -907,19 +891,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			SPA->save_mysql_query_rules_from_runtime(false);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-			return false;
-		}
-
-		if (query_no_space_length==strlen("SAVE MYSQL QUERY RULES TO CLUSTER") && !strncasecmp("SAVE MYSQL QUERY RULES TO CLUSTER", query_no_space, query_no_space_length)) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Pushed mysql query rules from RUNTIME to cluster\n");
-			bool success = SPA->save_mysql_query_rules_to_cluster();
-			if (success) {
-				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-			} else {
-				SPA->send_MySQL_ERR(&sess->client_myds->myprot, NULL);
-			}
 			return false;
 		}
 	}
@@ -3466,50 +3437,6 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (resultset) delete resultset;
 }
 
-
-// Gets a copy of the runtime mysql servers config and passes is to an external script for distribution
-// to other ProxySQL instances. Returns true in case of success and false in case of failure.
-bool ProxySQL_Admin::save_mysql_servers_to_cluster() {
-	char *tablename = (char *)"mysql_servers";
-	int status_code = save_config_to_cluster(tablename);
-	return status_code == 0;
-}
-
-// Gets a copy of the runtime mysql query rules config and passes is to an external script for distribution
-// to other ProxySQL instances. Returns true in case of success and false in case of failure.
-bool ProxySQL_Admin::save_mysql_query_rules_to_cluster() {
-	char *tablename = (char *)"mysql_query_rules";
-	int status_code = save_config_to_cluster(tablename);
-	return status_code == 0;
-}
-
-// Runs external config distribution script passing it the given table name. The script will use the admin
-// interface to read the contents of the table.
-int ProxySQL_Admin::save_config_to_cluster(char *tablename) {
-	pid_t pid = fork();
-	if (pid == 0) {
-		// child
-		errno = 0;
-		int exec_status = execlp("/usr/local/bin/proxysql-consul", "/usr/local/bin/proxysql-consul", "put", tablename, (char *) 0);
-		if (exec_status == -1) {
-			proxy_error("Exec failed for config save script with errno: %d.\n", errno);
-		}
-		_exit(0);
-	} else if (pid < 0) {
-		// failed to fork
-		proxy_error("Failed to fork for saving config.\n");
-		return -1;
-	} else {
-		// parent
-		int status_code;
-		waitpid(pid, &status_code, 0);
-		if (!WIFEXITED(status_code)) {
-			proxy_error("Config save script exited with an error: %d.\n", WEXITSTATUS(status_code));
-		}
-		proxy_info("Config save script exited with status code: %d.\n", status_code);
-		return status_code;
-	}
-}
 
 char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	char *error=NULL;
