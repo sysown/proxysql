@@ -61,4 +61,14 @@ Description of `proxysql-consul` configuration fields:
 - `proxysql_admin_password` - password used to login to the ProxySQL admin interface
 
 #Troubleshooting
-+ where to look for proxysql-consul output
+`proxysql-consul` now writes log messages to its output. As it is being called by both ProxySQL and Consul its output goes to the caller's output.
+
+If you get an error while running a `SAVE TO CLUSTER` command in the admin interface look for clues in ProxySQL's log at `/var/lib/proxysql/proxysql.log`.
+
+You can check that configuration is properly stored in Consul by querying it's HTTP API:
+```bash
+curl http://127.0.0.1:8500/v1/kv/proxysql/?recurse
+```
+The data will be base64 encoded but you can decode it using the `base64` utilitary.
+
+If all is fine on the master side but configs don't end up on the other ProxySQL servers have a look at Consul's output too.
