@@ -29,10 +29,6 @@ oldcode/tests/connect_speed
 
 *.swp
 
-# CLion project files
-.idea
-CMakeLists.txt
-
 # CTags
 .tags
 .tags_sorted_by_file
