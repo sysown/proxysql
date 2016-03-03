@@ -159,9 +159,33 @@ def update_proxysql_runtime_config(table, rows):
 
     admin_connection.close()
 
+def update_config():
+    """
+    Processes the updated config from Consul and if valid pushes it to
+    the local ProxySQL instance runtime.
+    """
+
+    updated_config_json = read_consul_data()
+    updated_config = json.loads(updated_config_json)
+
+    # TODO(iprunache) update JSON structure to support multi table configs
+    config_name = udpated_config['config_name']
+    rows = updated_config['rows']
+    _uuid = updated_config['uuid']
+    
+    if not rows:
+        print 'Empty config set for table: %s.' % table
+        return
+    if _uuid == config[CFG_UUID]:
+        print 'Ignoring self update.'
+        return
+    
+    update_proxysql_runtime_config(config_name, rows)
+    print 'Configs updated successfully.'
+
 # TODO(iprunache) rename to read_consul_data and extract data processing to
 # separate method.
-def update_config():
+def read_consul_data():
     """
     Reads all input from stdin that is passed by Consul and extracts the config
     that was modified.
@@ -173,6 +197,9 @@ def update_config():
 
     Values are returned as a JSON array. The actual value content is stored in
     the 'Value' field, base64 encoded.
+
+    Returns the decoded JSON that was the latest to be updated or None if it
+    failed to determine which key was last updated.
     """
     if 'CONSUL_INDEX' not in os.environ:
         print 'Missing consul index on update request'
@@ -187,25 +214,10 @@ def update_config():
            updated_value = value
            break
     if not updated_value:
-        print 'Failed to determine updated config from Consul data'
+        print 'Failed to determine updated key from Consul.'
         exit(1)
 
-    proxysql_config_json = base64.b64decode(updated_value['Value'])
-    proxysql_config = json.loads(proxysql_config_json)
-    # TODO(iprunache) update JSON structure to support multi table configs
-    config_name = proxysql_config['config_name']
-    rows = proxysql_config['rows']
-    _uuid = proxysql_config['uuid']
-    
-    if not rows:
-        print 'Empty config set for table: %s.' % table
-        return
-    if _uuid == config[CFG_UUID]:
-        print 'Ignoring self update.'
-        return
-    
-    update_proxysql_runtime_config(config_name, rows)
-    print 'Configs updated successfully.'
+    return base64.b64decode(updated_value['Value'])
 
 if __name__ == '__main__':
     arguments = docopt(__doc__, version='proxysql-consul 1.0')
@@ -215,5 +227,5 @@ if __name__ == '__main__':
     if arguments['put']:
         put_config_to_consul(arguments['<config-name>'])
     elif arguments['update']:
-        update_config()
+        read_consul_data()
 
