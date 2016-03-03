@@ -2,7 +2,7 @@
 
 """
 Usage:
-  proxysql-consul put <table> [--config-file=<config-file>]
+  proxysql-consul put <config-name> [--config-file=<config-file>]
   proxysql-consul update [--config-file=<config-file>]
   proxysql-consul (-h | --help)
 
@@ -36,7 +36,7 @@ CFG_PROXY_USERNAME = 'proxysql_admin_username'
 CFG_PROXY_PASSWORD = 'proxysql_admin_password'
 
 # Proxysql config types to Consul key mapping
-TABLE_TO_KEY = {
+CONFIG_NAME_TO_KEY = {
         'mysql_servers': 'proxysql/mysql_servers',
         'mysql_query_rules': 'proxysql/mysql_query_rules'
         }
@@ -46,12 +46,12 @@ RUNTIME_TABLE_BY_TABLE = {
         'mysql_query_rules': 'runtime_mysql_query_rules'
         }
 
-SAVE_QUERY_BY_TABLE = {
+SAVE_QUERY_BY_CONFIG_NAME = {
         'mysql_servers': 'SAVE MYSQL SERVERS TO MEMORY',
         'mysql_query_rules': 'SAVE MYSQL QUERY RULES TO MEMORY'
         }
 
-LOAD_QUERY_BY_TABLE = {
+LOAD_QUERY_BY_CONFIG_NAME = {
         'mysql_servers': 'LOAD MYSQL SERVERS FROM MEMORY',
         'mysql_query_rules': 'LOAD MYSQL QUERY RULES FROM MEMORY'
         }
@@ -102,19 +102,20 @@ def read_proxysql_runtime_config(table):
     return rows 
 
 
-def put_config_to_consul(table):
-    if table not in TABLE_TO_KEY:
-        print 'Unknown config table. Exiting.'
+def put_config_to_consul(config_name):
+    if config_name not in CONFIG_NAME_TO_KEY:
+        print 'Unknown config name. Exiting.'
         exit(1)
 
-    rows = read_proxysql_runtime_config(table)
+    rows = read_proxysql_runtime_config(config_name)
     consul_data = {}
-    consul_data['table'] = table
+    # TODO(iprunache) update JSON structure to support multi table configs
+    consul_data['config_name'] = config_name
     consul_data['rows'] = rows
     consul_data['uuid'] = config[CFG_UUID]
     consul_data_json = json.dumps(consul_data)
 
-    key = TABLE_TO_KEY[table]
+    key = CONFIG_NAME_TO_KEY[config_name]
     consul_iface = config[CFG_CONSUL_IFACE]
     consul_port = config[CFG_CONSUL_PORT]
 
@@ -151,14 +152,15 @@ def update_proxysql_runtime_config(table, rows):
     cursor.close()
 
     # commit changes to runtine
-    load_query = LOAD_QUERY_BY_TABLE[table]
+    load_query = LOAD_QUERY_BY_CONFIG_NAME[table]
     cursor = admin_connection.cursor()
     cursor.execute(load_query)
     cursor.close()
 
     admin_connection.close()
 
-
+# TODO(iprunache) rename to read_consul_data and extract data processing to
+# separate method.
 def update_config():
     """
     Reads all input from stdin that is passed by Consul and extracts the config
@@ -190,7 +192,8 @@ def update_config():
 
     proxysql_config_json = base64.b64decode(updated_value['Value'])
     proxysql_config = json.loads(proxysql_config_json)
-    table = proxysql_config['table']
+    # TODO(iprunache) update JSON structure to support multi table configs
+    config_name = proxysql_config['config_name']
     rows = proxysql_config['rows']
     _uuid = proxysql_config['uuid']
     
@@ -201,7 +204,7 @@ def update_config():
         print 'Ignoring self update.'
         return
     
-    update_proxysql_runtime_config(table, rows)
+    update_proxysql_runtime_config(config_name, rows)
     print 'Configs updated successfully.'
 
 if __name__ == '__main__':
@@ -210,7 +213,7 @@ if __name__ == '__main__':
     read_uuid_from_file()
 
     if arguments['put']:
-        put_config_to_consul(arguments['<table>'])
+        put_config_to_consul(arguments['<config-name>'])
     elif arguments['update']:
         update_config()
 
