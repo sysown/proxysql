@@ -50,7 +50,7 @@ Not currently used (planned usage in a future version).
 
 ### `admin-proxysql_consul_script_path`
 
-Defines the path to the proxysql-consul script used for integration with Consul. When commands like `SAVE MYSQL SERVERS TO CLUSTER` are executed, ProxySQL forks a process that executes the script at the path defined by the variable to forward the table contents to Consul.
+Defines the path to the proxysql-consul script used for integration with Consul. When commands like `SAVE MYSQL SERVERS TO CLUSTER` are executed, ProxySQL forks a process that executes the script at the path defined by the variable to forward the table contents to Consul. The default is `/usr/bin/local/proxysql-consul` which is the path where `make install` installs the script.
 
 ### `mysql-commands_stats`
 
