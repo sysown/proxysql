@@ -36,6 +36,42 @@ For integration with ProxySQL a watch needs to be added to Consul's config file:
 
 If you're running ProxySQL with `sudo` you'll also need to start the consul agent with `sudo`.
 
+##### Example Consul configuration files for a two machine setup
+Machine 1 with public IP 192.168.56.2:
+```json
+{
+  "node_name": "consul1",
+  "bind_addr": "192.168.56.2",
+  "data_dir": "/tmp/consul",
+  "server": true,
+  "bootstrap_expect": 1,
+  "retry_join": ["192.168.56.3"],
+  "watches": [
+    {
+      "type": "keyprefix",
+      "prefix": "proxysql/",
+      "handler": "proxysql-consul update"
+    }
+  ]
+}
+```
+Machine 2 with public IP 192.168.56.3:
+```json
+{
+  "node_name": "consul2",
+  "bind_addr": "192.168.56.3",
+  "data_dir": "/tmp/consul",
+  "watches": [
+    {
+      "type": "keyprefix",
+      "prefix": "proxysql/",
+      "handler": "proxysql-consul update"
+    }
+  ]
+}
+```
+
+
 #### proxysql-consul
 Running `sudo make install` to install ProxySQL also installs `proxysql-consul` in `/usr/local/bin` and puts a default `proxysql-consul.cnf` at `/etc/proxysql.cnf`.
 
