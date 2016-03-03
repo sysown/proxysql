@@ -93,7 +93,7 @@ def read_proxysql_runtime_config(table):
             port=config[CFG_PROXY_PORT],
             db='main')
 
-    # read runtime config from memory
+    # read runtime config directly from runtime tables
     cursor = admin_connection.cursor()
     cursor.execute('SELECT * FROM %s' % RUNTIME_TABLE_BY_TABLE[table])
     rows = cursor.fetchall()
