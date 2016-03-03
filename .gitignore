@@ -29,9 +29,6 @@ oldcode/tests/connect_speed
 
 *.swp
 
-# CTags
-.tags
-.tags_sorted_by_file
 
 # SQLITE files
 *.db
