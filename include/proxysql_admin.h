@@ -33,7 +33,8 @@ class ProxySQL_Admin {
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
-		char * admin_version;
+		char *admin_version;
+		char *proxysql_consul_script_path;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -111,7 +112,7 @@ class ProxySQL_Admin {
 	void flush_mysql_users__from_disk_to_memory();
 	void flush_mysql_servers__from_memory_to_disk();
 	void flush_mysql_servers__from_disk_to_memory();
-	void flush_mysql_query_rules__from_memory_to_disk();	
+	void flush_mysql_query_rules__from_memory_to_disk();
 	void flush_mysql_query_rules__from_disk_to_memory();
 	bool save_mysql_query_rules_to_cluster();
 	void load_mysql_servers_to_runtime();
