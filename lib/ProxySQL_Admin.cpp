@@ -3480,31 +3480,31 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 }
 
 
-// Gets a copy of the runtime mysql servers config and passes is to an external script for distribution
-// to other ProxySQL instances. Returns true in case of success and false in case of failure.
+// Triggers configuration propagation to all ProxySQL servers in a cluster for mysql servers. Returns
+// true in case of success.
 bool ProxySQL_Admin::save_mysql_servers_to_cluster() {
-	char *tablename = (char *)"mysql_servers";
-	int status_code = save_config_to_cluster(tablename);
+	char *config_name = (char *)"mysql_servers";
+	int status_code = save_config_to_cluster(config_name);
 	return status_code == 0;
 }
 
-// Gets a copy of the runtime mysql query rules config and passes is to an external script for distribution
-// to other ProxySQL instances. Returns true in case of success and false in case of failure.
+// Triggers configuration propagation to all ProxySQL servers in a cluster for mysql query rules. Returns
+// true in case of success.
 bool ProxySQL_Admin::save_mysql_query_rules_to_cluster() {
-	char *tablename = (char *)"mysql_query_rules";
-	int status_code = save_config_to_cluster(tablename);
+	char *config_name = (char *)"mysql_query_rules";
+	int status_code = save_config_to_cluster(config_name);
 	return status_code == 0;
 }
 
-// Runs external config distribution script passing it the given table name. The script will use the admin
-// interface to read the contents of the table.
-int ProxySQL_Admin::save_config_to_cluster(char *tablename) {
+// Runs external config distribution script passing it the given configuration name. The script will use the
+// admin interface to read the configuration.
+int ProxySQL_Admin::save_config_to_cluster(char *config_name) {
 	pid_t pid = fork();
 	if (pid == 0) {
 		// child
 		errno = 0;
 		char *proxysql_consul_script_path = get_variable((char *)"proxysql_consul_script_path");
-		int exec_status = execlp(proxysql_consul_script_path, proxysql_consul_script_path, "put", tablename, (char *) 0);
+		int exec_status = execlp(proxysql_consul_script_path, proxysql_consul_script_path, "put", config_name, (char *) 0);
 		if (exec_status == -1) {
 			proxy_error("Exec failed for config save script with errno: %d.\n", errno);
 		}
