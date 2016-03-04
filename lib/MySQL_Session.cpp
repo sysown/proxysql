@@ -1721,8 +1721,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint32_t resbuf=0;
 		unsigned char *aa=GloQC->get(
 			client_myds->myconn->userinfo->hash,
-			(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
-			client_myds->mysql_real_query.QuerySize ,
+//			(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
+//			client_myds->mysql_real_query.QuerySize ,
+			(const unsigned char *)CurrentQuery.QueryPointer ,
+			CurrentQuery.QueryLength ,
 			&resbuf ,
 			thread->curtime/1000
 		);
@@ -1737,6 +1739,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 //			CurrentQuery.end();
 //			GloQPro->delete_QP_out(qpo);
 //			qpo=NULL;
+			if (transaction_persistent_hostgroup == -1) {
+				// not active, we can change it
+				current_hostgroup=-1;
+			}
 			RequestEnd(NULL);
 			return true;
 		}
@@ -1858,8 +1864,10 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 					while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
 					GloQC->set(
 						client_myds->myconn->userinfo->hash ,
-						(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
-						client_myds->mysql_real_query.QuerySize ,
+//						(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
+//						client_myds->mysql_real_query.QuerySize ,
+						(const unsigned char *)CurrentQuery.QueryPointer,
+						CurrentQuery.QueryLength,
 						aa ,
 						client_myds->resultset_length ,
 						thread->curtime/1000 ,
