@@ -434,6 +434,19 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	return true;
 }
 
+// This method translates a 'SET variable=value' command into an equivalent UPDATE.
+//
+// It modifies the original query.
+bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
+
+	// TODO(iprunache) - parse command to extract variables and values (,=)
+	// TODO(iprunache) - build UPDATE command
+	// TODO(iprunache) - run UPDATE command
+
+	return true;
+}
+
 /* Note:
  * This function can modify the original query
  */
@@ -1420,6 +1433,13 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
 	}
+
+	if (!strncasecmp("SET ", query_no_space, 4)) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received SET\n");
+		run_query = admin_handler_command_set(query_no_space, query_no_space_length, sess, pa, &query, &query_length);
+		goto __run_query;
+	}
+
 	if(!strncasecmp("CHECKSUM ", query_no_space, 9)){
 		proxy_debug(PROXYSQL_DEBUG_ADMIN, 4, "Received CHECKSUM command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
