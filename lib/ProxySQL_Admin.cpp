@@ -434,17 +434,32 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	return true;
 }
 
-// This method translates a 'SET variable=value' command into an equivalent UPDATE.
+// This method translates a 'SET variable=value' command into an equivalent UPDATE. It doesn't yes support setting
+// multiple variables at once.
 //
 // It modifies the original query.
 bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
+	proxy_info("Received command %s\n", query_no_space);
 
-	// TODO(iprunache) - parse command to extract variables and values (,=)
+	// Get a pointer to the beginnig of var=value entry
+	char *set_entry = query_no_space + strlen("SET ");
+
+	char *variable;
+	char *value;
+	c_split_2(set_entry, "=", &variable, &value);
+
+	proxy_info("Set variable '%s' to value '%s'\n", variable, value);
+	// TODO(iprunache) - validate variables;
+	// TODO(iprunache) - parse variables to extract table
 	// TODO(iprunache) - build UPDATE command
 	// TODO(iprunache) - run UPDATE command
+	// TODO(iprunache) - cleanup debug prints
 
-	return true;
+	free(variable);
+	free(value);
+	SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+	return false;
 }
 
 /* Note:
