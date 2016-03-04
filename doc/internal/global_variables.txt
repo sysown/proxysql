@@ -5,6 +5,7 @@ either very simple, or managed by a simple API.
 
 Trying to make a standard API, the proposed functions are:
   virtual char **get_variables_list() {return NULL;}
+  virtual bool has_variable(char *name) {return false;}
   virtual char *get_variable(char *name) {return NULL;};
   virtual bool set_variable(char *name, char *value) {return false;};
   virtual void commit() {};
@@ -14,6 +15,8 @@ Trying to make a standard API, the proposed functions are:
 In order:
 - get_variables_list() returns an array of pointer to variables name, where the
   last element is NULL;
+- has_variable() returns true if the given name is the name of one of the module
+  variables;
 - get_variable() returns the value of a specific variable. If the variable was
   not previously set, the module should return the default value. If the
   variable doesn't exist, NULL should be returned;

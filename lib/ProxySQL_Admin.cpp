@@ -212,7 +212,7 @@ class admin_main_loop_listeners {
 		}
 		return ifaces;
 	}
-	
+
 
 	public:
 	int nfds;
@@ -445,19 +445,37 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 	// Get a pointer to the beginnig of var=value entry
 	char *set_entry = query_no_space + strlen("SET ");
 
-	char *variable;
-	char *value;
-	c_split_2(set_entry, "=", &variable, &value);
+	char *var_name;
+	char *var_value;
+	c_split_2(set_entry, "=", &var_name, &var_value);
 
-	proxy_info("Set variable '%s' to value '%s'\n", variable, value);
-	// TODO(iprunache) - validate variables;
-	// TODO(iprunache) - parse variables to extract table
+	proxy_info("Set variable '%s' to value '%s'\n", var_name, var_value);
+
+	char *t_var_name = trim_spaces_in_place(var_name);
+
+	// Check if the command tries to set a non-existing variable.
+	if (strlen(t_var_name) > 6 && !strncmp(t_var_name, "mysql-", 6)) {
+		// Strip the var type prefix since it's not stored internally.
+		if (!GloMTH->has_variable(t_var_name + 6)) {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *) "Unknown mysql variable.");
+			return false;
+		}
+	} else if (strlen(t_var_name) > 6 && !strncmp(t_var_name, "admin-", 6)) {
+		// Strip the var type prefix since it's not stored internally.
+		if (!SPA->has_variable(t_var_name + 6)) {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *) "Unknown admin variable.");
+			return false;
+		}
+	} else {
+		SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *) "Unknown variable.");
+		return false;
+	}
 	// TODO(iprunache) - build UPDATE command
 	// TODO(iprunache) - run UPDATE command
 	// TODO(iprunache) - cleanup debug prints
 
-	free(variable);
-	free(value);
+	free(var_name);
+	free(var_value);
 	SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 	return false;
 }
@@ -1267,7 +1285,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
 	query[query_length-1]=0;
 
-	char *query_no_space=(char *)l_alloc(query_length);	
+	char *query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
 
 	unsigned int query_no_space_length=remove_spaces(query_no_space);
@@ -1305,16 +1323,16 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 	if (sess->stats==false) {
-		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) { 
+		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
 			pthread_mutex_lock(&admin_mutex);
 			run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
 			pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
-		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) { 
+		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
-			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);	
+			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);
 			goto __run_query;
 		}
 		if ((query_no_space_length>16) && ( (!strncasecmp("KILL CONNECTION ", query_no_space, 16)) || (!strncasecmp("KILL CONNECTION ", query_no_space, 16))) ) {
@@ -1826,7 +1844,7 @@ void *child_mysql(void *arg) {
 	MySQL_Data_Stream *myds=sess->client_myds;
 
 	fds[0].fd=client;
-	fds[0].revents=0;	
+	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
@@ -1834,14 +1852,14 @@ void *child_mysql(void *arg) {
 
 	unsigned long oldtime=monotonic_time();
 	unsigned long curtime=monotonic_time();
-	
+
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
-			fds[0].events=POLLIN|POLLOUT;	
+			fds[0].events=POLLIN|POLLOUT;
 		} else {
-			fds[0].events=POLLIN;	
+			fds[0].events=POLLIN;
 		}
-		fds[0].revents=0;	
+		fds[0].revents=0;
 		//rc=poll(fds,nfds,2000);
 		rc=poll(fds,nfds,__sync_fetch_and_add(&__admin_refresh_interval,0));
 		{
@@ -1877,13 +1895,13 @@ __exit_child_mysql:
 	//delete sess;
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
-	delete mysql_thr;	
-//	l_mem_destroy(__thr_sfp);	
+	delete mysql_thr;
+//	l_mem_destroy(__thr_sfp);
 	return NULL;
 }
 
 void* child_telnet(void* arg)
-{ 
+{
 	int bytes_read;
 	//int i;
 //	struct timeval tv;
@@ -1896,7 +1914,7 @@ void* child_telnet(void* arg)
 	memset(line,0,LINESIZE+1);
 	while ((strncmp(line, "quit", 4) != 0) && glovars.shutdown==0) {
 		bytes_read = recv(client, line, LINESIZE, 0);
-		  if (bytes_read==-1) { 
+		  if (bytes_read==-1) {
 			 break;
 			 }
 		  char *eow = strchr(line, '\n');
@@ -1914,7 +1932,7 @@ void* child_telnet(void* arg)
 }
 
 void* child_telnet_also(void* arg)
-{ 
+{
 	int bytes_read;
 	//int i;
 //	struct timeval tv;
@@ -1927,7 +1945,7 @@ void* child_telnet_also(void* arg)
 	memset(line,0,LINESIZE+1);
 	while ((strncmp(line, "quit", 4) != 0) && glovars.shutdown==0) {
 		bytes_read = recv(client, line, LINESIZE, 0);
-		  if (bytes_read==-1) { 
+		  if (bytes_read==-1) {
 			 break;
 			 }
 		  char *eow = strchr(line, '\n');
@@ -1961,7 +1979,7 @@ static void * admin_main_loop(void *arg)
 	volatile int *shutdown=((struct _main_args *)arg)->shutdown;
 	char *socket_names[MAX_ADMIN_LISTENERS];
 	for (i=0;i<MAX_ADMIN_LISTENERS;i++) { socket_names[i]=NULL; }
-	pthread_attr_t attr; 
+	pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   pthread_attr_setstacksize (&attr, mystacksize);
@@ -2041,9 +2059,9 @@ __end_while_pool:
 //				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
 //				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=2; socket_names[nfds]=strdup(sn); nfds++; }
 //			}
-			S_amll.wrunlock();	
+			S_amll.wrunlock();
 		}
-		
+
 	}
 	//if (__sync_add_and_fetch(shutdown,0)==0) __sync_add_and_fetch(shutdown,1);
 	for (i=0; i<nfds; i++) {
@@ -2122,7 +2140,7 @@ bool ProxySQL_Admin::init() {
 	main_poll_fds=(struct pollfd *)malloc(sizeof(struct pollfd)*MAX_ADMIN_LISTENERS);
 	main_poll_nfds=0;
 
-	pthread_attr_t attr; 
+	pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setstacksize (&attr, mystacksize);
 
@@ -2184,7 +2202,7 @@ bool ProxySQL_Admin::init() {
 
 	dump_mysql_collations();
 
-#ifdef DEBUG	
+#ifdef DEBUG
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
 #endif /* DEBUG */
 
@@ -2211,16 +2229,16 @@ bool ProxySQL_Admin::init() {
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial) {
 		if (GloVars.configfile_open) {
-			if (GloVars.confFile->cfg) { 
- 				Read_MySQL_Servers_from_configfile();	
+			if (GloVars.confFile->cfg) {
+ 				Read_MySQL_Servers_from_configfile();
 				Read_Global_Variables_from_configfile("admin");
 				Read_Global_Variables_from_configfile("mysql");
 				Read_MySQL_Users_from_configfile();
 				Read_MySQL_Query_Rules_from_configfile();
 				__insert_or_replace_disktable_select_maintable();
 			} else {
-				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {		
- 					Read_MySQL_Servers_from_configfile();	
+				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {
+ 					Read_MySQL_Servers_from_configfile();
 					Read_MySQL_Users_from_configfile();
 					Read_MySQL_Query_Rules_from_configfile();
 					Read_Global_Variables_from_configfile("admin");
@@ -2237,7 +2255,7 @@ bool ProxySQL_Admin::init() {
 	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
 	S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);
 
-	
+
 
 //	pthread_t admin_thr;
 	struct _main_args *arg=(struct _main_args *)malloc(sizeof(struct _main_args));
@@ -2488,7 +2506,7 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
   }
   int l=strlen(a)+200;
 	GloMTH->wrlock();
-	char **varnames=GloMTH->get_variables_list();	
+	char **varnames=GloMTH->get_variables_list();
   char *query=(char *)malloc(l);
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMTH->get_variable(varnames[i]);
@@ -2512,6 +2530,19 @@ char **ProxySQL_Admin::get_variables_list() {
 		ret[i]=(i==l-1 ? NULL : strdup(admin_variables_names[i]));
 	}
 	return ret;
+}
+
+
+// Returns true if the given name is the name of an existing admin variable
+bool ProxySQL_Admin::has_variable(char *name) {
+	size_t no_vars = sizeof(admin_variables_names) / sizeof(char *);
+	for (unsigned int i = 0; i < no_vars, admin_variables_names[i] != NULL; ++i) {
+		size_t var_len = strlen(admin_variables_names[i]);
+		if (strlen(name) == var_len && !strncmp(name, admin_variables_names[i], var_len)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 char * ProxySQL_Admin::get_variable(char *name) {
@@ -3007,7 +3038,7 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
   }
   int l=strlen(a)+200;
 
-	char **varnames=get_variables_list();	
+	char **varnames=get_variables_list();
   char *query=(char *)malloc(l);
 	for (int i=0; varnames[i]; i++) {
 		char *val=get_variable(varnames[i]);
