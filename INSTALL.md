@@ -35,8 +35,6 @@ Compilation time should be around a couple of minutes for the first time around.
 
 Once you have installed it, please take a look at the document about [running and operating the proxy](RUNNING.md).
 
-Note that running ProxySQL integrations with external services like Consul **will require installing additional software**; this is detailed in the [running and operating the proxy](RUNNING.md) document. 
-
 Installing requirements for integrations
 ----------------------------------------
 #### Consul integration requirements
