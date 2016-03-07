@@ -183,7 +183,7 @@ Currently there are 2 classes of global variables, although more classes are in 
     * `admin-admin_credentials` - double-colon separated username and password for accessing the admin interface with read-write rights
     * `admin-mysql_ifaces` - TCP hostname and port on which to listen for incoming connections for the admin interface
 
-For more information about particular variables, please see the dedicated section on ![global variables][http://todo]
+For more information about particular variables, please see the dedicated section on [global variables](global_variables.md)
 
 # `mysql_collations`
 
