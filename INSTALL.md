@@ -39,4 +39,12 @@ Note that running ProxySQL integrations with external services like Consul **wil
 
 Installing requirements for integrations
 ----------------------------------------
-TODO(iprunache) - add requirements for Consul
+#### Consul integration requirements
+ProxySQL integrates with Consul to allow syncing of configuration in a cluster. Install requirements for this only if you plan to use the feature, ProxySQL will run fine without this if the feature is not used.
+
+ProxySQL integrates with Consul through a python script. The requirements are documented in [Consul's integration requirements.txt](integrations/consul/requirements.txt).
+
+To install, run:
+```bash
+pip install -r integrations/consul/requirements.txt
+```
