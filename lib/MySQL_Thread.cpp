@@ -1176,7 +1176,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 }
 
 // Returns true if the given name is the name of an existing mysql variable
-bool MySQL_Threads_Handler::has_variable(char *name) {
+bool MySQL_Threads_Handler::has_variable(const char *name) {
 	size_t no_vars = sizeof(mysql_thread_variables_names) / sizeof(char *);
 	for (unsigned int i = 0; i < no_vars, mysql_thread_variables_names[i] != NULL; ++i) {
 		size_t var_len = strlen(mysql_thread_variables_names[i]);

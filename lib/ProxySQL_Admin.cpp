@@ -434,6 +434,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	return true;
 }
 
+// Returns true if the given name is either a know mysql or admin global variable.
+bool is_valid_global_variable(const char *var_name) {
+	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
+		return true;
+	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
 // This method translates a 'SET variable=value' command into an equivalent UPDATE. It doesn't yes support setting
 // multiple variables at once.
 //
@@ -442,42 +453,41 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 	proxy_info("Received command %s\n", query_no_space);
 
-	// Get a pointer to the beginnig of var=value entry
+	// Get a pointer to the beginnig of var=value entry and split to get var name and value
 	char *set_entry = query_no_space + strlen("SET ");
-
-	char *var_name;
+	char *untrimmed_var_name;
 	char *var_value;
-	c_split_2(set_entry, "=", &var_name, &var_value);
+	c_split_2(set_entry, "=", &untrimmed_var_name, &var_value);
 
-	proxy_info("Set variable '%s' to value '%s'\n", var_name, var_value);
+	// Trim spaces from var name to allow writing like 'var = value'
+	char *var_name = trim_spaces_in_place(untrimmed_var_name);
 
-	char *t_var_name = trim_spaces_in_place(var_name);
-
+	bool run_query = false;
 	// Check if the command tries to set a non-existing variable.
-	if (strlen(t_var_name) > 6 && !strncmp(t_var_name, "mysql-", 6)) {
-		// Strip the var type prefix since it's not stored internally.
-		if (!GloMTH->has_variable(t_var_name + 6)) {
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *) "Unknown mysql variable.");
-			return false;
-		}
-	} else if (strlen(t_var_name) > 6 && !strncmp(t_var_name, "admin-", 6)) {
-		// Strip the var type prefix since it's not stored internally.
-		if (!SPA->has_variable(t_var_name + 6)) {
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *) "Unknown admin variable.");
-			return false;
-		}
+	if (!is_valid_global_variable(var_name)) {
+		char *err_msg_fmt = (char *) "Unknown global variable: '%s'.";
+		size_t buff_len = strlen(err_msg_fmt) + strlen(var_name) + 1;
+		char *buff = (char *) malloc(buff_len);
+		snprintf(buff, buff_len, err_msg_fmt, var_name);
+		SPA->send_MySQL_ERR(&sess->client_myds->myprot, buff);
+		free(buff);
+		run_query = false;
 	} else {
-		SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *) "Unknown variable.");
-		return false;
+		const char *update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+		// Computed length is more than needed since it also counts the format modifiers (%s).
+		size_t query_len = strlen(update_format) + strlen(var_name) + strlen(var_value) + 1;
+		char *query = (char *)l_alloc(query_len);
+		snprintf(query, query_len, update_format, var_value, var_name);
+
+		run_query = true;
+		l_free(*ql,*q);
+		*q = query;
+		*ql = strlen(*q) + 1;
 	}
-	// TODO(iprunache) - build UPDATE command
-	// TODO(iprunache) - run UPDATE command
-	// TODO(iprunache) - cleanup debug prints
 
 	free(var_name);
 	free(var_value);
-	SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-	return false;
+	return run_query;
 }
 
 /* Note:
@@ -2534,7 +2544,7 @@ char **ProxySQL_Admin::get_variables_list() {
 
 
 // Returns true if the given name is the name of an existing admin variable
-bool ProxySQL_Admin::has_variable(char *name) {
+bool ProxySQL_Admin::has_variable(const char *name) {
 	size_t no_vars = sizeof(admin_variables_names) / sizeof(char *);
 	for (unsigned int i = 0; i < no_vars, admin_variables_names[i] != NULL; ++i) {
 		size_t var_len = strlen(admin_variables_names[i]);
