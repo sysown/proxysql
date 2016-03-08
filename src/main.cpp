@@ -1,5 +1,6 @@
 #include <iostream>
 #include <thread>
+#include "AlertRouter.h"
 #include "btree_map.h"
 #include "proxysql.h"
 
@@ -114,6 +115,7 @@ MySQL_Authentication *GloMyAuth;
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH;
+AlertRouter *GloAlertRouter;
 
 MySQL_Monitor *GloMyMon;
 std::thread *MyMon_thread;
@@ -225,6 +227,10 @@ void ProxySQL_Main_init_Admin_module() {
 	GloAdmin->print_version();
 }
 
+void ProxySQL_Main_init_AlertRouter() {
+	GloAlertRouter = new AlertRouter();
+}
+
 void ProxySQL_Main_init_Auth_module() {
 	GloMyAuth = new MySQL_Authentication();
 	GloMyAuth->print_version();
@@ -324,6 +330,11 @@ void ProxySQL_Main_shutdown_all_modules() {
 		GloHTTP=NULL;
 	}
 
+	if (GloAlertRouter) {
+		delete GloAlertRouter;
+		GloAlertRouter = NULL;
+	}
+
 	delete GloAdmin;
 	delete MyHGM;
 }
@@ -349,14 +360,12 @@ void ProxySQL_Main_init() {
 }
 
 
-
-
-
-
 void ProxySQL_Main_init_phase2___not_started() {
 	ProxySQL_Main_init_main_modules();
 	ProxySQL_Main_init_Admin_module();
 	GloMTH->print_version();
+
+	ProxySQL_Main_init_AlertRouter();
 
 	if (GloVars.configfile_open) {
 		GloVars.confFile->CloseFile();
