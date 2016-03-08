@@ -4,6 +4,8 @@
 
 extern ProxySQL_Admin *GloAdmin;
 
+// TODO(iprunache) Push alerts in separate threads to prevent blocking the threads that generated the alerts.
+
 // Checks which alert service integrations are enabled and sends the given message as an alert
 // to all enabled services.
 void AlertRouter::pushAlert(const char *message) {
