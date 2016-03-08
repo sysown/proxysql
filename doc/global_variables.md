@@ -48,6 +48,18 @@ Not currently used (planned usage in a future version).
 
 Not currently used (planned usage in a future version).
 
+### `admin-enable_ops_genie_integration`
+
+Enables integration with [OpsGenie](www.opsgenie.com) so that ProxySQL will push critical alerts to OpsGenie.
+
+### `admin-ops_geni_key`
+
+OpsGenie apiKey needed to authenticate when posting alerts.
+
+### `admin-ops_genie_recipient`
+
+Set this to the email address of the recipient for the alert.
+
 ### `mysql-commands_stats`
 
 Enable per-command MySQL query statistics. A command is a type of SQL query that is being executed. Some examples are: SELECT, INSERT or ALTER TABLE. See the `stats_mysql_commands_counters` section in the [admin tables documentation](https://github.com/sysown/proxysql-0.2/blob/master/doc/admin_tables.md#stats_mysql_commands_counters) in order to see more details about what kind of statistics are gathered.
