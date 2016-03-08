@@ -23,10 +23,7 @@ void free_response(http_response *response) {
 
 static void ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
     struct http_message *hm = (struct http_message *) ev_data;
-
     struct http_client_data *client_data = (http_client_data *) nc->mgr->user_data;
-
-    printf("Event type: %d\n", ev);
 
     switch (ev) {
         case MG_EV_CONNECT:
