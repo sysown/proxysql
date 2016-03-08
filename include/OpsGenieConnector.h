@@ -11,7 +11,7 @@ private:
     const char *recipient;
 public:
     OpsGenieConnector(const char *apiKey, const char *recipient);
-    int createAlert(const char *);
+    int pushAlert(const char *message);
 };
 
 

@@ -8,7 +8,7 @@ OpsGenieConnector::OpsGenieConnector(const char *apiKey, const char *recipient) 
     this->recipient = recipient;
 }
 
-int OpsGenieConnector::createAlert(const char *message) {
+int OpsGenieConnector::pushAlert(const char *message) {
     const char *json_format = "{\"message\":\"%s\", \"apiKey\": \"%s\", \"recipients\": [\"%s\"]}";
     char *json = (char *) malloc(strlen(json_format)
                                  + strlen(message)

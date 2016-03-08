@@ -7,7 +7,7 @@
 // integrations.
 class AlertRouter {
 public:
-    void createAlert(const char *message);
+    void pushAlert(const char *message);
 };
 
 #endif //PROXYSQL_ALERTROUTER_H
