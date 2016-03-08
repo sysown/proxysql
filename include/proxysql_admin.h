@@ -93,8 +93,12 @@ class ProxySQL_Admin {
 	SQLite3DB *monitordb;	// in memory
 	void print_version();
 	bool init();
+	// variable accessors
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
+	bool get_enable_ops_genie_integration() {return variables.enable_ops_genie_integration; }
+	const char *get_ops_genie_key() { return variables.ops_genie_key; }
+	const char *get_ops_genie_recipient() { return variables.ops_genie_recipient; }
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();
