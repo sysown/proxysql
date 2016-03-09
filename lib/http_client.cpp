@@ -1,6 +1,4 @@
 #include "proxysql.h"
-#undef INVALID_SOCKET
-#undef closesocket
 #include "http_client.h"
 
 // Copies the body and status code from a mongoose http_message. It allocates

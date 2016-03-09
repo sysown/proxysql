@@ -1,6 +1,8 @@
 #ifndef PROXYSQL_HTTP_CLIENT_H
 #define PROXYSQL_HTTP_CLIENT_H
 
+#undef INVALID_SOCKET
+#undef closesocket
 #include "mongoose.h"
 
 struct http_response {
