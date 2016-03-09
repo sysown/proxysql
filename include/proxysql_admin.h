@@ -37,6 +37,7 @@ class ProxySQL_Admin {
 		bool enable_ops_genie_integration;
 		char *ops_genie_key;
 		char *ops_genie_recipient;
+		int min_time_between_alerts_sec;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -99,6 +100,7 @@ class ProxySQL_Admin {
 	bool get_enable_ops_genie_integration() {return variables.enable_ops_genie_integration; }
 	const char *get_ops_genie_key() { return variables.ops_genie_key; }
 	const char *get_ops_genie_recipient() { return variables.ops_genie_recipient; }
+	int get_min_time_between_alerts_sec() { return variables.min_time_between_alerts_sec; }
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();

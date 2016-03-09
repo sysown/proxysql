@@ -108,6 +108,7 @@ static char * admin_variables_names[]= {
 	(char *)"enable_ops_genie_integration",
 	(char *)"ops_genie_key",
 	(char *)"ops_genie_recipient",
+	(char *)"min_time_between_alerts_sec",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -2061,6 +2062,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.enable_ops_genie_integration = false;
 	variables.ops_genie_key = NULL;
 	variables.ops_genie_recipient = NULL;
+	variables.min_time_between_alerts_sec = 300;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -2507,6 +2509,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 	if (!strcasecmp(name,"ops_genie_key")) return s_strdup(variables.ops_genie_key);
 	if (!strcasecmp(name,"ops_genie_recipient")) return s_strdup(variables.ops_genie_recipient);
+	if (!strcasecmp(name,"min_time_between_alerts_sec")) {
+		sprintf(intbuf,"%d",variables.min_time_between_alerts_sec);
+		return strdup(intbuf);
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -2722,6 +2728,11 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name, "min_time_between_alerts_sec")) {
+		int intv = atoi(value);
+		variables.min_time_between_alerts_sec=intv;
+		return true;
 	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
