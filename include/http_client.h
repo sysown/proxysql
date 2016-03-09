@@ -1,7 +1,7 @@
 #ifndef PROXYSQL_HTTP_CLIENT_H
 #define PROXYSQL_HTTP_CLIENT_H
 
-#include <mongoose.h>
+#include "mongoose.h"
 
 struct http_response {
     int status_code;

@@ -1,6 +1,7 @@
 #include "AlertRouter.h"
-#include "proxysql_admin.h"
 #include "OpsGenieConnector.h"
+#include "proxysql.h"
+#include "cpp.h"
 
 extern ProxySQL_Admin *GloAdmin;
 
