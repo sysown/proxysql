@@ -1,3 +1,4 @@
+#include "proxysql.h"
 #include "http_client.h"
 #include "OpsGenieConnector.h"
 
@@ -15,6 +16,9 @@ int OpsGenieConnector::pushAlert(const char *message) {
 
     if (response) {
         int r_val = response->status_code == 200;
+        if (!r_val && response->body) {
+            proxy_error("Failed to push alert to OpsGenie: %s", response->body);
+        }
         free(response);
         return r_val;
     }
