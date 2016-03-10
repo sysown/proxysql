@@ -1,3 +1,12 @@
+/*
+ * This is a thin wrapper over mongoose's http client functionality. It provides a simple
+ * interface to make http calls and abstracts the handling of mongoose events required to
+ * do the call.
+ *
+ * We're using mongoose as a http client instead of a more full featured client like libcurl
+ * since mongoose was already part of the project to be used as an HTTP server.
+ */
+
 #ifndef PROXYSQL_HTTP_CLIENT_H
 #define PROXYSQL_HTTP_CLIENT_H
 
