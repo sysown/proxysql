@@ -47,10 +47,6 @@ static void ev_handler(struct mg_connection *nc, int ev, void *ev_data) {
     }
 }
 
-http_response * http_get(const char *url, const char *extra_headers) {
-    return nullptr;
-}
-
 // Does a HTTP post using mongoose API and returns the response status and body if all goes
 // fine. Returns NULL in case of error.
 //
