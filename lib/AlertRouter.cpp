@@ -14,12 +14,12 @@ AlertRouter::AlertRouter() {
 }
 
 void AlertRouter::pushAlertToOpsGenie(const char * message) {
-    if (!GloAdmin->get_ops_genie_api_key() || !GloAdmin->get_ops_genie_recipients()) {
-        proxy_error("You need to set both ops_genie_api_key and ops_genie_recipients to enable integration with OpsGenei");
+    if (!GloAdmin->get_ops_genie_api_key()) {
+        proxy_error("You need to set ops_genie_api_key to enable integration with OpsGenie");
         return;
     }
 
-    OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_api_key(), GloAdmin->get_ops_genie_recipients());
+    OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_api_key());
     opsGenieConnector.pushAlert(message);
 }
 

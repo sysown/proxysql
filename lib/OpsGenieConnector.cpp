@@ -4,14 +4,13 @@
 
 const char *OpsGenieConnector::apiUrl = "https://api.opsgenie.com/v1/json/alert";
 
-OpsGenieConnector::OpsGenieConnector(const char *apiKey, const char *recipient) {
+OpsGenieConnector::OpsGenieConnector(const char *apiKey) {
     this->apiKey = apiKey;
-    this->recipient = recipient;
 }
 
 int OpsGenieConnector::pushAlert(const char *message) {
     char json[1000];
-    json_emit(json, 1000, "{s:s, s:s, s:[s]}", "message", message, "apiKey", apiKey, "recipients", recipient);
+    json_emit(json, 1000, "{s:s, s:s}", "message", message, "apiKey", apiKey);
     http_response *response = http_post(this->apiUrl, "Content-Type: application/json\r\n", json);
 
     if (!response) {

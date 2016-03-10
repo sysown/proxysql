@@ -8,9 +8,8 @@ class OpsGenieConnector : public AlertServiceConnector {
 private:
     static const char *apiUrl;
     const char *apiKey;
-    const char *recipient;
 public:
-    OpsGenieConnector(const char *apiKey, const char *recipient);
+    OpsGenieConnector(const char *apiKey);
     int pushAlert(const char *message);
 };
 
