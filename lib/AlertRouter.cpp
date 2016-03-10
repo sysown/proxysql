@@ -13,6 +13,16 @@ AlertRouter::AlertRouter() {
     lastPushTime = time(NULL) - GloAdmin->get_min_time_between_alerts_sec() - 1;
 }
 
+void AlertRouter::pushAlertToOpsGenie(const char * message) {
+    if (!GloAdmin->get_ops_genie_api_key() || !GloAdmin->get_ops_genie_recipients()) {
+        proxy_error("You need to set both ops_genie_api_key and ops_genie_recipients to enable integration with OpsGenei");
+        return;
+    }
+
+    OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_api_key(), GloAdmin->get_ops_genie_recipients());
+    opsGenieConnector.pushAlert(message);
+}
+
 // Checks which alert service integrations are enabled and sends the given message as an alert
 // to all enabled services.
 void AlertRouter::pushAlert(const char *message) {
@@ -26,17 +36,9 @@ void AlertRouter::pushAlert(const char *message) {
     }
 
     if (GloAdmin->get_enable_ops_genie_integration()) {
-        if (!GloAdmin->get_ops_genie_api_key() || !GloAdmin->get_ops_genie_recipients()) {
-            proxy_error("You need to set both ops_genie_api_key and ops_genie_recipients to enable integration with OpsGenei");
-        }
-
-        OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_api_key(), GloAdmin->get_ops_genie_recipients());
-        int ret = opsGenieConnector.pushAlert(message);
-        if (!ret) {
-            proxy_error("Failed to send alert to OpsGenie. Alert message: %s", message);
-        } else {
-            lastPushTime = time(NULL);
-        }
+        pushAlertToOpsGenie(message);
     }
+    lastPushTime = time(NULL);
 }
+
 

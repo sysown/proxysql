@@ -14,6 +14,7 @@
 class AlertRouter {
 private:
     time_t lastPushTime;
+    void pushAlertToOpsGenie(const char * message);
 public:
     AlertRouter();
     void pushAlert(const char *message);
