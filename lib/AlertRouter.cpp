@@ -26,11 +26,11 @@ void AlertRouter::pushAlert(const char *message) {
     }
 
     if (GloAdmin->get_enable_ops_genie_integration()) {
-        if (!GloAdmin->get_ops_genie_key() || !GloAdmin->get_ops_genie_recipient()) {
-            proxy_error("You need to set both ops_genie_key and ops_genie_recipient to enable integration with OpsGenei");
+        if (!GloAdmin->get_ops_genie_key() || !GloAdmin->get_ops_genie_recipients()) {
+            proxy_error("You need to set both ops_genie_key and ops_genie_recipients to enable integration with OpsGenei");
         }
 
-        OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_key(), GloAdmin->get_ops_genie_recipient());
+        OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_key(), GloAdmin->get_ops_genie_recipients());
         int ret = opsGenieConnector.pushAlert(message);
         if (!ret) {
             proxy_error("Failed to send alert to OpsGenie. Alert message: %s", message);

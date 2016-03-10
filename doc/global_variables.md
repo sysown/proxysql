@@ -56,9 +56,9 @@ Enables integration with [OpsGenie](www.opsgenie.com) so that ProxySQL will push
 
 OpsGenie apiKey needed to authenticate when posting alerts.
 
-### `admin-ops_genie_recipient`
+### `admin-ops_genie_recipients`
 
-Set this to the email address of the recipient for the alert.
+This configures which OpsGenie users, groups, escalations or schedules configured for the OpsGenie account with `admin-ops_genie_key` API key will receive the alert. The default is `all`.
 
 ### `admin-min_time_between_alerts_sec`
 
