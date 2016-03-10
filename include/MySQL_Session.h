@@ -94,6 +94,7 @@ class MySQL_Session
 	enum session_status status;
 	int current_hostgroup;
 	int default_hostgroup;
+	int mirror_hostgroup;
 	int active_transactions;
 	int autocommit_on_hostgroup;
 	char * default_schema;

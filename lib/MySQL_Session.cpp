@@ -674,10 +674,11 @@ __get_pkts_from_client:
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
 									if (rc_break==true) { break; }
-
+									if (mirror==true) {
+										default_hostgroup=mirror_hostgroup;
+									}
 									if (mirror==false) {
-										if (pkt.size < 1000000 && CurrentQuery.is_select_NOT_for_update()==true) {
-											// this is a prototype for creating a mirror, only for SELECT
+										if (qpo->mirror_hostgroup >= 0 && pkt.size < 15*1024*1024 ) {
 											MySQL_Session *newsess=new MySQL_Session();
 											newsess->client_myds = new MySQL_Data_Stream();
 											newsess->client_myds->DSS=STATE_SLEEP;
@@ -691,7 +692,7 @@ __get_pkts_from_client:
 											newsess->client_myds->attach_connection(myconn);
 											newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
 											newsess->to_process=1;
-											newsess->default_hostgroup=default_hostgroup;
+											newsess->mirror_hostgroup=qpo->mirror_hostgroup; // in the new session we copy the mirror hostgroup
 											newsess->default_schema=strdup(default_schema);
 											newsess->mirror=true;
 											newsess->mirrorPkt.size=pkt.size;
@@ -1772,6 +1773,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin((unsigned char *)pkt->ptr,pkt->size,true);
 		delete qpo->new_query;
+	}
+	if (mirror==true) { // for mirror session we exit here
+		current_hostgroup=mirror_hostgroup;
+		return false;
 	}
 	if (qpo->cache_ttl>0) {
 		uint32_t resbuf=0;
