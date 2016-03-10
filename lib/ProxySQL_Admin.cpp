@@ -106,7 +106,7 @@ static char * admin_variables_names[]= {
 	(char *)"read_only",
 	(char *)"version",
 	(char *)"enable_ops_genie_integration",
-	(char *)"ops_genie_key",
+	(char *)"ops_genie_api_key",
 	(char *)"ops_genie_recipients",
 	(char *)"min_time_between_alerts_sec",
 #ifdef DEBUG
@@ -2060,7 +2060,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 	variables.admin_version=(char *)PROXYSQL_VERSION;
 	variables.enable_ops_genie_integration = false;
-	variables.ops_genie_key = NULL;
+	variables.ops_genie_api_key = NULL;
 	variables.ops_genie_recipients = strdup("all");
 	variables.min_time_between_alerts_sec = 300;
 #ifdef DEBUG
@@ -2507,7 +2507,7 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name, "enable_ops_genie_integration")) {
 		return strdup((variables.enable_ops_genie_integration ? "true" : "false"));
 	}
-	if (!strcasecmp(name,"ops_genie_key")) return s_strdup(variables.ops_genie_key);
+	if (!strcasecmp(name,"ops_genie_api_key")) return s_strdup(variables.ops_genie_api_key);
 	if (!strcasecmp(name,"ops_genie_recipients")) return s_strdup(variables.ops_genie_recipients);
 	if (!strcasecmp(name,"min_time_between_alerts_sec")) {
 		sprintf(intbuf,"%d",variables.min_time_between_alerts_sec);
@@ -2709,11 +2709,11 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		return false;
 	}
-	if (!strcasecmp(name, "ops_genie_key")) {
+	if (!strcasecmp(name, "ops_genie_api_key")) {
 		if (vallen) {
-			if (variables.ops_genie_key)
-				free(variables.ops_genie_key);
-			variables.ops_genie_key=strdup(value);
+			if (variables.ops_genie_api_key)
+				free(variables.ops_genie_api_key);
+			variables.ops_genie_api_key=strdup(value);
 			return true;
 		} else {
 			return false;

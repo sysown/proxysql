@@ -35,7 +35,7 @@ class ProxySQL_Admin {
 		bool admin_read_only;
 		char * admin_version;
 		bool enable_ops_genie_integration;
-		char *ops_genie_key;
+		char *ops_genie_api_key;
 		char *ops_genie_recipients;
 		int min_time_between_alerts_sec;
 #ifdef DEBUG
@@ -98,7 +98,7 @@ class ProxySQL_Admin {
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool get_enable_ops_genie_integration() {return variables.enable_ops_genie_integration; }
-	const char *get_ops_genie_key() { return variables.ops_genie_key; }
+	const char *get_ops_genie_api_key() { return variables.ops_genie_api_key; }
 	const char *get_ops_genie_recipients() { return variables.ops_genie_recipients; }
 	int get_min_time_between_alerts_sec() { return variables.min_time_between_alerts_sec; }
 	void init_users();
