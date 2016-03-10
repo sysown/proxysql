@@ -4,6 +4,7 @@
 *.oo
 *.pyc
 lib/obj/*
+**/obj/*
 
 # Libraries
 *.lib
@@ -47,6 +48,7 @@ proxysql
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
+**/bin/*
 
 #core
 core
