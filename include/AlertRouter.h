@@ -7,6 +7,10 @@
 // All alerts that need to be pushed to an external service should pass through it.
 // It detects which integrations are enabled and passes the alert to all active
 // integrations.
+//
+// It uses the AlertServiceConnector interface to interact with the various external
+// services connector. Since it mostly forwards alerts to the connectors, AlertRouter
+// mostly shares the same interface with AlertServiceConnector.
 class AlertRouter {
 private:
     time_t lastPushTime;
