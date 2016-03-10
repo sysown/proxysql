@@ -208,6 +208,9 @@ MySQL_Session::MySQL_Session() {
 	//server_myds=NULL;
 	to_process=0;
 	mybe=NULL;
+	mirror=false;
+	mirrorPkt.ptr=NULL;
+	mirrorPkt.size=0;
 	mybes= new PtrArray(4);
 	set_status(NONE);
 
@@ -238,7 +241,7 @@ MySQL_Session::~MySQL_Session() {
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
-	if (admin==false && connections_handler==false) {
+	if (admin==false && connections_handler==false && mirror==false) {
 		__sync_fetch_and_sub(&MyHGM->status.client_connections,1);
 	}
 }
@@ -308,7 +311,11 @@ void MySQL_Session::writeout() {
 	// FIXME: experimental
 	//if (client_myds) client_myds->set_pollout();
 	//if (server_myds) server_myds->set_pollout();
-	if (client_myds) client_myds->write_to_net_poll();
+	if (client_myds) {
+		if (mirror==false) {
+			client_myds->write_to_net_poll();
+		}
+	}
 	//if (server_myds && server_myds->net_failure==false) server_myds->write_to_net_poll();
 	if (mybe) {
 		if (mybe->server_myds) mybe->server_myds->write_to_net_poll();
@@ -549,14 +556,33 @@ int MySQL_Session::handler() {
 		assert(mybe);
 		assert(mybe->server_myds);
 		goto handler_again;
-		//goto __exit_DSS__STATE_NOT_INITIALIZED;
+	} else {
+		if (mirror==true) {
+			if (mirrorPkt.ptr) { // this is the first time we call handler()
+				pkt.ptr=mirrorPkt.ptr;
+				pkt.size=mirrorPkt.size;
+				mirrorPkt.ptr=NULL; // this will prevent the copy to happen again
+			} else {
+				if (status==WAITING_CLIENT_DATA) {
+					// we are being called a second time with WAITING_CLIENT_DATA
+					return 0;
+				}
+			}
+		}
 	}
 	}
 
 __get_pkts_from_client:
 
-	for (j=0; j<client_myds->PSarrayIN->len;) {
-		client_myds->PSarrayIN->remove_index(0,&pkt);
+	//for (j=0; j<client_myds->PSarrayIN->len;) {
+	// implement a more complex logic to run even in case of mirror
+	// if client_myds , this is a regular client
+	// if client_myds == NULL , it is a mirror
+	//     process mirror only status==WAITING_CLIENT_DATA
+	for (j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
+		if (mirror==false) {
+			client_myds->PSarrayIN->remove_index(0,&pkt);
+		}
 		//prot.parse_mysql_pkt(&pkt,client_myds);
 		switch (status) {
 
@@ -576,9 +602,10 @@ __get_pkts_from_client:
 				break;
 
 			case WAITING_CLIENT_DATA:
+				// this is handled only for real traffic, not mirror
 				if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) {
 					// we are handling a multi-packet
-					switch (client_myds->DSS) {
+					switch (client_myds->DSS) { // real traffic only
 						case STATE_SLEEP:
 							client_myds->DSS=STATE_SLEEP_MULTI_PACKET;
 							break;
@@ -618,7 +645,7 @@ __get_pkts_from_client:
 						}
 						if (client_myds->DSS!=STATE_SLEEP) // if DSS==STATE_SLEEP , we continue
 							break;
-					case STATE_SLEEP:
+					case STATE_SLEEP:	// only this section can be executed ALSO by mirror
 						command_counters->incr(thread->curtime/1000000);
 						if (transaction_persistent_hostgroup==-1) {
 							current_hostgroup=default_hostgroup;
@@ -647,6 +674,33 @@ __get_pkts_from_client:
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
 									if (rc_break==true) { break; }
+
+									if (mirror==false) {
+										if (pkt.size < 1000000 && CurrentQuery.is_select_NOT_for_update()==true) {
+											// this is a prototype for creating a mirror, only for SELECT
+											MySQL_Session *newsess=new MySQL_Session();
+											newsess->client_myds = new MySQL_Data_Stream();
+											newsess->client_myds->DSS=STATE_SLEEP;
+											newsess->client_myds->sess=newsess;
+											newsess->client_myds->myds_type=MYDS_FRONTEND;
+											newsess->client_myds->PSarrayOUT= new PtrSizeArray();;
+											thread->register_session(newsess);
+											newsess->status=WAITING_CLIENT_DATA;
+											MySQL_Connection *myconn=new MySQL_Connection;
+											myconn->userinfo->set(client_myds->myconn->userinfo);
+											newsess->client_myds->attach_connection(myconn);
+											newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
+											newsess->to_process=1;
+											newsess->default_hostgroup=default_hostgroup;
+											newsess->default_schema=strdup(default_schema);
+											newsess->mirror=true;
+											newsess->mirrorPkt.size=pkt.size;
+											newsess->mirrorPkt.ptr=l_alloc(newsess->mirrorPkt.size);
+											memcpy(newsess->mirrorPkt.ptr,pkt.ptr,pkt.size);
+											newsess->handler(); // execute immediately
+											newsess->to_process=0;
+										}
+									}
 
 									if (autocommit_on_hostgroup>=0) {
 									}
@@ -861,6 +915,7 @@ handler_again:
 							NEXT_IMMEDIATE(CHANGING_SCHEMA);
 						}
 					}
+					if (mirror==false) { // do not care about autocommit and charset if mirror
 					if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 						previous_status.push(PROCESSING_QUERY);
 						NEXT_IMMEDIATE(CHANGING_CHARSET);
@@ -879,6 +934,7 @@ handler_again:
 							previous_status.push(PROCESSING_QUERY);
 							NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
 						}
+					}
 					}
 				}
 				status=PROCESSING_QUERY;

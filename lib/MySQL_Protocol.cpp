@@ -438,6 +438,9 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
 
 //bool MySQL_Protocol::generate_pkt_EOF(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status) {
 bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	mysql_hdr myhdr;
 	myhdr.pkt_id=sequence_id;
 	myhdr.pkt_length=5;
@@ -473,6 +476,9 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 
 //bool MySQL_Protocol::generate_pkt_ERR(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
 bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	mysql_hdr myhdr;
 	uint32_t sql_message_len=( sql_message ? strlen(sql_message) : 0 );
 	myhdr.pkt_id=sequence_id;
@@ -511,7 +517,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 
 //bool MySQL_Protocol::generate_pkt_OK(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, unsigned int last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
 bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
-
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	char affected_rows_prefix;
 	uint8_t affected_rows_len=mysql_encode_length(affected_rows, &affected_rows_prefix);
 	char last_insert_id_prefix;
@@ -570,6 +578,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 
 //bool MySQL_Protocol::generate_pkt_column_count(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
 bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 
 	char count_prefix=0;
 	uint8_t count_len=mysql_encode_length(count, &count_prefix);
@@ -606,6 +617,9 @@ bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned i
 //bool MySQL_Protocol::generate_pkt_field(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
 bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
 
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	char *def=(char *)"def";
 	uint32_t def_strlen=strlen(def);
 	char def_prefix;
@@ -722,6 +736,9 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 }
 
 uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	int col=0;
 	unsigned int rowlen=0;
 	uint8_t pkt_sid=sequence_id;
@@ -1261,9 +1278,14 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	mysql=_my;
 	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
 	buffer_used=0;
-	myds=myprot->get_myds();
-	sid=myds->pkt_sid+1;
-	PSarrayOUT = new PtrSizeArray();
+	myds=NULL;
+	sid=0;
+	PSarrayOUT = NULL;
+	if (myprot) { // if myprot = NULL , this is a mirror
+		myds=myprot->get_myds();
+		sid=myds->pkt_sid+1;
+		PSarrayOUT = new PtrSizeArray();
+	}
 	result=_res;
 	resultset_size=0;
 	num_rows=0;
@@ -1271,6 +1293,9 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	PtrSize_t pkt;
 	// immediately generate the first set of packets
 	// columns count
+	if (myprot==NULL) {
+		return; // this is a mirror
+	}
 	myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields);
 	sid++;
 	PSarrayOUT->add(pkt.ptr,pkt.size);
@@ -1312,8 +1337,15 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 	unsigned long *lengths=mysql_fetch_lengths(result);
-	unsigned int pkt_length;
-	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row);
+	unsigned int pkt_length=0;
+	if (myprot) {
+		sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row);
+	} else {
+		unsigned int col=0;
+		for (col=0; col<num_fields; col++) {
+			pkt_length+=( row[col] ? lengths[col]+mysql_encode_length(lengths[col],NULL) : 1 );
+		}
+	}
 	sid++;
 	resultset_size+=pkt_length;
 	num_rows++;
@@ -1322,22 +1354,26 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 
 void MySQL_ResultSet::add_eof() {
 	PtrSize_t pkt;
-	buffer_to_PSarrayOut();
-	unsigned int nTrx=myds->sess->NumActiveTransactions();
-	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-	if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
-	PSarrayOUT->add(pkt.ptr,pkt.size);
-	sid++;
-	resultset_size+=pkt.size;
+	if (myprot) {
+		buffer_to_PSarrayOut();
+		unsigned int nTrx=myds->sess->NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
+		PSarrayOUT->add(pkt.ptr,pkt.size);
+		sid++;
+		resultset_size+=pkt.size;
+	}
 	resultset_completed=true;
 }
 
 bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 	transfer_started=true;
-	PSarrayFinal->copy_add(PSarrayOUT,0,PSarrayOUT->len);
-	while (PSarrayOUT->len)
-		PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
+	if (myprot) {
+		PSarrayFinal->copy_add(PSarrayOUT,0,PSarrayOUT->len);
+		while (PSarrayOUT->len)
+			PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
+	}
 	return resultset_completed;
 }
 

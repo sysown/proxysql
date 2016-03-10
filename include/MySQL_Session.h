@@ -85,6 +85,8 @@ class MySQL_Session
 	int user_max_connections;
 	bool client_authenticated;
 	bool connections_handler;
+	bool mirror;
+	PtrSize_t mirrorPkt;
 	bool stats;
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
 //	int client_fd;

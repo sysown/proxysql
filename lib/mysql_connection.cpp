@@ -584,7 +584,11 @@ handler_again:
 			if (mysql_result==NULL) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			} else {
-				MyRS=new MySQL_ResultSet(&myds->sess->client_myds->myprot, mysql_result, mysql);
+				if (myds->sess->mirror==false) {
+					MyRS=new MySQL_ResultSet(&myds->sess->client_myds->myprot, mysql_result, mysql);
+				} else {
+					MyRS=new MySQL_ResultSet(NULL, mysql_result, mysql);
+				}
 				async_fetch_row_start=false;
 				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 			}

@@ -676,6 +676,12 @@ int MySQL_Data_Stream::array2buffer() {
 	int ret=0;
 	unsigned int idx=0;
 	bool cont=true;
+	if (sess) {
+		if (sess->mirror==true) { // if this is a mirror session, just empty it
+			idx=PSarrayOUT->len;
+			goto __exit_array2buffer;
+		}
+	}
 	while (cont) {
 		VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT)==0) {

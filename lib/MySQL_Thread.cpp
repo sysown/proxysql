@@ -1690,6 +1690,14 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+		if (sess->mirror==true) { // this is a mirror session
+			if (sess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
+				unregister_session(n);
+				n--;
+				delete sess;
+				continue;
+			}
+		}
 		if (maintenance_loop) {
 			unsigned int numTrx=0;
 			unsigned long long sess_time = sess->IdleTime();
