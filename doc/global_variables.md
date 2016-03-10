@@ -54,7 +54,7 @@ Enables integration with [OpsGenie](www.opsgenie.com) so that ProxySQL will push
 
 ### `admin-ops_genie_api_key`
 
-OpsGenie apiKey needed to authenticate when posting alerts.
+OpsGenie apiKey needed to authenticate when pushing alerts.
 
 ### `admin-ops_genie_recipients`
 
