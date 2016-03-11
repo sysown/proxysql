@@ -12,6 +12,16 @@ Also, there are 2 types of global variables, depending on which part of ProxySQL
 
 These global variables are stored in a per-thread fashion inside of the proxy in order to speed up access to them, as they are used extremely frequently. They control the behaviour of the proxy in terms of memory footprint or the number of connections accepted, and other essential aspects. Whenever a `LOAD MYSQL VARIABLES TO RUNTIME` command is issued (see the [configuration system documentation](https://github.com/sysown/proxysql-0.2/blob/master/doc/configuration_system.md) for details on that command), all the threads using the variables are notified that they have to update their values.
 
+To change the value of a global variable either use an `UPDATE` statement:
+```
+UPDATE global_variables SET variable_value=1900 WHERE variable_name='admin-refresh_interval';
+```
+or the shorter `SET` statement, similar to MySQL's:
+```
+SET admin-refresh_interval = 1700;
+SET admin-version = '1.1.1beta8';
+```
+
 Next, we're going to explain each type of variable in detail.
 
 ### `admin-admin_credentials`

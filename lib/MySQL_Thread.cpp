@@ -292,7 +292,7 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc)) {
 				usleep(100); // pause a bit
 			}
-/*		
+/*
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_change,0,1)) { cpu_relax_pa(); }
 			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_change,0)==1) { cpu_relax_pa(); }
 //			spin_wrlock(&thr->thread_mutex);
@@ -323,7 +323,7 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 		shutdown(fd,SHUT_RDWR);
 		close(fd);
 	}
-	
+
 	return 0;
 }
 
@@ -618,7 +618,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		return strdup((variables.default_reconnect ? "true" : "false"));
 	}
 	return NULL;
-}	
+}
 
 
 
@@ -630,7 +630,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	// OUT:
 	// false: unable to change the variable value, either because doesn't exist, or because out of range, or read only
 	// true: variable value changed
-	// 
+	//
 	if (!value) return false;
 	size_t vallen=strlen(value);
 
@@ -1175,6 +1175,18 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	return ret;
 }
 
+// Returns true if the given name is the name of an existing mysql variable
+bool MySQL_Threads_Handler::has_variable(const char *name) {
+	size_t no_vars = sizeof(mysql_thread_variables_names) / sizeof(char *);
+	for (unsigned int i = 0; i < no_vars, mysql_thread_variables_names[i] != NULL; ++i) {
+		size_t var_len = strlen(mysql_thread_variables_names[i]);
+		if (strlen(name) == var_len && !strncmp(name, mysql_thread_variables_names[i], var_len)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void MySQL_Threads_Handler::print_version() {
 	fprintf(stderr,"Standard MySQL Threads Handler rev. %s -- %s -- %s\n", MYSQL_THREAD_VERSION, __FILE__, __TIMESTAMP__);
 }
@@ -1345,8 +1357,8 @@ void MySQL_Thread::poll_listener_add(int sock) {
 	listener_DS->fd=sock;
 
 	proxy_debug(PROXY_DEBUG_NET,1,"Created listener %p for socket %d\n", listener_DS, sock);
-	//mypoll_add(&mypolls, POLLIN, sock, listener_DS);	
-	mypolls.add(POLLIN, sock, listener_DS, monotonic_time());	
+	//mypoll_add(&mypolls, POLLIN, sock, listener_DS);
+	mypolls.add(POLLIN, sock, listener_DS, monotonic_time());
 }
 
 void MySQL_Thread::poll_listener_del(int sock) {
@@ -1489,7 +1501,7 @@ void MySQL_Thread::run() {
 			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 		}
 
-	
+
 		spin_wrunlock(&thread_mutex);
 
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
@@ -1498,7 +1510,7 @@ void MySQL_Thread::run() {
 //			if (n==1) {
 //				__sync_add_and_fetch(&mypolls.pending_listener_change,1);
 //			}
-		}	
+		}
 
 		if (mysql_thread___wait_timeout==0) {
 			// we should be going into PAUSE mode
@@ -1528,7 +1540,7 @@ void MySQL_Thread::run() {
 
 		spin_wrlock(&thread_mutex);
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
-		
+
 		curtime=monotonic_time();
 		if (curtime > last_maintenance_time + 200000) { // hardcoded value for now
 			last_maintenance_time=curtime;
@@ -1646,7 +1658,7 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 						myds->myconn->handler(mypolls.fds[n].revents);
 					}
 				}
-				if ( (mypolls.fds[n].events & POLLOUT) 
+				if ( (mypolls.fds[n].events & POLLOUT)
 						&&
 						( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) )
 				) {
@@ -1654,7 +1666,7 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 				}
 
 				myds->check_data_flow();
-				
+
 
 	      if (myds->active==FALSE) {
 					if (myds->sess->client_myds==myds) {

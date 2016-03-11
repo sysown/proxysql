@@ -30,6 +30,36 @@ int remove_spaces(const char *s) {
 	return strlen(s);
 }
 
+// This function returns a pointer to a substring of the original string. It also
+// modifies the original string by setting a null terminator to mark the end
+// of the substring.
+//
+// If the given string was allocated dynamically, the caller must not overwrite
+// that pointer with the returned value, since the original pointer must be
+// deallocated using the same allocator with which it was allocated.  The return
+// value must NOT be deallocated using free() etc.
+//
+// Source: http://stackoverflow.com/a/122721
+char *trim_spaces_in_place(char *str)
+{
+	char *end;
+
+	// Trim leading space
+	while(isspace(*str)) str++;
+
+	if(*str == 0)  // All spaces?
+		return str;
+
+	// Trim trailing space
+	end = str + strlen(str) - 1;
+	while(end > str && isspace(*end)) end--;
+
+	// Write new null terminator
+	*(end+1) = 0;
+
+	return str;
+}
+
 #define MIN_ARRAY_LEN	8
 #define MIN_ARRAY_DELETE_RATIO	8
 

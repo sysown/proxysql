@@ -311,6 +311,7 @@ class MySQL_Threads_Handler
 	char *get_variable(char *name);
 	bool set_variable(char *name, char *value);
 	char **get_variables_list();
+	bool has_variable(const char * name);
 
 	MySQL_Threads_Handler();
 	~MySQL_Threads_Handler();
