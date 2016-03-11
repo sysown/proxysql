@@ -238,6 +238,7 @@ typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
+typedef struct __SQP_query_parser_t SQP_par_t;
 //typedef struct _mysql_server_t mysql_server_t;
 
 #endif /* PROXYSQL_TYPEDEFS */
@@ -292,6 +293,16 @@ struct _mysql_server_t {
 	enum proxysql_server_status status;
 };
 */
+
+struct __SQP_query_parser_t {
+	sfilter sf;
+	uint64_t digest;
+	char *digest_text;
+	char *first_comment;
+	uint64_t digest_total;
+};
+
+
 
 struct _PtrSize_t {
   void *ptr;
@@ -700,11 +711,17 @@ __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___client_found_rows;
+__thread bool mysql_thread___multiplexing;
+__thread bool mysql_thread___enforce_autocommit_on_reads;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
 __thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
+
+/* variables used by events log */
+__thread char * mysql_thread___eventslog_filename;
+__thread int mysql_thread___eventslog_filesize;
 
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_history;
@@ -759,11 +776,17 @@ extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___client_found_rows;
+extern __thread bool mysql_thread___multiplexing;
+extern __thread bool mysql_thread___enforce_autocommit_on_reads;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
 extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
+
+/* variables used by events log */
+extern __thread char * mysql_thread___eventslog_filename;
+extern __thread int mysql_thread___eventslog_filesize;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_history;

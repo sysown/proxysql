@@ -166,6 +166,9 @@ Default value: `600000` (miliseconds - the equivalent of 100 seconds)
 
 The (username, password) combination with which the Monitor module will connect to the backend servers in order to check their health. Note that ProxySQL does not make any automated decisions based on these checks, but the data can be used in external scripts.
 
+It is also very important to note that `mysql-monitor_username` must not be a user in `mysql_users` table.
+Although, ProxySQL does not enforce this restriction.
+
 Default values: `monitor` / `monitor`
 
 ### `mysql-monitor_ping_interval`

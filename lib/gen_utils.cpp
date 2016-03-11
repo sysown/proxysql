@@ -42,6 +42,7 @@ static unsigned int l_near_pow_2 (unsigned int n) {
 
 // PtrArray is used also for shared struct, needs to fork the class in two)
 
+/*
 void * PtrArray::operator new(size_t size) {
 	return malloc(size);
 }
@@ -57,11 +58,12 @@ void * PtrArray::operator new(size_t size, bool b) {
 void PtrArray::operator delete(void *ptr, bool b) {
 	l_free(sizeof(PtrArray), ptr);
 }
+*/
 
-
-PtrArray::PtrArray(unsigned int __size, bool _use_l_alloc) {
-	use_l_alloc=false;
-	use_l_alloc=_use_l_alloc;
+//PtrArray::PtrArray(unsigned int __size, bool _use_l_alloc) {
+PtrArray::PtrArray(unsigned int __size) {
+//	use_l_alloc=false;
+//	use_l_alloc=_use_l_alloc;
 	len=0;
 	pdata=NULL;
 	size=0;
@@ -72,7 +74,8 @@ PtrArray::PtrArray(unsigned int __size, bool _use_l_alloc) {
 }
 
 PtrArray::~PtrArray() {
-	if (pdata) (use_l_alloc ? l_free(size*sizeof(void *),pdata) :  free(pdata) );
+	//if (pdata) (use_l_alloc ? l_free(size*sizeof(void *),pdata) :  free(pdata) );
+	if (pdata) ( free(pdata) );
 	//if (pdata) l_free(size*sizeof(void *),pdata);
 	pdata=NULL;
 }
@@ -80,7 +83,8 @@ PtrArray::~PtrArray() {
 
 void PtrArray::shrink() {
 	unsigned int new_size=l_near_pow_2(len+1);
-	pdata=(use_l_alloc ? (void **)l_realloc(pdata,new_size*sizeof(void *),size*sizeof(void *)) : (void **)realloc(pdata,new_size*sizeof(void *)) );
+	//pdata=(use_l_alloc ? (void **)l_realloc(pdata,new_size*sizeof(void *),size*sizeof(void *)) : (void **)realloc(pdata,new_size*sizeof(void *)) );
+	pdata=(void **)realloc(pdata,new_size*sizeof(void *));
 	//pdata=(void **)realloc(pdata,new_size*sizeof(void *));
 	//pdata=(void **)l_realloc(pdata,new_size*sizeof(void *),size*sizeof(void *));
 	size=new_size;
@@ -89,13 +93,15 @@ void PtrArray::shrink() {
 void PtrArray::expand(unsigned int more) {
     if ( (len+more) > size ) {
         unsigned int new_size=l_near_pow_2(len+more);
-				void *new_pdata=( use_l_alloc ? l_alloc(new_size*sizeof(void *)) : malloc(new_size*sizeof(void *)) );
+				//void *new_pdata=( use_l_alloc ? l_alloc(new_size*sizeof(void *)) : malloc(new_size*sizeof(void *)) );
+				void *new_pdata=malloc(new_size*sizeof(void *));
 				memset(new_pdata,0,new_size*sizeof(void *));
         //void *new_pdata=malloc(new_size*sizeof(void *));
         //void *new_pdata=l_alloc(new_size*sizeof(void *));
         if (pdata) {
             memcpy(new_pdata,pdata,size*sizeof(void *));
-						( use_l_alloc ? l_free(size*sizeof(void *),pdata) : free(pdata) );
+						//( use_l_alloc ? l_free(size*sizeof(void *),pdata) : free(pdata) );
+						free(pdata);
             //free(pdata);
 						//l_free(size*sizeof(void *),pdata);
         }
@@ -194,7 +200,7 @@ PtrSizeArray::~PtrSizeArray() {
 void PtrSizeArray::shrink() {
 	unsigned int new_size=l_near_pow_2(len+1);
 	//pdata=(PtrSize_t *)realloc(pdata,new_size*sizeof(PtrSize_t));
-	pdata=(PtrSize_t *)l_realloc(pdata,new_size*sizeof(PtrSize_t),size*sizeof(PtrSize_t));
+	pdata=(PtrSize_t *)realloc(pdata,new_size*sizeof(PtrSize_t));
 	size=new_size;
 }
 

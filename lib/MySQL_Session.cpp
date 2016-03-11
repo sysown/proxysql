@@ -74,13 +74,14 @@ Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
-	QueryParserArgs=NULL;
+	QueryParserArgs.digest_text=NULL;
+	QueryParserArgs.first_comment=NULL;
 }
 
 Query_Info::~Query_Info() {
-	if (QueryParserArgs) {
-		GloQPro->query_parser_free(QueryParserArgs);
-	}
+	//if (QueryParserArgs) {
+	GloQPro->query_parser_free(&QueryParserArgs);
+	//}
 	if (QueryPointer) {
 		//l_free(QueryLength+1,QueryPointer);
 	}
@@ -90,10 +91,12 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
-	QueryParserArgs=NULL;
+	//QueryParserArgs=NULL;
+	QueryParserArgs.digest_text=NULL;
+	QueryParserArgs.first_comment=NULL;
 	start_time=sess->thread->curtime;
+	init(_p, len, mysql_header);
 	if (mysql_thread___commands_stats || mysql_thread___query_digests) {
-		init(_p, len, mysql_header);
 		query_parser_init();
 		if (mysql_thread___commands_stats)
 			query_parser_command_type();
@@ -114,29 +117,31 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	//memcpy(QueryPointer,(mysql_header ? _p+5 : _p),QueryLength);
 	QueryPointer=(mysql_header ? _p+5 : _p);
 	//QueryPointer[QueryLength]=0;
-	QueryParserArgs=NULL;
+	//QueryParserArgs=NULL;
 	MyComQueryCmd=MYSQL_COM_QUERY_UNKNOWN;
 }
 
 void Query_Info::query_parser_init() {
-	QueryParserArgs=GloQPro->query_parser_init((char *)QueryPointer,QueryLength,0);
+	//QueryParserArgs=GloQPro->query_parser_init((char *)QueryPointer,QueryLength,0);
+	GloQPro->query_parser_init(&QueryParserArgs,(char *)QueryPointer,QueryLength,0);
 }
 
 enum MYSQL_COM_QUERY_command Query_Info::query_parser_command_type() {
-	MyComQueryCmd=GloQPro->query_parser_command_type(QueryParserArgs);
+	MyComQueryCmd=GloQPro->query_parser_command_type(&QueryParserArgs);
 	return MyComQueryCmd;
 }
 
 void Query_Info::query_parser_free() {
-	if (QueryParserArgs) {
-		GloQPro->query_parser_free(QueryParserArgs);
-		QueryParserArgs=NULL;
-	}
+	//if (QueryParserArgs) {
+	GloQPro->query_parser_free(&QueryParserArgs);
+	//QueryParserArgs=NULL;
+	//}
 }
 
 unsigned long long Query_Info::query_parser_update_counters() {
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
-	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, QueryParserArgs, end_time-start_time);
+	if (MyComQueryCmd==MYSQL_COM_QUERY_UNKNOWN) return 0; // this means that it was never initialized
+	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	//l_free(QueryLength+1,QueryPointer);
 	QueryPointer=NULL;
@@ -145,7 +150,29 @@ unsigned long long Query_Info::query_parser_update_counters() {
 }
 
 char * Query_Info::get_digest_text() {
-	return GloQPro->get_digest_text(QueryParserArgs);
+	return GloQPro->get_digest_text(&QueryParserArgs);
+}
+
+bool Query_Info::is_select_NOT_for_update() {
+	// to avoid an expensive strlen() on the digest_text, we consider only the real query
+	if (QueryPointer==NULL) {
+		return false;
+	}
+	if (QueryLength<7) {
+		return false;
+	}
+	if (strncasecmp((char *)QueryPointer,(char *)"SELECT ",7)) {
+		return false;
+	}
+	// if we arrive till here, it is a SELECT
+	if (QueryLength>=17) {
+		char *p=(char *)QueryPointer;
+		p+=QueryLength-11;
+		if (strncasecmp(p," FOR UPDATE",11)==0) {
+			return false;
+		}
+	}
+	return true;
 }
 
 void * MySQL_Session::operator new(size_t size) {
@@ -159,7 +186,6 @@ void MySQL_Session::operator delete(void *ptr) {
 
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
-	pause=0;
 	pause_until=0;
 	qpo=NULL;
 	command_counters=new StatCounters(15,10,false);
@@ -182,7 +208,7 @@ MySQL_Session::MySQL_Session() {
 	//server_myds=NULL;
 	to_process=0;
 	mybe=NULL;
-	mybes= new (true) PtrArray(4,true);
+	mybes= new PtrArray(4);
 	set_status(NONE);
 
 	CurrentQuery.sess=this;
@@ -290,7 +316,142 @@ void MySQL_Session::writeout() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
 
+
+// FIXME: This function is currently disabled . See #469
+bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
+	if (
+		( strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0 )
+		||
+		( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 )
+	) {
+		char c=((char *)pkt->ptr)[5];
+		if (c=='c' || c=='C') {
+			__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
+		} else {
+			__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
+		}
+		unsigned int nTrx=NumActiveTransactions();
+		if (nTrx) {
+			// there is an active transaction, we must forward the request
+			return false;
+		} else {
+			// there is no active transaction, we will just reply OK
+			client_myds->DSS=STATE_QUERY_SENT_NET;
+			uint16_t setStatus = 0;
+			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			l_free(pkt->size,pkt->ptr);
+			if (c=='c' || c=='C') {
+				__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
+			} else {
+				__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+
+// FIXME: This function is currently disabled . See #469
+bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
+	size_t sal=strlen("set autocommit");
+	if ( pkt->size >= 7+sal) {
+		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
+			__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
+			unsigned int i;
+			bool eq=false;
+			int fd=-1; // first digit
+			for (i=5+sal;i<pkt->size;i++) {
+				char c=((char *)pkt->ptr)[i];
+				if (c!='0' && c!='1' && c!=' ' && c!='=') return false; // found a not valid char
+				if (eq==false) {
+					if (c!=' ' && c!='=') return false; // found a not valid char
+					if (c=='=') eq=true;
+				} else {
+					if (c!='0' && c!='1' && c!=' ') return false; // found a not valid char
+					if (fd==-1) {
+						if (c=='0' || c=='1') { // found first digit
+							if (c=='0')
+								fd=0;
+							else
+								fd=1;
+						}
+					} else {
+						if (c=='0' || c=='1') { // found second digit
+							return false;
+						}
+					}
+				}
+			}
+			if (fd >= 0) { // we can set autocommit
+				// we immeditately process the number of transactions
+				unsigned int nTrx=NumActiveTransactions();
+				if (fd==1 && autocommit==true) {
+					// nothing to do, return OK
+					goto __ret_autocommit_OK;
+				}
+				if (fd==1 && autocommit==false) {
+					if (nTrx) {
+						// there is an active transaction, we need to forward it
+						// because this can potentially close the transaction
+						autocommit=true;
+						autocommit_on_hostgroup=FindOneActiveTransaction();
+						return false;
+					} else {
+						// as there is no active transaction, we do no need to forward it
+						// just change internal state
+						autocommit=false;
+						goto __ret_autocommit_OK;
+					}
+				}
+
+				if (fd==0) {
+					autocommit=false;	// we set it, no matter if already set or not
+/*
+					if (nTrx) {
+						// there is an active transaction, we need to forward it
+						// because this can potentially close the transaction
+						autocommit_on_hostgroup=FindOneActiveTransaction();
+						return false;
+					} else {
+						// as there is no active transaction, we do no need to forward it
+						// just return OK
+						goto __ret_autocommit_OK;
+					}
+*/
+					// it turned out I was wrong
+					// set autocommit=0 has no effect if there is an acrive transaction
+					// therefore, we never forward set autocommit = 0
+					goto __ret_autocommit_OK;
+				}
+__ret_autocommit_OK:
+				client_myds->DSS=STATE_QUERY_SENT_NET;
+				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+				if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+				client_myds->DSS=STATE_SLEEP;
+				status=WAITING_CLIENT_DATA;
+				l_free(pkt->size,pkt->ptr);
+				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+
+	if (handler_SetAutocommit(pkt) == true) {
+		return true;
+	}
+	if (handler_CommitRollback(pkt) == true) {
+		return true;
+	}
+
 	if (pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		char buf[16];
 		sprintf(buf,"%u",last_insert_id);
@@ -368,84 +529,9 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return true;
 	}
 
-	size_t sal=strlen("set autocommit");
-	if ( pkt->size > 7+sal) {
-		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
-			unsigned int i;
-			bool eq=false;
-			int fd=-1; // first digit
-			for (i=5+sal;i<pkt->size;i++) {
-				char c=((char *)pkt->ptr)[i];
-				if (c!='0' && c!='1' && c!=' ' && c!='=') return false; // found a not valid char
-				if (eq==false) {
-					if (c!=' ' && c!='=') return false; // found a not valid char
-					if (c=='=') eq=true;
-				} else {
-					if (c!='0' && c!='1' && c!=' ') return false; // found a not valid char
-					if (fd==-1) {
-						if (c=='0' || c=='1') { // found first digit
-							if (c=='0')
-								fd=0;
-							else
-								fd=1;
-						}
-					} else {
-						if (c=='0' || c=='1') { // found second digit
-							return false;
-						}
-					}
-				}
-			}
-			if (fd >= 0) { // we can set autocommit
-				// we immeditately process the number of transactions
-				unsigned int nTrx=NumActiveTransactions();
-				if (fd==1 && autocommit==true) {
-					// nothing to do, return OK
-					goto __ret_autocommit_OK;
-				}
-				if (fd==1 && autocommit==false) {
-					if (nTrx) {
-						// there is an active transaction, we need to forward it
-						// because this can potentially close the transaction
-						autocommit=true;
-						autocommit_on_hostgroup=FindOneActiveTransaction();
-						return false;
-					} else {
-						// as there is no active transaction, we do no need to forward it
-						// just change internal state
-						autocommit=false;
-						goto __ret_autocommit_OK;
-					}
-				}
-
-				if (fd==0) {
-					autocommit=false;	// we set it, no matter if already set or not
-					if (nTrx) {
-						// there is an active transaction, we need to forward it
-						// because this can potentially close the transaction
-						autocommit_on_hostgroup=FindOneActiveTransaction();
-						return false;
-					} else {
-						// as there is no active transaction, we do no need to forward it
-						// just return OK
-						goto __ret_autocommit_OK;
-					}
-				}
-__ret_autocommit_OK:
-				client_myds->DSS=STATE_QUERY_SENT_NET;
-				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-				if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-				client_myds->DSS=STATE_SLEEP;
-				status=WAITING_CLIENT_DATA;
-				l_free(pkt->size,pkt->ptr);
-				return true;
-			}
-		}
-	}
-
 	return false;
 }
+
 
 int MySQL_Session::handler() {
 	bool wrong_pass=false;
@@ -692,8 +778,10 @@ handler_again:
 				if (rc==0) {
 					myconn->async_state_machine=ASYNC_IDLE;
 					//if ((myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->return_MySQL_Connection_To_Pool();
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
 					}
 					delete mybe->server_myds;
 					mybe->server_myds=NULL;
@@ -702,7 +790,7 @@ handler_again:
 				} else {
 					if (rc==-1) {
 						proxy_error("Detected a broken connection during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
-						myds->destroy_MySQL_Connection_From_Pool();
+						myds->destroy_MySQL_Connection_From_Pool(false);
 						myds->fd=0;
 						delete mybe->server_myds;
 						mybe->server_myds=NULL;
@@ -761,23 +849,37 @@ handler_again:
 			} else {
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
-				if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
-					if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
-						previous_status.push(PROCESSING_QUERY);
-						NEXT_IMMEDIATE(CHANGING_USER_SERVER);
+				// these checks need to be performed only if we connect to a real mysql_server
+				if (default_hostgroup>=0) {
+					if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
+						if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
+							previous_status.push(PROCESSING_QUERY);
+							NEXT_IMMEDIATE(CHANGING_USER_SERVER);
+						}
+						if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
+							previous_status.push(PROCESSING_QUERY);
+							NEXT_IMMEDIATE(CHANGING_SCHEMA);
+						}
 					}
-					if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
+					if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 						previous_status.push(PROCESSING_QUERY);
-						NEXT_IMMEDIATE(CHANGING_SCHEMA);
+						NEXT_IMMEDIATE(CHANGING_CHARSET);
 					}
-				}
-				if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
-					previous_status.push(PROCESSING_QUERY);
-					NEXT_IMMEDIATE(CHANGING_CHARSET);
-				}
-				if (autocommit != mybe->server_myds->myconn->IsAutoCommit()) {
-					previous_status.push(PROCESSING_QUERY);
-					NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+					if (autocommit != mybe->server_myds->myconn->IsAutoCommit()) {
+						// see case #485
+						if (mysql_thread___enforce_autocommit_on_reads == false) {
+							// enforce_autocommit_on_reads is disabled
+							// we need to check if it is a SELECT not FOR UPDATE
+							if (CurrentQuery.is_select_NOT_for_update()==false) {
+								previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+							}
+						} else {
+							// in every other cases, enforce autocommit
+							previous_status.push(PROCESSING_QUERY);
+							NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+						}
+					}
 				}
 				status=PROCESSING_QUERY;
 				mybe->server_myds->max_connect_time=0;
@@ -828,7 +930,7 @@ handler_again:
 //					myds->free_mysql_real_query();
 					RequestEnd(myds);
 					//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						myds->DSS=STATE_NOT_INITIALIZED;
 						myds->return_MySQL_Connection_To_Pool();
 						if (transaction_persistent==true) {
@@ -858,7 +960,7 @@ handler_again:
 									retry_conn=true;
 								}
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -871,7 +973,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on server %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
@@ -880,7 +982,7 @@ handler_again:
 									retry_conn=true;
 								}
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -889,7 +991,7 @@ handler_again:
 							}
 							return -1;
 						} else {
-							proxy_warning("Error during query: %d, %s\n", myerr, mysql_error(myconn->mysql));
+							proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							// FIXME: deprecate old MySQL_Result_to_MySQL_wire , not completed yet
 							//MySQL_Result_to_MySQL_wire(myconn->mysql,myconn->mysql_result,&client_myds->myprot);
 
@@ -901,10 +1003,12 @@ handler_again:
 										return -1;
 									}
 								case 1290: // read-only
+								case 1047: // WSREP has not yet prepared node for application use
+								case 1053: // Server shutdown in progress
 									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 										retry_conn=true;
 									}
-									myds->destroy_MySQL_Connection_From_Pool();
+									myds->destroy_MySQL_Connection_From_Pool(true);
 									myds->fd=0;
 									if (retry_conn) {
 										myds->DSS=STATE_NOT_INITIALIZED;
@@ -928,7 +1032,7 @@ handler_again:
 //							myds->free_mysql_real_query();
 							RequestEnd(myds);
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+							if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								myds->DSS=STATE_NOT_INITIALIZED;
 								myds->return_MySQL_Connection_To_Pool();
 							} else {
@@ -980,7 +1084,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -996,7 +1100,7 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(true);
 							myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
@@ -1036,7 +1140,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1052,7 +1156,7 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-								myds->destroy_MySQL_Connection_From_Pool();
+								myds->destroy_MySQL_Connection_From_Pool(true);
 								myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
@@ -1092,7 +1196,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1108,7 +1212,7 @@ handler_again:
 							char sqlstate[10];
 							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-								myds->destroy_MySQL_Connection_From_Pool();
+								myds->destroy_MySQL_Connection_From_Pool(true);
 								myds->fd=0;
 							status=WAITING_CLIENT_DATA;
 							client_myds->DSS=STATE_SLEEP;
@@ -1149,7 +1253,7 @@ handler_again:
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
 							}
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							myds->fd=0;
 							if (retry_conn) {
 								myds->DSS=STATE_NOT_INITIALIZED;
@@ -1167,7 +1271,7 @@ handler_again:
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 //							CurrentQuery.end();
 //							myds->free_mysql_real_query();
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(true);
 							myds->fd=0;
 //							status=WAITING_CLIENT_DATA;
 //							client_myds->DSS=STATE_SLEEP;
@@ -1198,10 +1302,10 @@ handler_again:
 					}
 					if (mybe->server_myds->myconn) {
 						//mybe->server_myds->destroy_MySQL_Connection();
-						mybe->server_myds->destroy_MySQL_Connection_From_Pool();
+						mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 					}
 					mybe->server_myds->max_connect_time=0;
-					NEXT_IMMEDIATE(WAITING_CLIENT_DATA);					
+					NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
 				}
 			}
 			if (mybe->server_myds->myconn==NULL) {
@@ -1214,6 +1318,11 @@ handler_again:
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				int rc;
+				if (default_hostgroup<0) {
+					// we are connected to a Admin module backend
+					// we pretend to set a user variable to disable multiplexing
+					myconn->set_status_user_variable(true);
+				}
 				enum session_status st=status;
 				if (mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE) {
 					st=previous_status.top();
@@ -1247,7 +1356,7 @@ handler_again:
 						if (myds->connect_retries_on_failure >0 ) {
 							myds->connect_retries_on_failure--;
 							//myds->destroy_MySQL_Connection();
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool(false);
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
 						} else {
 							int myerr=mysql_errno(myconn->mysql);
@@ -1269,7 +1378,7 @@ handler_again:
 								previous_status.pop();
 							}
 							//myds->destroy_MySQL_Connection();
-							myds->destroy_MySQL_Connection_From_Pool();
+							myds->destroy_MySQL_Connection_From_Pool( myerr ? true : false );
 							myds->max_connect_time=0;
 							NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
 						}
@@ -1292,8 +1401,10 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	if (mybe && mybe->server_myds) {
 	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
+#ifdef DEBUG
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
+#endif /* DEBUG */
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
 	} else {
 
@@ -1387,7 +1498,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	if ( 
 		(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) 
 		&&
-		( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) )
+		( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) || strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 ) // Do not delete this line. See bug #492
 	)	{
 		if (default_hostgroup<0 && admin==true) {
 			if (default_hostgroup==STATS_HOSTGROUP) {
@@ -1607,14 +1718,18 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		delete qpo->new_query;
 	}
 	if (qpo->cache_ttl>0) {
-		client_myds->query_SQL=(unsigned char *)l_alloc(pkt->size-sizeof(mysql_hdr));
-		memcpy(client_myds->query_SQL,(unsigned char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
-		client_myds->query_SQL[pkt->size-sizeof(mysql_hdr)-1]=0;
 		uint32_t resbuf=0;
-		unsigned char *aa=GloQC->get(client_myds->query_SQL,&resbuf);
+		unsigned char *aa=GloQC->get(
+			client_myds->myconn->userinfo->hash,
+//			(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
+//			client_myds->mysql_real_query.QuerySize ,
+			(const unsigned char *)CurrentQuery.QueryPointer ,
+			CurrentQuery.QueryLength ,
+			&resbuf ,
+			thread->curtime/1000
+		);
 		if (aa) {
 			l_free(pkt->size,pkt->ptr);
-			l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
 			client_myds->buffer2resultset(aa,resbuf);
 			free(aa);
 			client_myds->PSarrayOUT->copy_add(client_myds->resultset,0,client_myds->resultset->len);
@@ -1624,6 +1739,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 //			CurrentQuery.end();
 //			GloQPro->delete_QP_out(qpo);
 //			qpo=NULL;
+			if (transaction_persistent_hostgroup == -1) {
+				// not active, we can change it
+				current_hostgroup=-1;
+			}
 			RequestEnd(NULL);
 			return true;
 		}
@@ -1633,6 +1752,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			current_hostgroup=qpo->destination_hostgroup;
 		}
 	}
+/*
 	if (autocommit_on_hostgroup >= 0) {
 		// the query is a "set autocommit=0"
 		// we set current_hostgroup=autocommit_on_hostgroup if possible
@@ -1643,6 +1763,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 		autocommit_on_hostgroup=-1;	// at the end, always reset autocommit_on_hostgroup to -1
 	}
+*/
 	return false;
 }
 
@@ -1741,10 +1862,19 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 					client_myds->resultset_length=MyRS->resultset_size;
 					unsigned char *aa=client_myds->resultset2buffer(false);
 					while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
-					GloQC->set((unsigned char *)client_myds->query_SQL,strlen((char *)client_myds->query_SQL)+1,aa,client_myds->resultset_length,qpo->cache_ttl);
+					GloQC->set(
+						client_myds->myconn->userinfo->hash ,
+//						(const unsigned char *)client_myds->mysql_real_query.QueryPtr ,
+//						client_myds->mysql_real_query.QuerySize ,
+						(const unsigned char *)CurrentQuery.QueryPointer,
+						CurrentQuery.QueryLength,
+						aa ,
+						client_myds->resultset_length ,
+						thread->curtime/1000 ,
+						thread->curtime/1000 + qpo->cache_ttl
+					);
 					l_free(client_myds->resultset_length,aa);
 					client_myds->resultset_length=0;
-					l_free(strlen((char *)client_myds->query_SQL)+1,client_myds->query_SQL);
 				}
 			}
 		}

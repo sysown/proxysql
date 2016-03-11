@@ -45,6 +45,7 @@ oldcode/tests/connect_speed
 proxysql
 binaries/*deb
 binaries/*rpm
+tools/eventslog_reader_sample
 
 #core
 core
@@ -62,9 +63,6 @@ architecture.txt
 
 
 ### DEPS
-
-#sqlite
-deps/sqlite3/sqlite-amalgamation-3080403/
 
 #jemalloc source
 deps/jemalloc/jemalloc-3.6.0/

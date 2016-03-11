@@ -35,7 +35,7 @@ class ProxySQL_GlobalVariables {
 		unsigned long long start_time;
 		bool gdbg;
 		bool nostart;
-		bool use_proxysql_mem;
+//		bool use_proxysql_mem;
 		pthread_mutex_t start_mutex;
 		bool foreground;
 #ifdef DEBUG
@@ -60,6 +60,7 @@ class ProxySQL_GlobalVariables {
 	void process_opts_pre();
 	void process_opts_post();
 	void parse(int argc, const char * argv[]);
+	void install_signal_handler();
 };
 
 /*

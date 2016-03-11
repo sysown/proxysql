@@ -10,6 +10,10 @@
 #define FIRST_COMMENT_MAX_LENGTH  1024
 #endif /* FIRST_COMMENT_MAX_LENGTH */
 
+#ifndef QUERY_DIGEST_MAX_LENGTH
+#define QUERY_DIGEST_MAX_LENGTH  65000
+#endif /* QUERY_DIGEST_MAX_LENGTH */
+
 typedef struct
 {
 	char*       s;
@@ -28,7 +32,7 @@ extern "C" {
 tokenizer_t tokenizer( const char* s, const char* delimiters, int empties );
 const char* free_tokenizer( tokenizer_t* tokenizer );
 const char* tokenize( tokenizer_t* tokenizer );
-char * mysql_query_digest_and_first_comment(char *s , int len , char *first_comment);
+char * mysql_query_digest_and_first_comment(char *s , int len , char **first_comment);
 void c_split_2(const char *in, const char *del, char **out1, char **out2);
 #ifdef __cplusplus
 }

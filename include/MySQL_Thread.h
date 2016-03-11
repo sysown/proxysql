@@ -138,11 +138,9 @@ class MySQL_Thread
 {
 
 	private:
-  MySQL_Connection **my_idle_conns;
-  //MySQL_Data_Stream **my_idle_myds;
+	MySQL_Connection **my_idle_conns;
   bool processing_idles;
   unsigned long long last_processing_idles;
-  PtrArray *mysql_sessions_connections_handler;
 
 
 	protected:
@@ -152,7 +150,8 @@ class MySQL_Thread
 
 	int pipefd[2];
 	unsigned long long curtime;
-
+	unsigned long long last_maintenance_time;
+	bool maintenance_loop;
 	ProxySQL_Poll mypolls;
 	pthread_t thread_id;
 	int shutdown;
@@ -183,7 +182,6 @@ class MySQL_Thread
   void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
   void process_all_sessions();
   void refresh_variables();
-  void process_all_sessions_connections_handler();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
   void unregister_session_connection_handler(int idx, bool _new=false);
   //void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
@@ -281,6 +279,8 @@ class MySQL_Threads_Handler
 		bool default_reconnect;
 		bool have_compress;
 		bool client_found_rows;
+		bool multiplexing;
+		bool enforce_autocommit_on_reads;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
@@ -295,6 +295,8 @@ class MySQL_Threads_Handler
 		uint16_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
+		char *eventslog_filename;
+		int eventslog_filesize;
 	} variables;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;

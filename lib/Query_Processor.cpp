@@ -5,8 +5,6 @@
 #include "re2/regexp.h"
 #include "proxysql.h"
 #include "cpp.h"
-#include "../deps/libinjection/libinjection.h"
-#include "../deps/libinjection/libinjection_sqli.h"
 
 #include "SpookyV2.h"
 
@@ -69,6 +67,7 @@ class QP_rule_text {
 	}
 };
 
+/*
 struct __SQP_query_parser_t {
 	sfilter sf;
 	uint64_t digest;
@@ -78,7 +77,7 @@ struct __SQP_query_parser_t {
 };
 
 typedef struct __SQP_query_parser_t SQP_par_t;
-
+*/
 class QP_query_digest_stats {
 	public:
 	uint64_t digest;
@@ -91,7 +90,8 @@ class QP_query_digest_stats {
 	unsigned long long sum_time;
 	unsigned long long min_time;
 	unsigned long long max_time;
-	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt) {
+	int hid;
+	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h) {
 		digest=d;
 		digest_text=strdup(dt);
 		username=strdup(u);
@@ -102,12 +102,13 @@ class QP_query_digest_stats {
 		sum_time=0;
 		min_time=0;
 		max_time=0;
+		hid=h;
 	}
 	void add_time(unsigned long long t, unsigned long long n) {
 		count_star++;
 		sum_time+=t;
 		if (t < min_time || min_time==0) {
-			min_time = t;
+			if (t) min_time = t;
 		}
 		if (t > max_time) {
 			max_time = t;
@@ -133,7 +134,7 @@ class QP_query_digest_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*10);
+		char **pta=(char **)malloc(sizeof(char *)*11);
 		assert(schemaname);
 		pta[0]=strdup(schemaname);
 		assert(username);
@@ -176,11 +177,13 @@ class QP_query_digest_stats {
 		pta[8]=strdup(buf);
 		sprintf(buf,"%llu",max_time);
 		pta[9]=strdup(buf);
+		sprintf(buf,"%d",hid);
+		pta[10]=strdup(buf);
 		return pta;
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<10;i++) {
+		for (i=0;i<11;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -564,8 +567,9 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 
 SQLite3_result * Query_Processor::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
-	SQLite3_result *result=new SQLite3_result(10);
+	SQLite3_result *result=new SQLite3_result(11);
 	spin_rdlock(&digest_rwlock);
+	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
 	result->add_column_definition(SQLITE_TEXT,"usernname");
 	result->add_column_definition(SQLITE_TEXT,"digest");
@@ -576,7 +580,8 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
-	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	//for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row();
 		result->add_row(pta);
@@ -587,8 +592,9 @@ SQLite3_result * Query_Processor::get_query_digests() {
 }
 
 SQLite3_result * Query_Processor::get_query_digests_reset() {
-	SQLite3_result *result=new SQLite3_result(10);
+	SQLite3_result *result=new SQLite3_result(11);
 	spin_wrlock(&digest_rwlock);
+	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
 	result->add_column_definition(SQLITE_TEXT,"usernname");
 	result->add_column_definition(SQLITE_TEXT,"digest");
@@ -599,14 +605,16 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
-	for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	//for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row();
 		result->add_row(pta);
 		qds->free_row(pta);
 		delete qds;
 	}
-	digest_bt_map.erase(digest_bt_map.begin(),digest_bt_map.end());
+	//digest_bt_map.erase(digest_bt_map.begin(),digest_bt_map.end());
+	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 	spin_wrunlock(&digest_rwlock);
 	return result;
 }
@@ -617,8 +625,8 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	Query_Processor_Output *ret=NULL;
 	ret=new Query_Processor_Output();
 	SQP_par_t *qp=NULL;
-	if (qi && qi->QueryParserArgs) {
-		qp=(SQP_par_t *)qi->QueryParserArgs;
+	if (qi) {
+		qp=(SQP_par_t *)&qi->QueryParserArgs;
 	}
 	unsigned int len=size-sizeof(mysql_hdr)-1;
 	char *query=(char *)l_alloc(len+1);
@@ -782,7 +790,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 __exit_process_mysql_query:
 	// FIXME : there is too much data being copied around
 	l_free(len+1,query);
-	if (qp && qp->first_comment[0]) {
+	if (qp && qp->first_comment) {
 		// we have a comment to parse
 		query_parser_first_comment(ret, qp->first_comment);
 	}
@@ -830,43 +838,45 @@ void Query_Processor::update_query_processor_stats() {
 };
 
 
-void * Query_Processor::query_parser_init(char *query, int query_length, int flags) {
-	SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
+void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags) {
+	//SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
 	if (mysql_thread___commands_stats)
 		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
-	qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
-	qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
+	//qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
+	//qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, qp->first_comment);
+		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment);
 		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
 #ifdef DEBUG
-		if (strlen(qp->first_comment)) {
+		if (qp->first_comment && strlen(qp->first_comment)) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
 		}
 #endif /* DEBUG */
 	}
-	return (void *)qp;
+	//return (void *)qp;
 };
 
-enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(void *args) {
-	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(args);
+enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_t *qp) {
+	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(qp);
 	//_thr_commands_counters[ret]++;
 	return ret;
 }
 
-unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, void *p, unsigned long long t) {
+unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
-	SQP_par_t *qp=(SQP_par_t *)p;
+	//SQP_par_t *qp=(SQP_par_t *)p;
 
 	if (qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
 		uint64_t hash2;
-		SpookyHash *myhash=new SpookyHash();
-		myhash->Init(19,3);
+		//SpookyHash *myhash=new SpookyHash();
+		//myhash->Init(19,3);
+		SpookyHash myhash;
+		myhash.Init(19,3);
 		assert(sess);
 		assert(sess->client_myds);
 		assert(sess->client_myds->myconn);
@@ -874,51 +884,56 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 		assert(ui->username);
 		assert(ui->schemaname);
-		myhash->Update(ui->username,strlen(ui->username));
-		myhash->Update(&qp->digest,sizeof(qp->digest));
-		myhash->Update(ui->schemaname,strlen(ui->schemaname));
-		myhash->Final(&qp->digest_total,&hash2);
-		delete myhash;
-		update_query_digest(qp, ui, t, sess->thread->curtime);
+		myhash.Update(ui->username,strlen(ui->username));
+		myhash.Update(&qp->digest,sizeof(qp->digest));
+		myhash.Update(ui->schemaname,strlen(ui->schemaname));
+		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
+		myhash.Final(&qp->digest_total,&hash2);
+		//delete myhash;
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime);
 	}
 	return ret;
 }
 
-void Query_Processor::update_query_digest(void *p, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
-	SQP_par_t *qp=(SQP_par_t *)p;
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
+	//SQP_par_t *qp=(SQP_par_t *)p;
 	spin_wrlock(&digest_rwlock);
 
 	QP_query_digest_stats *qds;	
 
-	btree::btree_map<uint64_t, void *>::iterator it;
-	it=digest_bt_map.find(qp->digest_total);
-	if (it != digest_bt_map.end()) {
+	//btree::btree_map<uint64_t, void *>::iterator it;
+	//it=digest_bt_map.find(qp->digest_total);
+	//if (it != digest_bt_map.end()) {
+	std::unordered_map<uint64_t, void *>::iterator it;
+	it=digest_umap.find(qp->digest_total);
+	if (it != digest_umap.end()) {
 		// found
 		qds=(QP_query_digest_stats *)it->second;
 		qds->add_time(t,n);
 	} else {
-		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text);
+		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
 		qds->add_time(t,n);
-		digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
+		//digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
+		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
 	}
 
 	spin_wrunlock(&digest_rwlock);
 }
 
-char * Query_Processor::get_digest_text(void *p) {
-	if (p==NULL) return NULL;
-	SQP_par_t *qp=(SQP_par_t *)p;
+char * Query_Processor::get_digest_text(SQP_par_t *qp) {
+	if (qp==NULL) return NULL;
+	//SQP_par_t *qp=(SQP_par_t *)p;
 	return qp->digest_text;
 }
 
-uint64_t Query_Processor::get_digest(void *args) {
-	if (args==NULL) return 0;
-	SQP_par_t *qp=(SQP_par_t *)args;
+uint64_t Query_Processor::get_digest(SQP_par_t *qp) {
+	if (qp==NULL) return 0;
+	//SQP_par_t *qp=(SQP_par_t *)args;
 	return qp->digest;
 }
 
-enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *args) {
-	SQP_par_t *qp=(SQP_par_t *)args;
+enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_par_t *qp) {
+	//SQP_par_t *qp=(SQP_par_t *)args;
 	while (libinjection_sqli_tokenize(&qp->sf)) {
 		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
 			char c1=toupper(qp->sf.current->val[0]);
@@ -977,6 +992,12 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(void *
 				case 'I':
 					if (!strcasecmp("INSERT",qp->sf.current->val)) { // INSERT
 						return MYSQL_COM_QUERY_INSERT;
+					}
+					return MYSQL_COM_QUERY_UNKNOWN;
+					break;
+				case 'R':
+					if (!strcasecmp("ROLLBACK",qp->sf.current->val)) { // ROLLBACK
+						return MYSQL_COM_QUERY_ROLLBACK;
 					}
 					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
@@ -1073,14 +1094,15 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 }
 
 
-void Query_Processor::query_parser_free(void *args) {
-	SQP_par_t *qp=(SQP_par_t *)args;
+void Query_Processor::query_parser_free(SQP_par_t *qp) {
+	//SQP_par_t *qp=(SQP_par_t *)args;
 	if (qp->digest_text) {
 		free(qp->digest_text);
 		qp->digest_text=NULL;
 	}
 	if (qp->first_comment) {
-		l_free(FIRST_COMMENT_MAX_LENGTH,qp->first_comment);
+		free(qp->first_comment);
+		qp->first_comment=NULL;
 	}
-	free(qp);
+	//free(qp);
 };

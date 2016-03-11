@@ -32,6 +32,8 @@ class ProxySQL_Admin {
 		char *mysql_ifaces;
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
+		bool admin_read_only;
+		char * admin_version;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -88,11 +90,13 @@ class ProxySQL_Admin {
 	SQLite3DB *monitordb;	// in memory
 	void print_version();
 	bool init();
+	bool get_read_only() { return variables.admin_read_only; }
+	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();
 	void save_mysql_users_runtime_to_database();
-	void save_mysql_servers_runtime_to_database();
+	void save_mysql_servers_runtime_to_database(bool);
 	void admin_shutdown();
 	bool is_command(std::string);
 //	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
@@ -112,7 +116,7 @@ class ProxySQL_Admin {
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
-	void save_mysql_query_rules_from_runtime();
+	void save_mysql_query_rules_from_runtime(bool);
 
 	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }

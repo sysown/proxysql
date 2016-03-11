@@ -14,7 +14,7 @@ static void term_handler(int sig) {
 
 void crash_handler(int sig) {
 #ifdef DEBUG
-	malloc_stats_print(NULL, NULL, "");
+//	malloc_stats_print(NULL, NULL, "");
 #endif
 	void *arr[20];
 	size_t s;
@@ -23,7 +23,15 @@ void crash_handler(int sig) {
 
 	fprintf(stderr, "Error: signal %d:\n", sig);
 	backtrace_symbols_fd(arr, s, STDERR_FILENO);
-	exit(EXIT_FAILURE);
+//#ifdef SYS_gettid
+	// try to generate a core dump signaling again the thread
+	signal(sig, SIG_DFL);
+//	pid_t tid;
+//	tid = syscall(SYS_gettid);
+	pthread_kill(pthread_self(), sig);
+	//kill(tid, sig);
+//#endif /* SYS_gettid */
+//	exit(EXIT_FAILURE);
 }
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
@@ -47,7 +55,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
-	global.use_proxysql_mem=false;
+//	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
 	global.gdb=0;
@@ -68,19 +76,21 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
-	opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
+	//opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	confFile=new ProxySQL_ConfigFile();
+};
+
+void ProxySQL_GlobalVariables::install_signal_handler() {
 	signal(SIGTERM, term_handler);
 	signal(SIGSEGV, crash_handler);
 	signal(SIGABRT, crash_handler);
 	signal(SIGPIPE, SIG_IGN);
-};
-
+}
 
 void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
 	opt->parse(argc, argv);
@@ -126,9 +136,9 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		GloVars.__cmd_proxysql_datadir=strdup(datadir.c_str());
 	}
 
-	if (opt->isSet("-m")) {
-		global.use_proxysql_mem=true;
-	}
+//	if (opt->isSet("-m")) {
+//		global.use_proxysql_mem=true;
+//	}
 
 	if (opt->isSet("--initial")) {
 		__cmd_proxysql_initial=true;

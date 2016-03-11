@@ -9057,6 +9057,7 @@ static const keyword_t sql_keywords[] = {
     {"RIGHT OUTER", 'k'},
     {"RIGHT OUTER JOIN", 'k'},
     {"RLIKE", 'o'},
+    {"ROLLBACK", 'T'},
     {"ROUND", 'f'},
     {"ROW", 'f'},
     {"ROW_COUNT", 'f'},
@@ -9346,5 +9347,5 @@ static const keyword_t sql_keywords[] = {
     {"||", '&'},
     {"~*", 'o'},
 };
-static const size_t sql_keywords_sz = 9050;
+static const size_t sql_keywords_sz = 9051;
 #endif

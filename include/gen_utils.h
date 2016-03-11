@@ -27,15 +27,16 @@ class PtrArray {
 	volatile unsigned int size;
 	void expand(unsigned int);
 	void shrink();
-	bool use_l_alloc;
+//	bool use_l_alloc;
 	public:
-	void * operator new(size_t);
-	void operator delete(void *);
-	void * operator new(size_t, bool);
-	void operator delete(void *, bool);
+//	void * operator new(size_t);
+//	void operator delete(void *);
+//	void * operator new(size_t, bool);
+//	void operator delete(void *, bool);
 	void **pdata;
 	unsigned int len;
-	PtrArray(unsigned int __size=0, bool _use_l_alloc=false);
+	//PtrArray(unsigned int __size=0, bool _use_l_alloc=false);
+	PtrArray(unsigned int __size=0);
 	~PtrArray();
 
 	void *index(unsigned int i) { return pdata[i];} ;

@@ -105,7 +105,6 @@ class MySQL_Data_Stream
 	PtrSizeArray *PSarrayOUTpending;
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
-	unsigned char * query_SQL;	
 
 	int active_transaction; // 1 if there is an active transaction
 	int active; // data stream is active. If not, shutdown+close needs to be called
@@ -185,10 +184,11 @@ class MySQL_Data_Stream
 
 	void return_MySQL_Connection_To_Pool();
 	
-	void destroy_MySQL_Connection_From_Pool() {
+	void destroy_MySQL_Connection_From_Pool(bool sq) {
 		MySQL_Connection *mc=myconn;
 		detach_connection();
 		unplug_backend();
+		mc->send_quit=sq;
 		MyHGM->destroy_MyConn_from_pool(mc);
 	}
 	void free_mysql_real_query();	

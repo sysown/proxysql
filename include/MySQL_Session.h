@@ -20,7 +20,7 @@ class Query_Info {
 	MySQL_Session *sess;
 	unsigned long long start_time;
 	unsigned long long end_time;
-	void *QueryParserArgs;
+	SQP_par_t QueryParserArgs;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
 	unsigned char *QueryPointer;
 	int QueryLength;
@@ -34,6 +34,7 @@ class Query_Info {
 	void begin(unsigned char *_p, int len, bool mysql_header=false);
 	void end();
 	char *get_digest_text();
+	bool is_select_NOT_for_update();
 };
 
 class MySQL_Session
@@ -62,6 +63,8 @@ class MySQL_Session
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
 	bool handler_special_queries(PtrSize_t *);
+	bool handler_CommitRollback(PtrSize_t *);
+	bool handler_SetAutocommit(PtrSize_t *);
 	void RequestEnd(MySQL_Data_Stream *);
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
@@ -100,7 +103,6 @@ class MySQL_Session
 	int pending_connect;
 	Query_Info CurrentQuery;
 	//void *query_parser_args;
-	unsigned long long pause;
 	unsigned long long pause_until;
 	//MySQL_Session_userinfo userinfo_client;
 	//MySQL_Session_userinfo userinfo_server;

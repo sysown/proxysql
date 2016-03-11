@@ -139,6 +139,7 @@ MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
+	send_quit=true;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -151,6 +152,7 @@ MySQL_Connection::MySQL_Connection() {
 	status_flags=0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
+	options.autocommit=true;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -168,8 +170,15 @@ MySQL_Connection::~MySQL_Connection() {
 		userinfo=NULL;
 	}
 	if (mysql) {
+		// always decrease the counter
+		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
 		async_free_result();
-		mysql_close(mysql);
+		if (send_quit) {
+			mysql_close(mysql);
+		} else {
+			mysql_close_no_command(mysql);
+			shutdown(fd, SHUT_RDWR);
+		}
 		mysql=NULL;
 	}
 //	// FIXME: with the use of mysql client library , this part should be gone.
@@ -446,6 +455,7 @@ handler_again:
 			break;
 		case ASYNC_CONNECT_END:
 			if (!ret_mysql) {
+				// always increase the counter
 				proxy_error("Failed to mysql_real_connect() on %s:%d , %d: %s\n", parent->address, parent->port, mysql_errno(mysql), mysql_error(mysql));
     		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
@@ -453,8 +463,8 @@ handler_again:
 			}
     	break;
 		case ASYNC_CONNECT_SUCCESSFUL:
-			__sync_fetch_and_add(&parent->connect_OK,1);
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
+			__sync_fetch_and_add(&parent->connect_OK,1);
 			break;
 		case ASYNC_CONNECT_FAILED:
 			parent->connect_error(mysql_errno(mysql));
@@ -696,7 +706,9 @@ handler_again:
 
 
 void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
+#ifdef DEBUG
 	int fd;
+#endif /* DEBUG */
 	wait_events=0;
 
 	if (async_exit_status & MYSQL_WAIT_READ)
@@ -704,9 +716,15 @@ void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
 	if (async_exit_status & MYSQL_WAIT_WRITE)
 		wait_events|= POLLOUT;
 	if (wait_events)
+#ifdef DEBUG
 		fd= mysql_get_socket(mysql);
+#else
+		mysql_get_socket(mysql);
+#endif /* DEBUG */
 	else
+#ifdef DEBUG
 		fd= -1;
+#endif /* DEBUG */
 	if (async_exit_status & MYSQL_WAIT_TIMEOUT) {
 	timeout=10000;
 	//tv.tv_sec= 0;
@@ -1030,7 +1048,13 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (query_digest_text==NULL) return;
 	if (get_status_user_variable()==false) { // we search for variables only if not already set
 		if (index(query_digest_text,'@')) {
-			set_status_user_variable(true);
+			if (
+				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
+				&&
+				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
+			) {
+				set_status_user_variable(true);
+			}
 		}
 	}
 	if (get_status_temporary_table()==false) { // we search for temporary if not already set
@@ -1051,6 +1075,20 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (get_status_get_lock()==false) { // we search for get_lock if not already set
 		if (strcasestr(query_digest_text,"GET_LOCK(")) {
 			set_status_get_lock(true);
+		}
+	}
+}
+
+void MySQL_Connection::optimize() {
+	if (mysql->net.max_packet > 65536) { // FIXME: temporary, maybe for very long time . This needs to become a global variable
+		if ( ( mysql->net.buff == mysql->net.read_pos ) &&  ( mysql->net.read_pos == mysql->net.write_pos ) ) {
+			free(mysql->net.buff);
+			mysql->net.max_packet=8192;
+			mysql->net.buff=(unsigned char *)malloc(mysql->net.max_packet);
+			memset(mysql->net.buff,0,mysql->net.max_packet);
+			mysql->net.read_pos=mysql->net.buff;
+			mysql->net.write_pos=mysql->net.buff;
+			mysql->net.buff_end=mysql->net.buff+mysql->net.max_packet;
 		}
 	}
 }

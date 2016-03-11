@@ -12,7 +12,6 @@
 #define STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE      0x00000020
 #define STATUS_MYSQL_CONNECTION_GET_LOCK             0x00000040
 
-
 class MySQL_Connection_userinfo {
 	private:
 	uint64_t compute_hash();
@@ -39,6 +38,7 @@ class MySQL_Connection {
 	short wait_events;
 	unsigned long long timeout;
 	char scramble_buff[40];
+	bool send_quit;
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
 	int interr;	// integer return
 	my_bool ret_bool;
@@ -131,5 +131,6 @@ class MySQL_Connection {
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
+	void optimize();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

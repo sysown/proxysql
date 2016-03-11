@@ -159,9 +159,18 @@ static char is_digit_string(char *f, char *t)
 }
 
 
-char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment){
+char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comment){
 	int i = 0;
 
+	char cur_comment[FIRST_COMMENT_MAX_LENGTH];
+	cur_comment[0]=0;
+	int ccl=0;
+	int cmd=0;
+
+	int len = _len;
+	if (_len > QUERY_DIGEST_MAX_LENGTH) {
+		len = QUERY_DIGEST_MAX_LENGTH;
+	}
 	char *r = (char *) malloc(len + SIZECHAR);
 
 	char *p_r = r;
@@ -189,7 +198,10 @@ char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment
 			// comment type 1 - start with '/*'
 			if(prev_char == '/' && *s == '*')
 			{
+				ccl=0;
 				flag = 1;
+				if (*(s+1)=='!')
+					cmd=1;
 			}
 
 			// comment type 2 - start with '#'
@@ -242,17 +254,29 @@ char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment
 			// comment
 			// --------
 			if (flag == 1) {
+				if (cmd) {
+					if (ccl<FIRST_COMMENT_MAX_LENGTH-1) {
+						cur_comment[ccl]=*s;
+						ccl++;
+					}
+				}
 				if (fc==0) {
 					fc=1;
 				}
 				if (fc==1) {
 					if (fc_len<FIRST_COMMENT_MAX_LENGTH-1) {
-						first_comment[fc_len]= !is_space_char(*s) ? *s : ' ';
+						if (*first_comment==NULL) {
+							*first_comment=(char *)malloc(FIRST_COMMENT_MAX_LENGTH);
+						}
+						char *c=*first_comment+fc_len;
+						*c = !is_space_char(*s) ? *s : ' ';
 						fc_len++;
 					}
 					if (prev_char == '*' && *s == '/') {
 						if (fc_len>=2) fc_len-=2;
-						first_comment[fc_len]=0;
+						char *c=*first_comment+fc_len;
+						*c=0;
+						//*first_comment[fc_len]=0;
 						fc=2;
 					}
 				}
@@ -266,6 +290,44 @@ char *mysql_query_digest_and_first_comment(char *s, int len, char *first_comment
 			)
 			{
 				p_r = flag == 1 ? p_r_t - SIZECHAR : p_r_t;
+				if (cmd) {
+					cur_comment[ccl]=0;
+					if (ccl>=2) {
+						ccl-=2;
+						cur_comment[ccl]=0;
+						char el=0;
+						int fcc=0;
+						while (el==0 && fcc<ccl ) {
+							switch (cur_comment[fcc]) {
+								case '/':
+								case '*':
+								case '!':
+								case '0':
+								case '1':
+								case '2':
+								case '3':
+								case '4':
+								case '5':
+								case '6':
+								case '7':
+								case '8':
+								case '9':
+								case ' ':
+									fcc++;
+									break;
+								default:
+									el=1;
+									break;
+							}
+						}
+						if (el) {
+							memcpy(p_r,cur_comment+fcc,ccl-fcc);
+							p_r+=(ccl-fcc);
+							*p_r++=' ';
+						}
+					}
+					cmd=0;
+				}
 				prev_char = ' ';
 				flag = 0;
 				s++;

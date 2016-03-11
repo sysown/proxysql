@@ -8,6 +8,8 @@ extern MySQL_Threads_Handler *GloMTH;
 #undef max_allowed_packet
 #endif
 
+#define RESULTSET_BUFLEN 16300
+
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
 
@@ -719,7 +721,7 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-uint8_t MySQL_Protocol::generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
+uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
 	int col=0;
 	unsigned int rowlen=0;
 	uint8_t pkt_sid=sequence_id;
@@ -728,7 +730,23 @@ uint8_t MySQL_Protocol::generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int
 	}
 	PtrSize_t pkt;
 	pkt.size=rowlen+sizeof(mysql_hdr);
-	pkt.ptr=l_alloc(pkt.size);
+	if ( pkt.size<=(RESULTSET_BUFLEN-myrs->buffer_used) ) {
+		// there is space in the buffer, add the data to it
+		pkt.ptr = myrs->buffer + myrs->buffer_used;
+		myrs->buffer_used += pkt.size;
+	} else {
+		// there is no space in the buffer, we flush the buffer and recreate it
+		myrs->buffer_to_PSarrayOut();
+		// now we can check again if there is space in the buffer
+		if ( pkt.size<=(RESULTSET_BUFLEN-myrs->buffer_used) ) {
+			// there is space in the NEW buffer, add the data to it
+			pkt.ptr = myrs->buffer + myrs->buffer_used;
+			myrs->buffer_used += pkt.size;
+		} else {
+			// a new buffer is not enough to store the new row
+			pkt.ptr=l_alloc(pkt.size);
+		}
+	}
 	int l=sizeof(mysql_hdr);
 	for (col=0; col<colnums; col++) {
 		if (fieldstxt[col]) {
@@ -746,7 +764,12 @@ uint8_t MySQL_Protocol::generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int
 		myhdr.pkt_id=pkt_sid;
 		myhdr.pkt_length=rowlen;
 		memcpy(pkt.ptr, &myhdr, sizeof(mysql_hdr));
-		PSarrayOut->add(pkt.ptr,pkt.size);
+		if (pkt.ptr >= myrs->buffer && pkt.ptr < myrs->buffer+RESULTSET_BUFLEN) {
+			// we are writing within the buffer, do not add to PSarrayOUT
+		} else {
+			// we are writing outside the buffer, add to PSarrayOUT
+			myrs->PSarrayOUT->add(pkt.ptr,pkt.size);
+		}
 	} else {
 		unsigned int left=pkt.size;
 		unsigned int copied=0;
@@ -760,7 +783,8 @@ uint8_t MySQL_Protocol::generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int
 			pkt_sid++;
 			myhdr.pkt_length=0xFFFFFF;
 			memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
-			PSarrayOut->add(pkt2.ptr,pkt2.size);
+			// we are writing a large packet (over 16MB), we assume we are always outside the buffer
+			myrs->PSarrayOUT->add(pkt2.ptr,pkt2.size);
 			copied+=0xFFFFFF;
 			left-=0xFFFFFF;
 		}
@@ -772,7 +796,8 @@ uint8_t MySQL_Protocol::generate_pkt_row2(PtrSizeArray *PSarrayOut, unsigned int
 		myhdr.pkt_id=pkt_sid;
 		myhdr.pkt_length=left-sizeof(mysql_hdr);
 		memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
-		PSarrayOut->add(pkt2.ptr,pkt2.size);
+		// we are writing a large packet (over 16MB), we assume we are always outside the buffer
+		myrs->PSarrayOUT->add(pkt2.ptr,pkt2.size);
 	}
 	if (len) { *len=pkt.size+(pkt_sid-sequence_id)*sizeof(mysql_hdr); }
 	if (pkt.size >= (0xFFFFFF+sizeof(mysql_hdr))) {
@@ -790,7 +815,8 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 		+ 20 // scramble
 		+ 1; // 00
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc0(size);
+  unsigned char *_ptr=(unsigned char *)malloc(size);
+	memset(_ptr,0,size);
   memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
   int l;
   l=sizeof(mysql_hdr);
@@ -839,7 +865,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
   //mypkt->data=g_slice_alloc0(mypkt->length);
   //mypkt->data=l_alloc0(thrLD->sfp, mypkt->length);
-  unsigned char *_ptr=(unsigned char *)l_alloc0(size);
+  unsigned char *_ptr=(unsigned char *)malloc(size);
+	memset(_ptr,0,size);
   memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
   //Copy4B(_ptr, &myhdr);
   int l;
@@ -1099,7 +1126,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		/*if (pass_len) */ userinfo->password=strdup((const char *)"");
 	}
 	//if (password) free(password);
-	if (password) l_free_string(password);
+	if (password) {
+		free(password);
+		password=NULL;
+	}
 
 	return ret;
 }
@@ -1214,7 +1244,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		if (pass_len) userinfo->password=strdup((const char *)"");
 	}
 	//if (password) free(password);
-	if (password) l_free_string(password);
+	if (password) {
+		free(password);
+		password=NULL;
+	}
 
 	//l_free(len,pkt);
 	return ret;
@@ -1226,6 +1259,8 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
+	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	buffer_used=0;
 	myds=myprot->get_myds();
 	sid=myds->pkt_sid+1;
 	PSarrayOUT = new PtrSizeArray();
@@ -1269,12 +1304,16 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 		}
 		delete PSarrayOUT;
 	}
+	if (buffer) {
+		free(buffer);
+		buffer=NULL;
+	}
 }
 
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 	unsigned long *lengths=mysql_fetch_lengths(result);
 	unsigned int pkt_length;
-	sid=myprot->generate_pkt_row2(PSarrayOUT, &pkt_length, sid, num_fields, lengths, row);
+	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row);
 	sid++;
 	resultset_size+=pkt_length;
 	num_rows++;
@@ -1283,6 +1322,7 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 
 void MySQL_ResultSet::add_eof() {
 	PtrSize_t pkt;
+	buffer_to_PSarrayOut();
 	unsigned int nTrx=myds->sess->NumActiveTransactions();
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
@@ -1299,4 +1339,12 @@ bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 	while (PSarrayOUT->len)
 		PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
 	return resultset_completed;
+}
+
+void MySQL_ResultSet::buffer_to_PSarrayOut() {
+	if (buffer_used==0)
+		return;	// exit immediately if the buffer is empty
+	PSarrayOUT->add(buffer,buffer_used);
+	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	buffer_used=0;
 }

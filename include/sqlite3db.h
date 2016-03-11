@@ -85,6 +85,9 @@ class SQLite3_result {
 	public:
 	int columns;
 	int rows_count;
+	char *checksum();
+	int64_t raw_checksum();
+
 	std::vector<SQLite3_column *> column_definition;
 	std::vector<SQLite3_row *> rows;
 	SQLite3_result() {

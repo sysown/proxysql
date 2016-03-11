@@ -101,9 +101,9 @@ using namespace std;
 
 static volatile int load_;
 
-__thread l_sfp *__thr_sfp=NULL;
+//__thread l_sfp *__thr_sfp=NULL;
 
-const char *malloc_conf = "xmalloc:true,lg_tcache_max:17";
+const char *malloc_conf = "xmalloc:true,lg_tcache_max:16";
 
 int listen_fd;
 int socket_fd;
@@ -123,7 +123,7 @@ MySQL_Logger *GloMyLogger;
 
 void * mysql_worker_thread_func(void *arg) {
 
-	__thr_sfp=l_mem_init();
+//	__thr_sfp=l_mem_init();
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
@@ -136,7 +136,7 @@ void * mysql_worker_thread_func(void *arg) {
 	worker->run();
 	//delete worker;
 	delete worker;
-	l_mem_destroy(__thr_sfp);
+//	l_mem_destroy(__thr_sfp);
 	return NULL;
 }
 
@@ -317,8 +317,7 @@ void ProxySQL_Main_init() {
 #else
 	glovars.has_debug=false;
 #endif /* DEBUG */
-	GloVars.global.start_time=monotonic_time();
-	__thr_sfp=l_mem_init();
+//	__thr_sfp=l_mem_init();
 
 	{
 		/* moved here, so if needed by multiple modules it applies to all of them */
@@ -490,7 +489,7 @@ int main(int argc, const char * argv[]) {
 
 	ProxySQL_Main_init();
 	ProxySQL_Main_process_global_variables(argc, argv);
-
+	GloVars.global.start_time=monotonic_time(); // always initialize it
 
 	if (GloVars.global.foreground==false) {
 
@@ -508,6 +507,8 @@ int main(int argc, const char * argv[]) {
 
 		} else { /* The daemon */
 
+			GloVars.global.start_time=monotonic_time();
+			GloVars.install_signal_handler();
 			if (ProxySQL_daemonize_phase2()==false) {
 				goto finish;
 			}
@@ -530,12 +531,16 @@ gotofork:
 			exit(EXIT_FAILURE);
 		}
 
-		if (pid) {
+		if (pid) { /* The parent */
 
 			if (ProxySQL_daemonize_phase3()==false) {
 				goto gotofork;
 			}
 
+		} else { /* The daemon */
+
+			GloVars.global.start_time=monotonic_time();
+			GloVars.install_signal_handler();
 		}
 	}
 
@@ -578,7 +583,7 @@ finish:
 	daemon_signal_done();
 	daemon_pid_file_remove();
 
-	l_mem_destroy(__thr_sfp);
+//	l_mem_destroy(__thr_sfp);
 	return 0;
 }
 
