@@ -10,7 +10,7 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
-CURVER=1.1.1
+CURVER=1.1.2
 
 .PHONY: default
 default: build_deps build_lib build_src

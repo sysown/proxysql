@@ -2546,7 +2546,7 @@ char **ProxySQL_Admin::get_variables_list() {
 // Returns true if the given name is the name of an existing admin variable
 bool ProxySQL_Admin::has_variable(const char *name) {
 	size_t no_vars = sizeof(admin_variables_names) / sizeof(char *);
-	for (unsigned int i = 0; i < no_vars, admin_variables_names[i] != NULL; ++i) {
+	for (unsigned int i = 0; i < no_vars ; ++i) {
 		size_t var_len = strlen(admin_variables_names[i]);
 		if (strlen(name) == var_len && !strncmp(name, admin_variables_names[i], var_len)) {
 			return true;
