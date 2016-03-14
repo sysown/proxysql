@@ -214,6 +214,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyMon=NULL;
 	GloMyLogger=NULL;
 	GloHTTP=NULL;
+	GloAlertRouter = NULL;
 	MyHGM=new MySQL_HostGroups_Manager();
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
