@@ -87,8 +87,8 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_VERSION	"1.1.1.beta7" DEB
-#define PROXYSQL_CODENAME	"Kleon"
+#define PROXYSQL_VERSION	"1.2.0a" DEB
+#define PROXYSQL_CODENAME	"Truls"
 
 #ifndef PROXYSQL_FUNC_DEFS
 #define PROXYSQL_FUNC_DEFS
