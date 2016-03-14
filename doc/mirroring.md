@@ -3,7 +3,7 @@
 This is the first implementation of mirroring in ProxySQL, and should be considered experimental:
 * specification can change in the near future
 * isn't extensively tested
-* upgrade from previous version that do not support mirroring will lose any previously defined query rules
+* upgrades from previous versions that do not support mirroring will lose any previously defined query rules
 
 ### Extensions to mysql_query_rules
 
@@ -43,8 +43,8 @@ apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)
 
 ## Implementation overview
 
-When either `mirror_flagOUT` or `mirror_hostgroup` are set for a matching query, real time query mirroring is automatically enabled.
-Note that mirroring is enabled for the the final query, if it was rewritten: if the query was rewritten along the way, the mirroring logic applies to the rewritten query. Although, the mirrored query can be rewritten and modified again. Details below.
+When either `mirror_flagOUT` or `mirror_hostgroup` are set for a matching query, real time query mirroring is automatically enabled.  
+Note that mirroring is enabled for the the final query, if the original was rewritten: if the query was rewritten along the way, the mirroring logic applies to the rewritten query. Although, the mirrored query can be rewritten and modified again. Details below.  
 If a source queries is matched against multiple query rules, it is possible that `mirror_flagOUT` or `mirror_hostgroup` are changes multiple times.  
 The mirroring logic is the follow:
 * if `mirror_flagOUT` or `mirror_hostgroup` are set while processing the source query, a new mysql session is created
@@ -55,7 +55,7 @@ The mirroring logic is the follow:
 
 ## Examples
 
-# Mirror selects to same hostgroup
+### Mirror selects to same hostgroup
 
 In this very simple example we will just send all `SELECT` statements to hostgroup2, both the original and the mirror ones.
 
@@ -97,7 +97,7 @@ mysql> SELECT id FROM sbtest1 LIMIT 3;
 3 rows in set (0.02 sec)
 ```
 
-Back to the admin interface, we can see that the SELECT statements was executed twice:
+Back to the admin interface, we can see that the SELECT statement was executed twice:
 ``` sql
 Admin> select hostgroup,count_star,schemaname,digest_text from stats_mysql_query_digest ORDER BY digest;
 +-----------+------------+--------------------+----------------------------------+
@@ -140,7 +140,7 @@ Admin> select hostgroup,count_star,schemaname,digest_text from stats_mysql_query
 It is important to note that ProxySQL collect metrics both for the original query and the mirrored one.
 
 
-# Mirror SELECT to different hostgroup
+### Mirror SELECT to different hostgroup
 
 In this example, we will re-configure proxysql to send all the `SELECT` statements to hostgroup1, but to mirror them on hostgroup2 :
 ``` sql
@@ -153,7 +153,7 @@ Query OK, 1 row affected (0.00 sec)
 Admin> LOAD MYSQL QUERY RULES TO RUNTIME;                                                                                                                                 Query OK, 0 rows affected (0.00 sec)
 ```
 
-We also empty `stats_mysql_query_digest` to have a fresh start:
+We also empty `stats_mysql_query_digest` to have a fresh stats:
 ``` sql
 Admin> SELECT COUNT(*) FROM stats_mysql_query_digest_reset;
 +----------+
@@ -193,26 +193,24 @@ Admin> select hostgroup,count_star,sum_time,digest_text from stats_mysql_query_d
 ```
 The same identical query was sent to both hostgroup1 and hostgroup2!
 
-# rewrite both source query and mirror
+### rewrite both source query and mirror
 
 In this example, we will rewrite the original query, and then mirror it:
 For semplicity, we will rewrite `sbtest[0-9]+` to `sbtest3` :
 ``` sql
-Admin> DELETE FROM mysql_query_rules;                                                                                                                                     Query OK, 1 row affected (0.00 sec)
+Admin> DELETE FROM mysql_query_rules;
+Query OK, 1 row affected (0.00 sec)
 
 Admin> INSERT INTO mysql_query_rules (rule_id,active,match_pattern,destination_hostgroup,replace_pattern,mirror_hostgroup,apply) VALUES (5,1,'sbtest[0-9]+',1,'sbtest3',2,1);
 Query OK, 1 row affected (0.00 sec)
 
-Admin> LOAD MYSQL QUERY RULES TO RUNTIME;                                                                                                                                 Query OK, 0 rows affected (0.00 sec)
+Admin> LOAD MYSQL QUERY RULES TO RUNTIME;
+Query OK, 0 rows affected (0.00 sec)
 ```
 
 Again, we reset `stats_mysql_query_digest` :
 ``` sql
-Admin> SELECT COUNT(*) FROM stats_mysql_query_digest_reset;                                                                                                               +----------+
-| COUNT(*) |
-+----------+
-| 2        |
-+----------+
+Admin> SELECT COUNT(*) FROM stats_mysql_query_digest_reset;
 ```
 
 From the mysql client we can run the usual query:
@@ -242,12 +240,12 @@ Admin> select hostgroup,count_star,sum_time,digest_text from stats_mysql_query_d
 
 As expected, the modified query was executed on both hostgroups
 
-# rewrite mirror query only 
+### rewrite mirror query only 
 
 In this example we will rewrite only the mirrored query.  
 This is very useful if we want, for example, try to understand the performance of a rewritten query, or if a new index can improve performance.  
 In this specific example we will compare the performance of the same queries with and without the use of indexes.
-We will also send the queries to different hostgroups.
+We will also send the queries to same hostgroups.
 
 The follow creates a rule (`rule_id=5`) that:
 * matches `FROM sbtest1 `
@@ -256,13 +254,14 @@ The follow creates a rule (`rule_id=5`) that:
 * does NOT set a `mirror_hostgroup`
 
 ``` sql
-Admin> DELETE FROM mysql_query_rules;                                                                                                                                     Query OK, 1 row affected (0.00 sec)
+Admin> DELETE FROM mysql_query_rules;
+Query OK, 1 row affected (0.00 sec)
 
 Admin> INSERT INTO mysql_query_rules (rule_id,active,match_pattern,destination_hostgroup,mirror_flagOUT,apply) VALUES (5,1,'FROM sbtest1 ',2,100,1);
 Query OK, 1 row affected (0.00 sec)
 ```
 
-Because `mirror_flagOUT` is set, a new session will be created to run the same query. Although `mirror_hostgroup` was not set, so the query will be sent to the default hostgroup for the specific user, according to `mysql_users`. Instead, we want to send the mirror query to the same hostgroup as the original. We could do this either setting `mirror_hostgroup` in rule with `rule_id=5` , or create a new rule. We will create a new rule, also to reqrite the query:
+Because `mirror_flagOUT` is set, a new session will be created to run the same query. Although `mirror_hostgroup` was not set, so the query will be sent to the default hostgroup for the specific user, according to `mysql_users`. Instead, we want to send the mirror query to the same hostgroup as the original. We could do this either setting `mirror_hostgroup` in rule with `rule_id=5` , or create a new rule. We will create a new rule, also to rewrite the query:
 ``` sql
 Admin> INSERT INTO mysql_query_rules (rule_id,active,flagIN,match_pattern,destination_hostgroup,replace_pattern,apply) VALUES (10,1,100,'FROM sbtest1 ',2,'FROM sbtest1 IGNORE INDEX(k_1) ',1);
 Query OK, 1 row affected (0.00 sec)
@@ -310,7 +309,8 @@ destination_hostgroup: 2
                 apply: 1
 2 rows in set (0.00 sec)
 
-Admin> LOAD MYSQL QUERY RULES TO RUNTIME;                                                                                                                                    Query OK, 0 rows affected (0.00 sec)
+Admin> LOAD MYSQL QUERY RULES TO RUNTIME;
+Query OK, 0 rows affected (0.00 sec)
 ```
 
 One important thing to note here is that in the rule with `rule_id=10` , the one the mirrored query will match against, we need to set `destination_hostgroup` and not `mirror_hostgroup` : `mirror_hostgroup` should be set only for the original query in order to immediately specify where the mirror query should be sent, without the need of extra rules in `mysql_query_rules` .
@@ -364,7 +364,7 @@ Table `stats_mysql_query_digest` confirms that:
 * the mirrored query was rewritten
 * the mirrored query was way slower because ignored the index
 
-# Advanced example: use mirroring to test query rewrite
+### Advanced example: use mirroring to test query rewrite
 
 While working on mirroring I was asked a completely different question, related to query rewrite: how one could know if the given regex matches given query, and verify that the rewrite pattern is correct?  
 To be more specific, the problem is to understand if the rewrite is correct without affecting live traffic.  
@@ -380,7 +380,8 @@ Query OK, 1 row affected (0.00 sec)
 Admin> INSERT INTO mysql_query_rules (rule_id,active,flagIN,match_pattern,destination_hostgroup,replace_pattern,apply) VALUES (10,1,100,'^SELECT DISTINCT c FROM sbtest([0-9]{1,2}) WHERE id BETWEEN ([0-9]+) AND ([0-9]+)\+([0-9]+) ORDER BY c$',2,'SELECT DISTINCT c FROM sbtest\1 WHERE id = \3 \+ \4 ORDER BY c',1);
 Query OK, 1 row affected (0.00 sec)
 
-Admin> LOAD MYSQL QUERY RULES TO RUNTIME;                                                                                                                                    Query OK, 0 rows affected (0.00 sec)
+Admin> LOAD MYSQL QUERY RULES TO RUNTIME;
+Query OK, 0 rows affected (0.00 sec)
 ```
 
 The regex above are quite complex, and this is why mirroring helps instead of rewriting live traffic.
@@ -430,7 +431,7 @@ Admin> SELECT * from stats_mysql_query_rules;
 ```
 
 Rule with `rule_id=10` was a match according to `hits` in `stats_mysql_query_rules`.  
-Why the query wasn't rewritten than? the error log has this information:  
+Why the query wasn't rewritten than? The error log has this information:  
 ```
 re2/re2.cc:881: invalid rewrite pattern: SELECT DISTINCT c FROM sbtest\1 WHERE id = \3 \+ \4 ORDER BY c
 ```
@@ -439,7 +440,8 @@ Indeed, it is an incorrect syntax , let fix this:
 Admin> UPDATE mysql_query_rules SET replace_pattern='SELECT DISTINCT c FROM sbtest\1 WHERE id = \3 + \4 ORDER BY c' WHERE rule_id=10;
 Query OK, 1 row affected (0.00 sec)
 
-Admin> LOAD MYSQL QUERY RULES TO RUNTIME;                                                                                                                                    Query OK, 0 rows affected (0.00 sec)
+Admin> LOAD MYSQL QUERY RULES TO RUNTIME;
+Query OK, 0 rows affected (0.00 sec)
 
 Admin> SELECT COUNT(*) FROM stats_mysql_query_digest_reset;
 ```
@@ -469,17 +471,18 @@ Admin> select hostgroup,count_star,sum_time,digest_text from stats_mysql_query_d
 
 Well, yes, the query was rewritten correctly, and was also executed :-)  
 
-# Advanced example: use mirroring to test query rewrite
+### Advanced example: use mirroring and firewall to test query rewrite
 
-Taking the previous example/exercises a bit forward: is it possible to how a query will be rewritten without executing it? YES!  
-To achieve this, we will set `error_msg` for the mirrored query: in this way ProxySQL will process the query, but it will filter it without sending it to any mysql servers.
+Taking the previous example/exercise a bit forward: is it possible to know how a query will be rewritten without executing it? YES!  
+To achieve this, we will set `error_msg` for the mirrored query: in this way ProxySQL will process the query, but it will filter it without sending it to any mysql servers. As stated in the very beginning, the mirrored query can be modified, and firewall it is an example of modifying the mirrored query.
 
 Example:
 ``` sql
 Admin> UPDATE mysql_query_rules SET error_msg="random error, blah blah" WHERE rule_id=10;
 Query OK, 1 row affected (0.00 sec)
 
-Admin> LOAD MYSQL QUERY RULES TO RUNTIME;                                                                                                                                    Query OK, 0 rows affected (0.01 sec)
+Admin> LOAD MYSQL QUERY RULES TO RUNTIME;
+Query OK, 0 rows affected (0.01 sec)
 
 Admin> SELECT COUNT(*) FROM stats_mysql_query_digest_reset;
 ```
@@ -516,4 +519,6 @@ Admin> SELECT * from stats_mysql_query_rules;                                   
 2 rows in set (0.00 sec)
 ```
 
-Great! We know that the query was rewritten, but actually not sent anywhere (`sum_time=0` because the response was immediate, and `hostgroup=-1` has the special meaning of "not sent anywhere").
+Great! We know that the query was rewritten, but actually not sent anywhere:
+* `sum_time=0` because the response was immediate
+* `hostgroup=-1` has the special meaning of "not sent anywhere"
