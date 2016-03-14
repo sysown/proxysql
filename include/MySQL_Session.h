@@ -95,6 +95,7 @@ class MySQL_Session
 	int current_hostgroup;
 	int default_hostgroup;
 	int mirror_hostgroup;
+	int mirror_flagOUT;
 	int active_transactions;
 	int autocommit_on_hostgroup;
 	char * default_schema;
