@@ -14,10 +14,11 @@
 class AlertRouter {
 private:
     time_t lastPushTime;
-    void pushAlertToOpsGenie(const char * message);
+    static void *pushAlertToOpsGenie(void *message);
+    void pushAlertInDetachedThread(void *(*pushMethod)(void *), char *message);
 public:
     AlertRouter();
-    void pushAlert(const char *message);
+    void pushAlert(char *message);
 };
 
 #endif //PROXYSQL_ALERTROUTER_H

@@ -13,19 +13,51 @@ AlertRouter::AlertRouter() {
     lastPushTime = time(NULL) - GloAdmin->get_min_time_between_alerts_sec() - 1;
 }
 
-void AlertRouter::pushAlertToOpsGenie(const char * message) {
+
+// Forwards the given message to OpsGenieConnector so it can be pushed to OpsGenie.
+//
+// It assumes that it can be run in a different thread than the one that allocated message so it will free message
+// before returning.
+void *AlertRouter::pushAlertToOpsGenie(void *message) {
     if (!GloAdmin->get_ops_genie_api_key()) {
         proxy_error("You need to set ops_genie_api_key to enable integration with OpsGenie");
-        return;
+        free(message);
+        return NULL;
     }
 
     OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_api_key());
-    opsGenieConnector.pushAlert(message);
+    opsGenieConnector.pushAlert((char *)message);
+    free(message);
+    return NULL;
+}
+
+
+// Creates a detached thread to run the pushMethod with the given message as argument.
+//
+// Clones message so the thread can safely use it even if parent thread frees it before the new thread runs.
+void AlertRouter::pushAlertInDetachedThread(void *(*pushMethod)(void *), char *message) {
+    pthread_t thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+    // The thread we spawn should free this buffer. We need to duplicate otherwise the parent thread may get to free
+    // message before the child thread gets to access it. The child thread will be responsible of cleaning it up.
+    char *arg = strdup(message);
+    int rc = pthread_create(&thread, &attr, pushMethod, arg);
+    if (rc) {
+        proxy_error("Failed to create detached thread for pushing alert with message: %s.\n Return code is %d\n",
+                    arg, rc);
+    }
+    pthread_attr_destroy(&attr);
 }
 
 // Checks which alert service integrations are enabled and sends the given message as an alert
 // to all enabled services.
-void AlertRouter::pushAlert(const char *message) {
+//
+// This method spawns new treads to do push the requests so it doesn't block the thread creating the alert. It creates
+// a copy of message so you can free message at will.
+void AlertRouter::pushAlert(char *message) {
     // Drop the alert if it is to soon since the last alert was pushed.
     time_t now = time(NULL);
     int min_time_between_alerts_sec = GloAdmin->get_min_time_between_alerts_sec();
@@ -36,7 +68,7 @@ void AlertRouter::pushAlert(const char *message) {
     }
 
     if (GloAdmin->get_enable_ops_genie_integration()) {
-        pushAlertToOpsGenie(message);
+        pushAlertInDetachedThread(AlertRouter::pushAlertToOpsGenie, message);
     }
     lastPushTime = time(NULL);
 }
