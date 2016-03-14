@@ -73,6 +73,7 @@ class MySQL_Session
 	void * operator new(size_t);
 	void operator delete(void *);
 	MySQL_Thread *thread;
+	unsigned long long start_time;
 	uint32_t thread_session_id;
 //	enum session_states sess_states;
 	Query_Processor_Output *qpo;

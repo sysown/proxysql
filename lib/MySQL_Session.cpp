@@ -188,6 +188,7 @@ MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	pause_until=0;
 	qpo=NULL;
+	start_time=0;
 	command_counters=new StatCounters(15,10,false);
 	healthy=1;
 	autocommit=true;
@@ -675,7 +676,13 @@ __get_pkts_from_client:
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
-									if (rc_break==true) { break; }
+									if (rc_break==true) {
+										if (mirror==false) {
+											break;
+										} else {
+											return -1;
+										}
+									}
 									//if (mirror==true) {
 									//	// this is not required anymore, because now
 									//	// GloQPro->process_mysql_query() knows if we are inside a mirror session
@@ -697,7 +704,11 @@ __get_pkts_from_client:
 											newsess->client_myds->attach_connection(myconn);
 											newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
 											newsess->to_process=1;
-											newsess->mirror_hostgroup=qpo->mirror_hostgroup; // in the new session we copy the mirror hostgroup
+											if (qpo->mirror_hostgroup>= 0) {
+												newsess->mirror_hostgroup=qpo->mirror_hostgroup; // in the new session we copy the mirror hostgroup
+											} else {
+												newsess->mirror_hostgroup=default_hostgroup; // copy the default
+											}
 											newsess->mirror_flagOUT=qpo->mirror_flagOUT; // in the new session we copy the mirror flagOUT
 											newsess->default_schema=strdup(default_schema);
 											newsess->mirror=true;

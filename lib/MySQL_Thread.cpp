@@ -1365,6 +1365,7 @@ void MySQL_Thread::register_session(MySQL_Session *_sess) {
 	}
 	mysql_sessions->add(_sess);
 	_sess->thread=this;
+	_sess->start_time=curtime;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
 }
 
@@ -2053,7 +2054,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						pta[3]=strdup(ui->schemaname);
 					}
 				}
-				if (sess->client_myds->client_addr->sa_family==AF_INET) {
+				if (sess->mirror==false && sess->client_myds->client_addr->sa_family==AF_INET) {
 					struct sockaddr_in * ipv4addr=(struct sockaddr_in *)sess->client_myds->client_addr;
 					pta[4]=strdup(inet_ntoa(ipv4addr->sin_addr));
 					sprintf(buf,"%d", htons(ipv4addr->sin_port));
@@ -2131,11 +2132,16 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						pta[11]=strdup(buf);
 						break;
 				}
-				int idx=sess->client_myds->poll_fds_idx;
-				unsigned long long last_sent=sess->thread->mypolls.last_sent[idx];
-				unsigned long long last_recv=sess->thread->mypolls.last_recv[idx];
-				unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
-				sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
+				if (sess->mirror==false) {
+					int idx=sess->client_myds->poll_fds_idx;
+					unsigned long long last_sent=sess->thread->mypolls.last_sent[idx];
+					unsigned long long last_recv=sess->thread->mypolls.last_recv[idx];
+					unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
+					sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
+				} else {
+					// for mirror session we only consider the start time
+					sprintf(buf,"%llu", (sess->thread->curtime - sess->start_time)/1000 );
+				}
 				pta[12]=strdup(buf);
 
 				result->add_row(pta);
