@@ -366,8 +366,6 @@ void ProxySQL_Main_init_phase2___not_started() {
 	ProxySQL_Main_init_Admin_module();
 	GloMTH->print_version();
 
-	ProxySQL_Main_init_AlertRouter();
-
 	if (GloVars.configfile_open) {
 		GloVars.confFile->CloseFile();
 	}
@@ -383,6 +381,8 @@ void ProxySQL_Main_init_phase2___not_started() {
 void ProxySQL_Main_init_phase3___start_all() {
 
 	GloMyLogger->set_datadir(GloVars.datadir);
+
+	ProxySQL_Main_init_AlertRouter();
 
 	// load all mysql servers to GloHGH
 	GloAdmin->init_mysql_servers();
