@@ -18,6 +18,7 @@ private:
     void pushAlertInDetachedThread(void *(*pushMethod)(void *), char *message);
 public:
     AlertRouter();
+    AlertRouter(time_t lastPushTime);
     void pushAlert(char *message);
 };
 
