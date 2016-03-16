@@ -1,5 +1,6 @@
 #include "AlertRouter.h"
 #include "OpsGenieConnector.h"
+#include "PagerdutyConnector.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -27,6 +28,24 @@ void *AlertRouter::pushAlertToOpsGenie(void *message) {
 
     OpsGenieConnector opsGenieConnector(GloAdmin->get_ops_genie_api_key());
     opsGenieConnector.pushAlert((char *)message);
+    free(message);
+    return NULL;
+}
+
+
+// Forwards the given message to PagerdutyConnector so it can be pushed to pagerduty.
+//
+// It assumes that it can be run in a different thread than the one that allocated message so it will free message
+// before returning.
+void *AlertRouter::pushAlertToPagerduty(void *message) {
+    if (!GloAdmin->get_pager_duty_service_key()) {
+        proxy_error("You need to set pager_duty_service_key to enable integration with pagerduty");
+        free(message);
+        return NULL;
+    }
+
+    PagerdutyConnector pagerdutyConnector(GloAdmin->get_pager_duty_service_key());
+    pagerdutyConnector.pushAlert((char *)message);
     free(message);
     return NULL;
 }
@@ -69,6 +88,9 @@ void AlertRouter::pushAlert(char *message) {
 
     if (GloAdmin->get_enable_ops_genie_integration()) {
         pushAlertInDetachedThread(AlertRouter::pushAlertToOpsGenie, message);
+    }
+    if (GloAdmin->get_enable_pager_duty_integration()) {
+        pushAlertInDetachedThread(AlertRouter::pushAlertToPagerduty, message);
     }
     lastPushTime = time(NULL);
 }
