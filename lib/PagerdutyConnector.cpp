@@ -2,7 +2,7 @@
 #include "http_client.h"
 #include "PagerdutyConnector.h"
 
-const char *PagerdutyConnector::apiUrl = "https://api.opsgenie.com/v1/json/alert";
+const char *PagerdutyConnector::apiUrl = "https://events.pagerduty.com/generic/2010-04-15/create_event.json";
 
 PagerdutyConnector::PagerdutyConnector(const char *serviceKey) {
     this->serviceKey = serviceKey;
@@ -10,7 +10,8 @@ PagerdutyConnector::PagerdutyConnector(const char *serviceKey) {
 
 int PagerdutyConnector::pushAlert(const char *message) {
     char json[1000];
-    json_emit(json, 1000, "{s:s, s:s}", "message", message, "apiKey", apiKey);
+    json_emit(json, 1000, "{s:s, s:s, s:s, s:s}", "service_key", this->serviceKey, "event_type", "trigger",
+              "description", message, "client", "ProxySQL");
     http_response *response = http_post(this->apiUrl, "Content-Type: application/json\r\n", json);
 
     if (!response) {
