@@ -58,7 +58,7 @@ Let us explain in more depth each individual option.
 
 Sending alerts for critical events
 ----------------------------------
-ProxySQL supports integration with [OpsGenie](www.opsgenie.com) so it can send alerts when critical events happen.
+ProxySQL supports integration with [OpsGenie](www.opsgenie.com) and [pagerduty](www.pagerduty.com) so it can send alerts when critical events happen.
 
 So far ProxySQL sends alerts for the following events:
 * when a backend server gets shunned
@@ -69,4 +69,11 @@ So far ProxySQL sends alerts for the following events:
 3. Add a recipient or team to the newly created integration to have someone notified when ProxySQL will create an alert. If you don't configure a recipient or team then the alert will be created but nobody will get notified.
 4. Copy the API key and set the `admin-ops_genie_api_key` variable to it using ProxySQL's admin interface. See [Configuring ProxySQL](doc/configuration.md) on how to do that.
 5. Set the `admin-enable_ops_genie_integration` variable to `true`.
-6. Aditionally you can configure a rate limit for the alerts by setting the value of `admin-min_time_between_alerts_sec` variable.
+6. Aditionally you can configure a global rate limit for the alerts by setting the value of `admin-min_time_between_alerts_sec` variable.
+
+###Configure integration with pagerduty
+1. Create an pagerduty account.
+2. Follow the signup wizard to create an API Service or create a new one at <https://vitaminsoftware.pagerduty.com/services>.
+3. Go to `Configuration`->`Services` and select your service. From the `Settings` tab copy the `Integration key` and set the `admin-pager_duty_service_key` variable to it using ProxySQL's admin interface.
+5. Set the `admin-enable_pager_duty_integration` variable to `true`.
+6. Aditionally you can configure a global rate limit for the alerts by setting the value of `admin-min_time_between_alerts_sec` variable.
