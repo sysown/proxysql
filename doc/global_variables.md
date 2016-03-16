@@ -60,7 +60,7 @@ OpsGenie apiKey needed to authenticate when pushing alerts.
 
 Enables integration with [pagerduty](www.pagerduty.com/) so that ProxySQL will push critical alerts to pagerduty.
 
-### `admin-pager_duty_api_key`
+### `admin-pager_duty_service_key`
 
 pagerduty apiKey needed to authenticate when pushing alerts.
 

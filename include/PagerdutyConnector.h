@@ -7,9 +7,9 @@
 class PagerdutyConnector : public AlertServiceConnector {
 private:
     static const char *apiUrl;
-    const char *apiKey;
+    const char *serviceKey;
 public:
-    PagerdutyConnector(const char *apiKey);
+    PagerdutyConnector(const char *serviceKey);
     int pushAlert(const char *message);
 };
 

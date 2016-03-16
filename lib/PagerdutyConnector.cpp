@@ -4,8 +4,8 @@
 
 const char *PagerdutyConnector::apiUrl = "https://api.opsgenie.com/v1/json/alert";
 
-PagerdutyConnector::PagerdutyConnector(const char *apiKey) {
-    this->apiKey = apiKey;
+PagerdutyConnector::PagerdutyConnector(const char *serviceKey) {
+    this->serviceKey = serviceKey;
 }
 
 int PagerdutyConnector::pushAlert(const char *message) {

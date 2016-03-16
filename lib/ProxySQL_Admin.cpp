@@ -108,7 +108,7 @@ static char * admin_variables_names[]= {
 	(char *)"enable_ops_genie_integration",
 	(char *)"ops_genie_api_key",
   	(char *)"enable_pager_duty_integration",
-  	(char *)"pager_duty_api_key",
+  	(char *)"pager_duty_service_key",
 	(char *)"min_time_between_alerts_sec",
 #ifdef DEBUG
   (char *)"debug",
@@ -2063,7 +2063,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.enable_ops_genie_integration = false;
 	variables.ops_genie_api_key = NULL;
 	variables.enable_pager_duty_integration = false;
-	variables.pager_duty_api_key = NULL;
+	variables.pager_duty_service_key = NULL;
 	variables.min_time_between_alerts_sec = 300;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
@@ -2513,7 +2513,7 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name, "enable_pager_duty_integration")) {
 		return strdup((variables.enable_pager_duty_integration ? "true" : "false"));
 	}
-	if (!strcasecmp(name,"pager_duty_api_key")) return s_strdup(variables.pager_duty_api_key);
+	if (!strcasecmp(name,"pager_duty_service_key")) return s_strdup(variables.pager_duty_service_key);
 	if (!strcasecmp(name,"min_time_between_alerts_sec")) {
 		sprintf(intbuf,"%d",variables.min_time_between_alerts_sec);
 		return strdup(intbuf);
@@ -2735,11 +2735,11 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		return false;
 	}
-	if (!strcasecmp(name, "pager_duty_api_key")) {
+	if (!strcasecmp(name, "pager_duty_service_key")) {
 		if (vallen) {
-			if (variables.pager_duty_api_key)
-				free(variables.pager_duty_api_key);
-			variables.pager_duty_api_key=strdup(value);
+			if (variables.pager_duty_service_key)
+				free(variables.pager_duty_service_key);
+			variables.pager_duty_service_key=strdup(value);
 			return true;
 		} else {
 			return false;
