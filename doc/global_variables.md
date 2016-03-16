@@ -56,6 +56,14 @@ Enables integration with [OpsGenie](www.opsgenie.com) so that ProxySQL will push
 
 OpsGenie apiKey needed to authenticate when pushing alerts.
 
+### `admin-enable_pager_duty_integration`
+
+Enables integration with [pagerduty](www.pagerduty.com/) so that ProxySQL will push critical alerts to pagerduty.
+
+### `admin-pager_duty_api_key`
+
+pagerduty apiKey needed to authenticate when pushing alerts.
+
 ### `admin-min_time_between_alerts_sec`
 
 Defines a rate limit for sending alerts. ProxySQL will drop alerts that occur sooner than min_time_between_alerts_sec seconds since the previous alert that was pushed.
