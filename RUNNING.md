@@ -62,6 +62,7 @@ ProxySQL supports integration with [OpsGenie](www.opsgenie.com) and [pagerduty](
 
 So far ProxySQL sends alerts for the following events:
 * when a backend server gets shunned
+* when the angel process restarts the daemon process
 
 ###Configure integration with OpsGenie
 1. Create an OpsGenie account.

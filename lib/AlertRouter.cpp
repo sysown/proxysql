@@ -15,6 +15,11 @@ AlertRouter::AlertRouter() {
 }
 
 
+AlertRouter::AlertRouter(time_t lastPushTime) {
+    this->lastPushTime = lastPushTime;
+}
+
+
 // Forwards the given message to OpsGenieConnector so it can be pushed to OpsGenie.
 //
 // It assumes that it can be run in a different thread than the one that allocated message so it will free message

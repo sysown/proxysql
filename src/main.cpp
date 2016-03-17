@@ -19,8 +19,15 @@
 #undef dlerror
 #endif
 
-
 time_t laststart;
+// Set to the time of the most recent daemon restart. Used to mark that a notification must be sent that the daemon
+// failed. Will be read by the daemon process as soon as GloAlertRouter is initialized.
+time_t latest_restart;
+// The time of the 2nd latest restart. Will be read by the daemon process and used as the time for the latest sent
+// alert. Useful to impose alert rate limiting so that alerts are not sent if the daemon is restarted multiple times
+// inside the alert rate limiting time. Needed because the daemon loses state when it is restarted.
+long previous_restart;
+
 pid_t pid;
 
 static const char * proxysql_pid_file() {
@@ -229,7 +236,14 @@ void ProxySQL_Main_init_Admin_module() {
 }
 
 void ProxySQL_Main_init_AlertRouter() {
-	GloAlertRouter = new AlertRouter();
+	if (!previous_restart) {
+		GloAlertRouter = new AlertRouter();
+	} else {
+		GloAlertRouter = new AlertRouter(previous_restart);
+	}
+	if (latest_restart) {
+		GloAlertRouter->pushAlert((char *)"Daemon failed and was restarted by angel process.");
+	}
 }
 
 void ProxySQL_Main_init_Auth_module() {
@@ -545,12 +559,19 @@ int main(int argc, const char * argv[]) {
 		}
 
 	laststart=0;
+	latest_restart = 0;
+	previous_restart = 0;
 	if (glovars.proxy_restart_on_error) {
 gotofork:
 		if (laststart) {
 			//daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
 			proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
 			sleep(glovars.proxy_restart_delay);
+
+			if (latest_restart) {
+				previous_restart = latest_restart;
+			}
+			latest_restart = time(NULL);
 		}
 		laststart=time(NULL);
 		pid = fork();
