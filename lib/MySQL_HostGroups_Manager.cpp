@@ -1,6 +1,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "AlertRouter.h"
+#include <atomic>
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
