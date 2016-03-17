@@ -81,5 +81,6 @@ cleanall:
 	cd libinjection && ${MAKE} clean
 	cd libevent && rm -rf libevent-2.0.22-stable
 	cd sqlite3/sqlite3 && rm -rf *.o
+	cd mongoose/mongoose && rm -rf *.o
 .PHONY: cleanall
 
