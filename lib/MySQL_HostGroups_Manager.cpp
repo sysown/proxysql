@@ -143,7 +143,7 @@ void MySrvC::connect_error(int err_num) {
 		default:
 			break;
 	}
-	time_t t=time(NULL);
+	unsigned long long t=time(NULL);
 	if (t!=time_last_detected_error) {
 		time_last_detected_error=t;
 		connect_ERR_at_time_last_detected_error=1;
