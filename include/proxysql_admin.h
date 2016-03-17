@@ -34,6 +34,9 @@ class ProxySQL_Admin {
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
 		char * admin_version;
+		bool enable_ops_genie_integration;
+		char *ops_genie_api_key;
+		int min_time_between_alerts_sec;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -90,8 +93,12 @@ class ProxySQL_Admin {
 	SQLite3DB *monitordb;	// in memory
 	void print_version();
 	bool init();
+	// variable accessors
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
+	bool get_enable_ops_genie_integration() {return variables.enable_ops_genie_integration; }
+	const char *get_ops_genie_api_key() { return variables.ops_genie_api_key; }
+	int get_min_time_between_alerts_sec() { return variables.min_time_between_alerts_sec; }
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();

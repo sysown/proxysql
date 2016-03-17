@@ -55,3 +55,18 @@ Let us explain in more depth each individual option.
 * `-V, --version`. Print the current version of ProxySQL
 * `--initial`. Reset the admin database with the content from the configuration file. Refer to the [configuration system documentation](https://github.com/sysown/proxysql/blob/master/doc/configuration_system.md) for more information.
 * `--reload`. Merge the configuration from the config file with the current runtime database. Refer to the [configuration system documentation](https://github.com/sysown/proxysql/blob/master/doc/configuration_system.md) for more information.
+
+Sending alerts for critical events
+----------------------------------
+ProxySQL supports integration with [OpsGenie](www.opsgenie.com) so it can send alerts when critical events happen.
+
+So far ProxySQL sends alerts for the following events:
+* when a backend server gets shunned
+
+###Configure integration with OpsGenie
+1. Create an OpsGenie account.
+2. Create an OpsGenie [API integration](https://app.opsgenie.com/integration).
+3. Add a recipient or team to the newly created integration to have someone notified when ProxySQL will create an alert. If you don't configure a recipient or team then the alert will be created but nobody will get notified.
+4. Copy the API key and set the `admin-ops_genie_api_key` variable to it using ProxySQL's admin interface. See [Configuring ProxySQL](doc/configuration.md) on how to do that.
+5. Set the `admin-enable_ops_genie_integration` variable to `true`.
+6. Aditionally you can configure a rate limit for the alerts by setting the value of `admin-min_time_between_alerts_sec` variable.

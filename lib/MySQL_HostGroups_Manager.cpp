@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "AlertRouter.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
@@ -9,6 +10,7 @@
 
 
 extern ProxySQL_Admin *GloAdmin;
+extern AlertRouter *GloAlertRouter;
 
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -150,6 +152,12 @@ void MySrvC::connect_error(int err_num) {
 			proxy_info("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			status=MYSQL_SERVER_STATUS_SHUNNED;
 			shunned_automatic=true;
+
+			// Push an alert for a backend server failing.
+			int len = snprintf(NULL, 0, "Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
+			char message[len + 1];
+			sprintf(message, "Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
+			GloAlertRouter->pushAlert(message);
 		}
 	}
 }

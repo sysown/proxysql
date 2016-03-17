@@ -13,6 +13,7 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <proxysql_admin.h>
 
 #include "SpookyV2.h"
 //#define MYSQL_THREAD_IMPLEMENTATION
@@ -104,6 +105,9 @@ static char * admin_variables_names[]= {
   (char *)"refresh_interval",
 	(char *)"read_only",
 	(char *)"version",
+	(char *)"enable_ops_genie_integration",
+	(char *)"ops_genie_api_key",
+	(char *)"min_time_between_alerts_sec",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -2054,6 +2058,9 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.refresh_interval=2000;
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 	variables.admin_version=(char *)PROXYSQL_VERSION;
+	variables.enable_ops_genie_integration = false;
+	variables.ops_genie_api_key = NULL;
+	variables.min_time_between_alerts_sec = 300;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -2495,6 +2502,14 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"read_only")) {
 		return strdup((variables.admin_read_only ? "true" : "false"));
 	}
+	if (!strcasecmp(name, "enable_ops_genie_integration")) {
+		return strdup((variables.enable_ops_genie_integration ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"ops_genie_api_key")) return s_strdup(variables.ops_genie_api_key);
+	if (!strcasecmp(name,"min_time_between_alerts_sec")) {
+		sprintf(intbuf,"%d",variables.min_time_between_alerts_sec);
+		return strdup(intbuf);
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -2679,6 +2694,32 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			return true;
 		}
 		return false;
+	}
+	if (!strcasecmp(name,"enable_ops_genie_integration")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.enable_ops_genie_integration=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.enable_ops_genie_integration=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name, "ops_genie_api_key")) {
+		if (vallen) {
+			if (variables.ops_genie_api_key)
+				free(variables.ops_genie_api_key);
+			variables.ops_genie_api_key=strdup(value);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name, "min_time_between_alerts_sec")) {
+		int intv = atoi(value);
+		variables.min_time_between_alerts_sec=intv;
+		return true;
 	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
