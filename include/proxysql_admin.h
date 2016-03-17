@@ -36,6 +36,8 @@ class ProxySQL_Admin {
 		char * admin_version;
 		bool enable_ops_genie_integration;
 		char *ops_genie_api_key;
+		bool enable_pager_duty_integration;
+		char *pager_duty_service_key;
 		int min_time_between_alerts_sec;
 #ifdef DEBUG
 		bool debug;
@@ -96,8 +98,10 @@ class ProxySQL_Admin {
 	// variable accessors
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
-	bool get_enable_ops_genie_integration() {return variables.enable_ops_genie_integration; }
+	bool get_enable_ops_genie_integration() { return variables.enable_ops_genie_integration; }
 	const char *get_ops_genie_api_key() { return variables.ops_genie_api_key; }
+	bool get_enable_pager_duty_integration() { return variables.enable_pager_duty_integration; }
+	const char *get_pager_duty_service_key() { return variables.pager_duty_service_key; }
 	int get_min_time_between_alerts_sec() { return variables.min_time_between_alerts_sec; }
 	void init_users();
 	void init_mysql_servers();

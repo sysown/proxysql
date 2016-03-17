@@ -107,6 +107,8 @@ static char * admin_variables_names[]= {
 	(char *)"version",
 	(char *)"enable_ops_genie_integration",
 	(char *)"ops_genie_api_key",
+  	(char *)"enable_pager_duty_integration",
+  	(char *)"pager_duty_service_key",
 	(char *)"min_time_between_alerts_sec",
 #ifdef DEBUG
   (char *)"debug",
@@ -2060,6 +2062,8 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.admin_version=(char *)PROXYSQL_VERSION;
 	variables.enable_ops_genie_integration = false;
 	variables.ops_genie_api_key = NULL;
+	variables.enable_pager_duty_integration = false;
+	variables.pager_duty_service_key = NULL;
 	variables.min_time_between_alerts_sec = 300;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
@@ -2506,6 +2510,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		return strdup((variables.enable_ops_genie_integration ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"ops_genie_api_key")) return s_strdup(variables.ops_genie_api_key);
+	if (!strcasecmp(name, "enable_pager_duty_integration")) {
+		return strdup((variables.enable_pager_duty_integration ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"pager_duty_service_key")) return s_strdup(variables.pager_duty_service_key);
 	if (!strcasecmp(name,"min_time_between_alerts_sec")) {
 		sprintf(intbuf,"%d",variables.min_time_between_alerts_sec);
 		return strdup(intbuf);
@@ -2711,6 +2719,27 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			if (variables.ops_genie_api_key)
 				free(variables.ops_genie_api_key);
 			variables.ops_genie_api_key=strdup(value);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"enable_pager_duty_integration")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.enable_pager_duty_integration=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.enable_pager_duty_integration=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name, "pager_duty_service_key")) {
+		if (vallen) {
+			if (variables.pager_duty_service_key)
+				free(variables.pager_duty_service_key);
+			variables.pager_duty_service_key=strdup(value);
 			return true;
 		} else {
 			return false;

@@ -15,6 +15,7 @@ class AlertRouter {
 private:
     time_t lastPushTime;
     static void *pushAlertToOpsGenie(void *message);
+    static void *pushAlertToPagerduty(void *message);
     void pushAlertInDetachedThread(void *(*pushMethod)(void *), char *message);
 public:
     AlertRouter();

@@ -50,7 +50,7 @@ OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 _OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo simple_kv.oo sqlite3db.oo global_variables.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo AlertRouter.oo
 OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
 
-_OBJ_MG = ProxySQL_HTTP.oo2 http_client.oo2 OpsGenieConnector.oo2
+_OBJ_MG = ProxySQL_HTTP.oo2 http_client.oo2 OpsGenieConnector.oo2 PagerdutyConnector.oo2
 OBJ_MG = $(patsubst %,$(ODIR)/%,$(_OBJ_MG))
 
 %.ko: %.cpp
