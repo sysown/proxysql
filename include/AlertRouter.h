@@ -1,7 +1,7 @@
 #ifndef PROXYSQL_ALERTROUTER_H
 #define PROXYSQL_ALERTROUTER_H
 
-#include <time.h>
+#include <atomic>
 
 // Acts as a gateway between ProxySQL core and integrations with alerting services.
 // All alerts that need to be pushed to an external service should pass through it.
@@ -13,13 +13,13 @@
 // mostly shares the same interface with AlertServiceConnector.
 class AlertRouter {
 private:
-    time_t lastPushTime;
+    std::atomic_ullong lastPushTime;
     static void *pushAlertToOpsGenie(void *message);
     static void *pushAlertToPagerduty(void *message);
     void pushAlertInDetachedThread(void *(*pushMethod)(void *), char *message);
 public:
     AlertRouter();
-    AlertRouter(time_t lastPushTime);
+    AlertRouter(unsigned long long lastPushTime);
     void pushAlert(char *message);
 };
 

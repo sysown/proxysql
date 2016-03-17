@@ -15,7 +15,7 @@ AlertRouter::AlertRouter() {
 }
 
 
-AlertRouter::AlertRouter(time_t lastPushTime) {
+AlertRouter::AlertRouter(unsigned long long lastPushTime) {
     this->lastPushTime = lastPushTime;
 }
 
@@ -83,21 +83,25 @@ void AlertRouter::pushAlertInDetachedThread(void *(*pushMethod)(void *), char *m
 // a copy of message so you can free message at will.
 void AlertRouter::pushAlert(char *message) {
     // Drop the alert if it is to soon since the last alert was pushed.
-    time_t now = time(NULL);
+    unsigned long long now = time(NULL);
+    unsigned long long last = lastPushTime; // atomic read
     int min_time_between_alerts_sec = GloAdmin->get_min_time_between_alerts_sec();
-    if ((int) difftime(now, lastPushTime) < min_time_between_alerts_sec) {
+    if ( now <= last + min_time_between_alerts_sec ) {
         proxy_info("Dropping alert raised sooner than %d seconds since previously pushed alert. Message: %s",
                    min_time_between_alerts_sec, message);
         return;
     }
-
+		if (!lastPushTime.compare_exchange_strong(last,now)) { // atomic compare with old value and swap it
+			//lastPushTime was already changed in some other thread
+			return;
+		}
     if (GloAdmin->get_enable_ops_genie_integration()) {
         pushAlertInDetachedThread(AlertRouter::pushAlertToOpsGenie, message);
     }
     if (GloAdmin->get_enable_pager_duty_integration()) {
         pushAlertInDetachedThread(AlertRouter::pushAlertToPagerduty, message);
     }
-    lastPushTime = time(NULL);
+    //lastPushTime = time(NULL);
 }
 
 

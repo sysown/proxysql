@@ -26,7 +26,7 @@ time_t latest_restart;
 // The time of the 2nd latest restart. Will be read by the daemon process and used as the time for the latest sent
 // alert. Useful to impose alert rate limiting so that alerts are not sent if the daemon is restarted multiple times
 // inside the alert rate limiting time. Needed because the daemon loses state when it is restarted.
-long previous_restart;
+unsigned long long previous_restart;
 
 pid_t pid;
 
