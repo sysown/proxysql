@@ -22,6 +22,7 @@ class ProxySQL_Admin {
 	int *main_callback_func;
 
 	rwlock_t rwlock;
+	rwlock_t mysql_servers_rwlock;
 	void wrlock();
 	void wrunlock();
 
@@ -143,5 +144,8 @@ class ProxySQL_Admin {
 	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
 	SQLite3_result * generate_show_table_status(const char *, char **err);
 	SQLite3_result * generate_show_fields_from(const char *tablename, char **err);
+
+	void mysql_servers_wrlock();
+	void mysql_servers_wrunlock();
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
