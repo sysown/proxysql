@@ -47,11 +47,14 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 
-packages: centos7 ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg
+packages: centos7 ubuntu12 ubuntu14 debian7 debian8 ubuntu12-dbg ubuntu14-dbg debian7-dbg debian8-dbg
 .PHONY: packages
 
 centos7: binaries/proxysql-${CURVER}-1.x86_64.rpm
 .PHONY: centos
+
+ubuntu12: binaries/proxysql_${CURVER}-ubuntu12_amd64.deb
+.PHONY: ubuntu12
 
 ubuntu14: binaries/proxysql_${CURVER}-ubuntu14_amd64.deb
 .PHONY: ubuntu14
@@ -61,6 +64,9 @@ debian7: binaries/proxysql_${CURVER}-debian7_amd64.deb
 
 debian8: binaries/proxysql_${CURVER}-debian8_amd64.deb
 .PHONY: debian8
+
+ubuntu12-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu12_amd64.deb
+.PHONY: ubuntu12-dbg
 
 ubuntu14-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb
 .PHONY: ubuntu14-dbg
@@ -79,6 +85,19 @@ binaries/proxysql-v${CURVER}-1.x86_64.rpm:
 	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries
 #	docker kill centos7_build
 	docker rm centos7_build
+
+binaries/proxysql_${CURVER}-ubuntu12_amd64.deb:
+	docker stop ubuntu12_build || true
+	docker rm ubuntu12_build || true
+	docker create --name ubuntu12_build renecannao/proxysql:build-ubuntu12 bash -c "while : ; do sleep 10 ; done"
+	docker start ubuntu12_build
+	docker exec ubuntu12_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec ubuntu12_build bash -c "cd /opt/proxysql; sed -i -e 's/c++11/c++0x/' lib/Makefile ; sed -i -e 's/c++11/c++0x/' src/Makefile ; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} -j 4"
+	docker cp docker/images/proxysql/ubuntu-12.04-build/proxysql.ctl ubuntu12_build:/opt/proxysql/
+	docker exec ubuntu12_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	docker cp ubuntu12_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-ubuntu12_amd64.deb
+	docker stop ubuntu12_build
+	docker rm ubuntu12_build
 
 binaries/proxysql_${CURVER}-ubuntu14_amd64.deb:
 	docker stop ubuntu14_build || true
@@ -119,6 +138,19 @@ binaries/proxysql_${CURVER}-debian8_amd64.deb:
 	docker stop debian8_build
 	docker rm debian8_build
 
+
+binaries/proxysql_${CURVER}-dbg-ubuntu12_amd64.deb:
+	docker stop ubuntu12_build || true
+	docker rm ubuntu12_build || true
+	docker create --name ubuntu12_build renecannao/proxysql:build-ubuntu12 bash -c "while : ; do sleep 10 ; done"
+	docker start ubuntu12_build
+	docker exec ubuntu12_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec ubuntu12_build bash -c "cd /opt/proxysql; sed -i -e 's/c++11/c++0x/' lib/Makefile ; sed -i -e 's/c++11/c++0x/' src/Makefile ; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} -j 4 debug"
+	docker cp docker/images/proxysql/ubuntu-12.04-build/proxysql.ctl ubuntu12_build:/opt/proxysql/
+	docker exec ubuntu12_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	docker cp ubuntu12_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-dbg-ubuntu12_amd64.deb
+	docker stop ubuntu12_build
+	docker rm ubuntu12_build
 
 binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb:
 	docker stop ubuntu14_build || true

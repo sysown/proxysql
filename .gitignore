@@ -43,7 +43,7 @@ oldcode/tests/connect_speed
 *.err
 
 #binary
-proxysql
+src/proxysql
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
