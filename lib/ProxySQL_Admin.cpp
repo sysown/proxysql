@@ -1490,7 +1490,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 	if(!strncasecmp("CHECKSUM ", query_no_space, 9)){
-		proxy_debug(PROXYSQL_DEBUG_ADMIN, 4, "Received CHECKSUM command\n");
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received CHECKSUM command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SQLite3_result *resultset=NULL;
 		char *tablename=NULL;

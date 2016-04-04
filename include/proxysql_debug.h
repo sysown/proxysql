@@ -15,14 +15,14 @@ extern int gdbg;
 #endif
 
 #ifdef DEBUG
-#ifdef HAVE_SYSCALL_H
+#ifdef SYS_gettid
 #define proxy_debug(module, verbosity, fmt, ...) \
 	do { if (GloVars.global.gdbg) { \
 	proxy_debug_func(module, verbosity, syscall(SYS_gettid), __FILE__, __LINE__, __func__ ,  fmt,  ## __VA_ARGS__); \
 	} } while (0)
 #else
 #define proxy_debug(module, verbosity, fmt, ...)
-#endif /* HAVE_SYSCALL_H */
+#endif /* SYS_gettid */
 #else
 #define proxy_debug(module, verbosity, fmt, ...)
 #endif /* DEBUG */
