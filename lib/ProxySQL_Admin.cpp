@@ -3428,7 +3428,8 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+strlen(r->fields[7])+16);
-			sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[4], r->fields[3], r->fields[5], r->fields[6], r->fields[7]);
+			// if the backend is shunned, save_mysql_servers_runtime_to_database() should set to ONLINE if _runtime==false
+			sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], r->fields[4], ( _runtime ? r->fields[3] : ( strcmp(r->fields[3],"SHUNNED")==0 ? "ONLINE" : r->fields[3] ) ), r->fields[5], r->fields[6], r->fields[7]);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 			admindb->execute(query);
 			free(query);
