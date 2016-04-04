@@ -750,7 +750,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->mysql_servers_wrlock();
 			SPA->load_mysql_servers_to_runtime();
+			SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -795,7 +797,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->mysql_servers_wrlock();
 			SPA->save_mysql_servers_runtime_to_database(false);
+			SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -1033,7 +1037,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false);
 			}
 			if (runtime_mysql_servers) {
+				mysql_servers_wrlock();
 				save_mysql_servers_runtime_to_database(true);
+				mysql_servers_wrunlock();
 			}
 			if (runtime_mysql_query_rules) {
 				save_mysql_query_rules_from_runtime(true);
@@ -2046,6 +2052,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 
 	SPA=this;
 	spinlock_rwlock_init(&rwlock);
+	spinlock_rwlock_init(&mysql_servers_rwlock);
 	variables.admin_credentials=strdup("admin:admin");
 	variables.stats_credentials=strdup("stats:stats");
 	if (GloVars.__cmd_proxysql_admin_socket) {
@@ -2076,6 +2083,14 @@ void ProxySQL_Admin::wrlock() {
 
 void ProxySQL_Admin::wrunlock() {
 	spin_wrunlock(&rwlock);
+};
+
+void ProxySQL_Admin::mysql_servers_wrlock() {
+	spin_wrlock(&mysql_servers_rwlock);
+};
+
+void ProxySQL_Admin::mysql_servers_wrunlock() {
+	spin_wrunlock(&mysql_servers_rwlock);
 };
 
 void ProxySQL_Admin::print_version() {
@@ -3232,7 +3247,9 @@ void ProxySQL_Admin::init_users() {
 }
 
 void ProxySQL_Admin::init_mysql_servers() {
+	mysql_servers_wrlock();
 	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
 }
 
 void ProxySQL_Admin::init_mysql_query_rules() {
@@ -3383,6 +3400,7 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 }
 
 void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
+	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
 	SQLite3_result *resultset=NULL;
 	// dump mysql_servers
@@ -3444,6 +3462,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 
 
 void ProxySQL_Admin::load_mysql_servers_to_runtime() {
+	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
