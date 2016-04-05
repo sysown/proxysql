@@ -1673,6 +1673,14 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					if (myds->sess->client_myds==myds) {
 						proxy_debug(PROXY_DEBUG_NET,1, "Session=%p, DataStream=%p -- Deleting FD %d\n", myds->sess, myds, myds->fd);
 						myds->sess->set_unhealthy();
+					} else {
+						// if this is a backend with fast_forward, set unhealthy
+						// if this is a backend without fast_forward, do not set unhealthy: it will be handled by client library
+						if (myds->sess->session_fast_forward) { // if fast forward
+							if (myds->myds_type==MYDS_BACKEND) { // and backend
+								myds->sess->set_unhealthy(); // set unhealthy
+							}
+						}
 					}
 				}
 }

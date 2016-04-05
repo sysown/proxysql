@@ -192,7 +192,7 @@ class MySQL_Data_Stream
 		MyHGM->destroy_MyConn_from_pool(mc);
 	}
 	void free_mysql_real_query();	
-
+	void reinit_queues();
 //	void destroy_MySQL_Connection() {
 //		MySQL_Connection *mc=myconn;
 //		detach_connection();

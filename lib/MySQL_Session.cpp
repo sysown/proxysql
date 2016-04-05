@@ -542,6 +542,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	return false;
 }
 
+#define NEXT_IMMEDIATE(new_st) do { set_status(new_st); goto handler_again; } while (0)
 
 int MySQL_Session::handler() {
 	bool wrong_pass=false;
@@ -654,6 +655,13 @@ __get_pkts_from_client:
 							current_hostgroup=default_hostgroup;
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n");
+						if (session_fast_forward==true) { // if it is fast forward
+							mybe=find_or_create_backend(current_hostgroup); // set a backend
+							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
+							mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
+							previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
+							NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
+						}
 						//unsigned char c;
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						switch ((enum_mysql_command)c) {
@@ -824,14 +832,21 @@ __get_pkts_from_client:
 	}
 
 
-#define NEXT_IMMEDIATE(new_st) do { set_status(new_st); goto handler_again; } while (0)
 
 handler_again:
 
 	switch (status) {
 		case FAST_FORWARD:
-			fprintf(stderr,"FAST_FORWARD\n");
-			// FIXME: to implement
+			if (mybe->server_myds->mypolls==NULL) {
+				// register the mysql_data_stream
+				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+			}
+			// copy all packets from backend to frontend
+			for (unsigned int k=0; k < mybe->server_myds->PSarrayIN->len; k++) {
+				PtrSize_t pkt;
+				mybe->server_myds->PSarrayIN->remove_index(0,&pkt);
+				client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+			}
 			break;
 		case CONNECTING_CLIENT:
 			//fprintf(stderr,"CONNECTING_CLIENT\n");
@@ -1421,6 +1436,11 @@ handler_again:
 						st=previous_status.top();
 						previous_status.pop();
 						myds->wait_until=0;
+						if (session_fast_forward==true) {
+							// we have a successful connection and session_fast_forward enabled
+							// set DSS=STATE_SLEEP or it will believe it have to use MARIADB client library
+							myds->DSS=STATE_SLEEP;
+						}
 						NEXT_IMMEDIATE(st);
 						break;
 					case -1:
@@ -1923,6 +1943,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->DSS=STATE_READY;
 		if (session_fast_forward==true) {
 			status=FAST_FORWARD;
+			mybe->server_myds->myconn->reusable=false; // the connection cannot be usable anymore
 		}
 	}
 }

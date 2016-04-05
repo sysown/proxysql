@@ -237,6 +237,13 @@ void MySQL_Data_Stream::init() {
 	}
 }
 
+void MySQL_Data_Stream::reinit_queues() {
+	if (queueIN.buffer==NULL)
+		queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
+	if (queueOUT.buffer==NULL)
+		queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
+}
+
 // this function initializes a MySQL_Data_Stream with arguments
 void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int _fd) {
 	myds_type=_type;
