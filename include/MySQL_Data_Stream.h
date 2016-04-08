@@ -81,7 +81,9 @@ class MySQL_Data_Stream
 		unsigned int partial;
 	} CompPktOUT;
 
+	MySQL_Protocol myprot;
 	MyDS_real_query mysql_real_query;
+	bytes_stats_t bytes_info; // bytes statistics
 
 	PtrSize_t multi_pkt;
 
@@ -95,25 +97,23 @@ class MySQL_Data_Stream
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
 
-	unsigned int connect_tries;
 	ProxySQL_Poll *mypolls;
-	int array2buffer_full();
 	//int listener;
 	MySQL_Connection *myconn;
-	MySQL_Protocol myprot;
+	MySQL_Session *sess;  // pointer to the session using this data stream
+	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
+	SSL *ssl;
+	struct sockaddr *client_addr;
+
+	unsigned int connect_tries;
 	int connect_retries_on_failure;
 	enum mysql_data_stream_status DSS;
 	enum MySQL_DS_type myds_type;
-	MySQL_Session *sess;  // pointer to the session using this data stream
-	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
-	bytes_stats_t bytes_info; // bytes statistics
-	int fd; // file descriptor
 
-	struct sockaddr *client_addr;
 	socklen_t client_addrlen;
 
+	int fd; // file descriptor
 	int poll_fds_idx;
-	SSL *ssl;
 
 
 	int active_transaction; // 1 if there is an active transaction
@@ -136,7 +136,7 @@ class MySQL_Data_Stream
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
 
-
+	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
 	void shut_soft();
