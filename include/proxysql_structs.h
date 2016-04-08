@@ -297,9 +297,9 @@ struct _mysql_server_t {
 struct __SQP_query_parser_t {
 	sfilter sf;
 	uint64_t digest;
+	uint64_t digest_total;
 	char *digest_text;
 	char *first_comment;
-	uint64_t digest_total;
 };
 
 

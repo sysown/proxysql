@@ -17,13 +17,15 @@ class MySQL_Session_userinfo {
 */
 class Query_Info {
 	public:
+	SQP_par_t QueryParserArgs;
 	MySQL_Session *sess;
+	unsigned char *QueryPointer;
 	unsigned long long start_time;
 	unsigned long long end_time;
-	SQP_par_t QueryParserArgs;
-	enum MYSQL_COM_QUERY_command MyComQueryCmd;
-	unsigned char *QueryPointer;
+
 	int QueryLength;
+	enum MYSQL_COM_QUERY_command MyComQueryCmd;
+
 	Query_Info();
 	~Query_Info();
 	void init(unsigned char *_p, int len, bool mysql_header=false);
@@ -72,60 +74,51 @@ class MySQL_Session
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
-	MySQL_Thread *thread;
+
+	Query_Info CurrentQuery;
+	PtrSize_t mirrorPkt;
+
+	// uint64_t
 	unsigned long long start_time;
-	uint32_t thread_session_id;
-//	enum session_states sess_states;
+	unsigned long long pause_until;
+
+	// pointers
+	MySQL_Thread *thread;
 	Query_Processor_Output *qpo;
 	StatCounters *command_counters;
-	int healthy;
-	bool autocommit;
-	bool killed;
-	bool admin;
-	bool max_connections_reached;
-	int user_max_connections;
-	bool client_authenticated;
-	bool connections_handler;
-	bool mirror;
-	PtrSize_t mirrorPkt;
-	bool stats;
-	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
-//	int client_fd;
-//	int server_fd;
+	MySQL_Backend *mybe;
+	PtrArray *mybes;
+	MySQL_Data_Stream *client_myds;
+	MySQL_Data_Stream *server_myds;
+	char * default_schema;
+
+	uint32_t thread_session_id;
+	unsigned int last_insert_id;
 	enum session_status status;
+	int healthy;
+	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
 	int active_transactions;
 	int autocommit_on_hostgroup;
-	char * default_schema;
-	bool schema_locked;
-	bool transaction_persistent;
 	int transaction_persistent_hostgroup;
-	bool session_fast_forward;
 	int to_process;
 	int pending_connect;
-	Query_Info CurrentQuery;
-	//void *query_parser_args;
-	unsigned long long pause_until;
-	//MySQL_Session_userinfo userinfo_client;
-	//MySQL_Session_userinfo userinfo_server;
-//	char *username;
-//	char *password;
-//	char *schema_name;
-//	char *schema_cur;
-//	char *schema_new;
-	//int net_failure;
-	MySQL_Data_Stream *client_myds;
-	MySQL_Data_Stream *server_myds;
 
-	//GPtrArray *mybes;
-	MySQL_Backend *mybe;
-	PtrArray *mybes;
-
-	// Support for LAST_INSERT_ID()
-	unsigned int last_insert_id;
+	// bool
+	bool autocommit;
+	bool killed;
+	bool admin;
+	bool max_connections_reached;
+	bool client_authenticated;
+	bool connections_handler;
+	bool mirror;
+	bool stats;
+	bool schema_locked;
+	bool transaction_persistent;
+	bool session_fast_forward;
 
 	MySQL_Session();
 //	MySQL_Session(int);
@@ -149,6 +142,7 @@ class MySQL_Session
 	//MySQL_Protocol myprot_server;
 	int handler();
 
+	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
 	MySQL_Backend * find_backend(int);
 	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
