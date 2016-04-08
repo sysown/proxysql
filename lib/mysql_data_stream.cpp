@@ -112,7 +112,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 
 	PSarrayIN=NULL;
 	PSarrayOUT=NULL;
-	PSarrayOUTpending=NULL;
+	//PSarrayOUTpending=NULL;
 	resultset=NULL;
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
@@ -167,13 +167,13 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		}
 		delete PSarrayOUT;
 	}
-	if (PSarrayOUTpending) {
-		while (PSarrayOUTpending->len) {
-			PSarrayOUTpending->remove_index_fast(0,&pkt);
-			l_free(pkt.size, pkt.ptr);
-		}
-		delete PSarrayOUTpending;
-	}
+//	if (PSarrayOUTpending) {
+//		while (PSarrayOUTpending->len) {
+//			PSarrayOUTpending->remove_index_fast(0,&pkt);
+//			l_free(pkt.size, pkt.ptr);
+//		}
+//		delete PSarrayOUTpending;
+//	}
 	if (resultset) {
 		while (resultset->len) {
 			resultset->remove_index_fast(0,&pkt);
@@ -228,7 +228,7 @@ void MySQL_Data_Stream::init() {
 		proxy_debug(PROXY_DEBUG_NET,1, "Init Data Stream. Session=%p, DataStream=%p -- type %d\n" , sess, this, myds_type);
 		if (PSarrayIN==NULL) PSarrayIN = new PtrSizeArray();
 		if (PSarrayOUT==NULL) PSarrayOUT= new PtrSizeArray();
-		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
+//		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
 		if (resultset==NULL) resultset = new PtrSizeArray();
 	}
 	if (myds_type!=MYDS_FRONTEND) {
@@ -880,6 +880,7 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 }
 
 
+/*
 void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 	unsigned int k;
 	PtrSize_t pkt2;
@@ -888,6 +889,7 @@ void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 		PSarrayOUTpending->add(pkt2.ptr, pkt2.size);
 	}
 }
+*/
 
 /*
 int MySQL_Data_Stream::assign_mshge(unsigned int hid) {

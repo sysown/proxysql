@@ -304,8 +304,8 @@ void MySQL_Session::writeout() {
 				if (mybe->server_myds->poll_fds_idx>-1) { // NOTE: attempt to force writes
 					mybe->server_myds->array2buffer_full();
 				}
-			} else {
-				mybe->server_myds->move_from_OUT_to_OUTpending();
+//			} else {
+//				mybe->server_myds->move_from_OUT_to_OUTpending();
 			}
 		} else {
 			mybe->server_myds->array2buffer_full();

@@ -91,7 +91,7 @@ class MySQL_Data_Stream
 
 	PtrSizeArray *PSarrayIN;
 	PtrSizeArray *PSarrayOUT;
-	PtrSizeArray *PSarrayOUTpending;
+	//PtrSizeArray *PSarrayOUTpending;
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
 
@@ -167,7 +167,7 @@ class MySQL_Data_Stream
 	void check_data_flow();
 	int assign_fd_from_mysql_conn();
 
-	void move_from_OUT_to_OUTpending();
+	//void move_from_OUT_to_OUTpending();
 	unsigned char * resultset2buffer(bool);
 	void buffer2resultset(unsigned char *, unsigned int);
 
