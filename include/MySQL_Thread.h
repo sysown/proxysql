@@ -138,9 +138,10 @@ class MySQL_Thread
 {
 
 	private:
+  unsigned long long last_processing_idles;
 	MySQL_Connection **my_idle_conns;
   bool processing_idles;
-  unsigned long long last_processing_idles;
+	bool maintenance_loop;
 
 
 	protected:
@@ -148,14 +149,13 @@ class MySQL_Thread
 
 	public:
 
-	int pipefd[2];
-	unsigned long long curtime;
-	unsigned long long last_maintenance_time;
-	bool maintenance_loop;
 	ProxySQL_Poll mypolls;
 	pthread_t thread_id;
-	int shutdown;
+	unsigned long long curtime;
+	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
+	int pipefd[2];
+	int shutdown;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss
