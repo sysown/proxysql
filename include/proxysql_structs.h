@@ -300,6 +300,7 @@ struct __SQP_query_parser_t {
 	uint64_t digest_total;
 	char *digest_text;
 	char *first_comment;
+	char *query_prefix;
 };
 
 

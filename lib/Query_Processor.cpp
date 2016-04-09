@@ -791,7 +791,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
     }
     if (qr->error_msg) {
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->error_msg);
-			proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
+			//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
       ret->error_msg=strdup(qr->error_msg);
     }
     if (qr->cache_ttl >= 0) {
@@ -871,11 +871,13 @@ void Query_Processor::update_query_processor_stats() {
 
 
 void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags) {
-	//SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
-	if (mysql_thread___commands_stats)
-		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
+	// trying to get rid of libinjection
+	// instead of initializing qp->sf , we copy query info later in this function
+//	if (mysql_thread___commands_stats)
+//		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
+	qp->query_prefix=NULL;
 	//qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
 	//qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
 	if (mysql_thread___query_digests) {
@@ -886,8 +888,12 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
 		}
 #endif /* DEBUG */
+	} else {
+		// if mysql_thread___query_digests==false but we still want command statistics, we copy the prefix of the query
+		if (mysql_thread___commands_stats) {
+			qp->query_prefix=strndup(query,32);
+		}
 	}
-	//return (void *)qp;
 };
 
 enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_t *qp) {
@@ -966,13 +972,126 @@ uint64_t Query_Processor::get_digest(SQP_par_t *qp) {
 
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_par_t *qp) {
 	//SQP_par_t *qp=(SQP_par_t *)args;
-	while (libinjection_sqli_tokenize(&qp->sf)) {
-		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
-			char c1=toupper(qp->sf.current->val[0]);
-			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", qp->sf.current->val, c1);
-			switch (c1) {
-				case 'A':
-					if (!strcasecmp("ALTER",qp->sf.current->val)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
+	char *text=NULL; // this new variable is a pointer to either qp->digest_text , or to the query
+	if (qp->digest_text) {
+		text=qp->digest_text;
+	} else {
+		text=qp->query_prefix;
+	}
+
+
+	enum MYSQL_COM_QUERY_command ret=MYSQL_COM_QUERY_UNKNOWN;
+	char c1;
+
+  tokenizer_t tok = tokenizer( text, " ", TOKENIZER_NO_EMPTIES );
+  char* token=NULL;
+	token=(char *)tokenize(&tok);
+	if (token==NULL) {
+		goto __exit__query_parser_command_type;
+	}
+
+	//c1=toupper(token[0]);
+	c1=token[0];
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", token, c1);
+	switch (c1) {
+		case 'a':
+		case 'A':
+			if (!mystrcasecmp("ALTER",token)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!mystrcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_ALTER_TABLE;
+				} else {
+					if (!mystrcasecmp("OFFLINE",token) || !mystrcasecmp("ONLINE",token)) {
+						token=(char *)tokenize(&tok);
+						if (token==NULL) break;
+						if (!mystrcasecmp("TABLE",token)) {
+							ret=MYSQL_COM_QUERY_ALTER_TABLE;
+						} else {
+							if (!mystrcasecmp("IGNORE",token)) {
+								if (token==NULL) break;
+								token=(char *)tokenize(&tok);
+								if (!mystrcasecmp("TABLE",token))
+									ret=MYSQL_COM_QUERY_ALTER_TABLE;
+							}
+						}
+					} else {
+						if (!mystrcasecmp("IGNORE",token)) {
+							if (token==NULL) break;
+							token=(char *)tokenize(&tok);
+							if (!mystrcasecmp("TABLE",token))
+								ret=MYSQL_COM_QUERY_ALTER_TABLE;
+						}
+					}
+				}
+			}
+			if (!mystrcasecmp("ANALYZE",token)) { // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_ANALYZE_TABLE;
+				} else {
+					if (!strcasecmp("NO_WRITE_TO_BINLOG",token) || !strcasecmp("LOCAL",token)) {
+						token=(char *)tokenize(&tok);
+						if (token==NULL) break;
+						if (!strcasecmp("TABLE",token)) {
+							ret=MYSQL_COM_QUERY_ANALYZE_TABLE;
+						}
+					}
+				}
+			}
+			break;
+		case 'b':
+		case 'B':
+			if (!strcasecmp("BEGIN",token)) { // BEGIN
+				ret=MYSQL_COM_QUERY_BEGIN;
+			}
+			break;
+		case 'c':
+		case 'C':
+			if (!strcasecmp("COMMIT",token)) { // COMMIT
+				ret=MYSQL_COM_QUERY_COMMIT;
+			}
+			break;
+		case 'd':
+		case 'D':
+			if (!strcasecmp("DELETE",token)) { // DELETE
+				ret=MYSQL_COM_QUERY_DELETE;
+			}
+			break;
+		case 'i':
+		case 'I':
+			if (!strcasecmp("INSERT",token)) { // INSERT
+				ret=MYSQL_COM_QUERY_INSERT;
+			}
+			break;
+		case 'r':
+		case 'R':
+			if (!strcasecmp("ROLLBACK",token)) { // ROLLBACK
+				ret=MYSQL_COM_QUERY_ROLLBACK;
+			}
+			break;
+		case 's':
+		case 'S':
+			if (!mystrcasecmp("SELECT",token)) { // SELECT
+				ret=MYSQL_COM_QUERY_SELECT;
+			}
+			break;
+		case 'u':
+		case 'U':
+			if (!strcasecmp("UPDATE",token)) { // UPDATE
+				ret=MYSQL_COM_QUERY_UPDATE;
+			}
+			break;
+		default:
+			break;
+	}
+
+//  for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
+//			switch (c1) {
+//				case 'A':
+/*
+					if (!strcasecmp("ALTER",token)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
 						while (libinjection_sqli_tokenize(&qp->sf)) {
 							if (qp->sf.current->type=='c') continue;
 							if (qp->sf.current->type=='n') {
@@ -1033,6 +1152,8 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 					}
 					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
+*/
+/*
 				case 'S':
 					if (!strcasecmp("SELECT",qp->sf.current->val)) { // SELECT
 						return MYSQL_COM_QUERY_SELECT;
@@ -1043,12 +1164,14 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 					if (!strcasecmp("SHOW",qp->sf.current->val)) { // SHOW
 						while (libinjection_sqli_tokenize(&qp->sf)) {
 							if (qp->sf.current->type=='c') continue;
+*/
 /*
 							if (qp->sf.current->type=='n') {
 								if (!strcasecmp("OFFLINE",qp->sf.current->val)) continue;
 								if (!strcasecmp("ONLINE",qp->sf.current->val)) continue;
 							}
 */
+/*
 							if (qp->sf.current->type=='k') {
 								if (!strcasecmp("TABLE",qp->sf.current->val)) {
 									while (libinjection_sqli_tokenize(&qp->sf)) {
@@ -1065,19 +1188,30 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 					}
 					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
+*/
+/*
 				case 'U':
 					if (!strcasecmp("UPDATE",qp->sf.current->val)) { // UPDATE
 						return MYSQL_COM_QUERY_UPDATE;
 					}
 					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
+*/
+/*
 				default:
 					return MYSQL_COM_QUERY_UNKNOWN;
 					break;
 			}
 		}
 	}
-	return MYSQL_COM_QUERY_UNKNOWN;
+*/
+__exit__query_parser_command_type:
+  free_tokenizer( &tok );
+	if (qp->query_prefix) {
+		free(qp->query_prefix);
+		qp->query_prefix=NULL;
+	}
+	return ret;
 }
 
 bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {

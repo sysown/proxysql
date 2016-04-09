@@ -244,7 +244,7 @@ static int cstrcasecmp_with_null(const char *a, const char *b, size_t n)
  * a all uppercase c-string (null terminated), case insenstive!
  *
  * also ignore any embedded nulls in the HTML string!
- *
+ *4
  * return 1 if match / starts with
  * return 0 if not
  */
