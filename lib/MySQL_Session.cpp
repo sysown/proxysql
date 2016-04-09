@@ -329,37 +329,44 @@ void MySQL_Session::writeout() {
 
 // FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
-	if (
-		( strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0 )
-		||
-		( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 )
-	) {
-		char c=((char *)pkt->ptr)[5];
-		if (c=='c' || c=='C') {
-			__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
-		} else {
-			__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
-		}
-		unsigned int nTrx=NumActiveTransactions();
-		if (nTrx) {
-			// there is an active transaction, we must forward the request
-			return false;
-		} else {
-			// there is no active transaction, we will just reply OK
-			client_myds->DSS=STATE_QUERY_SENT_NET;
-			uint16_t setStatus = 0;
-			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
-			l_free(pkt->size,pkt->ptr);
-			if (c=='c' || c=='C') {
-				__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
-			} else {
-				__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
+	char c=((char *)pkt->ptr)[5];
+	bool ret=false;
+	if (c=='c' || c=='C') {
+		if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
+				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
+				ret=true;
 			}
-			return true;
+		} else {
+			if (c=='r' || c=='R') {
+				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
+					__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
+					ret=true;
+				}
+			}
 		}
+
+	if (ret==false) {
+		return false;	// quick exit
+	}
+	unsigned int nTrx=NumActiveTransactions();
+	if (nTrx) {
+		// there is an active transaction, we must forward the request
+		return false;
+	} else {
+		// there is no active transaction, we will just reply OK
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		uint16_t setStatus = 0;
+		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+		if (c=='c' || c=='C') {
+			__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
+		} else {
+			__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
+		}
+		return true;
 	}
 	return false;
 }
