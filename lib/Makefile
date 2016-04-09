@@ -14,8 +14,8 @@ JEMALLOC_IDIR=$(JEMALLOC_PATH)/include/jemalloc
 LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig-1.4.9
 LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
 
-INJECTION_PATH=$(DEPS_PATH)/libinjection
-INJECTION_IDIR=$(INJECTION_PATH)
+#INJECTION_PATH=$(DEPS_PATH)/libinjection
+#INJECTION_IDIR=$(INJECTION_PATH)
 
 LIBEVENT_PATH=$(DEPS_PATH)/libevent/libevent
 LIBEVENT_IDIR=$(LIBEVENT_PATH)/include
@@ -62,8 +62,8 @@ $(ODIR)/%.o: %.c
 $(ODIR)/%.oo: %.cpp
 	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o 
-	ar rcs $@ $(OBJ) $(OBJ_CPP) $(INJECTION_PATH)/libinjection.a $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o 
+	ar rcs $@ $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o
 
 $(ODIR):
 	mkdir $(ODIR)
