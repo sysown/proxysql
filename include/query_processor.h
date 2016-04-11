@@ -192,12 +192,10 @@ class Query_Processor {
 
 
 	private:
-	enum MYSQL_COM_QUERY_command __query_parser_command_type(SQP_par_t *qp);
-
-	rwlock_t digest_rwlock;
-	//BtMap_query_digest digest_bt_map;
 	umap_query_digest digest_umap;
-
+	rwlock_t digest_rwlock;
+	int64_t padding;	// to get rwlock cache aligned
+	enum MYSQL_COM_QUERY_command __query_parser_command_type(SQP_par_t *qp);
 	protected:
 	rwlock_t rwlock;
 	std::vector<QP_rule_t *> rules;

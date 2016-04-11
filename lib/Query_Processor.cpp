@@ -866,7 +866,8 @@ void Query_Processor::update_query_processor_stats() {
 				_thr_commands_counters[i]->counters[j]=0;
 			}
 		}
-		__sync_fetch_and_add(&commands_counters[i]->total_time,_thr_commands_counters[i]->total_time);
+		if (_thr_commands_counters[i]->total_time)
+			__sync_fetch_and_add(&commands_counters[i]->total_time,_thr_commands_counters[i]->total_time);
 		_thr_commands_counters[i]->total_time=0;
 	}
 };
