@@ -25,6 +25,7 @@
 *.gcno
 
 callgrind.out.*
+cachegrind.out.*
 
 oldcode/tests/connect_speed
 
