@@ -861,8 +861,10 @@ void Query_Processor::update_query_processor_stats() {
 	spin_rdunlock(&rwlock);
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) {
 		for (int j=0; j<13; j++) {
-			__sync_fetch_and_add(&commands_counters[i]->counters[j],_thr_commands_counters[i]->counters[j]);
-			_thr_commands_counters[i]->counters[j]=0;
+			if (_thr_commands_counters[i]->counters[j]) {
+				__sync_fetch_and_add(&commands_counters[i]->counters[j],_thr_commands_counters[i]->counters[j]);
+				_thr_commands_counters[i]->counters[j]=0;
+			}
 		}
 		__sync_fetch_and_add(&commands_counters[i]->total_time,_thr_commands_counters[i]->total_time);
 		_thr_commands_counters[i]->total_time=0;
