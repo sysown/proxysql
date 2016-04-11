@@ -74,6 +74,7 @@ class ProxySQL_Admin {
 	bool set_variable(char *name, char *value);
 	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
+	void disk_upgrade_mysql_query_rules();
 
 #ifdef DEBUG
 	void add_credentials(char *type, char *credentials, int hostgroup_id);
