@@ -63,8 +63,6 @@
 
 #include "proxysql_mem.h"
 
-#include "../deps/libinjection/libinjection.h"
-#include "../deps/libinjection/libinjection_sqli.h"
 
 #include "proxysql_structs.h"
 #include "proxysql_debug.h"
