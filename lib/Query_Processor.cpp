@@ -260,74 +260,12 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 	qrs->clear();
 }
 
-/*
-class Command_Counter {
-	private:
-	int cmd_idx;
-	int _add_idx(unsigned long long t) {
-		if (t<=100) return 0;
-		if (t<=500) return 1;
-		if (t<=1000) return 2;
-		if (t<=5000) return 3;
-		if (t<=10000) return 4;
-		if (t<=50000) return 5;
-		if (t<=100000) return 6;
-		if (t<=500000) return 7;
-		if (t<=1000000) return 8;
-		if (t<=5000000) return 9;
-		if (t<=10000000) return 10;
-		return 11;
-	}
-	public:
-	unsigned long long total_time;
-	unsigned long long counters[13];
-	Command_Counter(int a) {
-		total_time=0;
-		cmd_idx=a;
-		total_time=0;
-		for (int i=0; i<13; i++) {
-			counters[i]=0;
-		}
-	}
-	unsigned long long add_time(unsigned long long t) {
-		total_time+=t;
-		counters[0]++;
-		int i=_add_idx(t);
-		counters[i+1]++;
-		return total_time;
-	}
-	char **get_row() {
-		char **pta=(char **)malloc(sizeof(char *)*15);
-		pta[0]=commands_counters_desc[cmd_idx];
-		itostr(pta[1],total_time);
-		for (int i=0;i<13;i++) itostr(pta[i+2], counters[i]);
-		return pta;
-	}
-	void free_row(char **pta) {
-		for (int i=1;i<15;i++) free(pta[i]);
-		free(pta);
-	}
-};
-*/
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
 //__thread unsigned int _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 __thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 
-/*
-class Standard_Query_Processor: public Query_Processor {
-
-private:
-rwlock_t rwlock;
-std::vector<QP_rule_t *> rules;
-//unsigned int commands_counters[MYSQL_COM_QUERY___NONE];
-Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
-
-volatile unsigned int version;
-protected:
-public:
-*/
 Query_Processor::Query_Processor() {
 #ifdef DEBUG
 	if (glovars.has_debug==false) {
@@ -735,30 +673,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		// if we arrived here, we have a match
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 
-/*
-{
-		// FIXME: this block of code is only for testing
-		if ((qr->hits%20)==0) {
-			spin_rdlock(&rwlock);
-			if (__sync_add_and_fetch(&version,0) == _thr_SQP_version) { // extra safety check to avoid race conditions
-				__sync_fetch_and_add(&qr->parent->hits,20);
-			}
-*/
-/*
-			QP_rule_t *qrg;
-			for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
-				qrg=*it;
-				if (qrg->rule_id==qr->rule_id) {
-					__sync_fetch_and_add(&qrg->hits,20);
-					break;
-				}
-			}
-*/
-/*
-			spin_rdunlock(&rwlock);
-		}
-}
-*/
 		if (qr->flagOUT >= 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
 			flagIN=qr->flagOUT;
@@ -901,7 +815,6 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 
 enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_t *qp) {
 	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(qp);
-	//_thr_commands_counters[ret]++;
 	return ret;
 }
 
@@ -909,13 +822,10 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
-	//SQP_par_t *qp=(SQP_par_t *)p;
 
 	if (qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
 		uint64_t hash2;
-		//SpookyHash *myhash=new SpookyHash();
-		//myhash->Init(19,3);
 		SpookyHash myhash;
 		myhash.Init(19,3);
 		assert(sess);
@@ -937,14 +847,10 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 }
 
 void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
-	//SQP_par_t *qp=(SQP_par_t *)p;
 	spin_wrlock(&digest_rwlock);
 
 	QP_query_digest_stats *qds;	
 
-	//btree::btree_map<uint64_t, void *>::iterator it;
-	//it=digest_bt_map.find(qp->digest_total);
-	//if (it != digest_bt_map.end()) {
 	std::unordered_map<uint64_t, void *>::iterator it;
 	it=digest_umap.find(qp->digest_total);
 	if (it != digest_umap.end()) {
@@ -954,7 +860,6 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 	} else {
 		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
 		qds->add_time(t,n);
-		//digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
 		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
 	}
 
@@ -1118,124 +1023,6 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 			break;
 	}
 
-//  for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
-//			switch (c1) {
-//				case 'A':
-/*
-					if (!strcasecmp("ALTER",token)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
-						while (libinjection_sqli_tokenize(&qp->sf)) {
-							if (qp->sf.current->type=='c') continue;
-							if (qp->sf.current->type=='n') {
-								if (!strcasecmp("OFFLINE",qp->sf.current->val)) continue;
-								if (!strcasecmp("ONLINE",qp->sf.current->val)) continue;
-							}
-							if (qp->sf.current->type=='k') {
-								if (!strcasecmp("IGNORE",qp->sf.current->val)) continue;
-								if (!strcasecmp("TABLE",qp->sf.current->val))
-									return MYSQL_COM_QUERY_ALTER_TABLE;
-							}
-							return MYSQL_COM_QUERY_UNKNOWN;
-						}
-					}
-					if (!strcasecmp("ANALYZE",qp->sf.current->val)) { // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE
-						while (libinjection_sqli_tokenize(&qp->sf)) {
-							if (qp->sf.current->type=='c') continue;
-							if (qp->sf.current->type=='n') {
-								if (!strcasecmp("LOCAL",qp->sf.current->val)) continue;
-							}
-							if (qp->sf.current->type=='k') {
-								if (!strcasecmp("NO_WRITE_TO_BINLOG",qp->sf.current->val)) continue;
-								if (!strcasecmp("TABLE",qp->sf.current->val))
-									return MYSQL_COM_QUERY_ANALYZE_TABLE;
-							}
-							return MYSQL_COM_QUERY_UNKNOWN;
-						}
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'B':
-					if (!strcasecmp("BEGIN",qp->sf.current->val)) { // BEGIN
-						return MYSQL_COM_QUERY_BEGIN;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'C':
-					if (!strcasecmp("COMMIT",qp->sf.current->val)) { // COMMIT
-						return MYSQL_COM_QUERY_COMMIT;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'D':
-					if (!strcasecmp("DELETE",qp->sf.current->val)) { // DELETE
-						return MYSQL_COM_QUERY_DELETE;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'I':
-					if (!strcasecmp("INSERT",qp->sf.current->val)) { // INSERT
-						return MYSQL_COM_QUERY_INSERT;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'R':
-					if (!strcasecmp("ROLLBACK",qp->sf.current->val)) { // ROLLBACK
-						return MYSQL_COM_QUERY_ROLLBACK;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-*/
-/*
-				case 'S':
-					if (!strcasecmp("SELECT",qp->sf.current->val)) { // SELECT
-						return MYSQL_COM_QUERY_SELECT;
-					}
-					if (!strcasecmp("SET",qp->sf.current->val)) { // SET
-						return MYSQL_COM_QUERY_SET;
-					}
-					if (!strcasecmp("SHOW",qp->sf.current->val)) { // SHOW
-						while (libinjection_sqli_tokenize(&qp->sf)) {
-							if (qp->sf.current->type=='c') continue;
-*/
-/*
-							if (qp->sf.current->type=='n') {
-								if (!strcasecmp("OFFLINE",qp->sf.current->val)) continue;
-								if (!strcasecmp("ONLINE",qp->sf.current->val)) continue;
-							}
-*/
-/*
-							if (qp->sf.current->type=='k') {
-								if (!strcasecmp("TABLE",qp->sf.current->val)) {
-									while (libinjection_sqli_tokenize(&qp->sf)) {
-										if (qp->sf.current->type=='c') continue;
-										if (qp->sf.current->type=='n') {
-											if (!strcasecmp("STATUS",qp->sf.current->val))
-												return MYSQL_COM_QUERY_SHOW_TABLE_STATUS;
-										}
-									}
-								}
-							}
-							return MYSQL_COM_QUERY_UNKNOWN;
-						}
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-*/
-/*
-				case 'U':
-					if (!strcasecmp("UPDATE",qp->sf.current->val)) { // UPDATE
-						return MYSQL_COM_QUERY_UPDATE;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-*/
-/*
-				default:
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-			}
-		}
-	}
-*/
 __exit__query_parser_command_type:
   free_tokenizer( &tok );
 	if (qp->query_prefix) {
@@ -1298,7 +1085,6 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 
 
 void Query_Processor::query_parser_free(SQP_par_t *qp) {
-	//SQP_par_t *qp=(SQP_par_t *)args;
 	if (qp->digest_text) {
 		free(qp->digest_text);
 		qp->digest_text=NULL;
@@ -1307,5 +1093,4 @@ void Query_Processor::query_parser_free(SQP_par_t *qp) {
 		free(qp->first_comment);
 		qp->first_comment=NULL;
 	}
-	//free(qp);
 };
