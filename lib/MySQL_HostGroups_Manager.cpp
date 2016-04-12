@@ -613,14 +613,41 @@ MySrvC *MyHGC::get_random_MySrvC() {
 						// we do all these changes without locking . We assume the server is not used from long
 						// even if the server is still in used and any of the follow command fails it is not critical
 						// because this is only an attempt to recover a server that is probably dead anyway
-						if ((t - mysrvc->time_last_detected_error) > mysql_thread___shun_recovery_time_sec) {
+
+						// the next few lines of code try to solve issue #530
+						int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/1000 - 1 : mysql_thread___shun_recovery_time_sec );
+						if (max_wait_sec < 1) { // min wait time should be at least 1 second
+							max_wait_sec = 1;
+						}
+						if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							mysrvc->shunned_automatic=false;
 							mysrvc->connect_ERR_at_time_last_detected_error=0;
 							mysrvc->time_last_detected_error=0;
+							// if a server is taken back online, consider it immediately
+							sum+=mysrvc->weight;
 						}
 					}
 				}
+			}
+		}
+		if (sum==0) {
+			// per issue #531 , we try a desperate attempt to bring back online any shunned server
+			// we do this lowering the maximum wait time to 10%
+			// most of the follow code is copied from few lines above
+			time_t t;
+			t=time(NULL);
+			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/100 - 1 : mysql_thread___shun_recovery_time_sec/10 );
+			if (max_wait_sec < 1) { // min wait time should be at least 1 second
+				max_wait_sec = 1;
+			}
+			if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
+				mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+				mysrvc->shunned_automatic=false;
+				mysrvc->connect_ERR_at_time_last_detected_error=0;
+				mysrvc->time_last_detected_error=0;
+				// if a server is taken back online, consider it immediately
+				sum+=mysrvc->weight;
 			}
 		}
 		if (sum==0) {
