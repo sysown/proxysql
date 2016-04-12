@@ -1027,6 +1027,7 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 						}
 					}
 				}
+				break;
 			}
 			if (!mystrcasecmp("ANALYZE",token)) { // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE
 				token=(char *)tokenize(&tok);
@@ -1042,6 +1043,7 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 						}
 					}
 				}
+				break;
 			}
 			break;
 		case 'b':
@@ -1078,6 +1080,32 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 		case 'S':
 			if (!mystrcasecmp("SELECT",token)) { // SELECT
 				ret=MYSQL_COM_QUERY_SELECT;
+				break;
+			}
+			if (!mystrcasecmp("SET",token)) { // SET
+				ret=MYSQL_COM_QUERY_SET;
+				break;
+			}
+			if (!mystrcasecmp("SHOW",token)) { // SHOW
+				ret=MYSQL_COM_QUERY_SHOW;
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					token=(char *)tokenize(&tok);
+					if (token==NULL) break;
+					if (!strcasecmp("STATUS",token)) {
+						ret=MYSQL_COM_QUERY_SHOW_TABLE_STATUS;
+					}
+				}
+				break;
+			}
+			if (!mystrcasecmp("START",token)) { // START
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TRANSACTION",token)) {
+					ret=MYSQL_COM_QUERY_START_TRANSACTION;
+				}
+				break;
 			}
 			break;
 		case 'u':
