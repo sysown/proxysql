@@ -1067,7 +1067,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		}
 	}
 	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
-		if (!strncasecmp(query_digest_text,"LOCK TABLES", strlen("LOCK TABLES"))) {
+		if (!strncasecmp(query_digest_text,"LOCK TABLE", strlen("LOCK TABLE"))) {
 			set_status_lock_tables(true);
 		}
 	}
