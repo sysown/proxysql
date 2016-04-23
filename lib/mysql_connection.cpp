@@ -507,9 +507,15 @@ handler_again:
 			break;
 		case ASYNC_PING_CONT:
 			assert(myds->sess->status==PINGING_SERVER);
-			ping_cont(event);
+			if (event) {
+				ping_cont(event);
+			}
 			if (async_exit_status) {
-				next_event(ASYNC_PING_CONT);
+				if (myds->sess->thread->curtime >= myds->wait_until) {
+					next_event(ASYNC_PING_CONT);
+				} else {
+					NEXT_IMMEDIATE(ASYNC_PING_TIMEOUT);
+				}
 			} else {
 				NEXT_IMMEDIATE(ASYNC_PING_END);
 			}
@@ -524,6 +530,8 @@ handler_again:
 		case ASYNC_PING_SUCCESSFUL:
 			break;
 		case ASYNC_PING_FAILED:
+			break;
+		case ASYNC_PING_TIMEOUT:
 			break;
 		case ASYNC_QUERY_START:
 			real_query_start();
@@ -828,6 +836,7 @@ int MySQL_Connection::async_ping(short event) {
 			return 0;
 			break;
 		case ASYNC_PING_FAILED:
+		case ASYNC_PING_TIMEOUT:
 			return -1;
 			break;
 		case ASYNC_IDLE:
@@ -844,6 +853,7 @@ int MySQL_Connection::async_ping(short event) {
 			return 0;
 			break;
 		case ASYNC_PING_FAILED:
+		case ASYNC_PING_TIMEOUT:
 			return -1;
 			break;
 		default:
