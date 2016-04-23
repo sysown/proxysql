@@ -173,12 +173,7 @@ MySQL_Connection::~MySQL_Connection() {
 		// always decrease the counter
 		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
 		async_free_result();
-		if (send_quit) {
-			mysql_close(mysql);
-		} else {
-			mysql_close_no_command(mysql);
-			shutdown(fd, SHUT_RDWR);
-		}
+		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
 	}
 //	// FIXME: with the use of mysql client library , this part should be gone.
@@ -1095,4 +1090,22 @@ void MySQL_Connection::optimize() {
 			mysql->net.buff_end=mysql->net.buff+mysql->net.max_packet;
 		}
 	}
+}
+
+// close_mysql() is a replacement for mysql_close()
+// if avoids that a QUIT command stops forever
+// FIXME: currently doesn't support encryption and compression
+void MySQL_Connection::close_mysql() {
+	if (send_quit) {
+		char buff[5];
+		mysql_hdr myhdr;
+		myhdr.pkt_id=0;
+		myhdr.pkt_length=1;
+		memcpy(buff, &myhdr, sizeof(mysql_hdr));
+		buff[4]=0x01;
+		int fd=mysql->net.fd;
+		send(fd, buff, 5, MSG_NOSIGNAL);
+	}
+	mysql_close_no_command(mysql);
+	shutdown(fd, SHUT_RDWR);
 }

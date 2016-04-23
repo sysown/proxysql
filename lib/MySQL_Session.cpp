@@ -57,6 +57,7 @@ static void * kill_query_thread(void *arg) {
 	}
 	char buf[100];
 	sprintf(buf,"KILL QUERY %lu", ka->id);
+	// FIXME: these 2 calls are blocking, fortunately on their own thread
 	mysql_query(mysql,buf);
 	mysql_close(mysql);
 __exit_kill_query_thread:
