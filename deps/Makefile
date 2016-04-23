@@ -23,7 +23,7 @@ libevent: libevent/libevent/.libs/libevent.a
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-4.1.0
 	cd jemalloc && tar -jxf jemalloc-4.1.0.tar.bz2
-	cd jemalloc/jemalloc && CFLAGS=-O2 ./configure --enable-xmalloc
+	cd jemalloc/jemalloc && ./configure --enable-xmalloc
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
