@@ -35,6 +35,22 @@ static MySQL_Monitor *GloMyMon;
 
 static void state_machine_handler(int fd, short event, void *arg);
 
+static void close_mysql(MYSQL *my) {
+	char quit_buff[5];
+	memset(quit_buff,0,5);
+	quit_buff[0]=1;
+	quit_buff[4]=1;
+	int fd=my->net.fd;
+	int wb=write(fd,quit_buff,5);
+	fd+=wb; // dummy, to make compiler happy
+	fd-=wb; // dummy, to make compiler happy
+	mysql_close_no_command(my);
+	shutdown(fd, SHUT_RDWR);
+}
+
+
+
+
 /*
 struct state_data {
 	int ST;
@@ -341,8 +357,17 @@ again:
 
 			case 8:
 				status=mysql_ping_cont(&interr,mysql, mysql_status(event));
-				if (status)
-					next_event(8,status);
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_ping_timeout * 1000) {
+						next_event(8,status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
 				else 
 					NEXT_IMMEDIATE(9);
 				break;
@@ -365,6 +390,12 @@ again:
 				}
 				break;
 
+			case 90: // timeout for both ping and replication lag
+				mysql_error_msg=strdup("timeout");
+				close_mysql(mysql);
+				mysql=NULL;
+				break;
+
 			case 10:
 				if (mysql_thread___monitor_timer_cached==true) {
 					event_base_gettimeofday_cached(base, &tv_out);
@@ -381,10 +412,20 @@ again:
 
 			case 11:
 				status=mysql_query_cont(&interr,mysql, mysql_status(event));
-				if (status)
-					next_event(11,status);
-				else
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
+						next_event(11,status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
+				else {
 					NEXT_IMMEDIATE(12);
+				}
 				break;
 
 			case 12:
