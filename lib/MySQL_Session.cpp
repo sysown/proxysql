@@ -1043,8 +1043,11 @@ handler_again:
 				} else {
 					if (rc==-1) {
 						// the query failed
-						if (myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-							// the query failed because the server is offline hard
+						if (
+							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
+							||
+							(myconn->parent->status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+						) {
 							if (mysql_thread___connect_timeout_server_max) {
 								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
 							}

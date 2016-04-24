@@ -979,11 +979,60 @@ __end_monitor_ping_loop:
 			free(sds);
 		}
 
-		if (resultset)
+		if (resultset) {
 			delete resultset;
+			resultset=NULL;
+		}
 
 		event_base_free(libevent_base);
 
+		// now it is time to shun all problematic hosts
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status!='OFFLINE_HARD' AND b.ping_error IS NOT NULL";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", query, error);
+		} else {
+			// get all addresses and ports
+			int i=0;
+			int j=0;
+			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
+			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				addresses[i]=strdup(r->fields[0]);
+				ports[i]=strdup(r->fields[1]);
+				i++;
+			}
+			if (resultset) {
+				delete resultset;
+				resultset=NULL;
+			}
+			char *new_query=(char *)"SELECT 1 FROM (SELECT hostname,port FROM monitor.mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a GROUP BY hostname,port HAVING COUNT(*)=%d";
+			for (j=0;i<i;j++) {
+				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
+				sprintf(buff,new_query,addresses[j],ports[j],3,3);
+				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+				free(buff);
+				if (!error) {
+					if (resultset) {
+						if (resultset->rows_count) {
+							// disable host
+							MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+						}
+						delete resultset;
+						resultset=NULL;
+					}
+				}
+			}
+			while (i) { // now free all the addresses/ports
+				i--;
+				free(addresses[i]);
+				free(ports[i]);
+			}
+			free(addresses);
+			free(ports);
+		}
 
 __sleep_monitor_ping_loop:
 		t2=monotonic_time();

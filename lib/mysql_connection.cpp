@@ -796,7 +796,12 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	if (parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD)
+	if (
+		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+	) {
+	}
 		return -1;
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
