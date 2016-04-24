@@ -93,7 +93,7 @@ binaries/proxysql-v${CURVER}-1.x86_64.rpm:
 binaries/proxysql-${CURVER}-1-centos67.x86_64.rpm:
 	docker stop centos67_build || true
 	docker rm centos67_build || true
-	docker create --name centos67_build renecannao/proxysql:build-centos67 bash -c "while : ; do sleep 10 ; done"
+	docker create --name centos67_build renecannao/proxysql:build-centos6.7 bash -c "while : ; do sleep 10 ; done"
 	docker start centos67_build
 	docker exec centos67_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec centos67_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE}"
