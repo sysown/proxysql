@@ -47,8 +47,12 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 
-packages: centos7 ubuntu12 ubuntu14 debian7 debian8 ubuntu12-dbg ubuntu14-dbg debian7-dbg debian8-dbg
+packages: centos6.7 centos7 ubuntu12 ubuntu14 debian7 debian8 ubuntu12-dbg ubuntu14-dbg debian7-dbg debian8-dbg
 .PHONY: packages
+
+
+centos6.7: binaries/proxysql-${CURVER}-1-centos67.x86_64.rpm
+.PHONY: centos6.7
 
 centos7: binaries/proxysql-${CURVER}-1.x86_64.rpm
 .PHONY: centos
@@ -85,6 +89,24 @@ binaries/proxysql-v${CURVER}-1.x86_64.rpm:
 	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries
 #	docker kill centos7_build
 	docker rm centos7_build
+
+binaries/proxysql-${CURVER}-1-centos67.x86_64.rpm:
+	docker stop centos67_build || true
+	docker rm centos67_build || true
+	docker create --name centos67_build renecannao/proxysql:build-centos67 bash -c "while : ; do sleep 10 ; done"
+	docker start centos67_build
+	docker exec centos67_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec centos67_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE}"
+	docker exec -it centos67_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	docker exec -it centos67_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
+	docker cp docker/images/proxysql/centos67-build/rpmmacros centos67_build:/root/.rpmmacros
+	docker cp docker/images/proxysql/centos67-build/proxysql.spec centos67_build:/root/rpmbuild/SPECS/proxysql.spec
+	docker exec -it centos67_build bash -c "cp /opt/proxysql/proxysql-${CURVER}.tar.gz /root/rpmbuild/SOURCES"
+	docker exec -it centos67_build bash -c "cd /root/rpmbuild; rpmbuild -ba SPECS/proxysql.spec"
+	docker exec -it centos67_build bash -c "cp /root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm /root/rpm"
+	docker cp centos67_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries/proxysql-${CURVER}-1-centos67.x86_64.rpm
+	docker stop centos67_build
+	docker rm centos67_build
 
 binaries/proxysql_${CURVER}-ubuntu12_amd64.deb:
 	docker stop ubuntu12_build || true
