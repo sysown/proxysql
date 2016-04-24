@@ -246,6 +246,7 @@ class MySQL_Threads_Handler
 		int monitor_connect_interval;
 		int monitor_connect_timeout;
 		int monitor_ping_interval;
+		int monitor_ping_max_failures;
 		int monitor_ping_timeout;
 		int monitor_read_only_interval;
 		int monitor_read_only_timeout;

@@ -1011,12 +1011,14 @@ __end_monitor_ping_loop:
 			char *new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
-				sprintf(buff,new_query,addresses[j],ports[j],3,3);
+				int max_failures=mysql_thread___monitor_ping_max_failures;
+				sprintf(buff,new_query,addresses[j],ports[j],max_failures,max_failures);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
 				if (!error) {
 					if (resultset) {
 						if (resultset->rows_count) {
 							// disable host
+							proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections\n", addresses[j], atoi(ports[j]), max_failures);
 							MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
 						}
 						delete resultset;
