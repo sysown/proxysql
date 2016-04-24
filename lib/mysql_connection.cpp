@@ -801,8 +801,8 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 		||
 		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
 	) {
-	}
 		return -1;
+	}
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
 			return 0;

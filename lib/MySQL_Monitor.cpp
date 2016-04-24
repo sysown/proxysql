@@ -669,8 +669,8 @@ MySQL_Monitor::MySQL_Monitor() {
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
 	admindb=new SQLite3DB();
-  admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-
+	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	admindb->execute("ATTACH DATABASE 'file:mem_monitordb?mode=memory&cache=shared' AS 'monitor'");
 	// define monitoring tables
 	tables_defs_monitor=new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT);	
@@ -1008,12 +1008,11 @@ __end_monitor_ping_loop:
 				delete resultset;
 				resultset=NULL;
 			}
-			char *new_query=(char *)"SELECT 1 FROM (SELECT hostname,port FROM monitor.mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a GROUP BY hostname,port HAVING COUNT(*)=%d";
-			for (j=0;i<i;j++) {
+			char *new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
+			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				sprintf(buff,new_query,addresses[j],ports[j],3,3);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
-				free(buff);
 				if (!error) {
 					if (resultset) {
 						if (resultset->rows_count) {
@@ -1023,7 +1022,10 @@ __end_monitor_ping_loop:
 						delete resultset;
 						resultset=NULL;
 					}
+				} else {
+					proxy_error("Error on %s : %s\n", query, error);
 				}
+				free(buff);
 			}
 			while (i) { // now free all the addresses/ports
 				i--;
