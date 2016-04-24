@@ -602,6 +602,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
+	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
 	if (l) {
 		//int j=0;
@@ -610,6 +611,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					sum+=mysrvc->weight;
+					TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -639,6 +641,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 								mysrvc->time_last_detected_error=0;
 								// if a server is taken back online, consider it immediately
 								sum+=mysrvc->weight;
+								TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
 							}
 						}
 					}
@@ -662,24 +665,45 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				mysrvc->time_last_detected_error=0;
 				// if a server is taken back online, consider it immediately
 				sum+=mysrvc->weight;
+				TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
 			}
 		}
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 			return NULL; // if we reach here, we couldn't find any target
 		}
-		unsigned int k=rand()%sum;
+
+		unsigned int New_sum=0;
+		unsigned int New_TotalUsedConn=0;
+
+		// we will now scan again to ignore overloaded server
+		for (j=0; j<l; j++) {
+			mysrvc=mysrvs->idx(j);
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
+				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					if ((len * sum) <= (New_TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+						New_sum+=mysrvc->weight;
+						New_TotalUsedConn+=len;
+					}
+				}
+			}
+		}
+		unsigned int k=rand()%New_sum;
   	k++;
-		sum=0;
+		New_sum=0;
 
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					sum+=mysrvc->weight;
-					if (k<=sum) {
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-						return mysrvc;
+				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
+				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					if ((len * sum) <= (New_TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+						New_sum+=mysrvc->weight;
+						if (k<=New_sum) {
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+							return mysrvc;
+						}
 					}
 				}
 			}
@@ -1050,7 +1074,6 @@ void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
   for (unsigned int i=0; i<MyHostGroups->len; i++) {
     MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		unsigned int j;
-		unsigned int sum=0;
 		unsigned int l=myhgc->mysrvs->cnt();
 		if (l) {
 			for (j=0; j<l; j++) {
