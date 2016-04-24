@@ -689,6 +689,12 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				}
 			}
 		}
+
+		if (New_sum==0) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+			return NULL; // if we reach here, we couldn't find any target
+		}
+
 		unsigned int k=rand()%New_sum;
   	k++;
 		New_sum=0;

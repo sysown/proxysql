@@ -1018,7 +1018,7 @@ __end_monitor_ping_loop:
 					if (resultset) {
 						if (resultset->rows_count) {
 							// disable host
-							proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections\n", addresses[j], atoi(ports[j]), max_failures);
+							proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections\n", addresses[j], ports[j], max_failures);
 							MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
 						}
 						delete resultset;
