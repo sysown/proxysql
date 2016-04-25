@@ -384,12 +384,12 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 			int fd=-1; // first digit
 			for (i=5+sal;i<pkt->size;i++) {
 				char c=((char *)pkt->ptr)[i];
-				if (c!='0' && c!='1' && c!=' ' && c!='=') return false; // found a not valid char
+				if (c!='0' && c!='1' && c!=' ' && c!='=' && c!='/') return false; // found a not valid char
 				if (eq==false) {
 					if (c!=' ' && c!='=') return false; // found a not valid char
 					if (c=='=') eq=true;
 				} else {
-					if (c!='0' && c!='1' && c!=' ') return false; // found a not valid char
+					if (c!='0' && c!='1' && c!=' ' && c!='/') return false; // found a not valid char
 					if (fd==-1) {
 						if (c=='0' || c=='1') { // found first digit
 							if (c=='0')
@@ -400,6 +400,10 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					} else {
 						if (c=='0' || c=='1') { // found second digit
 							return false;
+						} else {
+							if (c=='/' || c==' ') {
+								break;
+							}
 						}
 					}
 				}
