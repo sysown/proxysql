@@ -682,7 +682,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ((len * sum) <= (New_TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
 						New_sum+=mysrvc->weight;
 						New_TotalUsedConn+=len;
 					}
@@ -704,7 +704,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ((len * sum) <= (New_TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
 						New_sum+=mysrvc->weight;
 						if (k<=New_sum) {
 							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
