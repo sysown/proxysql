@@ -50,6 +50,8 @@ chkconfig --del %{name}
 %{_sysconfdir}/init.d/%{name}
 
 %changelog
+* Mon Mar 14 2016 Rene Cannao <rene.cannao@gmail.com> 1.2.0
+- First testing release of 1.2
 * Sat Mar 11 2016 Rene Cannao <rene.cannao@gmail.com> 1.1.2
 - Upgraded to release 1.1.2
 * Sat Oct 31 2015 Rene Cannao <rene.cannao@gmail.com> 1.0.1
