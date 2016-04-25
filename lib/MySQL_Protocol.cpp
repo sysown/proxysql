@@ -400,7 +400,7 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 static unsigned char protocol_version=10;
 //static uint16_t server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 //static uint8_t server_language=33;
-static uint16_t server_status=1;
+static uint16_t server_status=SERVER_STATUS_AUTOCOMMIT;
 //static char *mysql_server_version = (char *)"5.1.30";
 
 //bool MySQL_Protocol::generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
