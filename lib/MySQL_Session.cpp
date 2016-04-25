@@ -425,7 +425,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					} else {
 						// as there is no active transaction, we do no need to forward it
 						// just change internal state
-						autocommit=false;
+						autocommit=true;
 						goto __ret_autocommit_OK;
 					}
 				}
