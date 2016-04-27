@@ -152,6 +152,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_connect_interval",
 	(char *)"monitor_connect_timeout",
 	(char *)"monitor_ping_interval",
+	(char *)"monitor_ping_max_failures",
 	(char *)"monitor_ping_timeout",
 	(char *)"monitor_read_only_interval",
 	(char *)"monitor_read_only_timeout",
@@ -221,6 +222,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=200;
 	variables.monitor_ping_interval=60000;
+	variables.monitor_ping_max_failures=3;
 	variables.monitor_ping_timeout=100;
 	variables.monitor_read_only_interval=1000;
 	variables.monitor_read_only_timeout=100;
@@ -376,6 +378,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 		if (!strcasecmp(name,"monitor_connect_interval")) return (int)variables.monitor_connect_interval;
 		if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
 		if (!strcasecmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
+		if (!strcasecmp(name,"monitor_ping_max_failures")) return (int)variables.monitor_ping_max_failures;
 		if (!strcasecmp(name,"monitor_ping_timeout")) return (int)variables.monitor_ping_timeout;
 		if (!strcasecmp(name,"monitor_read_only_interval")) return (int)variables.monitor_read_only_interval;
 		if (!strcasecmp(name,"monitor_read_only_timeout")) return (int)variables.monitor_read_only_timeout;
@@ -452,6 +455,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_ping_interval")) {
 			sprintf(intbuf,"%d",variables.monitor_ping_interval);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_ping_max_failures")) {
+			sprintf(intbuf,"%d",variables.monitor_ping_max_failures);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_ping_timeout")) {
@@ -703,6 +710,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 7*24*3600*1000) {
 				variables.monitor_ping_interval=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_ping_max_failures")) {
+			int intv=atoi(value);
+			if (intv >= 1 && intv <= 1000*1000) {
+				variables.monitor_ping_max_failures=intv;
 				return true;
 			} else {
 				return false;
@@ -1802,6 +1818,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_connect_interval=GloMTH->get_variable_int((char *)"monitor_connect_interval");
 	mysql_thread___monitor_connect_timeout=GloMTH->get_variable_int((char *)"monitor_connect_timeout");
 	mysql_thread___monitor_ping_interval=GloMTH->get_variable_int((char *)"monitor_ping_interval");
+	mysql_thread___monitor_ping_max_failures=GloMTH->get_variable_int((char *)"monitor_ping_max_failures");
 	mysql_thread___monitor_ping_timeout=GloMTH->get_variable_int((char *)"monitor_ping_timeout");
 	mysql_thread___monitor_read_only_interval=GloMTH->get_variable_int((char *)"monitor_read_only_interval");
 	mysql_thread___monitor_read_only_timeout=GloMTH->get_variable_int((char *)"monitor_read_only_timeout");

@@ -119,6 +119,7 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	time_last_detected_error=0;
 	connect_ERR_at_time_last_detected_error=0;
 	shunned_automatic=false;
+	shunned_and_kill_all_connections=false;	// false to default
 	//charset=_charset;
 	myhgc=NULL;
 	ConnectionsUsed=new MySrvConnList(this);
@@ -152,6 +153,12 @@ void MySrvC::connect_error(int err_num) {
 			shunned_automatic=true;
 		}
 	}
+}
+
+void MySrvC::shun_and_killall() {
+	status=MYSQL_SERVER_STATUS_SHUNNED;
+	shunned_automatic=true;
+	shunned_and_kill_all_connections=true;
 }
 
 MySrvC::~MySrvC() {
@@ -595,6 +602,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
+	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
 	if (l) {
 		//int j=0;
@@ -603,6 +611,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					sum+=mysrvc->weight;
+					TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -620,12 +629,20 @@ MySrvC *MyHGC::get_random_MySrvC() {
 							max_wait_sec = 1;
 						}
 						if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
-							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-							mysrvc->shunned_automatic=false;
-							mysrvc->connect_ERR_at_time_last_detected_error=0;
-							mysrvc->time_last_detected_error=0;
-							// if a server is taken back online, consider it immediately
-							sum+=mysrvc->weight;
+							if (
+								(mysrvc->shunned_and_kill_all_connections==false) // it is safe to bring it back online
+								||
+								(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns->len==0 && mysrvc->ConnectionsFree->conns->len==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
+							) {
+								mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+								mysrvc->shunned_automatic=false;
+								mysrvc->shunned_and_kill_all_connections=false;
+								mysrvc->connect_ERR_at_time_last_detected_error=0;
+								mysrvc->time_last_detected_error=0;
+								// if a server is taken back online, consider it immediately
+								sum+=mysrvc->weight;
+								TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+							}
 						}
 					}
 				}
@@ -648,24 +665,51 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				mysrvc->time_last_detected_error=0;
 				// if a server is taken back online, consider it immediately
 				sum+=mysrvc->weight;
+				TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
 			}
 		}
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 			return NULL; // if we reach here, we couldn't find any target
 		}
-		unsigned int k=rand()%sum;
+
+		unsigned int New_sum=0;
+		unsigned int New_TotalUsedConn=0;
+
+		// we will now scan again to ignore overloaded server
+		for (j=0; j<l; j++) {
+			mysrvc=mysrvs->idx(j);
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
+				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+						New_sum+=mysrvc->weight;
+						New_TotalUsedConn+=len;
+					}
+				}
+			}
+		}
+
+		if (New_sum==0) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+			return NULL; // if we reach here, we couldn't find any target
+		}
+
+		unsigned int k=rand()%New_sum;
   	k++;
-		sum=0;
+		New_sum=0;
 
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					sum+=mysrvc->weight;
-					if (k<=sum) {
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-						return mysrvc;
+				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
+				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+						New_sum+=mysrvc->weight;
+						if (k<=New_sum) {
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+							return mysrvc;
+						}
 					}
 				}
 			}
@@ -1023,4 +1067,42 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	}
 
 	free(query);
+}
+
+
+
+// shun_and_killall
+// this function is called only from MySQL_Monitor::monitor_ping()
+// it temporary disables a host that is not responding to pings, and mark the host in a way that when used the connection will be dropped
+void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
+	wrlock();
+	MySrvC *mysrvc=NULL;
+  for (unsigned int i=0; i<MyHostGroups->len; i++) {
+    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		unsigned int j;
+		unsigned int l=myhgc->mysrvs->cnt();
+		if (l) {
+			for (j=0; j<l; j++) {
+				mysrvc=myhgc->mysrvs->idx(j);
+				if (mysrvc->port==port && strcmp(mysrvc->address,hostname)==0) {
+					switch (mysrvc->status) {
+						case MYSQL_SERVER_STATUS_SHUNNED:
+							if (mysrvc->shunned_automatic==false) {
+								break;
+							}
+						case MYSQL_SERVER_STATUS_ONLINE:
+						case MYSQL_SERVER_STATUS_OFFLINE_SOFT:
+							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED;
+							mysrvc->shunned_automatic=true;
+							mysrvc->shunned_and_kill_all_connections=true;
+							mysrvc->ConnectionsFree->drop_all_connections();
+							break;
+						default:
+							break;
+					}
+				}
+			}
+		}
+	}
+	wrunlock();
 }

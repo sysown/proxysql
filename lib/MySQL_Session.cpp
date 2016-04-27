@@ -57,6 +57,7 @@ static void * kill_query_thread(void *arg) {
 	}
 	char buf[100];
 	sprintf(buf,"KILL QUERY %lu", ka->id);
+	// FIXME: these 2 calls are blocking, fortunately on their own thread
 	mysql_query(mysql,buf);
 	mysql_close(mysql);
 __exit_kill_query_thread:
@@ -383,12 +384,12 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 			int fd=-1; // first digit
 			for (i=5+sal;i<pkt->size;i++) {
 				char c=((char *)pkt->ptr)[i];
-				if (c!='0' && c!='1' && c!=' ' && c!='=') return false; // found a not valid char
+				if (c!='0' && c!='1' && c!=' ' && c!='=' && c!='/') return false; // found a not valid char
 				if (eq==false) {
 					if (c!=' ' && c!='=') return false; // found a not valid char
 					if (c=='=') eq=true;
 				} else {
-					if (c!='0' && c!='1' && c!=' ') return false; // found a not valid char
+					if (c!='0' && c!='1' && c!=' ' && c!='/') return false; // found a not valid char
 					if (fd==-1) {
 						if (c=='0' || c=='1') { // found first digit
 							if (c=='0')
@@ -399,6 +400,10 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					} else {
 						if (c=='0' || c=='1') { // found second digit
 							return false;
+						} else {
+							if (c=='/' || c==' ') {
+								break;
+							}
 						}
 					}
 				}
@@ -420,7 +425,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					} else {
 						// as there is no active transaction, we do no need to forward it
 						// just change internal state
-						autocommit=false;
+						autocommit=true;
 						goto __ret_autocommit_OK;
 					}
 				}
@@ -1042,8 +1047,11 @@ handler_again:
 				} else {
 					if (rc==-1) {
 						// the query failed
-						if (myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-							// the query failed because the server is offline hard
+						if (
+							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
+							||
+							(myconn->parent->status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+						) {
 							if (mysql_thread___connect_timeout_server_max) {
 								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
 							}

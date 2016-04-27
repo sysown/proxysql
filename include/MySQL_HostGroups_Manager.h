@@ -55,12 +55,14 @@ class MySrvC {	// MySQL Server Container
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
 	bool shunned_automatic;
+	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
 	//uint8_t charset;
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag);
 	~MySrvC();
 	void connect_error(int);
+	void shun_and_killall();
 };
 
 class MySrvList {	// MySQL Server List
@@ -153,6 +155,7 @@ class MySQL_HostGroups_Manager {
 	void replication_lag_action(int, char*, unsigned int, int);
 	void read_only_action(char *hostname, int port, int read_only);
 	unsigned int get_servers_table_version();
+	void shun_and_killall(char *hostname, int port);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

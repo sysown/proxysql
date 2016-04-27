@@ -173,12 +173,7 @@ MySQL_Connection::~MySQL_Connection() {
 		// always decrease the counter
 		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
 		async_free_result();
-		if (send_quit) {
-			mysql_close(mysql);
-		} else {
-			mysql_close_no_command(mysql);
-			shutdown(fd, SHUT_RDWR);
-		}
+		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
 	}
 //	// FIXME: with the use of mysql client library , this part should be gone.
@@ -512,9 +507,15 @@ handler_again:
 			break;
 		case ASYNC_PING_CONT:
 			assert(myds->sess->status==PINGING_SERVER);
-			ping_cont(event);
+			if (event) {
+				ping_cont(event);
+			}
 			if (async_exit_status) {
-				next_event(ASYNC_PING_CONT);
+				if (myds->sess->thread->curtime >= myds->wait_until) {
+					next_event(ASYNC_PING_CONT);
+				} else {
+					NEXT_IMMEDIATE(ASYNC_PING_TIMEOUT);
+				}
 			} else {
 				NEXT_IMMEDIATE(ASYNC_PING_END);
 			}
@@ -529,6 +530,8 @@ handler_again:
 		case ASYNC_PING_SUCCESSFUL:
 			break;
 		case ASYNC_PING_FAILED:
+			break;
+		case ASYNC_PING_TIMEOUT:
 			break;
 		case ASYNC_QUERY_START:
 			real_query_start();
@@ -793,8 +796,13 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	if (parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD)
+	if (
+		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+	) {
 		return -1;
+	}
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
 			return 0;
@@ -833,6 +841,7 @@ int MySQL_Connection::async_ping(short event) {
 			return 0;
 			break;
 		case ASYNC_PING_FAILED:
+		case ASYNC_PING_TIMEOUT:
 			return -1;
 			break;
 		case ASYNC_IDLE:
@@ -849,6 +858,7 @@ int MySQL_Connection::async_ping(short event) {
 			return 0;
 			break;
 		case ASYNC_PING_FAILED:
+		case ASYNC_PING_TIMEOUT:
 			return -1;
 			break;
 		default:
@@ -1095,4 +1105,22 @@ void MySQL_Connection::optimize() {
 			mysql->net.buff_end=mysql->net.buff+mysql->net.max_packet;
 		}
 	}
+}
+
+// close_mysql() is a replacement for mysql_close()
+// if avoids that a QUIT command stops forever
+// FIXME: currently doesn't support encryption and compression
+void MySQL_Connection::close_mysql() {
+	if (send_quit) {
+		char buff[5];
+		mysql_hdr myhdr;
+		myhdr.pkt_id=0;
+		myhdr.pkt_length=1;
+		memcpy(buff, &myhdr, sizeof(mysql_hdr));
+		buff[4]=0x01;
+		int fd=mysql->net.fd;
+		send(fd, buff, 5, MSG_NOSIGNAL);
+	}
+	mysql_close_no_command(mysql);
+	shutdown(fd, SHUT_RDWR);
 }

@@ -35,6 +35,22 @@ static MySQL_Monitor *GloMyMon;
 
 static void state_machine_handler(int fd, short event, void *arg);
 
+static void close_mysql(MYSQL *my) {
+	char quit_buff[5];
+	memset(quit_buff,0,5);
+	quit_buff[0]=1;
+	quit_buff[4]=1;
+	int fd=my->net.fd;
+	int wb=write(fd,quit_buff,5);
+	fd+=wb; // dummy, to make compiler happy
+	fd-=wb; // dummy, to make compiler happy
+	mysql_close_no_command(my);
+	shutdown(fd, SHUT_RDWR);
+}
+
+
+
+
 /*
 struct state_data {
 	int ST;
@@ -341,8 +357,17 @@ again:
 
 			case 8:
 				status=mysql_ping_cont(&interr,mysql, mysql_status(event));
-				if (status)
-					next_event(8,status);
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_ping_timeout * 1000) {
+						next_event(8,status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
 				else 
 					NEXT_IMMEDIATE(9);
 				break;
@@ -365,6 +390,12 @@ again:
 				}
 				break;
 
+			case 90: // timeout for both ping and replication lag
+				mysql_error_msg=strdup("timeout");
+				close_mysql(mysql);
+				mysql=NULL;
+				break;
+
 			case 10:
 				if (mysql_thread___monitor_timer_cached==true) {
 					event_base_gettimeofday_cached(base, &tv_out);
@@ -381,10 +412,20 @@ again:
 
 			case 11:
 				status=mysql_query_cont(&interr,mysql, mysql_status(event));
-				if (status)
-					next_event(11,status);
-				else
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
+						next_event(11,status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
+				else {
 					NEXT_IMMEDIATE(12);
+				}
 				break;
 
 			case 12:
@@ -628,8 +669,8 @@ MySQL_Monitor::MySQL_Monitor() {
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
 	admindb=new SQLite3DB();
-  admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-
+	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	admindb->execute("ATTACH DATABASE 'file:mem_monitordb?mode=memory&cache=shared' AS 'monitor'");
 	// define monitoring tables
 	tables_defs_monitor=new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT);	
@@ -938,11 +979,64 @@ __end_monitor_ping_loop:
 			free(sds);
 		}
 
-		if (resultset)
+		if (resultset) {
 			delete resultset;
+			resultset=NULL;
+		}
 
 		event_base_free(libevent_base);
 
+		// now it is time to shun all problematic hosts
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status!='OFFLINE_HARD' AND b.ping_error IS NOT NULL";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", query, error);
+		} else {
+			// get all addresses and ports
+			int i=0;
+			int j=0;
+			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
+			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				addresses[i]=strdup(r->fields[0]);
+				ports[i]=strdup(r->fields[1]);
+				i++;
+			}
+			if (resultset) {
+				delete resultset;
+				resultset=NULL;
+			}
+			char *new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
+			for (j=0;j<i;j++) {
+				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
+				int max_failures=mysql_thread___monitor_ping_max_failures;
+				sprintf(buff,new_query,addresses[j],ports[j],max_failures,max_failures);
+				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+				if (!error) {
+					if (resultset) {
+						if (resultset->rows_count) {
+							// disable host
+							proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections\n", addresses[j], ports[j], max_failures);
+							MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+						}
+						delete resultset;
+						resultset=NULL;
+					}
+				} else {
+					proxy_error("Error on %s : %s\n", query, error);
+				}
+				free(buff);
+			}
+			while (i) { // now free all the addresses/ports
+				i--;
+				free(addresses[i]);
+				free(ports[i]);
+			}
+			free(addresses);
+			free(ports);
+		}
 
 __sleep_monitor_ping_loop:
 		t2=monotonic_time();

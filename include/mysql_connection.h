@@ -132,5 +132,6 @@ class MySQL_Connection {
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 	void optimize();
+	void close_mysql();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */
