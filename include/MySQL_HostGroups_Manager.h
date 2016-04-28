@@ -160,7 +160,7 @@ class MySQL_HostGroups_Manager {
 	void read_only_action(char *hostname, int port, int read_only);
 	unsigned int get_servers_table_version();
 	void shun_and_killall(char *hostname, int port);
-	void set_server_current_latency_ms(char *hostname, int port, unsigned int _current_latency_ms);
+	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

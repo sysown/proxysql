@@ -1133,7 +1133,7 @@ void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 // it set the average latency for a host in the last 3 pings
 // the connection pool will use this information to evaluate or exclude a specific hosts
 // note that this variable is in microsecond, while user defines it in millisecond
-void MySQL_HostGroups_Manager::set_server_current_latency_ms(char *hostname, int port, unsigned int _current_latency_us) {
+void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us) {
 	wrlock();
 	MySrvC *mysrvc=NULL;
   for (unsigned int i=0; i<MyHostGroups->len; i++) {
