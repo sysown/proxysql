@@ -298,6 +298,9 @@ void MySQL_Connection::connect_start() {
 	mysql=mysql_init(NULL);
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+	if (parent->use_ssl) {
+		mysql_ssl_set(mysql, "/home/vagrant/newcerts/client-key.pem","/home/vagrant/newcerts/client-cert.pem", NULL, NULL, NULL);
+	}
 	unsigned int timeout= 1;
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
 	const CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
