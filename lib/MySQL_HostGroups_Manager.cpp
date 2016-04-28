@@ -622,8 +622,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					sum+=mysrvc->weight;
-					TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+						sum+=mysrvc->weight;
+						TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+					}
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -652,8 +654,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
 								// if a server is taken back online, consider it immediately
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+									sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+								}
 							}
 						}
 					}
@@ -676,8 +680,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				mysrvc->connect_ERR_at_time_last_detected_error=0;
 				mysrvc->time_last_detected_error=0;
 				// if a server is taken back online, consider it immediately
-				sum+=mysrvc->weight;
-				TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+				if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+					sum+=mysrvc->weight;
+					TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+				}
 			}
 		}
 		if (sum==0) {
@@ -694,9 +700,11 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-						New_sum+=mysrvc->weight;
-						New_TotalUsedConn+=len;
+					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+							New_sum+=mysrvc->weight;
+							New_TotalUsedConn+=len;
+						}
 					}
 				}
 			}
@@ -716,11 +724,13 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-						New_sum+=mysrvc->weight;
-						if (k<=New_sum) {
-							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-							return mysrvc;
+					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+							New_sum+=mysrvc->weight;
+							if (k<=New_sum) {
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+								return mysrvc;
+							}
 						}
 					}
 				}
