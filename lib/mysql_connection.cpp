@@ -512,9 +512,9 @@ handler_again:
 			}
 			if (async_exit_status) {
 				if (myds->sess->thread->curtime >= myds->wait_until) {
-					next_event(ASYNC_PING_CONT);
-				} else {
 					NEXT_IMMEDIATE(ASYNC_PING_TIMEOUT);
+				} else {
+					next_event(ASYNC_PING_CONT);
 				}
 			} else {
 				NEXT_IMMEDIATE(ASYNC_PING_END);
