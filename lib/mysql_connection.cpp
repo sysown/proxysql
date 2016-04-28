@@ -299,7 +299,7 @@ void MySQL_Connection::connect_start() {
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 	if (parent->use_ssl) {
-		mysql_ssl_set(mysql, "/home/vagrant/newcerts/client-key.pem","/home/vagrant/newcerts/client-cert.pem", NULL, NULL, NULL);
+		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, NULL);
 	}
 	unsigned int timeout= 1;
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
