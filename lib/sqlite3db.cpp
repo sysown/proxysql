@@ -47,15 +47,28 @@ bool SQLite3DB::execute(const char *str) {
 	assert(url);
 	assert(db);
 	char *err=NULL;
-	sqlite3_exec(db, str, NULL, 0, &err);
-	if(err!=NULL) {
-        proxy_error("SQLITE error: %s --- %s\n", err, str);
-		if (assert_on_error) {
-			assert(err==0);
+	int rc=0;
+	do {
+	rc=sqlite3_exec(db, str, NULL, 0, &err);
+//	fprintf(stderr,"%d : %s\n", rc, str);
+		if(err!=NULL) {
+			if (rc!=SQLITE_LOCKED) {
+				proxy_error("SQLITE error: %s --- %s\n", err, str);
+				if (assert_on_error) {
+					assert(err==0);
+				}
+			}
+			sqlite3_free(err);
+			err=NULL;
 		}
-		return false;		
+		if (rc==SQLITE_LOCKED) { // the execution of sqlite3_exec() failed because locked
+			usleep(USLEEP_SQLITE_LOCKED);
+		}
+	} while (rc==SQLITE_LOCKED);
+	if (rc==SQLITE_OK) {
+		return true;
 	}
-	return true;
+	return false;
 }
 
 
