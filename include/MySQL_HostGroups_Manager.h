@@ -49,7 +49,9 @@ class MySrvC {	// MySQL Server Container
 	unsigned int max_replication_lag;
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
-	unsigned int max_latency_ms;
+	// note that these variables are in microsecond, while user defines max lantency in millisecond
+	unsigned int current_latency_us;
+	unsigned int max_latency_us;
 	time_t time_last_detected_error;
 	unsigned int connect_ERR_at_time_last_detected_error;
 	unsigned long long queries_sent;
@@ -158,6 +160,7 @@ class MySQL_HostGroups_Manager {
 	void read_only_action(char *hostname, int port, int read_only);
 	unsigned int get_servers_table_version();
 	void shun_and_killall(char *hostname, int port);
+	void set_server_current_latency_ms(char *hostname, int port, unsigned int _current_latency_ms);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

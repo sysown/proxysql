@@ -112,7 +112,8 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
-	max_latency_ms=_max_latency_ms;
+	max_latency_us=_max_latency_ms*1000;
+	current_latency_us=0;
 	connect_OK=0;
 	connect_ERR=0;
 	queries_sent=0;
@@ -408,7 +409,7 @@ bool MySQL_HostGroups_Manager::commit() {
 				}
 				if (atoi(r->fields[9])!=atoi(r->fields[17])) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_latency_ms for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[9] , mysrvc->max_latency_ms , atoi(r->fields[17]));
-					mysrvc->max_latency_ms=atoi(r->fields[17]);
+					mysrvc->max_latency_us=1000*atoi(r->fields[17]);
 				}
 			}
 		}
@@ -461,7 +462,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 			uintptr_t ptr=(uintptr_t)mysrvc;
 			char *q=(char *)"INSERT INTO mysql_servers VALUES(%d,\"%s\",%d,%d,%d,%u,%u,%u,%u,%u,%llu)";
 			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+8+8+16+8+16+32);
-			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_ms,  ptr);
+			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us/1000,  ptr);
 			char *st;
 			switch (mysrvc->status) {
 				case 0:
@@ -478,7 +479,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 					st=(char *)"SHUNNED";
 					break;
 			}
-			fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_ms);
+			fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 			//fprintf(stderr,"%s\n",query);
 			mydb->execute(query);
@@ -1081,7 +1082,6 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 }
 
 
-
 // shun_and_killall
 // this function is called only from MySQL_Monitor::monitor_ping()
 // it temporary disables a host that is not responding to pings, and mark the host in a way that when used the connection will be dropped
@@ -1111,6 +1111,30 @@ void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 						default:
 							break;
 					}
+				}
+			}
+		}
+	}
+	wrunlock();
+}
+
+// set_server_current_latency_us
+// this function is called only from MySQL_Monitor::monitor_ping()
+// it set the average latency for a host in the last 3 pings
+// the connection pool will use this information to evaluate or exclude a specific hosts
+// note that this variable is in microsecond, while user defines it in millisecond
+void MySQL_HostGroups_Manager::set_server_current_latency_ms(char *hostname, int port, unsigned int _current_latency_us) {
+	wrlock();
+	MySrvC *mysrvc=NULL;
+  for (unsigned int i=0; i<MyHostGroups->len; i++) {
+    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		unsigned int j;
+		unsigned int l=myhgc->mysrvs->cnt();
+		if (l) {
+			for (j=0; j<l; j++) {
+				mysrvc=myhgc->mysrvs->idx(j);
+				if (mysrvc->port==port && strcmp(mysrvc->address,hostname)==0) {
+					mysrvc->current_latency_us=_current_latency_us;
 				}
 			}
 		}
