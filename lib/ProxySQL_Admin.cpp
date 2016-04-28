@@ -56,7 +56,15 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define LINESIZE	2048
 
-#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+
+// mysql_servers in v1.1.0
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_1_0 "CREATE TABLE mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+
+// mysql_servers in v1.2.0e
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_2_0e "CREATE TABLE mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+
+
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 
@@ -72,7 +80,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , UNIQUE (reader_hostgroup))"
 
@@ -2222,6 +2230,9 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
 
+	// upgrade mysql_servers if needed (upgrade from previous version)
+	disk_upgrade_mysql_servers();
+
 	// upgrade mysql_query_rules if needed (upgrade from previous version)
 	disk_upgrade_mysql_query_rules();
 
@@ -3432,15 +3443,20 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	if (resultset) {
 		char *q=NULL;
 		if (_runtime) {
-			q=(char *)"INSERT INTO runtime_mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s)";
+			q=(char *)"INSERT INTO runtime_mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s,%s,%s)";
 		} else {
-			q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s)";
+			q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s,%s,%s)";
 		}
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+strlen(r->fields[7])+16);
+			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+strlen(r->fields[7])+
+				strlen(r->fields[8])+ // use_ssl
+				strlen(r->fields[9])+ // max_latency_ms
+			16); // padding
 			// if the backend is shunned, save_mysql_servers_runtime_to_database() should set to ONLINE if _runtime==false
-			sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], ( _runtime ? r->fields[4] : ( strcmp(r->fields[4],"SHUNNED")==0 ? "ONLINE" : r->fields[4] ) ), r->fields[3], r->fields[5], r->fields[6], r->fields[7]);
+			sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], ( _runtime ? r->fields[4] : ( strcmp(r->fields[4],"SHUNNED")==0 ? "ONLINE" : r->fields[4] ) ), r->fields[3], r->fields[5], r->fields[6], r->fields[7],
+				r->fields[8], // use_ssl
+				r->fields[9]); // max_latency_ms
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 			admindb->execute(query);
 			free(query);
@@ -3485,7 +3501,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag FROM main.mysql_servers";
+	char *query=(char *)"SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	//MyHGH->wrlock();
@@ -3508,8 +3524,15 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 					}
 				}
 			}
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "hid=%d , hostname=%s , port=%d , status=%s , weight=%d , compression=%d , max_connections=%d , max_replication_lag=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), r->fields[3], atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]));
-			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), status, atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]));
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "hid=%d , hostname=%s , port=%d , status=%s , weight=%d , compression=%d , max_connections=%d , max_replication_lag=%d, use_ssl=%d, max_latency_ms=%d\n",
+				atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), r->fields[3], atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7])
+				atoi(r->fields[8]), // use_ssl
+				atoi(r->fields[9])  // max_latency_ms
+			);
+			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), status, atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]),
+				atoi(r->fields[8]), // use_ssl
+				atoi(r->fields[9])  // max_latency_ms
+			);
 			//MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
 		}
 	}
@@ -3817,7 +3840,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag) VALUES (\"%s\", %d, %d, %d, %d, \"%s\", %d, %d)";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms) VALUES (\"%s\", %d, %d, %d, %d, \"%s\", %d, %d, %d, %d)";
 	for (i=0; i< count; i++) {
 		const Setting &server = mysql_servers[i];
 		std::string address;
@@ -3828,6 +3851,8 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 		int compression=0;
 		int max_connections=1000; // default
 		int max_replication_lag=0; // default
+		int use_ssl=0;
+		int max_latency_ms=0;
 		if (server.lookupValue("address", address)==false) continue;
 		if (server.lookupValue("port", port)==false) continue;
 		if (server.lookupValue("hostgroup", hostgroup)==false) continue;
@@ -3844,8 +3869,10 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 		server.lookupValue("weight", weight);
 		server.lookupValue("max_connections", max_connections);
 		server.lookupValue("max_replication_lag", max_replication_lag);
+		server.lookupValue("use_ssl", use_ssl);
+		server.lookupValue("max_latency_ms", max_latency_ms);
 		char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+128);
-		sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag);
+		sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms);
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
 		free(query);
@@ -3901,6 +3928,28 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_query_rules (rule_id,active,username,schemaname,flagIN,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,delay,error_msg,apply) SELECT rule_id,active,username,schemaname,flagIN,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,delay,error_msg,apply FROM mysql_query_rules_v110");
+	}
+	configdb->execute("PRAGMA foreign_keys = ON");
+}
+
+void ProxySQL_Admin::disk_upgrade_mysql_servers() {
+	// this function is called only for configdb table
+	// it is responsible to upgrade table mysql_servers if its structure is from a previous version
+	int rci;
+	configdb->execute("PRAGMA foreign_keys = OFF");
+	rci=configdb->check_table_structure((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_1_0);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version v1.1.0 of table mysql_servers\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
+		// drop any existing table with suffix _v110
+		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v110");
+		// rename current table to add suffix _v110
+		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v110");
+		// create new table
+		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag FROM mysql_servers_v110");
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
