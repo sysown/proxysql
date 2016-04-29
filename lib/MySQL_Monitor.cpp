@@ -1008,7 +1008,8 @@ __end_monitor_ping_loop:
 				delete resultset;
 				resultset=NULL;
 			}
-			char *new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
+			char *new_query=NULL;
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
@@ -1029,6 +1030,30 @@ __end_monitor_ping_loop:
 				}
 				free(buff);
 			}
+
+			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
+			for (j=0;j<i;j++) {
+				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
+				sprintf(buff,new_query,addresses[j],ports[j]);
+				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+				if (!error) {
+					if (resultset) {
+						if (resultset->rows_count) {
+							for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+								SQLite3_row *r=*it; // this should be called just once, but we create a generic for loop
+								// update curreny_latency_ms
+								MyHGM->set_server_current_latency_us(addresses[j],atoi(ports[j]), atoi(r->fields[2]));
+							}
+						}
+						delete resultset;
+						resultset=NULL;
+					}
+				} else {
+					proxy_error("Error on %s : %s\n", query, error);
+				}
+				free(buff);
+			}
+
 			while (i) { // now free all the addresses/ports
 				i--;
 				free(addresses[i]);
