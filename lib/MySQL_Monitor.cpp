@@ -1031,6 +1031,40 @@ __end_monitor_ping_loop:
 				free(buff);
 			}
 
+			while (i) { // now free all the addresses/ports
+				i--;
+				free(addresses[i]);
+				free(ports[i]);
+			}
+			free(addresses);
+			free(ports);
+		}
+
+
+		// now it is time to update current_lantency_ms
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status!='OFFLINE_HARD' AND b.ping_error IS NULL";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", query, error);
+		} else {
+			// get all addresses and ports
+			int i=0;
+			int j=0;
+			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
+			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				addresses[i]=strdup(r->fields[0]);
+				ports[i]=strdup(r->fields[1]);
+				i++;
+			}
+			if (resultset) {
+				delete resultset;
+				resultset=NULL;
+			}
+			char *new_query=NULL;
+
 			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
@@ -1041,7 +1075,7 @@ __end_monitor_ping_loop:
 						if (resultset->rows_count) {
 							for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 								SQLite3_row *r=*it; // this should be called just once, but we create a generic for loop
-								// update curreny_latency_ms
+								// update current_latency_ms
 								MyHGM->set_server_current_latency_us(addresses[j],atoi(ports[j]), atoi(r->fields[2]));
 							}
 						}
@@ -1053,14 +1087,6 @@ __end_monitor_ping_loop:
 				}
 				free(buff);
 			}
-
-			while (i) { // now free all the addresses/ports
-				i--;
-				free(addresses[i]);
-				free(ports[i]);
-			}
-			free(addresses);
-			free(ports);
 		}
 
 __sleep_monitor_ping_loop:

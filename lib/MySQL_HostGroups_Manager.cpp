@@ -932,7 +932,7 @@ void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_resul
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
-  const int colnum=11;
+  const int colnum=12;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -946,6 +946,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
   result->add_column_definition(SQLITE_TEXT,"Queries");
   result->add_column_definition(SQLITE_TEXT,"Bytes_sent");
   result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
+  result->add_column_definition(SQLITE_TEXT,"Latency_us");
 	wrlock();
 	int i,j, k;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -1004,6 +1005,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			pta[9]=strdup(buf);
 			sprintf(buf,"%llu", mysrvc->bytes_recv);
 			pta[10]=strdup(buf);
+			sprintf(buf,"%llu", mysrvc->current_latency_us);
+			pta[11]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])
