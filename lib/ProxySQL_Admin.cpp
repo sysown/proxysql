@@ -472,11 +472,11 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 	bool run_query = false;
 	// Check if the command tries to set a non-existing variable.
 	if (!is_valid_global_variable(var_name)) {
-		char *err_msg_fmt = (char *) "Unknown global variable: '%s'.";
+		char *err_msg_fmt = (char *) "ERROR: Unknown global variable: '%s'.";
 		size_t buff_len = strlen(err_msg_fmt) + strlen(var_name) + 1;
 		char *buff = (char *) malloc(buff_len);
 		snprintf(buff, buff_len, err_msg_fmt, var_name);
-		SPA->send_MySQL_ERR(&sess->client_myds->myprot, buff);
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, buff);
 		free(buff);
 		run_query = false;
 	} else {
