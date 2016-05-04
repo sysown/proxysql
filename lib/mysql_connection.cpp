@@ -159,6 +159,7 @@ MySQL_Connection::MySQL_Connection() {
 	query.length=0;
 	largest_query_length=0;
 	MyRS=NULL;
+	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 
@@ -311,6 +312,7 @@ void MySQL_Connection::connect_start() {
 		client_flags += CLIENT_FOUND_ROWS;
 	if (parent->compression)
 		client_flags += CLIENT_COMPRESS;
+	client_flags += CLIENT_MULTI_STATEMENTS; // FIXME: add global variable
 	if (parent->port) {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
@@ -560,6 +562,36 @@ handler_again:
 #endif
 			}
 			break;
+
+		case ASYNC_NEXT_RESULT_START:
+			async_exit_status = mysql_next_result_start(&interr, mysql);
+			if (async_exit_status) {
+				next_event(ASYNC_NEXT_RESULT_CONT);
+			} else {
+#ifdef PROXYSQL_USE_RESULT
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+#else
+				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+#endif
+			}
+			break;
+
+		case ASYNC_NEXT_RESULT_CONT:
+			async_exit_status = mysql_next_result_cont(&interr, mysql, mysql_status(event, true));
+			if (async_exit_status) {
+				next_event(ASYNC_NEXT_RESULT_CONT);
+			} else {
+#ifdef PROXYSQL_USE_RESULT
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+#else
+				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+#endif
+			}
+			break;
+
+		case ASYNC_NEXT_RESULT_END:
+			break;
+
 		case ASYNC_STORE_RESULT_START:
 			if (mysql_errno(mysql)) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
@@ -619,6 +651,14 @@ handler_again:
 			}
 			break;
 		case ASYNC_QUERY_END:
+			if (mysql_result) {
+				mysql_free_result(mysql_result);
+				mysql_result=NULL;
+			}
+			//if (mysql_next_result(mysql)==0) {
+			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
+				async_state_machine=ASYNC_NEXT_RESULT_START;
+			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_START:
 			set_autocommit_start();
@@ -805,6 +845,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 	}
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
+			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end
 			return 0;
 			break;
 		case ASYNC_IDLE:
@@ -821,6 +862,16 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 		} else {
 			return 0;
 		}
+	}
+	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
+		// if we reached this point it measn we are processing a multi-statement
+		// and we need to exit to give control to MySQL_Session
+		processing_multi_statement=true;
+		return 2;
+	}
+	if (processing_multi_statement==true) {
+		// we are in the middle of processing a multi-statement
+		return 3;
 	}
 	return 1;
 }

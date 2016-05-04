@@ -203,6 +203,7 @@ MySQL_Session::MySQL_Session() {
 	default_schema=NULL;
 	schema_locked=false;
 	session_fast_forward=false;
+	started_sending_data_to_client=false;
 	admin_func=NULL;
 	//client_fd=0;
 	//server_fd=0;
@@ -1145,10 +1146,32 @@ handler_again:
 							}
 						}
 					} else {
-						// rc==1 , query is still running
-						// start sending to frontend if mysql_thread___threshold_resultset_size is reached
-						if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int) mysql_thread___threshold_resultset_size) {
-							myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+						switch (rc) {
+							// rc==1 , query is still running
+							// start sending to frontend if mysql_thread___threshold_resultset_size is reached
+							case 1:
+								if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int) mysql_thread___threshold_resultset_size) {
+									myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+								}
+								break;
+							// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
+							case 2:
+								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
+										delete myconn->MyRS;
+										myconn->MyRS=NULL;
+									}
+									NEXT_IMMEDIATE(PROCESSING_QUERY);
+								break;
+							// rc==3 , a multi statement query is still running
+							// start sending to frontend if mysql_thread___threshold_resultset_size is reached
+							case 3:
+								if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int) mysql_thread___threshold_resultset_size) {
+									myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+								}
+								break;
+							default:
+								break;
 						}
 					}
 				}
@@ -1999,12 +2022,16 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			unsigned int nTrx=NumActiveTransactions();
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
+				setStatus += SERVER_MORE_RESULTS_EXIST;
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status|setStatus,mysql->warning_count,mysql->info);
+			client_myds->pkt_sid++;
 		} else {
 			// error
 			char sqlstate[10];
 			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
+			client_myds->pkt_sid++;
 		}
 	}
 }
@@ -2132,4 +2159,5 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	client_myds->DSS=STATE_SLEEP;
 	// finalize the query
 	CurrentQuery.end();
+	started_sending_data_to_client=false;
 }

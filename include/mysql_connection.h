@@ -77,6 +77,7 @@ class MySQL_Connection {
 	bool has_prepared_statement;
 	bool processing_prepared_statement_prepare;
 	bool processing_prepared_statement_execute;
+	bool processing_multi_statement;
 	MySQL_Connection();
 	~MySQL_Connection();
 //	int assign_mshge(unsigned int);

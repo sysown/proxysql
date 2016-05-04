@@ -119,7 +119,7 @@ class MySQL_Session
 	bool schema_locked;
 	bool transaction_persistent;
 	bool session_fast_forward;
-
+	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, of if proysql is still buffering everything
 	MySQL_Session();
 //	MySQL_Session(int);
 	~MySQL_Session();
