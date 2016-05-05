@@ -502,6 +502,8 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_ERR;
 				break;
+			case STATE_OK:
+				break;
 			default:
 				assert(0);
 		}
@@ -563,6 +565,8 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			case STATE_QUERY_SENT_DS:
 			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_OK;
+				break;
+			case STATE_OK:
 				break;
 			default:
 				assert(0);
@@ -1333,6 +1337,7 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 		free(buffer);
 		buffer=NULL;
 	}
+	myds->pkt_sid=sid-1;
 }
 
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
