@@ -299,6 +299,10 @@ class MySQL_Threads_Handler
 		int poll_timeout_on_failure;
 		char *eventslog_filename;
 		int eventslog_filesize;
+		// SSL related, proxy to server
+		char * ssl_p2s_ca;
+		char * ssl_p2s_cert;
+		char * ssl_p2s_key;
 	} variables;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;
