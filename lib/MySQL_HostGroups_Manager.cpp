@@ -855,6 +855,21 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 				delete mc;
 				//__sync_fetch_and_sub(&status.server_connections_connected, 1);
 			}
+
+			// drop all connections with life exceeding mysql-connection_max_age
+			if (mysql_thread___connection_max_age_ms) {
+				unsigned long long curtime=monotonic_time();
+				int i=0;
+				for (i=0; i<(int)pa->len ; i++) {
+					MySQL_Connection *mc=(MySQL_Connection *)pa->index(i);
+					if (curtime > mc->creation_time + mysql_thread___connection_max_age_ms * 1000) {
+						mc=(MySQL_Connection *)pa->remove_index_fast(0);
+						delete mc;
+						i--;
+					}
+				}
+			}
+
 		}
 	}
 }

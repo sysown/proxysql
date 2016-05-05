@@ -159,6 +159,7 @@ MySQL_Connection::MySQL_Connection() {
 	query.length=0;
 	largest_query_length=0;
 	MyRS=NULL;
+	creation_time=0;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 
@@ -765,6 +766,7 @@ int MySQL_Connection::async_connect(short event) {
 	if (async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
 		async_state_machine=ASYNC_IDLE;
 		myds->wait_until=0;
+		creation_time=myds->sess->thread->curtime;
 		return 0;
 	}
 	handler(event);

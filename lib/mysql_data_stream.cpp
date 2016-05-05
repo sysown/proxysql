@@ -939,10 +939,14 @@ void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
 	mc->last_time_used=sess->thread->curtime;
-	detach_connection();
-	unplug_backend();
-	//mc->async_state_machine=ASYNC_IDLE;
-	MyHGM->push_MyConn_to_pool(mc);
+	if ((mysql_thread___connection_max_age_ms) && (mc->last_time_used > mc->creation_time + mysql_thread___connection_max_age_ms * 1000)) {
+		destroy_MySQL_Connection_From_Pool(true);
+	} else {
+		detach_connection();
+		unplug_backend();
+		//mc->async_state_machine=ASYNC_IDLE;
+		MyHGM->push_MyConn_to_pool(mc);
+	}
 }
 
 void MySQL_Data_Stream::free_mysql_real_query() {

@@ -48,6 +48,7 @@ class MySQL_Connection {
 		char *ptr;
 	} query;
 	char scramble_buff[40];
+	unsigned long long creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
 	int fd;
