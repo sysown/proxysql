@@ -408,7 +408,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					mysrvc->use_ssl=atoi(r->fields[16]);
 				}
 				if (atoi(r->fields[9])!=atoi(r->fields[17])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_latency_ms for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[9] , mysrvc->max_latency_ms , atoi(r->fields[17]));
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_latency_ms for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[9] , mysrvc->max_latency_us , atoi(r->fields[17]));
 					mysrvc->max_latency_us=1000*atoi(r->fields[17]);
 				}
 			}
