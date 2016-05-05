@@ -35,10 +35,10 @@ class MySQL_Connection {
 	unsigned long long inserted_into_pool;
 	public:
 	struct {
+		char *server_version;
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
 		unsigned int compression_min_length;
-		char *server_version;
 		uint8_t protocol_version;
 		uint8_t charset;
 		bool autocommit;
