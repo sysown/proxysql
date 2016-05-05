@@ -112,7 +112,8 @@ MySrvC::MySrvC(char *add, uint16_t p, unsigned int _weight, enum MySerStatus _st
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
-	max_latency_ms=_max_latency_ms;
+	max_latency_us=_max_latency_ms*1000;
+	current_latency_us=0;
 	connect_OK=0;
 	connect_ERR=0;
 	queries_sent=0;
@@ -408,7 +409,7 @@ bool MySQL_HostGroups_Manager::commit() {
 				}
 				if (atoi(r->fields[9])!=atoi(r->fields[17])) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_latency_ms for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[9] , mysrvc->max_latency_ms , atoi(r->fields[17]));
-					mysrvc->max_latency_ms=atoi(r->fields[17]);
+					mysrvc->max_latency_us=1000*atoi(r->fields[17]);
 				}
 			}
 		}
@@ -461,7 +462,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 			uintptr_t ptr=(uintptr_t)mysrvc;
 			char *q=(char *)"INSERT INTO mysql_servers VALUES(%d,\"%s\",%d,%d,%d,%u,%u,%u,%u,%u,%llu)";
 			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+8+8+16+8+16+32);
-			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_ms,  ptr);
+			sprintf(query, q, mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, mysrvc->status, mysrvc->compression, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us/1000,  ptr);
 			char *st;
 			switch (mysrvc->status) {
 				case 0:
@@ -478,7 +479,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 					st=(char *)"SHUNNED";
 					break;
 			}
-			fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_ms);
+			fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 			//fprintf(stderr,"%s\n",query);
 			mydb->execute(query);
@@ -621,8 +622,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns->len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					sum+=mysrvc->weight;
-					TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+						sum+=mysrvc->weight;
+						TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+					}
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -651,8 +654,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
 								// if a server is taken back online, consider it immediately
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+									sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+								}
 							}
 						}
 					}
@@ -675,8 +680,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				mysrvc->connect_ERR_at_time_last_detected_error=0;
 				mysrvc->time_last_detected_error=0;
 				// if a server is taken back online, consider it immediately
-				sum+=mysrvc->weight;
-				TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+				if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+					sum+=mysrvc->weight;
+					TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+				}
 			}
 		}
 		if (sum==0) {
@@ -693,9 +700,11 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-						New_sum+=mysrvc->weight;
-						New_TotalUsedConn+=len;
+					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+							New_sum+=mysrvc->weight;
+							New_TotalUsedConn+=len;
+						}
 					}
 				}
 			}
@@ -715,11 +724,13 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				unsigned int len=mysrvc->ConnectionsUsed->conns->len;
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-						New_sum+=mysrvc->weight;
-						if (k<=New_sum) {
-							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-							return mysrvc;
+					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+							New_sum+=mysrvc->weight;
+							if (k<=New_sum) {
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+								return mysrvc;
+							}
 						}
 					}
 				}
@@ -936,7 +947,7 @@ void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_resul
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
-  const int colnum=11;
+  const int colnum=12;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -950,6 +961,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
   result->add_column_definition(SQLITE_TEXT,"Queries");
   result->add_column_definition(SQLITE_TEXT,"Bytes_sent");
   result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
+  result->add_column_definition(SQLITE_TEXT,"Latency_us");
 	wrlock();
 	int i,j, k;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -1008,6 +1020,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			pta[9]=strdup(buf);
 			sprintf(buf,"%llu", mysrvc->bytes_recv);
 			pta[10]=strdup(buf);
+			sprintf(buf,"%llu", mysrvc->current_latency_us);
+			pta[11]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])
@@ -1096,7 +1110,6 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 }
 
 
-
 // shun_and_killall
 // this function is called only from MySQL_Monitor::monitor_ping()
 // it temporary disables a host that is not responding to pings, and mark the host in a way that when used the connection will be dropped
@@ -1126,6 +1139,30 @@ void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 						default:
 							break;
 					}
+				}
+			}
+		}
+	}
+	wrunlock();
+}
+
+// set_server_current_latency_us
+// this function is called only from MySQL_Monitor::monitor_ping()
+// it set the average latency for a host in the last 3 pings
+// the connection pool will use this information to evaluate or exclude a specific hosts
+// note that this variable is in microsecond, while user defines it in millisecond
+void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us) {
+	wrlock();
+	MySrvC *mysrvc=NULL;
+  for (unsigned int i=0; i<MyHostGroups->len; i++) {
+    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		unsigned int j;
+		unsigned int l=myhgc->mysrvs->cnt();
+		if (l) {
+			for (j=0; j<l; j++) {
+				mysrvc=myhgc->mysrvs->idx(j);
+				if (mysrvc->port==port && strcmp(mysrvc->address,hostname)==0) {
+					mysrvc->current_latency_us=_current_latency_us;
 				}
 			}
 		}

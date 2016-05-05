@@ -174,6 +174,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"threshold_resultset_size",
 	(char *)"wait_timeout",
 	(char *)"max_connections",
+	(char *)"default_max_latency_ms",
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
 	(char *)"long_query_time",
@@ -246,6 +247,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.threshold_resultset_size=4*1024*1024;
 	variables.wait_timeout=8*3600*1000;
 	variables.max_connections=10*1000;
+	variables.default_max_latency_ms=1*1000; // by default, the maximum allowed latency for a host is 1000ms
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.long_query_time=1000;
@@ -435,6 +437,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
 	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
 	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
+	if (!strcasecmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
 	if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
@@ -598,6 +601,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"default_query_timeout")) {
 		sprintf(intbuf,"%d",variables.default_query_timeout);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"default_max_latency_ms")) {
+		sprintf(intbuf,"%d",variables.default_max_latency_ms);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"long_query_time")) {
@@ -913,6 +920,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 20*24*3600*1000) {
 			variables.default_query_timeout=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"default_max_latency_ms")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 20*24*3600*1000) {
+			variables.default_max_latency_ms=intv;
 			return true;
 		} else {
 			return false;
@@ -1866,6 +1882,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___max_connections=GloMTH->get_variable_int((char *)"max_connections");
 	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
+	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___ping_interval_server_msec=GloMTH->get_variable_int((char *)"ping_interval_server_msec");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");

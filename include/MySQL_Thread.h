@@ -288,6 +288,7 @@ class MySQL_Threads_Handler
 		int threshold_resultset_size;
 		int wait_timeout;
 		int max_connections;
+		int default_max_latency_ms;
 		int default_query_delay;
 		int default_query_timeout;
 		int long_query_time;
