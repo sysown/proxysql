@@ -674,15 +674,20 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (max_wait_sec < 1) { // min wait time should be at least 1 second
 				max_wait_sec = 1;
 			}
-			if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
-				mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-				mysrvc->shunned_automatic=false;
-				mysrvc->connect_ERR_at_time_last_detected_error=0;
-				mysrvc->time_last_detected_error=0;
-				// if a server is taken back online, consider it immediately
-				if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-					sum+=mysrvc->weight;
-					TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+			for (j=0; j<l; j++) {
+				mysrvc=mysrvs->idx(j);
+				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
+					if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
+						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+						mysrvc->shunned_automatic=false;
+						mysrvc->connect_ERR_at_time_last_detected_error=0;
+						mysrvc->time_last_detected_error=0;
+						// if a server is taken back online, consider it immediately
+						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+							sum+=mysrvc->weight;
+							TotalUsedConn+=mysrvc->ConnectionsUsed->conns->len;
+						}
+					}
 				}
 			}
 		}
