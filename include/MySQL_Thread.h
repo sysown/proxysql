@@ -304,6 +304,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_ca;
 		char * ssl_p2s_cert;
 		char * ssl_p2s_key;
+		char * ssl_p2s_cipher;
 	} variables;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;

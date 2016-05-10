@@ -730,6 +730,7 @@ __thread bool mysql_thread___sessions_sort;
 __thread char * mysql_thread___ssl_p2s_ca;
 __thread char * mysql_thread___ssl_p2s_cert;
 __thread char * mysql_thread___ssl_p2s_key;
+__thread char * mysql_thread___ssl_p2s_cipher;
 
 /* variables used by events log */
 __thread char * mysql_thread___eventslog_filename;
@@ -803,6 +804,7 @@ extern __thread bool mysql_thread___sessions_sort;
 extern __thread char * mysql_thread___ssl_p2s_ca;
 extern __thread char * mysql_thread___ssl_p2s_cert;
 extern __thread char * mysql_thread___ssl_p2s_key;
+extern __thread char * mysql_thread___ssl_p2s_cipher;
 
 /* variables used by events log */
 extern __thread char * mysql_thread___eventslog_filename;
