@@ -52,6 +52,7 @@ class MySQL_Connection {
 	unsigned long long last_time_used;
 	unsigned long long timeout;
 	int fd;
+	MySQL_STMTs_local *local_stmts;	// local view of prepared statements
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
 	MYSQL_RES *mysql_result;

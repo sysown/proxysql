@@ -162,6 +162,7 @@ MySQL_Connection::MySQL_Connection() {
 	creation_time=0;
 	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
+	local_stmts=NULL;
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -189,6 +190,9 @@ MySQL_Connection::~MySQL_Connection() {
 //	}
 	if (MyRS) {
 		delete MyRS;
+	}
+	if (local_stmts) {
+		delete local_stmts;
 	}
 };
 

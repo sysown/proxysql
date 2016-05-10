@@ -18,6 +18,7 @@
 #include "proxysql_admin.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
+#include "MySQL_PreparedStatement.h"
 #undef swap
 #undef min
 #undef max
