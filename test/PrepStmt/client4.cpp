@@ -11,8 +11,15 @@
 #define LOOPS	10
 #define USER	"root"
 #define SCHEMA	"test"
-MYSQL *mysql;
-MYSQL_STMT **stmt;
+
+#define NTHREADS	4
+
+
+typedef struct _thread_data_t {
+	MYSQL *mysql;
+	MYSQL_STMT **stmt;
+} thread_data_t;
+
 uint32_t statement_id;
 uint16_t num_params;
 uint16_t num_columns;
@@ -61,9 +68,10 @@ int run_stmt(MYSQL_STMT *stmt, int int_data) {
 }
 
 
-int main() {
+void * mysql_thread() {
 	std::mt19937 mt_rand(time(0));
-	GloMyStmt=new MySQL_STMT_Manager();
+
+
 	MySQL_STMTs_local *local_stmts=new MySQL_STMTs_local();
 	mysql = mysql_init(NULL);
 	char buff[128];
@@ -175,4 +183,8 @@ int main() {
 		fprintf(stdout, "Executed %u queries in: ", i);
 	}
 	return 0;
+}
+
+int main() {
+	GloMyStmt=new MySQL_STMT_Manager();
 }

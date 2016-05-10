@@ -2,23 +2,29 @@
 #include "cpp.h"
 
 #include <ctime>
+#include <thread>
 
 #define QUERY1	"SELECT ?"
 #define NUMPREP	100000
-#define NUMPRO	1000
+#define NUMPRO	10000
 //#define NUMPREP	160
 //#define NUMPRO	4
-#define LOOPS	10
+#define LOOPS	1
 #define USER	"root"
 #define SCHEMA	"test"
-MYSQL *mysql;
-MYSQL_STMT **stmt;
-uint32_t statement_id;
-uint16_t num_params;
-uint16_t num_columns;
-uint16_t warning_count;
+
+#define NTHREADS	4
 
 MySQL_STMT_Manager *GloMyStmt;
+
+typedef struct _thread_data_t {
+	std::thread *thread;
+	MYSQL *mysql;
+	MYSQL_STMT **stmt;
+} thread_data_t;
+
+
+thread_data_t **GloThrData;
 
 struct cpu_timer
 {
@@ -61,11 +67,19 @@ int run_stmt(MYSQL_STMT *stmt, int int_data) {
 }
 
 
-int main() {
+void * mysql_thread(int tid) {
 	std::mt19937 mt_rand(time(0));
-	GloMyStmt=new MySQL_STMT_Manager();
+
+	thread_data_t *THD;
+	THD=GloThrData[tid];
+
+	MYSQL *mysql;
+	MYSQL_STMT **stmt;
+
 	MySQL_STMTs_local *local_stmts=new MySQL_STMTs_local();
-	mysql = mysql_init(NULL);
+	THD->mysql = mysql_init(NULL);
+	mysql=THD->mysql;
+
 	char buff[128];
 	unsigned int bl=0;
 	if (!mysql_real_connect(mysql,"127.0.0.1",USER,"",SCHEMA,3306,NULL,0)) {
@@ -74,6 +88,7 @@ int main() {
 	}
 	int i;
 	stmt=(MYSQL_STMT **)malloc(sizeof(MYSQL_STMT*)*NUMPREP);
+	
 	{
 	cpu_timer t;
 	for (i=0; i<NUMPREP; i++) {
@@ -146,9 +161,11 @@ int main() {
 			MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
 			if (a) {
 				// we have a prepared statement, we can run it
-				founds++;
 				MYSQL_STMT *stm=local_stmts->find(a->statement_id);
-				run_stmt(stm,(uint32_t)mt_rand());
+				if (stm) {
+					run_stmt(stm,(uint32_t)mt_rand());
+					founds++;
+				}
 			}
 		}
 		fprintf(stdout, "Executed %u prepared statements in: ", founds);
@@ -173,6 +190,22 @@ int main() {
 			mysql_free_result(res);
 		}
 		fprintf(stdout, "Executed %u queries in: ", i);
+	}
+	return 0;
+}
+
+int main() {
+	mysql_library_init(0,NULL,NULL);
+	GloMyStmt=new MySQL_STMT_Manager();
+	GloThrData = (thread_data_t **)malloc(sizeof(thread_data_t *)*NTHREADS);
+
+	int i;
+	for (i=0; i<NTHREADS; i++) {
+		GloThrData[i]=(thread_data_t *)malloc(sizeof(thread_data_t));
+		GloThrData[i]->thread = new std::thread(&mysql_thread,i);
+	}
+	for (i=0; i<NTHREADS; i++) {
+		GloThrData[i]->thread->join();
 	}
 	return 0;
 }
