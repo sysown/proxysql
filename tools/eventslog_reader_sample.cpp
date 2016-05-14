@@ -78,14 +78,14 @@ class MySQL_Event {
 		username=read_string(f,username_len);
 		read_encoded_length((uint64_t *)&schemaname_len,f);
 		schemaname=read_string(f,schemaname_len);
-		cout << username_len << " " << username << " " << schemaname_len << " " << schemaname << endl;
+		cout << "username=" << username << " schemaname=" << schemaname;
 		read_encoded_length((uint64_t *)&start_time,f);
 		read_encoded_length((uint64_t *)&end_time,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
 		read_encoded_length((uint64_t *)&query_len,f);
 		query_ptr=read_string(f,query_len);
-		cout << start_time << " " << end_time << endl;
-		cout << query_len << " " << query_ptr << endl;
+		cout << " starttime=" << start_time << " endtime=" << end_time;
+		cout << " query=" << query_ptr << endl;
 	}
 	~MySQL_Event() {
 		free(username);
