@@ -147,6 +147,12 @@ inline unsigned long long monotonic_time() {
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
+
+inline unsigned long long realtime_time() {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
+}
 #endif /* __GEN_FUNCTIONS */
 
 bool Proxy_file_exists(const char *);

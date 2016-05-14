@@ -9,6 +9,10 @@
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
 
+enum log_event_type {
+	PROXYSQL_QUERY
+};
+
 enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
 
 enum MDB_ASYNC_ST { // MariaDB Async State Machine

@@ -22,9 +22,11 @@ class MySQL_Event {
 	size_t client_len;
 	uint64_t total_length;
 	unsigned char buf[10];
+	enum log_event_type et;
 	public:
 	MySQL_Event(uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest);
 	uint64_t write(std::fstream *f);
+	uint64_t write_query(std::fstream *f);
 	void set_query(const char *ptr, int len);
 };
 

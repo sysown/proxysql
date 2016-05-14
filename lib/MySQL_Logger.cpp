@@ -30,6 +30,7 @@ MySQL_Event::MySQL_Event (uint32_t _thread_id, char * _username, char * _scheman
 	start_time=_start_time;
 	end_time=_end_time;
 	query_digest=_query_digest;
+	et=PROXYSQL_QUERY;
 }
 
 void MySQL_Event::set_query(const char *ptr, int len) {
@@ -39,6 +40,19 @@ void MySQL_Event::set_query(const char *ptr, int len) {
 
 uint64_t MySQL_Event::write(std::fstream *f) {
 	uint64_t total_bytes=0;
+	switch (et) {
+		case PROXYSQL_QUERY:
+			total_bytes=write_query(f);
+			break;
+		default:
+			break;
+	}
+	return total_bytes;
+}
+
+uint64_t MySQL_Event::write_query(std::fstream *f) {
+	uint64_t total_bytes=0;
+	total_bytes+=1; // et
 	total_bytes+=mysql_encode_length(thread_id, NULL);
 	username_len=strlen(username);
 	total_bytes+=mysql_encode_length(username_len,NULL)+username_len;
@@ -55,6 +69,8 @@ uint64_t MySQL_Event::write(std::fstream *f) {
 	f->write((const char *)&total_bytes,sizeof(uint64_t));
 	//char prefix;
 	uint8_t len;
+
+	f->write((char *)&et,1);
 
 	len=mysql_encode_length(thread_id,buf);
 	write_encoded_length(buf,thread_id,len,buf[0]);
@@ -207,7 +223,13 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 
-	MySQL_Event me(sess->thread_session_id,ui->username,ui->schemaname,sess->CurrentQuery.start_time,sess->CurrentQuery.end_time,GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs));
+	uint64_t curtime_real=realtime_time();
+	uint64_t curtime_mono=sess->thread->curtime;
+	std::cout << " " << curtime_real << " " << curtime_mono << " " << sess->CurrentQuery.end_time << std::endl;
+	MySQL_Event me(sess->thread_session_id,ui->username,ui->schemaname,
+		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
+		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
+		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs));
 	char *c=(char *)sess->CurrentQuery.QueryPointer;
 	if (c) {
 		me.set_query(c,sess->CurrentQuery.QueryLength);
