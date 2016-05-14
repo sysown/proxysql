@@ -1179,4 +1179,5 @@ void MySQL_Connection::close_mysql() {
 	}
 	mysql_close_no_command(mysql);
 	shutdown(fd, SHUT_RDWR);
+	close(fd);
 }
