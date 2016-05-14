@@ -107,7 +107,7 @@ class MySQL_Event {
 		username=read_string(f,username_len);
 		read_encoded_length((uint64_t *)&schemaname_len,f);
 		schemaname=read_string(f,schemaname_len);
-		cout << "thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=" << schemaname << "\"";
+		cout << "ProxySQL LOG QUERY: thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=" << schemaname << "\"";
 		read_encoded_length((uint64_t *)&start_time,f);
 		read_encoded_length((uint64_t *)&end_time,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
