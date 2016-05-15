@@ -2047,6 +2047,13 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		}
 		sess->client_myds->client_addrlen=addrlen;
 		sess->client_myds->client_addr=addr;
+		if (sess->client_myds->client_addr->sa_family==AF_INET) {
+			struct sockaddr_in * ipv4addr=(struct sockaddr_in *)sess->client_myds->client_addr;
+			sess->client_myds->addr.addr=strdup(inet_ntoa(ipv4addr->sin_addr));
+			sess->client_myds->addr.port=htons(ipv4addr->sin_port);
+		} else {
+			sess->client_myds->addr.addr=strdup("localhost");
+		}
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);

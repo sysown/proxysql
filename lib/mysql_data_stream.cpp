@@ -97,6 +97,9 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	pkts_sent=0;
 	client_addr=NULL;
 
+	addr.addr=NULL;
+	addr.port=0;
+
 	sess=NULL;
 	mysql_real_query.pkt.ptr=NULL;
 	mysql_real_query.pkt.size=0;
@@ -147,6 +150,10 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (client_addr) {
 		free(client_addr);
 		client_addr=NULL;
+	}
+	if (addr.addr) {
+		free(addr.addr);
+		addr.addr=NULL;
 	}
 
 	free_mysql_real_query();

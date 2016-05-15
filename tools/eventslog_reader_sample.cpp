@@ -85,6 +85,7 @@ class MySQL_Event {
 	size_t server_len;
 	size_t client_len;
 	uint64_t total_length;
+	uint64_t hid;
 	log_event_type et;
 	public:
 	MySQL_Event() {
@@ -107,10 +108,24 @@ class MySQL_Event {
 		username=read_string(f,username_len);
 		read_encoded_length((uint64_t *)&schemaname_len,f);
 		schemaname=read_string(f,schemaname_len);
-		cout << "ProxySQL LOG QUERY: thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=" << schemaname << "\"";
+		read_encoded_length((uint64_t *)&client_len,f);
+		client=read_string(f,client_len);
+		cout << "ProxySQL LOG QUERY: thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=" << schemaname << "\" client=\"" << client << "\"";
+		read_encoded_length((uint64_t *)&hid,f);
+		if (hid==UINT64_MAX) {
+			cout << " HID=NULL ";
+		} else {
+			read_encoded_length((uint64_t *)&server_len,f);
+			server=read_string(f,server_len);
+			cout << " HID=" << hid << " server=\"" << server << "\"";
+		}
 		read_encoded_length((uint64_t *)&start_time,f);
 		read_encoded_length((uint64_t *)&end_time,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
+		char digest_hex[20];
+		uint32_t d32[2];
+		memcpy(&d32,&query_digest,sizeof(digest_hex));
+		sprintf(digest_hex,"0x%X%X", d32[0], d32[1]);
 		read_encoded_length((uint64_t *)&query_len,f);
 		query_ptr=read_string(f,query_len);
 		char buffer[26];
@@ -127,7 +142,8 @@ class MySQL_Event {
     strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
 		sprintf(buffer2,"%6u", (unsigned)(end_time%1000000));
 		cout << " endtime=\"" << buffer << "." << buffer2 << "\"";
-		cout << " query=\"" << query_ptr << "\""<< endl;
+		cout << " duration=" << (end_time-start_time) << "us";
+		cout << " digest=\"" << digest_hex << "\"" << endl << query_ptr << endl;
 	}
 	~MySQL_Event() {
 		free(username);

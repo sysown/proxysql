@@ -23,19 +23,29 @@ static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t l
 	return len;
 }
 
-MySQL_Event::MySQL_Event (uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest) {
+MySQL_Event::MySQL_Event (uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len) {
 	thread_id=_thread_id;
 	username=_username;
 	schemaname=_schemaname;
 	start_time=_start_time;
 	end_time=_end_time;
 	query_digest=_query_digest;
+	client=_client;
+	client_len=_client_len;
 	et=PROXYSQL_QUERY;
+	hid=UINT64_MAX;
+	server=NULL;
 }
 
 void MySQL_Event::set_query(const char *ptr, int len) {
 	query_ptr=(char *)ptr;
 	query_len=len;
+}
+
+void MySQL_Event::set_server(int _hid, const char *ptr, int len) {
+	server=(char *)ptr;
+	server_len=len;
+	hid=_hid;
 }
 
 uint64_t MySQL_Event::write(std::fstream *f) {
@@ -58,6 +68,13 @@ uint64_t MySQL_Event::write_query(std::fstream *f) {
 	total_bytes+=mysql_encode_length(username_len,NULL)+username_len;
 	schemaname_len=strlen(schemaname);
 	total_bytes+=mysql_encode_length(schemaname_len,NULL)+schemaname_len;
+
+	total_bytes+=mysql_encode_length(client_len,NULL)+client_len;
+
+	total_bytes+=mysql_encode_length(hid, NULL);
+	if (hid!=UINT64_MAX) {
+		total_bytes+=mysql_encode_length(server_len,NULL)+server_len;
+	}
 
 	total_bytes+=mysql_encode_length(start_time,NULL);
 	total_bytes+=mysql_encode_length(end_time,NULL);
@@ -85,6 +102,22 @@ uint64_t MySQL_Event::write_query(std::fstream *f) {
 	write_encoded_length(buf,schemaname_len,len,buf[0]);
 	f->write((char *)buf,len);
 	f->write(schemaname,schemaname_len);
+
+	len=mysql_encode_length(client_len,buf);
+	write_encoded_length(buf,client_len,len,buf[0]);
+	f->write((char *)buf,len);
+	f->write(client,client_len);
+
+	len=mysql_encode_length(hid,buf);
+	write_encoded_length(buf,hid,len,buf[0]);
+	f->write((char *)buf,len);
+
+	if (hid!=UINT64_MAX) {
+		len=mysql_encode_length(server_len,buf);
+		write_encoded_length(buf,server_len,len,buf[0]);
+		f->write((char *)buf,len);
+		f->write(server,server_len);
+	}
 
 	len=mysql_encode_length(start_time,buf);
 	write_encoded_length(buf,start_time,len,buf[0]);
@@ -217,7 +250,7 @@ void MySQL_Logger::set_datadir(char *s) {
 	flush_log();
 };
 
-void MySQL_Logger::log_request(MySQL_Session *sess) {
+void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	if (enabled==false) return;
 	if (logfile==NULL) return;
 
@@ -225,11 +258,24 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 
 	uint64_t curtime_real=realtime_time();
 	uint64_t curtime_mono=sess->thread->curtime;
-	std::cout << " " << curtime_real << " " << curtime_mono << " " << sess->CurrentQuery.end_time << std::endl;
+	//std::cout << " " << curtime_real << " " << curtime_mono << " " << sess->CurrentQuery.end_time << std::endl;
+	int cl=0;
+	char *ca=(char *)""; // default
+	if (sess->client_myds->addr.addr) {
+		ca=sess->client_myds->addr.addr;
+	}
+	cl+=strlen(ca);
+	if (cl && sess->client_myds->addr.port) {
+		ca=(char *)malloc(cl+8);
+		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+	}
+	cl=strlen(ca);
 	MySQL_Event me(sess->thread_session_id,ui->username,ui->schemaname,
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
-		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs));
+		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs),
+		ca, cl
+	);
 	char *c=(char *)sess->CurrentQuery.QueryPointer;
 	if (c) {
 		me.set_query(c,sess->CurrentQuery.QueryLength);
@@ -237,6 +283,24 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 		me.set_query("",0);
 	}
 
+	int sl=0;
+	char *sa=(char *)""; // default
+	if (myds) {
+		if (myds->myconn) {
+			sa=myds->myconn->parent->address;
+		}
+	}
+	sl+=strlen(sa);
+	if (sl && myds->myconn->parent->port) {
+		sa=(char *)malloc(sl+8);
+		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+	}
+	sl=strlen(sa);
+	if (sl) {
+		int hid=-1;
+		hid=myds->myconn->parent->myhgc->hid;
+		me.set_server(hid,sa,sl);
+	}
 /*
 	ev.set_server("");
 	ev.set_client("");
@@ -246,11 +310,19 @@ void MySQL_Logger::log_request(MySQL_Session *sess) {
 
 	me.write(logfile);
 
+
 	unsigned long curpos=logfile->tellp();
 	if (curpos > max_log_file_size) {
 		flush_log_unlocked();
 	}
 	wrunlock();
+
+	if (cl && sess->client_myds->addr.port) {
+		free(ca);
+	}
+	if (sl && myds->myconn->parent->port) {
+		free(sa);
+	}
 }
 
 void MySQL_Logger::flush() {

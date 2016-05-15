@@ -105,6 +105,11 @@ class MySQL_Data_Stream
 	SSL *ssl;
 	struct sockaddr *client_addr;
 
+	struct {
+		char *addr;
+		uint16_t port;
+	} addr;
+
 	unsigned int connect_tries;
 	int connect_retries_on_failure;
 	enum mysql_data_stream_status DSS;
