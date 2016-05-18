@@ -148,7 +148,6 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		__cmd_proxysql_reload=true;
 	}
 
-
 	config_file=GloVars.__cmd_proxysql_config_file;
 
 	if (config_file==NULL) {
