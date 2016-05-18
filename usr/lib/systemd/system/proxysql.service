@@ -1,0 +1,10 @@
+[Unit]
+Description=High Performance Advanced Proxy for MySQL
+
+[Service]
+Type=forking
+PIDFile=/var/lib/proxysql/proxysql.pid
+ExecStart=/usr/local/bin/proxysql
+
+[Install]
+WantedBy=multi-user.target

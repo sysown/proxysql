@@ -168,18 +168,27 @@ cleanall:
 	rm binaries/*deb || true
 	rm binaries/*rpm || true
 
+
 install: src/proxysql
 	install -m 0755 src/proxysql /usr/local/bin
 	install -m 0600 etc/proxysql.cnf /etc
-	install -m 0755 etc/init.d/proxysql /etc/init.d
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
-	update-rc.d proxysql defaults
+	if [ -d /usr/lib/systemd/system ]; then \
+		install -m 0755 usr/lib/systemd/system/proxysql.service /usr/lib/systemd/system ; \
+	else \
+  	install -m 0755 etc/init.d/proxysql /etc/init.d ; \
+  	update-rc.d proxysql defaults ; \
+	fi
 .PHONY: install
 
 uninstall:
-	rm /etc/init.d/proxysql
 	rm /etc/proxysql.cnf
 	rm /usr/local/bin/proxysql
 	rmdir /var/lib/proxysql 2>/dev/null || true
-	update-rc.d proxysql remove
+	if [ -d /usr/lib/systemd/system ]; then \
+		rm /usr/lib/systemd/system/proxysql.service ;\
+	else \
+  	rm etc/init.d/proxysql ;\
+		update-rc.d proxysql remove ;\
+	fi
 .PHONY: uninstall

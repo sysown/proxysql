@@ -75,9 +75,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
-	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
+	opt->add((const char *)"/etc/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
 	//opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
-	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
+	opt->add((const char *)"/var/lib/proxysql",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
@@ -112,7 +112,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	}
 
 	if (opt->isSet("-d")) {
-		opt->get("-d")->getInt(GloVars.__cmd_proxysql_gdbg);	
+		opt->get("-d")->getInt(GloVars.__cmd_proxysql_gdbg);
 		global.gdbg=true;
 	}
 
@@ -148,7 +148,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		__cmd_proxysql_reload=true;
 	}
 
-	
+
 	config_file=GloVars.__cmd_proxysql_config_file;
 
 	if (config_file==NULL) {
