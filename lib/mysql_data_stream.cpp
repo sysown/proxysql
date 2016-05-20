@@ -99,6 +99,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 
 	addr.addr=NULL;
 	addr.port=0;
+	proxy_addr.addr=NULL;
+	proxy_addr.port=0;
 
 	sess=NULL;
 	mysql_real_query.pkt.ptr=NULL;
@@ -154,6 +156,10 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (addr.addr) {
 		free(addr.addr);
 		addr.addr=NULL;
+	}
+	if (proxy_addr.addr) {
+		free(proxy_addr.addr);
+		proxy_addr.addr=NULL;
 	}
 
 	free_mysql_real_query();

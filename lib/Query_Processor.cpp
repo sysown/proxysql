@@ -51,9 +51,10 @@ class QP_rule_text {
 		itostr(pta[7], (long long)QPr->proxy_port);
 
 		char buf[20];
-		uint32_t d32[2];
-		memcpy(&d32,&QPr->digest,sizeof(QPr->digest));
-		sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		//uint32_t d32[2];
+		//memcpy(&d32,&QPr->digest,sizeof(QPr->digest));
+		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
     pta[8]=strdup(buf);
 
 		pta[9]=strdup_null(QPr->match_digest);
@@ -154,9 +155,10 @@ class QP_query_digest_stats {
 		assert(username);
 		pta[1]=strdup(username);
 
-		uint32_t d32[2];
-		memcpy(&d32,&digest,sizeof(digest));
-		sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		//uint32_t d32[2];
+		//memcpy(&d32,&digest,sizeof(digest));
+		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
 		pta[2]=strdup(buf);
 
 		assert(digest_text);
@@ -621,9 +623,10 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
 				char buf[20];
 				if (qr1->digest) { // not 0
-					uint32_t d32[2];
-					memcpy(&d32,&qr1->digest,sizeof(qr1->digest));
-					sprintf(buf,"0x%X%X", d32[0], d32[1]);
+					//uint32_t d32[2];
+					//memcpy(&d32,&qr1->digest,sizeof(qr1->digest));
+					//sprintf(buf,"0x%X%X", d32[0], d32[1]);
+					sprintf(buf,"0x%016llX", (long long unsigned int)qr1->digest);
 				}
 				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN,
 					qr1->client_addr, qr1->proxy_addr, qr1->proxy_port,
@@ -684,9 +687,27 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 
 		// match on client address
 		if (qr->client_addr && strlen(qr->client_addr)) {
-			if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
-				continue;
+			if (sess->client_myds->addr.addr) {
+				if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
+					continue;
+				}
+			}
+		}
+
+		// match on proxy_addr & proxy_port
+		if (qr->proxy_addr && strlen(qr->proxy_addr)) {
+			if (sess->client_myds->proxy_addr.addr) {
+				if (strcmp(qr->proxy_addr,sess->client_myds->proxy_addr.addr)!=0) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_addr\n", qr->rule_id);
+					continue;
+				}
+				if (qr->proxy_port>=0) {
+					if (qr->proxy_port!=sess->client_myds->proxy_addr.port) {
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_port\n", qr->rule_id);
+						continue;
+					}
+				}
 			}
 		}
 

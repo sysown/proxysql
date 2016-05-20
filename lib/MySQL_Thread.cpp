@@ -111,6 +111,16 @@ int MySQL_Listeners_Manager::find_idx(const char *iface) {
 	return -1;
 }
 
+iface_info * MySQL_Listeners_Manager::find_iface_from_fd(int fd) {
+	for (unsigned int i=0; i<ifaces->len; i++) {
+		iface_info *ifi=(iface_info *)ifaces->index(i);
+		if (ifi->fd==fd) {
+			return ifi;
+		}
+	}
+	return NULL;
+}
+
 int MySQL_Listeners_Manager::find_idx(const char *address, int port) {
 	for (unsigned int i=0; i<ifaces->len; i++) {
 		iface_info *ifi=(iface_info *)ifaces->index(i);
@@ -2053,6 +2063,12 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 			sess->client_myds->addr.port=htons(ipv4addr->sin_port);
 		} else {
 			sess->client_myds->addr.addr=strdup("localhost");
+		}
+		iface_info *ifi=NULL;
+		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd); // here we try to get the info about the proxy bind address
+		if (ifi) {
+			sess->client_myds->proxy_addr.addr=strdup(ifi->address);
+			sess->client_myds->proxy_addr.port=ifi->port;
 		}
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 		ioctl_FIONBIO(sess->client_myds->fd, 1);

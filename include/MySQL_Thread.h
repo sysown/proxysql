@@ -196,7 +196,6 @@ typedef MySQL_Thread * create_MySQL_Thread_t();
 typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
 
 
-
 class iface_info {
 	public:
 	char *iface;
@@ -218,6 +217,7 @@ class iface_info {
 
 
 
+
 class MySQL_Listeners_Manager {
 	private:
 	PtrArray *ifaces;
@@ -228,6 +228,7 @@ class MySQL_Listeners_Manager {
 	int add(const char *address, int port);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
+	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
 };
@@ -346,6 +347,9 @@ class MySQL_Threads_Handler
 	unsigned long long get_slow_queries();
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
+	iface_info *MLM_find_iface_from_fd(int fd) {
+		return MLM->find_iface_from_fd(fd);
+	}
 };
 
 

@@ -107,8 +107,12 @@ class MySQL_Data_Stream
 
 	struct {
 		char *addr;
-		uint16_t port;
+		int port;
 	} addr;
+	struct {
+		char *addr;
+		int port;
+	} proxy_addr;
 
 	unsigned int connect_tries;
 	int connect_retries_on_failure;
