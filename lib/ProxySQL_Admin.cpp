@@ -66,13 +66,16 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
-#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
+#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 
 // mysql_query_rules in v1.1.0
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_1_0 "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , error_msg VARCHAR , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 
 // mysql_query_rules in v1.2.0a
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_2_0a "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
+
+// mysql_query_rules in v1.2.0g
+#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_2_0g "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
@@ -84,7 +87,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , UNIQUE (reader_hostgroup))"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
@@ -2994,15 +2997,15 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	//char *a=(char *)"INSERT INTO mysql_query_rules VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
 	char *a=NULL;
 	if (_runtime) {
-		a=(char *)"INSERT INTO runtime_mysql_query_rules (rule_id, active, username, schemaname, flagIN, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, apply) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		a=(char *)"INSERT INTO runtime_mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, log, apply) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	} else {
-		a=(char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, apply) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
+		a=(char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, log, apply) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 	}
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
-		char *buffs[19];
-		for (int i=0; i<19; i++) {
+		char *buffs[24];
+		for (int i=0; i<24; i++) {
 			if (r->fields[i]) {
 				int l=strlen(r->fields[i])+4;
 				arg_len+=l;
@@ -3023,24 +3026,29 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 			buffs[2],
 			buffs[3],
 			( strcmp(r->fields[4],"-1")==0 ? "NULL" : r->fields[4] ), // flagIN
-			buffs[5], // match_digest
-			buffs[6], // match_pattern
-			r->fields[7], // negate
-			( strcmp(r->fields[8],"-1")==0 ? "NULL" : r->fields[8] ), // flagOUT
-			buffs[9], // replace_pattern
-			( strcmp(r->fields[10],"-1")==0 ? "NULL" : r->fields[10] ), // destination_hostgroup
-			( strcmp(r->fields[11],"-1")==0 ? "NULL" : r->fields[11] ), // cache_ttl
-			( strcmp(r->fields[12],"-1")==0 ? "NULL" : r->fields[12] ), // reconnect
-			( strcmp(r->fields[13],"-1")==0 ? "NULL" : r->fields[13] ), // timeout
-			( strcmp(r->fields[14],"-1")==0 ? "NULL" : r->fields[14] ), // delay
-			( strcmp(r->fields[15],"-1")==0 ? "NULL" : r->fields[15] ), // mirror_flagOUT
-			( strcmp(r->fields[16],"-1")==0 ? "NULL" : r->fields[16] ), // mirror_hostgroup
-			buffs[17], // error_msg
-			( strcmp(r->fields[18],"-1")==0 ? "NULL" : r->fields[18] ) // apply
+			buffs[5],	// client_addr
+			buffs[6],	// proxy_addr
+			( strcmp(r->fields[7],"-1")==0 ? "NULL" : r->fields[7] ), // proxy_port
+			buffs[8],	// digest
+			buffs[9], // match_digest
+			buffs[10], // match_pattern
+			r->fields[11], // negate
+			( strcmp(r->fields[12],"-1")==0 ? "NULL" : r->fields[12] ), // flagOUT
+			buffs[13], // replace_pattern
+			( strcmp(r->fields[14],"-1")==0 ? "NULL" : r->fields[14] ), // destination_hostgroup
+			( strcmp(r->fields[15],"-1")==0 ? "NULL" : r->fields[15] ), // cache_ttl
+			( strcmp(r->fields[16],"-1")==0 ? "NULL" : r->fields[16] ), // reconnect
+			( strcmp(r->fields[17],"-1")==0 ? "NULL" : r->fields[17] ), // timeout
+			( strcmp(r->fields[18],"-1")==0 ? "NULL" : r->fields[18] ), // delay
+			( strcmp(r->fields[19],"-1")==0 ? "NULL" : r->fields[19] ), // mirror_flagOUT
+			( strcmp(r->fields[20],"-1")==0 ? "NULL" : r->fields[20] ), // mirror_hostgroup
+			buffs[21], // error_msg
+			( strcmp(r->fields[22],"-1")==0 ? "NULL" : r->fields[22] ), // log
+			( strcmp(r->fields[23],"-1")==0 ? "NULL" : r->fields[23] ) // apply
 		);
 		//fprintf(stderr,"%s\n",query);
 		admindb->execute(query);
-		for (int i=0; i<19; i++) {
+		for (int i=0; i<24; i++) {
 			free(buffs[i]);
 		}
 		free(query);
@@ -3574,7 +3582,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	int affected_rows=0;
 	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, apply FROM main.mysql_query_rules WHERE active=1";
+	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, log, apply FROM main.mysql_query_rules WHERE active=1";
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -3585,25 +3593,30 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			nqpr=GloQPro->new_query_rule(
-				atoi(r->fields[0]),
+				atoi(r->fields[0]), // rule_id
 				true,
-				r->fields[1],
-				r->fields[2],
-				atoi(r->fields[3]),
-				r->fields[4],
-				r->fields[5],
-				(atoi(r->fields[6])==1 ? true : false),
-				(r->fields[7]==NULL ? -1 : atol(r->fields[7])),
-				r->fields[8],
-				(r->fields[9]==NULL ? -1 : atoi(r->fields[9])),
-				(r->fields[10]==NULL ? -1 : atol(r->fields[10])),
-				(r->fields[11]==NULL ? -1 : atol(r->fields[11])),
-				(r->fields[12]==NULL ? -1 : atol(r->fields[12])),
-				(r->fields[13]==NULL ? -1 : atol(r->fields[13])),
-				(r->fields[14]==NULL ? -1 : atol(r->fields[14])), // mirror_flagOUT
-				(r->fields[15]==NULL ? -1 : atol(r->fields[15])), // mirror_hostgroup
-				r->fields[16], // error_msg
-				(atoi(r->fields[17])==1 ? true : false)
+				r->fields[1],	// username
+				r->fields[2],	// schemaname
+				atoi(r->fields[3]),	// flagIN
+				r->fields[4],	// client_addr
+				r->fields[5],	// proxy_addr
+				(r->fields[6]==NULL ? -1 : atol(r->fields[6])), // proxy_port
+				r->fields[7],	// digest
+				r->fields[8],	// match_digest
+				r->fields[9],	// match_pattern
+				(atoi(r->fields[10])==1 ? true : false),	// negate_match_pattern
+				(r->fields[11]==NULL ? -1 : atol(r->fields[11])),	// flagOUT
+				r->fields[12],	// replae_pattern
+				(r->fields[13]==NULL ? -1 : atoi(r->fields[13])),	// destination_hostgroup
+				(r->fields[14]==NULL ? -1 : atol(r->fields[14])),	// cache_ttl
+				(r->fields[15]==NULL ? -1 : atol(r->fields[15])),	// reconnect
+				(r->fields[16]==NULL ? -1 : atol(r->fields[16])),	// timeout
+				(r->fields[17]==NULL ? -1 : atol(r->fields[17])),	// delay
+				(r->fields[18]==NULL ? -1 : atol(r->fields[18])), // mirror_flagOUT
+				(r->fields[19]==NULL ? -1 : atol(r->fields[19])), // mirror_hostgroup
+				r->fields[20], // error_msg
+				(r->fields[21]==NULL ? -1 : atol(r->fields[21])),	// log
+				(atoi(r->fields[22])==1 ? true : false)
 			);
 			GloQPro->insert(nqpr, false);
 		}
@@ -3707,7 +3720,7 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, apply) VALUES (%d, %d, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d)";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, delay, mirror_flagOUT, mirror_hostgroup, error_msg, log, apply) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d)";
 	for (i=0; i< count; i++) {
 		const Setting &rule = mysql_query_rules[i];
 		int rule_id;
@@ -3717,6 +3730,23 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 		bool schemaname_exists=false;
 		std::string schemaname;
 		int flagIN=0;
+
+		// variables for parsing client_addr
+		bool client_addr_exists=false;
+		std::string client_addr;
+
+		// variables for parsing proxy_addr
+		bool proxy_addr_exists=false;
+		std::string proxy_addr;
+
+		// variable for parsing proxy_port
+		int proxy_port=-1;
+
+		// variables for parsing digest
+		bool digest_exists=false;
+		std::string digest;
+
+
 		bool match_digest_exists=false;
 		std::string match_digest;
 		bool match_pattern_exists=false;
@@ -3734,12 +3764,24 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 		int delay=-1;
 		bool error_msg_exists=false;
 		std::string error_msg;
+
+		// variable for parsing log
+		int log=-1;
+
 		int apply=0;
+
+		// validate arguments
 		if (rule.lookupValue("rule_id", rule_id)==false) continue;
 		rule.lookupValue("active", active);
 		if (rule.lookupValue("username", username)) username_exists=true;
 		if (rule.lookupValue("schemaname", schemaname)) schemaname_exists=true;
 		rule.lookupValue("flagIN", flagIN);
+
+		if (rule.lookupValue("client_addr", client_addr)) client_addr_exists=true;
+		if (rule.lookupValue("proxy_addr", proxy_addr)) proxy_addr_exists=true;
+		rule.lookupValue("proxy_port", proxy_port);
+		if (rule.lookupValue("digest", digest)) digest_exists=true;
+
 		if (rule.lookupValue("match_digest", match_digest)) match_digest_exists=true;
 		if (rule.lookupValue("match_pattern", match_pattern)) match_pattern_exists=true;
 		rule.lookupValue("negate_match_pattern", negate_match_pattern);
@@ -3753,6 +3795,9 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 		rule.lookupValue("timeout", timeout);
 		rule.lookupValue("delay", delay);
 		if (rule.lookupValue("error_msg", username)) error_msg_exists=true;
+
+		rule.lookupValue("log", log);
+
 		rule.lookupValue("apply", apply);
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
 		int query_len=0;
@@ -3762,6 +3807,11 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 			( username_exists ? strlen(username.c_str()) : 0 ) + 4 +
 			( schemaname_exists ? strlen(schemaname.c_str()) : 0 ) + 4 +
 			strlen(std::to_string(flagIN).c_str()) + 4 +
+
+			( client_addr_exists ? strlen(client_addr.c_str()) : 0 ) + 4 +
+			( proxy_addr_exists ? strlen(proxy_addr.c_str()) : 0 ) + 4 +
+			strlen(std::to_string(proxy_port).c_str()) + 4 +
+
 			( match_digest_exists ? strlen(match_digest.c_str()) : 0 ) + 4 +
 			( match_pattern_exists ? strlen(match_pattern.c_str()) : 0 ) + 4 +
 			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
@@ -3775,6 +3825,7 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 			strlen(std::to_string(mirror_hostgroup).c_str()) + 4 +
 			strlen(std::to_string(delay).c_str()) + 4 +
 			( error_msg_exists ? strlen(error_msg.c_str()) : 0 ) + 4 +
+			strlen(std::to_string(log).c_str()) + 4 +
 			strlen(std::to_string(apply).c_str()) + 4 +
 			40;
 		char *query=(char *)malloc(query_len);
@@ -3786,6 +3837,20 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 			schemaname="\"" + schemaname + "\"";
 		else
 			schemaname = "NULL";
+
+		if (client_addr_exists)
+			client_addr="\"" + client_addr + "\"";
+		else
+			client_addr = "NULL";
+		if (proxy_addr_exists)
+			proxy_addr="\"" + proxy_addr + "\"";
+		else
+			proxy_addr = "NULL";
+		if (digest_exists)
+			digest="\"" + digest + "\"";
+		else
+			digest = "NULL";
+
 		if (match_digest_exists)
 			match_digest="\"" + match_digest + "\"";
 		else
@@ -3807,6 +3872,10 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 			username.c_str(),
 			schemaname.c_str(),
 			( flagIN >= 0 ? std::to_string(flagIN).c_str() : "NULL") ,
+			client_addr.c_str(),
+			proxy_addr.c_str(),
+			( proxy_port >= 0 ? std::to_string(proxy_port).c_str() : "NULL") ,
+			digest.c_str(),
 			match_digest.c_str(),
 			match_pattern.c_str(),
 			( negate_match_pattern == 0 ? 0 : 1) ,
@@ -3820,8 +3889,9 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 			( mirror_flagOUT >= 0 ? std::to_string(mirror_flagOUT).c_str() : "NULL") ,
 			( mirror_hostgroup >= 0 ? std::to_string(mirror_hostgroup).c_str() : "NULL") ,
 			error_msg.c_str(),
+			( log >= 0 ? std::to_string(log).c_str() : "NULL") ,
 			( apply == 0 ? 0 : 1)
-			);
+		);
 		//fprintf(stderr, "%s\n", query);
 		admindb->execute(query);
 		free(query);
@@ -3928,6 +3998,20 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_query_rules (rule_id,active,username,schemaname,flagIN,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,delay,error_msg,apply) SELECT rule_id,active,username,schemaname,flagIN,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,delay,error_msg,apply FROM mysql_query_rules_v110");
+	}
+	rci=configdb->check_table_structure((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_2_0a);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version v1.2.0a of table mysql_query_rules\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
+		// drop any existing table with suffix _v110
+		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_v120a");
+		// rename current table to add suffix _v110
+		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v120a");
+		// create new table
+		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_query_rules (rule_id,active,username,schemaname,flagIN,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,delay,error_msg,mirror_flagOUT,mirror_hostgroup,apply) SELECT rule_id,active,username,schemaname,flagIN,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,delay,error_msg,mirror_flagOUT,mirror_hostgroup,apply FROM mysql_query_rules_v120a");
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }

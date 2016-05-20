@@ -2138,7 +2138,11 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// so we track the time here
 	CurrentQuery.end_time=thread->curtime;
 
-	GloMyLogger->log_request(this, myds);
+	if (qpo) {
+		if (qpo->log==1) {
+			GloMyLogger->log_request(this, myds);	// we send for logging only if logging is enabled for this query
+		}
+	}
 
 	// clean qpo
 	if (qpo) {
