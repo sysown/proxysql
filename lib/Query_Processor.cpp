@@ -682,7 +682,17 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			}
 		}
 
-		// match on digest
+		// match on client address
+		if (qr->client_addr && strlen(qr->client_addr)) {
+			if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
+				continue;
+			}
+		}
+
+
+
+		// match on query digest
 		if (qp && qp->digest_text ) { // we call this only if we have a query digest
 			re2p=(re2_t *)qr->regex_engine1;
 			if (qr->match_digest) {
