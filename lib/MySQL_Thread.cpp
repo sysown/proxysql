@@ -70,6 +70,8 @@ MySQL_Listeners_Manager::MySQL_Listeners_Manager() {
 MySQL_Listeners_Manager::~MySQL_Listeners_Manager() {
 	while (ifaces->len) {
 		iface_info *ifi=(iface_info *)ifaces->remove_index_fast(0);
+		shutdown(ifi->fd,SHUT_RDWR);
+		close(ifi->fd);
 		delete ifi;
 	}
 	delete ifaces;
@@ -314,7 +316,7 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 		for (i=0;i<num_threads;i++) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc)) {
-				usleep(100); // pause a bit
+				usleep(10); // pause a bit
 			}
 /*
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_change,0,1)) { cpu_relax_pa(); }
@@ -1355,6 +1357,7 @@ void MySQL_Threads_Handler::shutdown_threads() {
 			if (mysql_threads[i].worker)
 				mysql_threads[i].worker->shutdown=1;
 		}
+		signal_all_threads(1);
 		for (i=0; i<num_threads; i++) {
 			if (mysql_threads[i].worker)
 				pthread_join(mysql_threads[i].thread_id,NULL);

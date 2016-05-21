@@ -13,7 +13,6 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
-
 #include "SpookyV2.h"
 //#define MYSQL_THREAD_IMPLEMENTATION
 
@@ -24,6 +23,17 @@
 
 #define READ_ONLY_OFF "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0e\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x03\x4f\x46\x46\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
+
+
+struct cpu_timer
+{
+	~cpu_timer()
+	{
+		unsigned long long end = monotonic_time();
+		std::cerr << double( end - begin ) / 1000000 << " secs.\n" ;
+	};
+	unsigned long long begin = monotonic_time();
+};
 
 char *s_strdup(char *s) {
 	char *ret=NULL;
@@ -2046,7 +2056,11 @@ static void * admin_main_loop(void *arg)
 			goto __end_while_pool;
 //        continue;
 		}
-		for (i=0;i<nfds;i++) {
+		if (fds[0].revents==POLLIN) {
+			// if we are here, we have been signaled
+			// we will soon exit
+		}
+		for (i=1;i<nfds;i++) {
 			if (fds[i].revents==POLLIN) {
 				client_t = accept(fds[i].fd, (struct sockaddr*)&addr, &addr_size);
 //		printf("Connected: %s:%d  sock=%d\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port), client_t);
@@ -2072,6 +2086,10 @@ __end_while_pool:
 				if (atoi(port)==0) { unlink(socket_names[i]); }
 			}
 			nfds=0;
+			fds[nfds].fd=GloAdmin->pipefd[0];
+			fds[nfds].events=POLLIN;
+			fds[nfds].revents=0;
+			nfds++;
 			unsigned int j;
 			i=0; j=0;
 			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
@@ -2169,6 +2187,7 @@ void ProxySQL_Admin::print_version() {
 
 bool ProxySQL_Admin::init() {
 	//int i;
+	cpu_timer cpt;
 	size_t mystacksize=256*1024;
 
 	child_func[0]=child_mysql;
@@ -2178,6 +2197,14 @@ bool ProxySQL_Admin::init() {
 	main_poll_nfds=0;
 	main_poll_fds=NULL;
 	main_callback_func=NULL;
+
+	{
+		int rc=pipe(pipefd);
+		if (rc) {
+			perror("Call to pipe() failed");
+			exit(EXIT_FAILURE);
+		}
+	}
 
 	main_callback_func=(int *)malloc(sizeof(int)*MAX_ADMIN_LISTENERS);
 	main_poll_fds=(struct pollfd *)malloc(sizeof(struct pollfd)*MAX_ADMIN_LISTENERS);
@@ -2317,6 +2344,7 @@ bool ProxySQL_Admin::init() {
 	}
 	do { usleep(50); } while (__sync_fetch_and_sub(&load_main_,0)==0);
 	load_main_=0;
+	std::cerr << "Admin initialized in ";
 	return true;
 };
 
@@ -2346,6 +2374,10 @@ void ProxySQL_Admin::admin_shutdown() {
 	delete tables_defs_stats;
 	drop_tables_defs(tables_defs_config);
 	delete tables_defs_config;
+	shutdown(pipefd[0],SHUT_RDWR);
+	shutdown(pipefd[1],SHUT_RDWR);
+	close(pipefd[0]);
+	close(pipefd[1]);
 };
 
 ProxySQL_Admin::~ProxySQL_Admin() {

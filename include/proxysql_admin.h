@@ -20,7 +20,6 @@ class ProxySQL_Admin {
 	int main_poll_nfds;
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
-
 	rwlock_t rwlock;
 	rwlock_t mysql_servers_rwlock;
 	void wrlock();
@@ -91,6 +90,7 @@ class ProxySQL_Admin {
 	SQLite3DB *statsdb;	// in memory
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
+	int pipefd[2];
 	void print_version();
 	bool init();
 	bool get_read_only() { return variables.admin_read_only; }
