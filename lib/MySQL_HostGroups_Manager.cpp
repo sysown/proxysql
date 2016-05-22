@@ -1025,7 +1025,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			pta[9]=strdup(buf);
 			sprintf(buf,"%llu", mysrvc->bytes_recv);
 			pta[10]=strdup(buf);
-			sprintf(buf,"%llu", mysrvc->current_latency_us);
+			sprintf(buf,"%u", mysrvc->current_latency_us);
 			pta[11]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
