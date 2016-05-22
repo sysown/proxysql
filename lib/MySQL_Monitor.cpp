@@ -291,6 +291,9 @@ again:
 				mysql=mysql_init(NULL);
 				assert(mysql);
 				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+				if (use_ssl) {
+					mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
+				}
 				if (mysql_thread___monitor_timer_cached==true) {
 					event_base_gettimeofday_cached(base, &tv_out);
 				} else {
