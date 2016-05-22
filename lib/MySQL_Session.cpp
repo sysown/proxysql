@@ -745,6 +745,14 @@ __get_pkts_from_client:
 									}
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
+									// set query retries
+									mybe->server_myds->query_retries_on_failure=mysql_thread___query_retries_on_failure;
+									// if a number of retries is set in mysql_query_rules, that takes priority
+									if (qpo) {
+										if (qpo->retries >= 0) {
+											mybe->server_myds->query_retries_on_failure=qpo->retries;
+										}
+									}
 									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
 									mybe->server_myds->wait_until=0;
 									pause_until=0;
@@ -1058,11 +1066,15 @@ handler_again:
 							}
 							bool retry_conn=false;
 							proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
-								// transfer to frontend has started, we cannot retry
-								} else {
-									retry_conn=true;
+							if (myds->query_retries_on_failure > 0) {
+								myds->query_retries_on_failure--;
+								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+									// transfer to frontend has started, we cannot retry
+									} else {
+										retry_conn=true;
+										proxy_warning("Retrying query.\n");
+									}
 								}
 							}
 							myds->destroy_MySQL_Connection_From_Pool(false);
@@ -1080,11 +1092,15 @@ handler_again:
 							// client error, serious
 							proxy_error("Detected a broken connection during query on (%d,%s,%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
-								// transfer to frontend has started, we cannot retry
-								} else {
-									retry_conn=true;
+							if (myds->query_retries_on_failure > 0) {
+								myds->query_retries_on_failure--;
+								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+									// transfer to frontend has started, we cannot retry
+									} else {
+										retry_conn=true;
+										proxy_warning("Retrying query.\n");
+									}
 								}
 							}
 							myds->destroy_MySQL_Connection_From_Pool(false);
@@ -1110,8 +1126,12 @@ handler_again:
 								case 1290: // read-only
 								case 1047: // WSREP has not yet prepared node for application use
 								case 1053: // Server shutdown in progress
-									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-										retry_conn=true;
+									if (myds->query_retries_on_failure > 0) {
+										myds->query_retries_on_failure--;
+										if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+											retry_conn=true;
+											proxy_warning("Retrying query.\n");
+										}
 									}
 									myds->destroy_MySQL_Connection_From_Pool(true);
 									myds->fd=0;

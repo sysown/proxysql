@@ -115,6 +115,7 @@ class MySQL_Data_Stream
 	} proxy_addr;
 
 	unsigned int connect_tries;
+	int query_retries_on_failure;
 	int connect_retries_on_failure;
 	enum mysql_data_stream_status DSS;
 	enum MySQL_DS_type myds_type;

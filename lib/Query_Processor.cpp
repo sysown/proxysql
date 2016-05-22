@@ -37,7 +37,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=25;
+		num_fields=26;
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -66,13 +66,14 @@ class QP_rule_text {
 		itostr(pta[15], (long long)QPr->cache_ttl);
 		itostr(pta[16], (long long)QPr->reconnect);
 		itostr(pta[17], (long long)QPr->timeout);
-		itostr(pta[18], (long long)QPr->delay);
-		itostr(pta[19], (long long)QPr->mirror_flagOUT);
-		itostr(pta[20], (long long)QPr->mirror_hostgroup);
-		pta[21]=strdup_null(QPr->error_msg);
-		itostr(pta[22], (long long)QPr->log);
-		itostr(pta[23], (long long)QPr->apply);
-		itostr(pta[24], (long long)QPr->hits);
+		itostr(pta[18], (long long)QPr->retries);
+		itostr(pta[19], (long long)QPr->delay);
+		itostr(pta[20], (long long)QPr->mirror_flagOUT);
+		itostr(pta[21], (long long)QPr->mirror_hostgroup);
+		pta[22]=strdup_null(QPr->error_msg);
+		itostr(pta[23], (long long)QPr->log);
+		itostr(pta[24], (long long)QPr->apply);
+		itostr(pta[25], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -377,7 +378,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int log, bool apply) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int log, bool apply) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -393,6 +394,7 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->cache_ttl=cache_ttl;
 	newQR->reconnect=reconnect;
 	newQR->timeout=timeout;
+	newQR->retries=retries;
 	newQR->delay=delay;
 	newQR->mirror_flagOUT=mirror_flagOUT;
 	newQR->mirror_hostgroup=mirror_hostgroup;
@@ -503,7 +505,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(25);
+	SQLite3_result *result=new SQLite3_result(26);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -524,6 +526,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"cache_ttl");
 	result->add_column_definition(SQLITE_TEXT,"reconnect");
 	result->add_column_definition(SQLITE_TEXT,"timeout");
+	result->add_column_definition(SQLITE_TEXT,"retries");
 	result->add_column_definition(SQLITE_TEXT,"delay");
 	result->add_column_definition(SQLITE_TEXT,"mirror_flagOUT");
 	result->add_column_definition(SQLITE_TEXT,"mirror_hostgroup");
@@ -633,7 +636,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					( qr1->digest ? buf : NULL ) ,
 					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern,
 					qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup,
-					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->delay, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
+					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
 					qr1->error_msg, qr1->log, qr1->apply);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
@@ -761,6 +764,11 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			// Note: negative timeout means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
       ret->timeout=qr->timeout;
+    }
+    if (qr->retries >= 0) {
+			// Note: negative retries means this rule doesn't change
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will%s be re-executed %d times in case of failure\n", qr->rule_id, qr->retries);
+      ret->retries=qr->retries;
     }
     if (qr->delay >= 0) {
 			// Note: negative delay means this rule doesn't change 
@@ -1128,6 +1136,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					qpo->delay=t;
+				}
+			}
+			if (!strcasecmp(key,"query_retries")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->retries=t;
 				}
 			}
 			if (!strcasecmp(key,"query_timeout")) {
