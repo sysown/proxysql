@@ -243,6 +243,7 @@ class MySQL_Monitor_State_Data {
 	int ST;
 	char *hostname;
 	int port;
+	bool use_ssl;
 	struct event *ev_mysql;
 	MYSQL *mysql;
 	struct event_base *base;
@@ -253,7 +254,7 @@ class MySQL_Monitor_State_Data {
 	MYSQL_ROW *row;
 	unsigned int repl_lag;
 	unsigned int hostgroup_id;
-	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b) {
+	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0) {
 		task_id=MON_CONNECT;
 		mysql=NULL;
 		result=NULL;
@@ -263,6 +264,7 @@ class MySQL_Monitor_State_Data {
 		hostname=strdup(h);
 		port=p;
 		base=b;
+		use_ssl=_use_ssl;
 		ST=0;
 		ev_mysql=NULL;
 	}
@@ -289,6 +291,9 @@ again:
 				mysql=mysql_init(NULL);
 				assert(mysql);
 				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+				if (use_ssl) {
+					mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
+				}
 				if (mysql_thread___monitor_timer_cached==true) {
 					event_base_gettimeofday_cached(base, &tv_out);
 				} else {
@@ -756,7 +761,9 @@ void * MySQL_Monitor::monitor_connect() {
 		SQLite3_result *resultset=NULL;
 		int i=0;
 		MySQL_Monitor_State_Data **sds=NULL;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
+		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
+		// add support for SSL
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers GROUP BY hostname, port";
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -793,7 +800,7 @@ void * MySQL_Monitor::monitor_connect() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base, atoi(r->fields[2]));
 				sds[i]->task_id=MON_CONNECT;
 				connect__num_active_connections++;
 				total_connect__num_active_connections++;
@@ -889,7 +896,9 @@ void * MySQL_Monitor::monitor_ping() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE status!='OFFLINE_HARD'";
+		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE status!='OFFLINE_HARD'";
+		// add support for SSL
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status!='OFFLINE_HARD' GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		glover=GloMTH->get_global_version();
@@ -924,7 +933,7 @@ void * MySQL_Monitor::monitor_ping() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base, atoi(r->fields[2]));
 				sds[i]->task_id=MON_PING;
 				ping__num_active_connections++;
 				total_ping__num_active_connections++;
@@ -1130,7 +1139,9 @@ void * MySQL_Monitor::monitor_read_only() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD'";
+		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD'";
+		// add support for SSL
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD' GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		glover=GloMTH->get_global_version();
@@ -1167,7 +1178,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base, atoi(r->fields[2]));
 				sds[i]->task_id=MON_READ_ONLY;
 //				sds[i]->hostgroup_id=atoi(r->fields[0]);
 //				sds[i]->repl_lag=atoi(r->fields[3]);
@@ -1309,7 +1320,9 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
+		//char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
+		// add support for SSL
+		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag, use_ssl FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
 		t1=monotonic_time();
 
 		glover=GloMTH->get_global_version();
@@ -1346,7 +1359,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]),libevent_base, atoi(r->fields[4]));
 				sds[i]->task_id=MON_REPLICATION_LAG;
 				sds[i]->hostgroup_id=atoi(r->fields[0]);
 				sds[i]->repl_lag=atoi(r->fields[3]);
