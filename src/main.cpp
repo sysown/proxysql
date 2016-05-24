@@ -41,12 +41,15 @@ static const char * proxysql_pid_file() {
 */
 struct cpu_timer
 {
+	cpu_timer() {
+		begin = monotonic_time();
+	}
 	~cpu_timer()
 	{
 		unsigned long long end = monotonic_time();
 		std::cerr << double( end - begin ) / 1000000 << " secs.\n" ;
 	};
-	unsigned long long begin = monotonic_time();
+	unsigned long long begin;
 };
 
 /*
