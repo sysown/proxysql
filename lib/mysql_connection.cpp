@@ -466,6 +466,22 @@ handler_again:
 		case ASYNC_CONNECT_SUCCESSFUL:
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
+			//assert(mysql->net.vio->async_context);
+			//mysql->net.vio->async_context= mysql->options.extension->async_context;
+			//if (parent->use_ssl) {
+			{
+				// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
+				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+				int f=fcntl(mysql->net.fd, F_GETFL);
+				fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
+			}
+			//if (parent->use_ssl) {
+				// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
+				//mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+				//ioctl_FIONBIO(mysql->net.fd,1);
+				//vio_blocking(mysql->net.vio, FALSE, 0);
+				//fcntl(mysql->net.vio->sd, F_SETFL, O_RDWR|O_NONBLOCK);
+			//}
 			break;
 		case ASYNC_CONNECT_FAILED:
 			parent->connect_error(mysql_errno(mysql));
