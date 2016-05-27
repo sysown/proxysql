@@ -96,11 +96,15 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
+#define ADMIN_SQLITE_TABLE_SCHEDULER "CREATE TABLE scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , PRIMARY KEY(id))" 
+
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , UNIQUE (reader_hostgroup))"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0)"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER "CREATE TABLE runtime_scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , PRIMARY KEY(id))" 
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
@@ -599,6 +603,102 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 #endif /* DEBUG */
 
+	if ((query_no_space_length>15) && ( (!strncasecmp("SAVE SCHEDULER ", query_no_space, 15)) || (!strncasecmp("LOAD SCHEDULER ", query_no_space, 15))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD SCHEDULER TO MEMORY") && !strncasecmp("LOAD SCHEDULER TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SCHEDULER TO MEM") && !strncasecmp("LOAD SCHEDULER TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SCHEDULER FROM DISK") && !strncasecmp("LOAD SCHEDULER FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_scheduler__from_disk_to_memory();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading scheduler to to MEMORY\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE SCHEDULER FROM MEMORY") && !strncasecmp("SAVE SCHEDULER FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SCHEDULER FROM MEM") && !strncasecmp("SAVE SCHEDULER FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SCHEDULER TO DISK") && !strncasecmp("SAVE SCHEDULER TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_scheduler__from_memory_to_disk();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving scheduler to DISK\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD SCHEDULER FROM MEMORY") && !strncasecmp("LOAD SCHEDULER FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SCHEDULER FROM MEM") && !strncasecmp("LOAD SCHEDULER FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SCHEDULER TO RUNTIME") && !strncasecmp("LOAD SCHEDULER TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SCHEDULER TO RUN") && !strncasecmp("LOAD SCHEDULER TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->load_scheduler_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded scheduler to RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+/* FIXME: not implemented yet!!
+		if (
+			(query_no_space_length==strlen("LOAD SCHEDULER FROM CONFIG") && !strncasecmp("LOAD SCHEDULER FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					int rows=0;
+					rows=SPA->Read_Scheduler_from_configfile();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded scheduler from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
+			return false;
+		}
+*/
+		if (
+			(query_no_space_length==strlen("SAVE SCHEDULER TO MEMORY") && !strncasecmp("SAVE SCHEDULER TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SCHEDULER TO MEM") && !strncasecmp("SAVE SCHEDULER TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SCHEDULER FROM RUNTIME") && !strncasecmp("SAVE SCHEDULER FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SCHEDULER FROM RUN") && !strncasecmp("SAVE SCHEDULER FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->save_scheduler_runtime_to_database(false);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved scheduler from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+	}
 	if ((query_no_space_length>17) && ( (!strncasecmp("SAVE MYSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD MYSQL USERS ", query_no_space, 17))) ) {
 
 		if (
@@ -1065,6 +1165,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_global=false;
 	bool dump_global_variables=false;
 
+	bool runtime_scheduler=false;
 	bool runtime_mysql_servers=false;
 	bool runtime_mysql_query_rules=false;
 
@@ -1096,6 +1197,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (strstr(query_no_space,"runtime_mysql_query_rules")) {
 				runtime_mysql_query_rules=true; refresh=true;
 			}
+			if (strstr(query_no_space,"runtime_scheduler")) {
+				runtime_scheduler=true; refresh=true;
+			}
 		}
 	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
@@ -1124,6 +1228,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (runtime_mysql_query_rules) {
 				save_mysql_query_rules_from_runtime(true);
+			}
+			if (runtime_scheduler) {
+				save_scheduler_runtime_to_database(true);
 			}
 		}
 		pthread_mutex_unlock(&admin_mutex);
@@ -2166,6 +2273,8 @@ ProxySQL_Admin::ProxySQL_Admin() {
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
+	// create the scheduler
+	scheduler=new ProxySQL_External_Scheduler();
 };
 
 void ProxySQL_Admin::wrlock() {
@@ -2240,6 +2349,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
+	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
+	insert_into_tables_defs(tables_defs_admin,"runtime_scheduler", ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -2250,6 +2361,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
+	insert_into_tables_defs(tables_defs_config,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -2381,6 +2493,10 @@ void ProxySQL_Admin::admin_shutdown() {
 	shutdown(pipefd[1],SHUT_RDWR);
 	close(pipefd[0]);
 	close(pipefd[1]);
+
+	// delete the scheduler
+	delete scheduler;
+	scheduler=NULL;
 };
 
 ProxySQL_Admin::~ProxySQL_Admin() {
@@ -3203,6 +3319,7 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
   admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
+	admindb->execute("INSERT OR IGNORE INTO main.scheduler SELECT * FROM disk.scheduler");
 #ifdef DEBUG
   admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 #endif /* DEBUG */
@@ -3216,6 +3333,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
   admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
+	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
 #ifdef DEBUG
   admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 #endif /* DEBUG */
@@ -3228,6 +3346,7 @@ void ProxySQL_Admin::__delete_disktable() {
   admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("DELETE FROM disk.mysql_query_rules");
 	admindb->execute("DELETE FROM disk.global_variables");
+	admindb->execute("DELETE FROM disk.scheduler");
 #ifdef DEBUG
   admindb->execute("DELETE FROM disk.debug_levels");
 #endif /* DEBUG */
@@ -3240,6 +3359,7 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
   admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
+	admindb->execute("INSERT OR REPLACE INTO disk.scheduler SELECT * FROM main.scheduler");
 #ifdef DEBUG
   admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
 #endif /* DEBUG */
@@ -3261,6 +3381,20 @@ void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
 	admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("INSERT INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_scheduler__from_disk_to_memory() {
+	admindb->wrlock();
+	admindb->execute("DELETE FROM main.scheduler");
+	admindb->execute("INSERT INTO main.scheduler SELECT * FROM disk.scheduler");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_scheduler__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("DELETE FROM disk.scheduler");
+	admindb->execute("INSERT INTO disk.scheduler SELECT * FROM main.scheduler");
 	admindb->wrunlock();
 }
 
@@ -3471,6 +3605,76 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 	free(ads);
 }
 
+void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
+	char *query=NULL;
+	// dump mysql_servers
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_scheduler";
+	} else {
+		query=(char *)"DELETE FROM main.scheduler";
+	}
+
+
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+
+	// allocate args only once
+	char **args=(char **)malloc(5*sizeof(char *));
+	// read lock the scheduler
+	spin_rdlock(&scheduler->rwlock);
+	char *q=NULL;
+	if (_runtime) {
+		q=(char *)"INSERT INTO runtime_scheduler VALUES(%lu,%lu,\"%s\" ,%s,%s,%s,%s,%s)";
+	} else {
+		q=(char *)"INSERT INTO scheduler VALUES(%lu,%lu,\"%s\" ,%s,%s,%s,%s,%s)";
+	}
+	for (std::vector<Scheduler_Row *>::iterator it = scheduler->Scheduler_Rows.begin() ; it != scheduler->Scheduler_Rows.end(); ++it) {
+		Scheduler_Row *sr=*it;
+		int i;
+		int l=strlen(q);
+
+		l+=strlen(sr->filename);
+
+		for (i=0; i<5; i++) {
+			if (sr->args[i]) {
+				args[i]=(char *)malloc(strlen(sr->args[i])+4);
+				sprintf(args[i],"\"%s\"",sr->args[i]);
+			} else {
+				args[i]=(char *)"NULL";
+			}
+			l+=strlen(args[i]);
+		}
+
+		l+=32; //padding
+
+		char *query=(char *)malloc(l);
+
+		sprintf(query, q,
+			sr->id, sr->interval_ms,
+			sr->filename, args[0],
+			args[1], args[2],
+			args[3], args[4]
+		);
+
+		for (i=0; i<5; i++) {
+			if (sr->args[i]) {
+				free(args[i]);	// free only if we allocated memory
+			}
+		}
+
+		admindb->execute(query);
+		free(query);
+	}
+
+	// unlock the scheduler
+	spin_rdunlock(&scheduler->rwlock);
+
+	// deallocate args
+	free(args);
+}
+
+
+
 void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
@@ -3538,6 +3742,22 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	resultset=NULL;
 }
 
+
+void ProxySQL_Admin::load_scheduler_to_runtime() {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT * FROM scheduler";
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		scheduler->update_table(resultset);
+	}
+	if (resultset) delete resultset;
+	resultset=NULL;
+}
 
 void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	// make sure that the caller has called mysql_servers_wrlock()
@@ -4077,4 +4297,80 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		configdb->execute("INSERT INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag FROM mysql_servers_v110");
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
+}
+
+
+
+
+
+Scheduler_Row::Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5) {
+	int i;
+	id=_id;
+	interval_ms=_in;
+	filename=strdup(_f);
+	args=(char **)malloc(6*sizeof(char *));
+	for (i=0;i<6;i++) {
+		args[i]=NULL;
+	}
+	// only copy fields if the previous one is not null
+	if (a1) {
+		args[0]=strdup(a1);
+		if (a2) {
+			args[1]=strdup(a2);
+			if (a3) {
+				args[2]=strdup(a3);
+				if (a4) {
+					args[3]=strdup(a4);
+					if (a5) {
+						args[4]=strdup(a5);
+					}
+				}
+			}
+		}
+	}
+}
+
+
+Scheduler_Row::~Scheduler_Row() {
+	int i;
+	for (i=0;i<6;i++) {
+		if (args[i]) {
+			free(args[i]);
+		}
+		args[i]=NULL;
+	}
+	free(args);
+	args=NULL;
+}
+
+
+ProxySQL_External_Scheduler::ProxySQL_External_Scheduler() {
+	spinlock_rwlock_init(&rwlock);
+}
+
+ProxySQL_External_Scheduler::~ProxySQL_External_Scheduler() {
+}
+
+void ProxySQL_External_Scheduler::update_table(SQLite3_result *resultset) {
+	spin_wrlock(&rwlock);
+	// delete all current rows
+	Scheduler_Row *sr;
+	for (std::vector<Scheduler_Row *>::iterator it=Scheduler_Rows.begin(); it!=Scheduler_Rows.end(); ++it) {
+		sr=*it;
+		delete sr;
+  }
+  Scheduler_Rows.clear();
+
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		unsigned int id=strtoul(r->fields[0], NULL, 10);
+		unsigned int interval_ms=strtoul(r->fields[1], NULL, 10);
+		Scheduler_Row *sr=new Scheduler_Row(id, interval_ms,
+			r->fields[2], r->fields[3],
+			r->fields[4], r->fields[5],
+			r->fields[6], r->fields[7]
+		);
+		Scheduler_Rows.push_back(sr);
+	}
+	spin_wrunlock(&rwlock);
 }

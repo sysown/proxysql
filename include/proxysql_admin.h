@@ -6,6 +6,37 @@
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 
 
+
+
+class Scheduler_Row {
+	public:
+	unsigned int id;
+	unsigned int interval_ms;
+	unsigned long long last;
+	unsigned long long next;
+	char *filename;
+//	char *arg1;
+//	char *arg2;
+//	char *arg3;
+//	char *arg4;
+//	char *arg5;
+	char **args;
+	Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5);
+	~Scheduler_Row();
+};
+
+
+class ProxySQL_External_Scheduler {
+	public:
+	rwlock_t rwlock;
+	std::vector<Scheduler_Row *> Scheduler_Rows;
+	ProxySQL_External_Scheduler();
+	~ProxySQL_External_Scheduler();
+	void run_once();
+	void update_table(SQLite3_result *result);
+};
+
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -38,6 +69,8 @@ class ProxySQL_Admin {
 		bool debug;
 #endif /* DEBUG */
 	} variables;
+
+	ProxySQL_External_Scheduler *scheduler;
 
 	void dump_mysql_collations();
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
@@ -121,6 +154,11 @@ class ProxySQL_Admin {
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
 	void save_mysql_query_rules_from_runtime(bool);
+
+	void load_scheduler_to_runtime();
+	void save_scheduler_runtime_to_database(bool);
+	void flush_scheduler__from_memory_to_disk();
+	void flush_scheduler__from_disk_to_memory();
 
 	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
