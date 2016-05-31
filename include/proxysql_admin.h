@@ -27,12 +27,16 @@ class Scheduler_Row {
 
 
 class ProxySQL_External_Scheduler {
+	private:
+	unsigned long long next_run;
 	public:
+	unsigned int last_version;
+	unsigned int version;
 	rwlock_t rwlock;
 	std::vector<Scheduler_Row *> Scheduler_Rows;
 	ProxySQL_External_Scheduler();
 	~ProxySQL_External_Scheduler();
-	void run_once();
+	unsigned long long run_once();
 	void update_table(SQLite3_result *result);
 };
 
@@ -187,5 +191,9 @@ class ProxySQL_Admin {
 
 	void mysql_servers_wrlock();
 	void mysql_servers_wrunlock();
+
+	// wrapper to call a private function
+	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
+
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
