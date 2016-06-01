@@ -4434,6 +4434,8 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 					int rc;
 					rc=execve(sr->filename, newargs, newenviron);
 					if (rc) {
+						proxy_error("Scheduler: Failed to run %s\n", sr->filename);
+						perror("execve()");
 						exit(EXIT_FAILURE);
 					}
 				}
