@@ -473,7 +473,12 @@ handler_again:
 				// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
 				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 				int f=fcntl(mysql->net.fd, F_GETFL);
+#ifdef FD_CLOEXEC
+				// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
+				fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK|FD_CLOEXEC);
+#else
 				fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
+#endif /* FD_CLOEXEC */
 			}
 			//if (parent->use_ssl) {
 				// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
