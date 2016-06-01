@@ -840,6 +840,11 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 			close(s);
 			return -1;
 		}
+#ifdef FD_CLOEXEC
+		int f_=fcntl(s, F_GETFL);
+		// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
+		fcntl(s, F_SETFL, f_|FD_CLOEXEC);
+#endif /* FD_CLOEXEC */
 		ioctl_FIONBIO(s, 1);
 		memset(&a, 0, sizeof(a));
 		a.sin_port = htons(connect_port);
@@ -857,6 +862,11 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 			close(s);
 			return -1;
 		}
+#ifdef FD_CLOEXEC
+		int f_=fcntl(s, F_GETFL);
+		// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
+		fcntl(s, F_SETFL, f_|FD_CLOEXEC);
+#endif /* FD_CLOEXEC */
 		ioctl_FIONBIO(s, 1);
 		memset(u.sun_path,0,UNIX_PATH_MAX);
 		u.sun_family = AF_UNIX;
