@@ -6,7 +6,7 @@
 
 #define QUERY1	"SELECT ?"
 #define NUMPREP	100000
-#define NUMPRO	10000
+#define NUMPRO	20000
 //#define NUMPREP	160
 //#define NUMPRO	4
 #define LOOPS	1
@@ -73,46 +73,58 @@ void * mysql_thread(int tid) {
 	thread_data_t *THD;
 	THD=GloThrData[tid];
 
+	// in this version, each mysql thread has just ONE connection
+	// for now we use blocking API
 	MYSQL *mysql;
-	MYSQL_STMT **stmt;
 
+	//MYSQL_STMT **stmt;
+
+	// we intialize the local mapping : MySQL_STMTs_local()
 	MySQL_STMTs_local *local_stmts=new MySQL_STMTs_local();
+
+	// we initialize a MYSQL structure
 	THD->mysql = mysql_init(NULL);
 	mysql=THD->mysql;
 
 	char buff[128];
 	unsigned int bl=0;
+
+	// we establish a connection to the database
 	if (!mysql_real_connect(mysql,"127.0.0.1",USER,"",SCHEMA,3306,NULL,0)) {
 		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		exit(EXIT_FAILURE);
 	}
 	int i;
-	stmt=(MYSQL_STMT **)malloc(sizeof(MYSQL_STMT*)*NUMPREP);
+
+	// array of (MYSQL_STMT *) ; we don't use it in this version
+	//stmt=(MYSQL_STMT **)malloc(sizeof(MYSQL_STMT*)*NUMPREP);
 	
+	MYSQL_STMT *stmt;
 	{
 	cpu_timer t;
-	for (i=0; i<NUMPREP; i++) {
-		stmt[i] = mysql_stmt_init(mysql);
-		if (!stmt[i]) {
-			fprintf(stderr, " mysql_stmt_init(), out of memory\n");
-			exit(EXIT_FAILURE);
-		}
+	// in this loop we create only some the prepared statements
+	for (i=0; i<NUMPREP/100; i++) {
 		sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 		bl=strlen(buff);
 		uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 		MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
 		if (a==NULL) { // no prepared statement was found in global
-			if (mysql_stmt_prepare(stmt[i], buff, bl)) { // the prepared statement is created
-				fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt[i]));
+			stmt = mysql_stmt_init(mysql);
+			if (!stmt) {
+				fprintf(stderr, " mysql_stmt_init(), out of memory\n");
 				exit(EXIT_FAILURE);
 			}
-			uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt[i]);
-			if (NUMPRO < 32)
-				fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt[i]->stmt_id, stmid);
-			local_stmts->insert(stmid,stmt[i]);
+			if (mysql_stmt_prepare(stmt, buff, bl)) { // the prepared statement is created
+				fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt));
+				exit(EXIT_FAILURE);
 			}
-		}
-	fprintf(stdout, "Prepared statements: %u client, %u proxy/server. ", NUMPREP, GloMyStmt->total_prepared_statements());
+			uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt);
+			if (NUMPRO < 32)
+				fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt->stmt_id, stmid);
+			local_stmts->insert(stmid,stmt);
+			}
+	}
+	fprintf(stdout, "Prepared statements: %u client, %u proxy/server. ", i, GloMyStmt->total_prepared_statements());
 	fprintf(stdout, "Created in: ");
 	}
 	{
@@ -151,8 +163,11 @@ void * mysql_thread(int tid) {
 		}
 		fprintf(stdout, "Found    %u prepared statements searching by hash in: ", founds);
 	}
+
 	{
 		unsigned int founds=0;
+		unsigned int created=0;
+		unsigned int executed=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
 			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
@@ -162,15 +177,50 @@ void * mysql_thread(int tid) {
 			if (a) {
 				// we have a prepared statement, we can run it
 				MYSQL_STMT *stm=local_stmts->find(a->statement_id);
-				if (stm) {
+				if (stm) { // the statement exists in local
 					run_stmt(stm,(uint32_t)mt_rand());
 					founds++;
+					executed++;
+					local_stmts->erase(a->statement_id);
+				} else { // the statement doesn't exist locally
+					stmt = mysql_stmt_init(mysql);	
+					if (!stmt) {
+						fprintf(stderr, " mysql_stmt_init(), out of memory\n");
+						exit(EXIT_FAILURE);
+					}
+					if (mysql_stmt_prepare(stmt, buff, bl)) { // the prepared statement is created
+						fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt));
+						exit(EXIT_FAILURE);
+					}
+					local_stmts->insert(a->statement_id,stmt);
+					run_stmt(stmt,(uint32_t)mt_rand());
+					created++;
+					executed++;
+					local_stmts->erase(a->statement_id);
 				}
+			} else { // no prepared statement was found in global
+				stmt = mysql_stmt_init(mysql);	
+				if (!stmt) {
+					fprintf(stderr, " mysql_stmt_init(), out of memory\n");
+					exit(EXIT_FAILURE);
+				}
+				if (mysql_stmt_prepare(stmt, buff, bl)) { // the prepared statement is created
+					fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt));
+					exit(EXIT_FAILURE);
+				}
+				uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt);
+				if (NUMPRO < 32)
+					fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt->stmt_id, stmid);
+				local_stmts->insert(stmid,stmt);
+				run_stmt(stmt,(uint32_t)mt_rand());
+				created++;
+				executed++;
+				local_stmts->erase(stmid);
 			}
 		}
-		fprintf(stdout, "Executed %u prepared statements in: ", founds);
+		fprintf(stdout, "Found %u , created %u and executed %u prepared statements in: ", founds, created, executed);
 	}
-	
+/*
 	{
 		// for comparison, we run also queries in TEXT protocol
 		cpu_timer t;
@@ -192,18 +242,24 @@ void * mysql_thread(int tid) {
 		fprintf(stdout, "Executed %u queries in: ", i);
 	}
 	return 0;
+*/
 }
 
 int main() {
+	// initialize mysql
 	mysql_library_init(0,NULL,NULL);
+
+	// create a new MySQL_STMT_Manager()
 	GloMyStmt=new MySQL_STMT_Manager();
 	GloThrData = (thread_data_t **)malloc(sizeof(thread_data_t *)*NTHREADS);
 
+	// starts N threads
 	int i;
 	for (i=0; i<NTHREADS; i++) {
 		GloThrData[i]=(thread_data_t *)malloc(sizeof(thread_data_t));
 		GloThrData[i]->thread = new std::thread(&mysql_thread,i);
 	}
+	// wait for the threads to complete
 	for (i=0; i<NTHREADS; i++) {
 		GloThrData[i]->thread->join();
 	}

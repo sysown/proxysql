@@ -5,16 +5,23 @@
 #include "cpp.h"
 
 
+// class MySQL_STMTs_local assiciates a global statement ID with a local statement ID for a specific connection
 class MySQL_STMTs_local {
 	private:
+	unsigned int num_entries;
 	std::map<uint32_t, MYSQL_STMT *> m;
 	public:
 	MySQL_STMTs_local() {
+		num_entries=0;
 	}
 	~MySQL_STMTs_local();
 	// we declare it here to be inline
 	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt) {
-		m.insert(std::make_pair(global_statement_id, stmt));
+		std::pair<std::map<uint32_t, MYSQL_STMT *>::iterator,bool> ret;
+		ret=m.insert(std::make_pair(global_statement_id, stmt));
+		if (ret.second==true) {
+			num_entries++;
+		}
 	}
 	// we declare it here to be inline
 	MYSQL_STMT * find(uint32_t global_statement_id) {
@@ -24,9 +31,15 @@ class MySQL_STMTs_local {
 		}
 		return NULL;	// not found
 	}
+	bool erase(uint32_t global_statement_id);
 	uint64_t compute_hash(unsigned int hostgroup, char *user, char *schema, char *query, unsigned int query_length);
 };
 
+
+
+// class MySQL_STMT_Global_info represents information about a MySQL Prepared Statement
+// it is an internal representation of prepared statement
+// it include all metadata associated with it
 class MySQL_STMT_Global_info {
 	private:
 	void compute_hash();

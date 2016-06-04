@@ -71,6 +71,20 @@ MySQL_STMTs_local::~MySQL_STMTs_local() {
 	m.erase(m.begin(),m.end());
 }
 
+bool MySQL_STMTs_local::erase(uint32_t global_statement_id) {
+	auto s=m.find(global_statement_id);
+	if (s!=m.end()) { // found
+		if (num_entries>1000) {
+			MYSQL_STMT *stmt=s->second;
+			mysql_stmt_close(stmt);
+			m.erase(s);
+			num_entries--;
+			return true; // we truly removed the prepared statement
+		}
+	}
+	return false; // we don't really remove the prepared statement
+}
+
 MySQL_STMT_Manager::MySQL_STMT_Manager() {
 	spinlock_rwlock_init(&rwlock);
 	next_statement_id=1;	// we initialize this as 1 because we 0 is not allowed
