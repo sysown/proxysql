@@ -15,6 +15,7 @@ extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
+extern MySQL_STMT_Manager *GloMyStmt;
 
 class KillArgs {
 	public:
@@ -803,6 +804,20 @@ __get_pkts_from_client:
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
 									if (rc_break==true) {
+										break;
+									}
+									if (client_myds->myconn->local_stmts==NULL) {
+										client_myds->myconn->local_stmts=new MySQL_STMTs_local();
+									}
+									uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+									MySQL_STMT_Global_info *stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash);
+									if (stmt_info) {
+										l_free(pkt.size,pkt.ptr);
+										client_myds->setDSS_STATE_QUERY_SENT_NET();
+										client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
+										client_myds->DSS=STATE_SLEEP;
+										status=WAITING_CLIENT_DATA;
+										break;
 									}
 								}
 								break;

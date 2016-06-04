@@ -96,5 +96,9 @@ class MySQL_Protocol {
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
+
+	// prepared statements
+	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info);
+
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */
