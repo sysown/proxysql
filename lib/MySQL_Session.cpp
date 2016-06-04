@@ -773,7 +773,6 @@ __get_pkts_from_client:
 							case _MYSQL_COM_CHANGE_USER:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
-							case _MYSQL_COM_STMT_PREPARE:
 							case _MYSQL_COM_STMT_EXECUTE:
 							case _MYSQL_COM_STMT_CLOSE:
 								l_free(pkt.size,pkt.ptr);
@@ -781,6 +780,31 @@ __get_pkts_from_client:
 								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
 								client_myds->DSS=STATE_SLEEP;
 								status=WAITING_CLIENT_DATA;
+								break;
+							case _MYSQL_COM_STMT_PREPARE:
+								if (admin==true) { // admin module will not support prepared statement!!
+									l_free(pkt.size,pkt.ptr);
+									client_myds->setDSS_STATE_QUERY_SENT_NET();
+									client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+									client_myds->DSS=STATE_SLEEP;
+									status=WAITING_CLIENT_DATA;
+									break;
+								} else {
+									// if we reach here, we are not on admin
+									bool rc_break=false;
+
+									// Note: CurrentQuery sees the query as sent by the client.
+									// shortly after, the packets it used to contain the query will be deallocated
+									// Note2 : we call the next function as if it was _MYSQL_COM_QUERY
+									// because the offset will be identical
+									CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,false);
+
+									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
+									if (rc_break==true) {
+									}
+								}
 								break;
 //							case _MYSQL_COM_STMT_PREPARE:
 //								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(&pkt);
@@ -1819,7 +1843,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 
-bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt) {
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool prepared) {
 	if (qpo->new_query) {
 		// the query was rewritten
 		l_free(pkt->size,pkt->ptr);	// free old pkt
@@ -1849,6 +1873,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		RequestEnd(NULL);
 		return true;
 	}
+
+	if (prepared) {	// for prepared statement we exit here
+		return false;
+	}
+
 	if (mirror==true) { // for mirror session we exit here
 		current_hostgroup=qpo->destination_hostgroup;
 		return false;
