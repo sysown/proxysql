@@ -88,6 +88,9 @@ void * mysql_thread(int tid) {
 	MySQL_Thread *worker = new MySQL_Thread();
 	worker->init();
 
+	char buff[128];
+	unsigned int bl=0;
+
 	MySrvC *mysrvc=new MySrvC((char *)"127.0.0.1", 3306, 100, MYSQL_SERVER_STATUS_ONLINE, 100, 0, 0, 0, 10000);
 
 	{
@@ -103,6 +106,7 @@ void * mysql_thread(int tid) {
 			sess->client_myds->DSS=STATE_SLEEP;
 			sess->client_myds->sess=sess;
 			sess->client_myds->myds_type=MYDS_FRONTEND;
+			sess->client_myds->PSarrayIN= new PtrSizeArray();
 			sess->client_myds->PSarrayOUT= new PtrSizeArray();
 			worker->register_session(sess);
 			sess->current_hostgroup=0;
@@ -126,7 +130,19 @@ void * mysql_thread(int tid) {
 		}
 		for (i=0; i<16; i++) {
 			MySQL_Session *sess=SESS[i];
-			sess->status=PROCESSING_QUERY;
+			sprintf(buff+5,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+			bl=strlen(buff+5);
+			mysql_hdr hdr;
+			hdr.pkt_id=0;
+			hdr.pkt_length=bl+1;
+			memcpy(buff,&hdr,sizeof(mysql_hdr));
+			buff[4]=0x16;
+			PtrSize_t pkt;
+			pkt.size=hdr.pkt_length+sizeof(mysql_hdr);
+			pkt.ptr=malloc(pkt.size);
+			memcpy(pkt.ptr,buff,pkt.size);
+			sess->client_myds->PSarrayIN->add(pkt.ptr,pkt.size);
+			sess->status=WAITING_CLIENT_DATA;;
 			sess->handler();
 		}
 	}
