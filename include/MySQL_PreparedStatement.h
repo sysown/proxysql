@@ -55,28 +55,10 @@ class MySQL_STMT_Global_info {
   uint16_t num_columns;
   uint16_t num_params;
   uint16_t warning_count;
-	MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h) {
-		statement_id=id;
-		hostgroup_id=h;
-		ref_count=0;
-		username=strdup(u);
-		schemaname=strdup(s);
-		query=strdup(q);
-		query_length=ql;
-		num_params=stmt->param_count;
-		num_columns=stmt->field_count;
-		warning_count=stmt->upsert_status.warning_count;
-		if (_h) {
-			hash=_h;
-		} else {
-			compute_hash();
-		}
-	}
-	~MySQL_STMT_Global_info() {
-		free(username);
-		free(schemaname);
-		free(query);
-	}
+	MYSQL_FIELD **fields;
+	//MYSQL_BIND **params; // seems unused
+	MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
+	~MySQL_STMT_Global_info();
 };
 
 class MySQL_STMT_Manager {
@@ -89,7 +71,7 @@ class MySQL_STMT_Manager {
 	MySQL_STMT_Manager();
 	~MySQL_STMT_Manager();
 	int ref_count(uint32_t statement_id, int cnt, bool lock=true);
-	uint32_t add_prepared_statement(unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock=true);
+	MySQL_STMT_Global_info * add_prepared_statement(unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock=true);
 	MySQL_STMT_Global_info * find_prepared_statement_by_stmt_id(uint32_t id, bool lock=true);
 	MySQL_STMT_Global_info * find_prepared_statement_by_hash(uint64_t hash, bool lock=true);
 	uint32_t total_prepared_statements() { return next_statement_id-1; }

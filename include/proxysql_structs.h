@@ -54,6 +54,11 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_INITDB_END,
 	ASYNC_INITDB_SUCCESSFUL,
 	ASYNC_INITDB_FAILED,
+	ASYNC_STMT_PREPARE_START,
+	ASYNC_STMT_PREPARE_CONT,
+	ASYNC_STMT_PREPARE_END,
+	ASYNC_STMT_PREPARE_SUCCESSFUL,
+	ASYNC_STMT_PREPARE_FAILED,
 
 	ASYNC_IDLE
 };
@@ -113,6 +118,7 @@ enum session_status {
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
 	FAST_FORWARD,
+	PROCESSING_STMT_PREPARE,
 	NONE
 };
 
@@ -719,6 +725,7 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___client_found_rows;
 __thread bool mysql_thread___multiplexing;
+__thread bool mysql_thread___stmt_multiplexing;
 __thread bool mysql_thread___enforce_autocommit_on_reads;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
@@ -792,6 +799,7 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___client_found_rows;
 extern __thread bool mysql_thread___multiplexing;
+extern __thread bool mysql_thread___stmt_multiplexing;
 extern __thread bool mysql_thread___enforce_autocommit_on_reads;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;

@@ -23,6 +23,8 @@ class Query_Info {
 	unsigned long long start_time;
 	unsigned long long end_time;
 
+	MYSQL_STMT *mysql_stmt;
+
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
 
@@ -70,6 +72,8 @@ class MySQL_Session
 	void RequestEnd(MySQL_Data_Stream *);
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
+
+	MySQL_STMT_Manager *Session_STMT_Manager;
 
 	public:
 	void * operator new(size_t);

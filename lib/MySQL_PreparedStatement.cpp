@@ -117,8 +117,8 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock) {
 	return ret;
 }
 
-uint32_t MySQL_STMT_Manager::add_prepared_statement(unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock) {
-	uint32_t ret=0;
+MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock) {
+	MySQL_STMT_Global_info *ret=NULL;
 	uint64_t hash=stmt_compute_hash(_h, u, s, q, ql); // this identifies the prepared statement
 	if (lock) {
 		spin_wrlock(&rwlock);
@@ -127,15 +127,17 @@ uint32_t MySQL_STMT_Manager::add_prepared_statement(unsigned int _h, char *u, ch
 	auto f = h.find(hash);
 	if (f!=h.end()) {
 		// found it!
-		MySQL_STMT_Global_info *a=f->second;
-		ret=a->statement_id;
+		//MySQL_STMT_Global_info *a=f->second;
+		//ret=a->statement_id;
+		ret=f->second;
 	} else {
 		// we need to create a new one
 		MySQL_STMT_Global_info *a=new MySQL_STMT_Global_info(next_statement_id,_h,u,s,q,ql,stmt,hash);
 		// insert it in both maps
 		m.insert(std::make_pair(a->statement_id, a));
 		h.insert(std::make_pair(a->hash, a));
-		ret=a->statement_id;
+		//ret=a->statement_id;
+		ret=a;
 		next_statement_id++;	// increment it
 	}
 
@@ -180,4 +182,86 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::find_prepared_statement_by_hash(uin
 	return ret;
 }
 
+MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h) {
+	statement_id=id;
+	hostgroup_id=h;
+	ref_count=0;
+	username=strdup(u);
+	schemaname=strdup(s);
+	query=strdup(q);
+	query_length=ql;
+	num_params=stmt->param_count;
+	num_columns=stmt->field_count;
+	warning_count=stmt->upsert_status.warning_count;
+	if (_h) {
+		hash=_h;
+	} else {
+		compute_hash();
+	}
+	fields=NULL;
+	if (num_columns) {
+		fields=(MYSQL_FIELD **)malloc(num_columns*sizeof(MYSQL_FIELD *));
+		uint16_t i;
+		for (i=0;i<num_columns;i++) {
+			fields[i]=(MYSQL_FIELD *)malloc(sizeof(MYSQL_FIELD));
+			MYSQL_FIELD *fs=&(stmt->fields[i]);
+			MYSQL_FIELD *fd=fields[i];
+			// first copy all fields
+			memcpy(fd,fs,sizeof(MYSQL_FIELD));
+			// then duplicate strings
+			fd->name = ( fs->name ? strdup(fs->name) : NULL );
+			fd->org_name = ( fs->org_name ? strdup(fs->org_name) : NULL );
+			fd->table = ( fs->table ? strdup(fs->table) : NULL );
+			fd->org_table = ( fs->org_table ? strdup(fs->org_table) : NULL );
+			fd->db = ( fs->db ? strdup(fs->db) : NULL );
+			fd->catalog = ( fs->catalog ? strdup(fs->catalog) : NULL );
+			fd->def = ( fs->def ? strdup(fs->def) : NULL );
+		}
+	}
+/*
+	params=NULL;
+	if(num_params) {
+		params=(MYSQL_BIND **)malloc(num_columns*sizeof(MYSQL_BIND *));
+		uint16_t i;
+		for (i=0;i<num_params;i++) {
+			params[i]=(MYSQL_BIND *)malloc(sizeof(MYSQL_BIND));
+			MYSQL_BIND *ps=&(stmt->params[i]);
+			MYSQL_BIND *pd=params[i];
+			// copy all params
+			memcpy(pd,ps,sizeof(MYSQL_BIND));
+		}
+	}
+*/
+}
 
+MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
+	free(username);
+	free(schemaname);
+	free(query);
+	if (num_columns) {
+		uint16_t i;
+		for (i=0;i<num_columns;i++) {
+			MYSQL_FIELD *f=fields[i];
+			if (f->name) { free(f->name); f->name=NULL; }
+			if (f->org_name) { free(f->org_name); f->org_name=NULL; }
+			if (f->table) { free(f->table); f->table=NULL; }
+			if (f->org_table) { free(f->org_table); f->org_table=NULL; }
+			if (f->db) { free(f->db); f->db=NULL; }
+			if (f->catalog) { free(f->catalog); f->catalog=NULL; }
+			if (f->def) { free(f->def); f->def=NULL; }
+			free(fields[i]);
+		}
+		free(fields);
+		fields=NULL;
+	}
+/*
+	if (num_params) {
+		uint16_t i;
+		for (i=0;i<num_params;i++) {
+			free(params[i]);
+		}
+		free(params);
+		params=NULL;
+	}
+*/
+}

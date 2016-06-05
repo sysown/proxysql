@@ -169,6 +169,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
+	(char *)"stmt_multiplexing",
 	(char *)"enforce_autocommit_on_reads",
 	(char *)"threshold_query_length",
 	(char *)"threshold_resultset_size",
@@ -266,6 +267,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_found_rows=true;
 	variables.commands_stats=true;
 	variables.multiplexing=true;
+	variables.stmt_multiplexing=false;
 	variables.enforce_autocommit_on_reads=false;
 	variables.query_digests=true;
 	variables.sessions_sort=true;
@@ -445,6 +447,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcasecmp(name,"client_found_rows")) return (int)variables.client_found_rows;
 	if (!strcasecmp(name,"multiplexing")) return (int)variables.multiplexing;
+	if (!strcasecmp(name,"stmt_multiplexing")) return (int)variables.stmt_multiplexing;
 	if (!strcasecmp(name,"enforce_autocommit_on_reads")) return (int)variables.enforce_autocommit_on_reads;
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
@@ -648,6 +651,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"multiplexing")) {
 		return strdup((variables.multiplexing ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"stmt_multiplexing")) {
+		return strdup((variables.stmt_multiplexing ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"enforce_autocommit_on_reads")) {
 		return strdup((variables.enforce_autocommit_on_reads ? "true" : "false"));
@@ -1199,6 +1205,21 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.multiplexing=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"stmt_multiplexing")) {
+/*
+		// FIXME : for now, stmt_multiplexing cannot be enabled
+		// there is no code to handle it
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.stmt_multiplexing=true;
+			return true;
+		}
+*/
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.stmt_multiplexing=false;
 			return true;
 		}
 		return false;
@@ -1948,6 +1969,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
+	mysql_thread___stmt_multiplexing=(bool)GloMTH->get_variable_int((char *)"stmt_multiplexing");
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
@@ -1983,6 +2005,9 @@ MySQL_Thread::MySQL_Thread() {
 	last_maintenance_time=0;
 	maintenance_loop=true;
 
+	status_variables.stmt_prepare=0;
+	status_variables.stmt_execute=0;
+	status_variables.stmt_close=0;
 	status_variables.queries=0;
 	status_variables.queries_slow=0;
 	status_variables.queries_backends_bytes_sent=0;
@@ -2128,6 +2153,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	{	// Queries filtered rollback
 		pta[0]=(char *)"Com_rollback_filtered";
 		sprintf(buf,"%llu",MyHGM->status.rollback_cnt_filtered);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// stmt prepare
+		pta[0]=(char *)"Com_stmt_prepare";
+		sprintf(buf,"%u",get_total_stmt_prepare());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// stmt execute
+		pta[0]=(char *)"Com_stmt_execute";
+		sprintf(buf,"%u",get_total_stmt_execute());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// stmt prepare
+		pta[0]=(char *)"Com_stmt_close";
+		sprintf(buf,"%u",get_total_stmt_close());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -2349,6 +2392,45 @@ __exit_kill_session:
 		spin_wrunlock(&thr->thread_mutex);
 	}
 	return ret;
+}
+
+unsigned long long MySQL_Threads_Handler::get_total_stmt_prepare() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.stmt_prepare,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_total_stmt_execute() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.stmt_execute,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_total_stmt_close() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.stmt_close,0);
+		}
+	}
+	return q;
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_queries() {

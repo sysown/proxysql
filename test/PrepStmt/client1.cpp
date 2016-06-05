@@ -11,7 +11,8 @@ uint16_t warning_count;
 
 int main() {
 	mysql = mysql_init(NULL);
-	if (!mysql_real_connect(mysql,"127.0.0.1","root","","test",3306,NULL,0)) {
+	if (!mysql_real_connect(mysql,"127.0.0.1","msandbox","msandbox","test",6033,NULL,0)) {
+	//if (!mysql_real_connect(mysql,"127.0.0.1","root","","test",3306,NULL,0)) {
 		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		exit(EXIT_FAILURE);
 	}
@@ -21,7 +22,7 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 	if (mysql_stmt_prepare(stmt, QUERY1, strlen(QUERY1))) {
-		fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt));
+		fprintf(stderr, " mysql_stmt_prepare(), failed: %d,  %s\n" , mysql_errno(mysql), mysql_stmt_error(stmt));
 		exit(EXIT_FAILURE);
 	}
 //	param_count= mysql_stmt_param_count(stmt);

@@ -463,7 +463,8 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 				(*myds)->DSS=STATE_EOF2;
 				break;
 			default:
-				assert(0);
+				//assert(0);
+				break;
 		}
 	}
 	if (len) { *len=size; }
@@ -726,8 +727,27 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	sid++;
 	if (stmt_info->num_params) {
 		for (i=0; i<stmt_info->num_params; i++) {
-
+			generate_pkt_field(true,NULL,NULL,sid,
+				(char *)"", (char *)"", (char *)"", (char *)"", (char *)"",
+				0,0,0,0,0,false,0,NULL);
+			sid++;
 		}
+		generate_pkt_EOF(true,NULL,NULL,sid,0,SERVER_STATUS_AUTOCOMMIT); // FIXME : for now we pass a very broken flag
+		sid++;
+	}
+	if (stmt_info->num_columns) {
+		for (i=0; i<stmt_info->num_params; i++) {
+			MYSQL_FIELD *fd=stmt_info->fields[i];
+			//bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
+			generate_pkt_field(true,NULL,NULL,sid,
+				fd->db,
+				fd->table, fd->org_table,
+				fd->name, fd->org_name,
+				fd->charsetnr, 0, fd->type, fd->flags, fd->decimals, false,0,NULL);
+			sid++;
+		}
+		generate_pkt_EOF(true,NULL,NULL,sid,0,SERVER_STATUS_AUTOCOMMIT); // FIXME : for now we pass a very broken flag
+		sid++;
 	}
 	return true;
 }

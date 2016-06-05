@@ -46,6 +46,7 @@ class MySQL_Connection {
 	struct {
 		unsigned long length;
 		char *ptr;
+		MYSQL_STMT *stmt;
 	} query;
 	char scramble_buff[40];
 	unsigned long long creation_time;
@@ -123,8 +124,13 @@ class MySQL_Connection {
 	int async_select_db(short event);
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, uint8_t nr);
-	int async_query(short event, char *stmt, unsigned long length);
+	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL);
 	int async_ping(short event);
+
+	void stmt_prepare_start();
+	void stmt_prepare_cont(short event);
+
+
 	void async_free_result();
 	bool IsActiveTransaction();
 	bool IsAutoCommit();
