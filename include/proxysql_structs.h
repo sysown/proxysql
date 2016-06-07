@@ -119,6 +119,7 @@ enum session_status {
 	CHANGING_USER_SERVER,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
+	PROCESSING_STMT_EXECUTE,
 	NONE
 };
 
@@ -250,7 +251,7 @@ typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 typedef struct __SQP_query_parser_t SQP_par_t;
 //typedef struct _mysql_server_t mysql_server_t;
-
+typedef struct _stmt_execute_metadata_t stmt_execute_metadata_t;
 #endif /* PROXYSQL_TYPEDEFS */
 
 //#ifdef __cplusplus
@@ -544,6 +545,15 @@ struct _mysql_session_t {
 };
 
 
+struct _stmt_execute_metadata_t {
+	uint32_t stmt_id;
+	uint8_t flags;
+	uint16_t num_params;
+	MYSQL_BIND *binds;
+	my_bool *is_nulls;
+	unsigned long *lengths;
+	void *pkt;
+};
 
 
 

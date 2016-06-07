@@ -118,6 +118,10 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock) {
 }
 
 MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock) {
+	return add_prepared_statement(_h, u, s, q, ql, stmt, -1, -1, -1, lock);
+}
+
+MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock) {
 	MySQL_STMT_Global_info *ret=NULL;
 	uint64_t hash=stmt_compute_hash(_h, u, s, q, ql); // this identifies the prepared statement
 	if (lock) {
@@ -133,6 +137,9 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int
 	} else {
 		// we need to create a new one
 		MySQL_STMT_Global_info *a=new MySQL_STMT_Global_info(next_statement_id,_h,u,s,q,ql,stmt,hash);
+		a->properties.cache_ttl=_cache_ttl;
+		a->properties.timeout=_timeout;
+		a->properties.delay=_delay;
 		// insert it in both maps
 		m.insert(std::make_pair(a->statement_id, a));
 		h.insert(std::make_pair(a->hash, a));
@@ -188,7 +195,8 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char
 	ref_count=0;
 	username=strdup(u);
 	schemaname=strdup(s);
-	query=strdup(q);
+	query=(char *)malloc(ql);
+	memcpy(query,q,ql);
 	query_length=ql;
 	num_params=stmt->param_count;
 	num_columns=stmt->field_count;
@@ -198,6 +206,12 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char
 	} else {
 		compute_hash();
 	}
+
+	// set default properties:
+	properties.cache_ttl=-1;
+	properties.timeout=-1;
+	properties.delay=-1;
+
 	fields=NULL;
 	if (num_columns) {
 		fields=(MYSQL_FIELD **)malloc(num_columns*sizeof(MYSQL_FIELD *));

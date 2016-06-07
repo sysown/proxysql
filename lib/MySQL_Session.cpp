@@ -780,7 +780,6 @@ __get_pkts_from_client:
 							case _MYSQL_COM_CHANGE_USER:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
-							case _MYSQL_COM_STMT_EXECUTE:
 							case _MYSQL_COM_STMT_CLOSE:
 								l_free(pkt.size,pkt.ptr);
 								client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -806,7 +805,7 @@ __get_pkts_from_client:
 									// shortly after, the packets it used to contain the query will be deallocated
 									// Note2 : we call the next function as if it was _MYSQL_COM_QUERY
 									// because the offset will be identical
-									CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,false);
+									CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,true);
 
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
@@ -844,6 +843,66 @@ __get_pkts_from_client:
 										mybe->server_myds->mysql_real_query.init(&pkt);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 									}
+								}
+								break;
+							case _MYSQL_COM_STMT_EXECUTE:
+								if (admin==true) { // admin module will not support prepared statement!!
+									l_free(pkt.size,pkt.ptr);
+									client_myds->setDSS_STATE_QUERY_SENT_NET();
+									client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+									client_myds->DSS=STATE_SLEEP;
+									status=WAITING_CLIENT_DATA;
+									break;
+								} else {
+									// if we reach here, we are not on admin
+									thread->status_variables.stmt_execute++;
+									thread->status_variables.queries++;
+									bool rc_break=false;
+
+									uint32_t stmt_global_id=0;
+									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+									// now we get the statement information
+									MySQL_STMT_Global_info *stmt_info=NULL;
+									if (mysql_thread___stmt_multiplexing) {
+										stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(stmt_global_id);
+									} else {
+										stmt_info=Session_STMT_Manager->find_prepared_statement_by_stmt_id(stmt_global_id);
+									}
+									if (stmt_info==NULL) {
+										// we couldn't find it
+										l_free(pkt.size,pkt.ptr);
+										client_myds->setDSS_STATE_QUERY_SENT_NET();
+										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Prepared statement doesn't exist");
+										client_myds->DSS=STATE_SLEEP;
+										status=WAITING_CLIENT_DATA;
+										break;
+									}
+
+									stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info->num_params);
+									if (stmt_meta==NULL) {
+										l_free(pkt.size,pkt.ptr);
+										client_myds->setDSS_STATE_QUERY_SENT_NET();
+										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Error in prepared statement execution");
+										client_myds->DSS=STATE_SLEEP;
+										status=WAITING_CLIENT_DATA;
+										break;
+									}
+									// else
+
+									CurrentQuery.begin((unsigned char *)stmt_info->query, stmt_info->query_length,false);
+
+									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+									// NOTE: we do not call YET the follow function for STMT_EXECUTE
+									//rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
+									current_hostgroup=stmt_info->hostgroup_id;
+									mybe=find_or_create_backend(current_hostgroup);
+									status=PROCESSING_STMT_EXECUTE;
+									mybe->server_myds->connect_retries_on_failure=0;
+									mybe->server_myds->wait_until=0;
+									mybe->server_myds->killed_at=0;
+									mybe->server_myds->mysql_real_query.init(&pkt);
+									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								}
 								break;
 //							case _MYSQL_COM_STMT_PREPARE:
@@ -1177,7 +1236,11 @@ handler_again:
 										(char *)client_myds->myconn->userinfo->schemaname,
 										(char *)CurrentQuery.QueryPointer,
 										CurrentQuery.QueryLength,
-										CurrentQuery.mysql_stmt);
+										CurrentQuery.mysql_stmt,
+										qpo->cache_ttl,
+										qpo->timeout,
+										qpo->delay,
+										true);
 									stmid=stmt_info->statement_id;
 									//uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 								} else {
@@ -1188,6 +1251,9 @@ handler_again:
 										(char *)CurrentQuery.QueryPointer,
 										CurrentQuery.QueryLength,
 										CurrentQuery.mysql_stmt,
+										qpo->cache_ttl,
+										qpo->timeout,
+										qpo->delay,
 										false);
 									stmid=stmt_info->statement_id;
 								}
@@ -2079,7 +2145,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 	if (prepared) {	// for prepared statement we exit here
-		return false;
+		goto __exit_set_destination_hostgroup;
 	}
 
 	if (mirror==true) { // for mirror session we exit here
@@ -2116,6 +2182,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			return true;
 		}
 	}
+
+__exit_set_destination_hostgroup:
+
 	if ( qpo->destination_hostgroup >= 0 ) {
 		if (transaction_persistent_hostgroup == -1) {
 			current_hostgroup=qpo->destination_hostgroup;

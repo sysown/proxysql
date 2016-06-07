@@ -2158,19 +2158,19 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	}
 	{	// stmt prepare
 		pta[0]=(char *)"Com_stmt_prepare";
-		sprintf(buf,"%u",get_total_stmt_prepare());
+		sprintf(buf,"%llu",get_total_stmt_prepare());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// stmt execute
 		pta[0]=(char *)"Com_stmt_execute";
-		sprintf(buf,"%u",get_total_stmt_execute());
+		sprintf(buf,"%llu",get_total_stmt_execute());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// stmt prepare
 		pta[0]=(char *)"Com_stmt_close";
-		sprintf(buf,"%u",get_total_stmt_close());
+		sprintf(buf,"%llu",get_total_stmt_close());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
