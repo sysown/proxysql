@@ -241,8 +241,9 @@ MySQL_Session::~MySQL_Session() {
 	reset_all_backends();
 	delete mybes;
 	if (default_schema) {
-		int s=strlen(default_schema);
-		l_free(s+1,default_schema);
+//		int s=strlen(default_schema);
+//		l_free(s+1,default_schema);
+		free(default_schema);
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
