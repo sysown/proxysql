@@ -165,6 +165,7 @@ class MySQL_Thread
 		unsigned long long queries_slow;
 		unsigned long long queries_backends_bytes_sent;
 		unsigned long long queries_backends_bytes_recv;
+		unsigned int active_transactions;
 	} status_variables;
 
 
@@ -348,6 +349,7 @@ class MySQL_Threads_Handler
 	unsigned long long get_slow_queries();
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
+	unsigned int get_active_transations();
 	iface_info *MLM_find_iface_from_fd(int fd) {
 		return MLM->find_iface_from_fd(fd);
 	}

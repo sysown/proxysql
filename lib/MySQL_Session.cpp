@@ -566,6 +566,8 @@ int MySQL_Session::handler() {
 	unsigned int j;
 	unsigned char c;
 
+	active_transactions=NumActiveTransactions();
+
 //	FIXME: Sessions without frontend are an ugly hack
 	if (session_fast_forward==false) {
 	if (client_myds==NULL) {

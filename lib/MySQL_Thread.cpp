@@ -1854,6 +1854,7 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 
 void MySQL_Thread::process_all_sessions() {
 	unsigned int n;
+	unsigned int total_active_transactions_=0;
 	int rc;
 	bool sess_sort=mysql_thread___sessions_sort;
 	if (sess_sort && mysql_sessions->len > 3) {
@@ -1907,6 +1908,7 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
+					total_active_transactions_+=sess->active_transactions;
 					if (rc==-1 || sess->killed==true) {
 						unregister_session(n);
 						n--;
@@ -1924,6 +1926,9 @@ void MySQL_Thread::process_all_sessions() {
 			}
 		}
 	}
+	unsigned int total_active_transactions_tmp;
+	total_active_transactions_tmp=__sync_add_and_fetch(&status_variables.active_transactions,0);
+	__sync_bool_compare_and_swap(&status_variables.active_transactions,total_active_transactions_tmp,total_active_transactions_);
 }
 
 void MySQL_Thread::refresh_variables() {
@@ -2045,6 +2050,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.queries_slow=0;
 	status_variables.queries_backends_bytes_sent=0;
 	status_variables.queries_backends_bytes_recv=0;
+	status_variables.active_transactions=0;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
@@ -2115,6 +2121,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
 	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
+	{	// Active Transactions
+		pta[0]=(char *)"Active_Transactions";
+		sprintf(buf,"%u",get_active_transations());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Connections created
 		pta[0]=(char *)"Client_Connections_aborted";
 		sprintf(buf,"%lu",MyHGM->status.client_connections_aborted);
@@ -2469,6 +2481,19 @@ unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_sent() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_backends_bytes_sent,0);
+		}
+	}
+	return q;
+}
+
+unsigned int MySQL_Threads_Handler::get_active_transations() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.active_transactions,0);
 		}
 	}
 	return q;
