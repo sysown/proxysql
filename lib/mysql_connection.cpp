@@ -173,7 +173,8 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 	if (mysql) {
 		// always decrease the counter
-		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
+		if (ret_mysql)
+			__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
 		async_free_result();
 		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
