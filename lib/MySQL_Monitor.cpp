@@ -313,8 +313,17 @@ again:
 				break;
 			case 1:
 				status= mysql_real_connect_cont(&ret, mysql, mysql_status(event));
-				if (status)
-					next_event(1, status);
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_connect_timeout * 1000) {
+						next_event(1, status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
 				else
 					//NEXT_IMMEDIATE(40);
 					NEXT_IMMEDIATE(3);
@@ -395,7 +404,7 @@ again:
 				}
 				break;
 
-			case 90: // timeout for both ping and replication lag
+			case 90: // timeout for connect , ping or replication lag
 				mysql_error_msg=strdup("timeout");
 				close_mysql(mysql);
 				mysql=NULL;
