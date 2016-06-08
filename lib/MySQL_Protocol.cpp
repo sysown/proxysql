@@ -1337,7 +1337,7 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 		free(buffer);
 		buffer=NULL;
 	}
-	myds->pkt_sid=sid-1;
+	if (myds) myds->pkt_sid=sid-1;
 }
 
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {

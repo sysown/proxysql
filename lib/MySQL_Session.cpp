@@ -720,7 +720,8 @@ __get_pkts_from_client:
 											newsess->client_myds->DSS=STATE_SLEEP;
 											newsess->client_myds->sess=newsess;
 											newsess->client_myds->myds_type=MYDS_FRONTEND;
-											newsess->client_myds->PSarrayOUT= new PtrSizeArray();;
+											newsess->client_myds->PSarrayOUT= new PtrSizeArray();
+											newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
 											thread->register_session(newsess);
 											newsess->status=WAITING_CLIENT_DATA;
 											MySQL_Connection *myconn=new MySQL_Connection;
