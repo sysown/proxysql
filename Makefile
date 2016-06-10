@@ -23,11 +23,11 @@ build_deps:
 	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib
-build_lib:
+build_lib: build_deps
 	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src
-build_src:
+build_src: build_deps
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_debug
