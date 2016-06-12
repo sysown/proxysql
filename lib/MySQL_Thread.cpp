@@ -1567,7 +1567,10 @@ void MySQL_Thread::run() {
 	while (shutdown==0) {
 
 	int num_idles;
-	if (processing_idles==false &&  (last_processing_idles < curtime-mysql_thread___ping_interval_server_msec*1000/10) ) {
+	if (processing_idles==true &&	(last_processing_idles < curtime-mysql_thread___ping_timeout_server*1000)) {
+		processing_idles=false;
+	}
+	if (processing_idles==false &&  (last_processing_idles < curtime-mysql_thread___ping_interval_server_msec*1000) ) {
 		int i;
 		num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server_msec*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 		for (i=0; i<num_idles; i++) {
@@ -1609,27 +1612,6 @@ void MySQL_Thread::run() {
 		last_processing_idles=curtime;
 	}
 
-	if (processing_idles==true &&	(last_processing_idles < curtime-3*mysql_thread___ping_timeout_server*1000)) {
-		processing_idles=false;
-/*
-		int i;
-		for (i=0; i<num_idles; i++) {
-			MySQL_Data_Stream *myds;
-			myds=my_idle_myds[i];
-			if (myds->myconn) {
-				MyHGM->destroy_MyConn_from_pool(myds->myconn);
-				myds->myconn=NULL;
-				if (myds->fd) {
-					myds->shut_hard();
-//					shutdown(myds->fd,SHUT_RDWR);
-//					close(myds->fd);
-					myds->fd=0;
-          mypolls.remove_index_fast(myds->poll_fds_idx);
-				}
-			}
-		}
-*/
-	}
 
 		for (n = 0; n < mypolls.len; n++) {
 			MySQL_Data_Stream *myds=NULL;
