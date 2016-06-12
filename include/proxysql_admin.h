@@ -101,7 +101,7 @@ class ProxySQL_Admin {
 	void add_admin_users();
 	void __refresh_users();
 
-	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
+	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 
@@ -109,7 +109,7 @@ class ProxySQL_Admin {
 	char *get_variable(char *name);
 	bool set_variable(char *name, char *value);
 	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
-	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
+	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
 

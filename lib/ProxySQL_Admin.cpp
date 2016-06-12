@@ -92,6 +92,8 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
+#define ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES "CREATE TABLE runtime_global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
 #define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , UNIQUE (reader_hostgroup))"
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
@@ -1218,8 +1220,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_global();
 		if (admin) {
 			if (dump_global_variables) {
-				flush_admin_variables___runtime_to_database(admindb, false, false, false);
-				flush_mysql_variables___runtime_to_database(admindb, false, false, false);
+				admindb->execute("DELETE FROM runtime_global_variables");	// extra
+				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
+				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
 			}
 			if (runtime_mysql_servers) {
 				mysql_servers_wrlock();
@@ -2358,6 +2361,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_admin,"runtime_global_variables", ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"runtime_scheduler", ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER);
@@ -2678,7 +2682,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 	if (resultset) delete resultset;
 }
 
-void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty) {
+void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
 		char *error=NULL;
@@ -2707,7 +2711,11 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MySQL variables from global_variables\n");
 		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mysql-%'");
 	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
+	}
 	char *a;
+	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
   if (replace) {
     a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
   } else {
@@ -2716,15 +2724,22 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
   int l=strlen(a)+200;
 	GloMTH->wrlock();
 	char **varnames=GloMTH->get_variables_list();
-  char *query=(char *)malloc(l);
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMTH->get_variable(varnames[i]);
+		l+=( varnames[i] ? strlen(varnames[i]) : 6);
+		l+=( val ? strlen(val) : 6);
+		char *query=(char *)malloc(l);
 		sprintf(query, a, varnames[i], val);
+		if (runtime) {
+			db->execute(query);
+			sprintf(query, b, varnames[i], val);
+		}
 		db->execute(query);
-		free(val);
+		if (val)
+			free(val);
+		free(query);
 	}
 	GloMTH->wrunlock();
-	free(query);
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
@@ -3218,7 +3233,7 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	delete resultset;
 }
 
-void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty) {
+void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
 		char *error=NULL;
@@ -3247,7 +3262,11 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting ADMIN variables from global_variables\n");
 		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'admin-%'");
 	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'");
+	}
 	char *a;
+	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"admin-%s\",\"%s\")";
   if (replace) {
     a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"admin-%s\",\"%s\")";
   } else {
@@ -3256,14 +3275,21 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
   int l=strlen(a)+200;
 
 	char **varnames=get_variables_list();
-  char *query=(char *)malloc(l);
 	for (int i=0; varnames[i]; i++) {
 		char *val=get_variable(varnames[i]);
+		l+=( varnames[i] ? strlen(varnames[i]) : 6);
+		l+=( val ? strlen(val) : 6);
+		char *query=(char *)malloc(l);
 		sprintf(query, a, varnames[i], val);
 		db->execute(query);
-		free(val);
+		if (runtime) {
+			sprintf(query, b, varnames[i], val);
+			db->execute(query);
+		}
+		if (val)
+			free(val);
+		free(query);
 	}
-	free(query);
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
