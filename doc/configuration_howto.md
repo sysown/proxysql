@@ -1,10 +1,9 @@
 # Mini HOW TO on ProxySQL Configuration
 
 This mini HOWTO described how to configure some of the component of ProxySQL step by step.
-This is not an complete guide.
+_This is not an complete guide_.
 
-
-We assume you are already aware og ProxySQL architecture, and this HOWTO assumes that ProxySQL is being reconfigured using the stardard SQL admin interface, available by default connecting to port 6032 using trivial (changable) credentials:
+We assume you are already aware of ProxySQL architecture, and this HOWTO assumes that ProxySQL is being reconfigured using the stardard SQL admin interface, available by default connecting to port 6032 using trivial (changable) credentials:
 
 ```
 $ mysql -u admin -padmin -h 127.0.0.1 -P6032
@@ -26,6 +25,7 @@ Empty set (0.00 sec)
 ```
 
 ### Add backends
+
 For this demo, I started 3 mysql servers locally using MySQL Sandbox.
 Let’s add them to ProxySQL.
 
@@ -52,12 +52,16 @@ Admin> SELECT * FROM mysql_servers;
 
 All looks good so far.
 
+> NOTE: By default, MySQL sandbox will set read_only = 0 on slaves. Set `set global read_only = 1` on the slaves.
+
+
 ### Configure monitoring
 
 ProxySQL constantly monitors the servers it has configured. To do so, it is important to configure some variables.
 Let’s configure them.
 
 Add the credentials of the users required to monitor the backend (the user needs to be already created in mysql server):
+
 ``` sql
 Admin> UPDATE global_variables SET variable_value='monitor' WHERE variable_name='mysql-monitor_username';
 Query OK, 1 row affected (0.00 sec)
@@ -65,7 +69,9 @@ Query OK, 1 row affected (0.00 sec)
 Admin> UPDATE global_variables SET variable_value='monitor' WHERE variable_name='mysql-monitor_password';
 Query OK, 1 row affected (0.00 sec)
 ```
+
 Then we configure the various monitoring intervals:
+
 ``` sql
 Admin> UPDATE global_variables SET variable_value='2000' WHERE variable_name IN ('mysql-monitor_connect_interval','mysql-monitor_ping_interval','mysql-monitor_read_only_interval');
 Query OK, 3 rows affected (0.00 sec)
@@ -107,7 +113,7 @@ Admin> SAVE MYSQL VARIABLES TO DISK;
 Query OK, 54 rows affected (0.02 sec)
 ```
 
-### check health of backends
+### Backend's health check
 
 Now, let’s see if ProxySQL is able to communicate with these hosts.
 ProxySQL has several tables where stores monitoring information.
@@ -400,16 +406,23 @@ It seems it worked, and not surprisingly the query was sent to the server listen
 
 Now we can try some "benchmark" to verify that ProxySQL is functional.
 
-Assuming you already created sysbench tables, you can run a load test using:
+Assuming you already created sysbench table, you can run a load test using:
+
 ```
-vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --num-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6032 run
+vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --num-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
 
 [ output omitted ]
 ```
 
 All run correctly through ProxySQL . Does ProxySQL exports metrics about what was running? Yes...
 
+> For older versions of sysbench, `report-interval` should be removed and `--db-ps-mode=disable` added.
 
+```
+sysbench --num-threads=4 --max-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 --db-ps-mode=disable run
+
+[ output omitted ]
+```
 
 
 ## ProxySQL Statistics
@@ -623,7 +636,7 @@ Query OK, 0 rows affected (0.00 sec)
 
 And finally we re-execute the sysbench load: 
 ```
-vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --num-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
+vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --max-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
 ```
 
 And let's verify the content of table `stats_mysql_query_digest` :
@@ -686,7 +699,7 @@ Admin> SELECT 1 FROM stats_mysql_query_digest_reset LIMIT 1; -- we reset the cou
 Now, we can run again the load test:
 
 ```
-vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --num-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
+vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --max-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
 ```
 
 We can now verify the content of table `stats_mysql_query_digest` :
@@ -767,7 +780,7 @@ Admin> SELECT 1 FROM stats_mysql_query_digest_reset LIMIT 1;
 ```
 
 ```
-vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --num-requests=0 --max-time=20 --test=tests/db/oltp.lua  --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
+vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --max-requests=0 --max-time=20 --test=tests/db/oltp.lua  --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
 ```
 
 ``` sql
@@ -857,7 +870,7 @@ Admin> SELECT 1 FROM stats_mysql_query_digest_reset LIMIT 1;
 ```
 
 ```
-vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --num-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
+vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --max-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
 ```
 
 And now we can verify:
@@ -952,7 +965,7 @@ Query OK, 0 rows affected (0.00 sec)
 ```
 
 ```
-vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --num-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
+vagrant@ubuntu-14:~/sysbench/sysbench-0.5/sysbench$ ./sysbench --report-interval=5 --num-threads=4 --max-requests=0 --max-time=20 --test=tests/db/oltp.lua --mysql-user='msandbox' --mysql-password='msandbox' --oltp-table-size=10000 --mysql-host=127.0.0.1 --mysql-port=6033 run
 ```
 
 
