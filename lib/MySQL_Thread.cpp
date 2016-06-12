@@ -1766,7 +1766,19 @@ void MySQL_Thread::run() {
 			// check for timeout
 			} else {
 				// check if the FD is valid
-				assert(mypolls.fds[n].revents!=POLLNVAL);
+				if (mypolls.fds[n].revents==POLLNVAL) {
+					// debugging output before assert
+					MySQL_Data_Stream *_myds=mypolls.myds[n];
+					if (_myds) {
+						if (_myds->myconn) {
+							proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, myds->fd, myds->myconn->fd);
+							assert(mypolls.fds[n].revents!=POLLNVAL);
+						}
+					}
+					// if we reached her, we didn't assert() yet
+					proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, myds->fd);
+					assert(mypolls.fds[n].revents!=POLLNVAL);
+				}
 				switch(myds->myds_type) {
 		// Note: this logic that was here was removed completely because we added mariadb client library.
 					case MYDS_LISTENER:
