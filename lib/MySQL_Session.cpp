@@ -1094,7 +1094,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on (%d,%s,%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if (myds->query_retries_on_failure > 0) {
 								myds->query_retries_on_failure--;
