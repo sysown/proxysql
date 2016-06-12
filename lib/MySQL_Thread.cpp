@@ -495,6 +495,37 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.server_capabilities);
 		return strdup(intbuf);
 	}
+	// SSL variables
+	if (!strncasecmp(name,"ssl_",4)) {
+		if (!strcasecmp(name,"ssl_p2s_ca")) {
+			if (variables.ssl_p2s_ca==NULL || strlen(variables.ssl_p2s_ca)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_ca);
+			}
+		}
+		if (!strcasecmp(name,"ssl_p2s_cert")) {
+			if (variables.ssl_p2s_cert==NULL || strlen(variables.ssl_p2s_cert)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_cert);
+			}
+		}
+		if (!strcasecmp(name,"ssl_p2s_key")) {
+			if (variables.ssl_p2s_key==NULL || strlen(variables.ssl_p2s_key)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_key);
+			}
+		}
+		if (!strcasecmp(name,"ssl_p2s_cipher")) {
+			if (variables.ssl_p2s_cipher==NULL || strlen(variables.ssl_p2s_cipher)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_cipher);
+			}
+		}
+	}
 	// monitor variables
 	if (!strncasecmp(name,"monitor_",8)) {
 		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
