@@ -1484,12 +1484,14 @@ handler_again:
 				assert(st==status);
 				unsigned long long curtime=monotonic_time();
 				//mybe->server_myds->myprot.init(&mybe->server_myds, mybe->server_myds->myconn->userinfo, this);
-				if (myds->mypolls==NULL) {
-					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
-				}
 /* */
 				assert(myconn->async_state_machine!=ASYNC_IDLE);
 				rc=myconn->async_connect(myds->revents);
+				if (myds->mypolls==NULL) {
+					// connection yet not in mypolls
+					myds->assign_fd_from_mysql_conn();
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
+				}
 				switch (rc) {
 					case 0:
 						myds->myds_type=MYDS_BACKEND;
