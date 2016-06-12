@@ -137,7 +137,6 @@ static char * admin_variables_names[]= {
   (char *)"mysql_ifaces",
   (char *)"telnet_admin_ifaces",
   (char *)"telnet_stats_ifaces",
-  (char *)"mysql_ifaces",
   (char *)"refresh_interval",
 	(char *)"read_only",
 	(char *)"version",
