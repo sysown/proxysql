@@ -1094,7 +1094,7 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on (%d,%s,%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if (myds->query_retries_on_failure > 0) {
 								myds->query_retries_on_failure--;
@@ -1484,12 +1484,14 @@ handler_again:
 				assert(st==status);
 				unsigned long long curtime=monotonic_time();
 				//mybe->server_myds->myprot.init(&mybe->server_myds, mybe->server_myds->myconn->userinfo, this);
-				if (myds->mypolls==NULL) {
-					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
-				}
 /* */
 				assert(myconn->async_state_machine!=ASYNC_IDLE);
 				rc=myconn->async_connect(myds->revents);
+				if (myds->mypolls==NULL) {
+					// connection yet not in mypolls
+					myds->assign_fd_from_mysql_conn();
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
+				}
 				switch (rc) {
 					case 0:
 						myds->myds_type=MYDS_BACKEND;
