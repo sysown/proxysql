@@ -74,13 +74,15 @@ bool SQLite3DB::execute(const char *str) {
 
 bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int *affected_rows, SQLite3_result **resultset) {
 	int rc;
-	sqlite3_stmt *statement;
+	sqlite3_stmt *statement=NULL;
 	*error=NULL;
 	bool ret=false;
+	VALGRIND_DISABLE_ERROR_REPORTING;
 	if(sqlite3_prepare_v2(db, str, -1, &statement, 0) != SQLITE_OK) {
 		*error=strdup(sqlite3_errmsg(db));
 		goto __exit_execute_statement;
 	}
+	VALGRIND_ENABLE_ERROR_REPORTING;
 	*cols = sqlite3_column_count(statement);
 	if (*cols==0) { // not a SELECT
 		*resultset=NULL;

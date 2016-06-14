@@ -45,7 +45,15 @@ static void close_mysql(MYSQL *my) {
 	fd+=wb; // dummy, to make compiler happy
 	fd-=wb; // dummy, to make compiler happy
 	mysql_close_no_command(my);
-	shutdown(fd, SHUT_RDWR);
+	int rc=0;
+	if (my->net.vio) {
+		rc=shutdown(fd, SHUT_RDWR);
+		if (rc==0) {
+			proxy_error("shutdown(): FD=%d , code=%d\n", fd, errno);
+			assert(rc==0);
+		}
+		close(fd);
+	}
 }
 
 
@@ -290,6 +298,7 @@ again:
 			case 0:
 				mysql=mysql_init(NULL);
 				assert(mysql);
+				// FIXME: should we set timeout ?
 				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 				if (use_ssl) {
 					mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
@@ -408,6 +417,7 @@ again:
 				mysql_error_msg=strdup("timeout");
 				close_mysql(mysql);
 				mysql=NULL;
+				return -1;
 				break;
 
 			case 10:
@@ -1211,7 +1221,7 @@ void * MySQL_Monitor::monitor_read_only() {
 
 __end_monitor_read_only_loop:
 		if (sds) {
-			sqlite3_stmt *statement;
+			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
@@ -1238,7 +1248,7 @@ __end_monitor_read_only_loop:
 				if (mmsd->result) {
 					unsigned int num_fields;
 					unsigned int k;
-					MYSQL_FIELD *fields;
+					MYSQL_FIELD *fields=NULL;
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);

@@ -1199,7 +1199,14 @@ void MySQL_Connection::close_mysql() {
 		int fd=mysql->net.fd;
 		send(fd, buff, 5, MSG_NOSIGNAL);
 	}
+	int rc=0;
 	mysql_close_no_command(mysql);
-	shutdown(fd, SHUT_RDWR);
-	close(fd);
+	if (mysql->net.vio) {
+		rc=shutdown(fd, SHUT_RDWR);
+		if (rc) {
+			proxy_error("shutdown(): FD=%d , code=%d\n", fd, errno);
+			assert(rc==0);
+		}
+		close(fd);
+	}
 }
