@@ -280,7 +280,11 @@ class MySQL_Monitor_State_Data {
 		if (hostname) {
 			free(hostname);
 		}
-		assert(mysql==NULL); // if mysql is not NULL, there is a bug
+		//assert(mysql==NULL); // if mysql is not NULL, there is a bug
+		if (mysql) {
+			close_mysql(mysql);
+			mysql=NULL;
+		}
 		if (mysql_error_msg) {
 			free(mysql_error_msg);
 		}
