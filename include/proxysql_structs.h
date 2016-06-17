@@ -3,6 +3,9 @@
 #define PKT_PARSED 0
 #define PKT_ERROR 1
 
+#ifdef max_allowed_packet
+#undef max_allowed_packet
+#endif
 
 
 
@@ -697,6 +700,7 @@ GOptionEntry cmd_option_entries[] =
 MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
+__thread int mysql_thread___max_allowed_packet;
 __thread int mysql_thread___max_transaction_time;
 __thread int mysql_thread___threshold_query_length;
 __thread int mysql_thread___threshold_resultset_size;
@@ -772,6 +776,7 @@ extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
+extern __thread int mysql_thread___max_allowed_packet;
 extern __thread int mysql_thread___max_transaction_time;
 extern __thread int mysql_thread___threshold_query_length;
 extern __thread int mysql_thread___threshold_resultset_size;

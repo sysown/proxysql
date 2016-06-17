@@ -1146,6 +1146,9 @@ handler_again:
 									}
 									return -1;
 									break;
+								case 1153: // ER_NET_PACKET_TOO_LARGE
+									proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+									break;
 								default:
 									break; // continue normally
 							}
@@ -1863,9 +1866,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		CurrentQuery.begin((unsigned char *)pkt->ptr,pkt->size,true);
 		delete qpo->new_query;
 	}
+
+	if (pkt->size > (unsigned int) mysql_thread___max_allowed_packet) {
+		// ER_NET_PACKET_TOO_LARGE
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01",(char *)"Got a packet bigger than 'max_allowed_packet' bytes");
+		l_free(pkt->size,pkt->ptr);
+		RequestEnd(NULL);
+		return true;
+	}
+
 	if (qpo->error_msg) {
 		client_myds->DSS=STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"#42000",qpo->error_msg);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
 //		client_myds->DSS=STATE_SLEEP;
 //		status=WAITING_CLIENT_DATA;
 		l_free(pkt->size,pkt->ptr);
