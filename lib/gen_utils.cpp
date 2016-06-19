@@ -60,6 +60,22 @@ char *trim_spaces_in_place(char *str)
 	return str;
 }
 
+
+char *trim_spaces_and_quotes_in_place(char *str) {
+	char *end;
+	// Trim leading space
+	while(isspace(*str) || *str=='\"' || *str=='\'')
+		str++;
+	if(*str == 0)  // All spaces?
+		return str;
+	// Trim trailing space
+	end = str + strlen(str) - 1;
+	while(end > str && (isspace(*end) || *end=='\"' || *end=='\'')) end--;
+	// Write new null terminator
+	*(end+1) = 0;
+	return str;
+}
+
 #define MIN_ARRAY_LEN	8
 #define MIN_ARRAY_DELETE_RATIO	8
 

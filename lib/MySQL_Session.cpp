@@ -529,8 +529,9 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
-	if ( (pkt->size < 25) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
-		char *name=strndup((char *)pkt->ptr+15,pkt->size-15);
+	if ( (pkt->size < 35) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
+		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
+		char *name=trim_spaces_and_quotes_in_place(unstripped);
 		const CHARSET_INFO * c = proxysql_find_charset_name(name);
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		if (!c) {
@@ -549,7 +550,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		client_myds->DSS=STATE_SLEEP;
 		status=WAITING_CLIENT_DATA;
 		l_free(pkt->size,pkt->ptr);
-		free(name);
+		free(unstripped);
 		return true;
 	}
 
