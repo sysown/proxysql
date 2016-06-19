@@ -210,6 +210,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"ssl_p2s_cipher",
 	(char *)"stacksize",
 	(char *)"threads",
+	(char *)"init_connect",
 	NULL
 };
 
@@ -266,6 +267,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.long_query_time=1000;
+	variables.init_connect=NULL;
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
@@ -406,6 +408,13 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			}
 		}
 	}
+	if (!strcasecmp(name,"init_connect")) {
+		if (variables.init_connect==NULL || strlen(variables.init_connect)==0) {
+			return NULL;
+		} else {
+			return strdup(variables.init_connect);
+		}
+	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
@@ -486,6 +495,13 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
+	if (!strcasecmp(name,"init_connect")) {
+		if (variables.init_connect==NULL || strlen(variables.init_connect)==0) {
+			return NULL;
+		} else {
+			return strdup(variables.init_connect);
+		}
+	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
@@ -1134,9 +1150,19 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 	}
 
+	if (!strcasecmp(name,"init_connect")) {
+		if (variables.init_connect) free(variables.init_connect);
+		variables.init_connect=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.init_connect=strdup(value);
+		}
+		return true;
+	}
+
 	// SSL proxy to server variables
 	if (!strcasecmp(name,"ssl_p2s_ca")) {
-		free(variables.ssl_p2s_ca);
+		if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
 		variables.ssl_p2s_ca=NULL;
 		if (vallen) {
 			if (strcmp(value,"(null)"))
@@ -1145,7 +1171,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 	if (!strcasecmp(name,"ssl_p2s_cert")) {
-		free(variables.ssl_p2s_cert);
+		if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
 		variables.ssl_p2s_cert=NULL;
 		if (vallen) {
 			if (strcmp(value,"(null)"))
@@ -1154,7 +1180,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 	if (!strcasecmp(name,"ssl_p2s_key")) {
-		free(variables.ssl_p2s_key);
+		if (variables.ssl_p2s_key) free(variables.ssl_p2s_key);
 		variables.ssl_p2s_key=NULL;
 		if (vallen) {
 			if (strcmp(value,"(null)"))
@@ -1163,7 +1189,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 	if (!strcasecmp(name,"ssl_p2s_cipher")) {
-		free(variables.ssl_p2s_cipher);
+		if (variables.ssl_p2s_cipher) free(variables.ssl_p2s_cipher);
 		variables.ssl_p2s_cipher=NULL;
 		if (vallen) {
 			if (strcmp(value,"(null)"))
@@ -1447,6 +1473,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
+	if (variables.init_connect) free(variables.init_connect);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
 	if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
@@ -1484,6 +1511,7 @@ MySQL_Thread::~MySQL_Thread() {
 
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
+	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
 	if (mysql_thread___ssl_p2s_ca) { free(mysql_thread___ssl_p2s_ca); mysql_thread___ssl_p2s_ca=NULL; }
 	if (mysql_thread___ssl_p2s_cert) { free(mysql_thread___ssl_p2s_cert); mysql_thread___ssl_p2s_cert=NULL; }
@@ -2020,6 +2048,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
 	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
 
+	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
+	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");
 	if (mysql_thread___server_version) free(mysql_thread___server_version);
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
@@ -2060,6 +2090,7 @@ MySQL_Thread::MySQL_Thread() {
 	last_processing_idles=0;
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___server_version=NULL;
+	mysql_thread___init_connect=NULL;
 	mysql_thread___eventslog_filename=NULL;
 
 	// SSL proxy to server

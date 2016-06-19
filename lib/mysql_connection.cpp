@@ -153,6 +153,8 @@ MySQL_Connection::MySQL_Connection() {
 	options.compression_min_length=0;
 	options.server_version=NULL;
 	options.autocommit=true;
+	options.init_connect=NULL;
+	options.init_connect_sent=false;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -167,6 +169,7 @@ MySQL_Connection::MySQL_Connection() {
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 	if (options.server_version) free(options.server_version);
+	if (options.init_connect) free(options.init_connect);
 	if (userinfo) {
 		delete userinfo;
 		userinfo=NULL;
@@ -1209,4 +1212,55 @@ void MySQL_Connection::close_mysql() {
 		}
 		close(fd);
 	}
+}
+
+
+// this function is identical to async_query() , with the only exception that MyRS should never be set
+int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigned long length) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	if (
+		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+	) {
+		return -1;
+	}
+	switch (async_state_machine) {
+		case ASYNC_QUERY_END:
+			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end
+			return 0;
+			break;
+		case ASYNC_IDLE:
+			set_query(stmt,length);
+			async_state_machine=ASYNC_QUERY_START;
+		default:
+			handler(event);
+			break;
+	}
+	if (MyRS) {
+		// this is a severe mistake, we shouldn't have reach here
+		// for now we do not assert but report the error
+		proxy_error("Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
+	}
+	if (async_state_machine==ASYNC_QUERY_END) {
+		if (mysql_errno(mysql)) {
+			return -1;
+		} else {
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+		}
+	}
+	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
+		// if we reached this point it measn we are processing a multi-statement
+		// and we need to exit to give control to MySQL_Session
+		processing_multi_statement=true;
+		return 2;
+	}
+	if (processing_multi_statement==true) {
+		// we are in the middle of processing a multi-statement
+		return 3;
+	}
+	return 1;
 }

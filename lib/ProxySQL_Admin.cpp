@@ -491,36 +491,46 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 
 	// Get a pointer to the beginnig of var=value entry and split to get var name and value
 	char *set_entry = query_no_space + strlen("SET ");
-	char *untrimmed_var_name;
-	char *var_value;
+	char *untrimmed_var_name=NULL;
+	char *var_value=NULL;
 	c_split_2(set_entry, "=", &untrimmed_var_name, &var_value);
 
 	// Trim spaces from var name to allow writing like 'var = value'
 	char *var_name = trim_spaces_in_place(untrimmed_var_name);
 
+
 	bool run_query = false;
 	// Check if the command tries to set a non-existing variable.
-	if (!is_valid_global_variable(var_name)) {
-		char *err_msg_fmt = (char *) "ERROR: Unknown global variable: '%s'.";
+	if (strcmp(var_name,"mysql-init_connect")==0) {
+		char *err_msg_fmt = (char *) "ERROR: Global variable '%s' is not configurable using SET command. You must run UPDATE global_variables";
 		size_t buff_len = strlen(err_msg_fmt) + strlen(var_name) + 1;
 		char *buff = (char *) malloc(buff_len);
 		snprintf(buff, buff_len, err_msg_fmt, var_name);
-		SPA->send_MySQL_OK(&sess->client_myds->myprot, buff);
+		SPA->send_MySQL_ERR(&sess->client_myds->myprot, buff);
 		free(buff);
 		run_query = false;
 	} else {
-		const char *update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
-		// Computed length is more than needed since it also counts the format modifiers (%s).
-		size_t query_len = strlen(update_format) + strlen(var_name) + strlen(var_value) + 1;
-		char *query = (char *)l_alloc(query_len);
-		snprintf(query, query_len, update_format, var_value, var_name);
+		if (!is_valid_global_variable(var_name)) {
+			char *err_msg_fmt = (char *) "ERROR: Unknown global variable: '%s'.";
+			size_t buff_len = strlen(err_msg_fmt) + strlen(var_name) + 1;
+			char *buff = (char *) malloc(buff_len);
+			snprintf(buff, buff_len, err_msg_fmt, var_name);
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, buff);
+			free(buff);
+			run_query = false;
+		} else {
+			const char *update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			// Computed length is more than needed since it also counts the format modifiers (%s).
+			size_t query_len = strlen(update_format) + strlen(var_name) + strlen(var_value) + 1;
+			char *query = (char *)l_alloc(query_len);
+			snprintf(query, query_len, update_format, var_value, var_name);
 
-		run_query = true;
-		l_free(*ql,*q);
-		*q = query;
-		*ql = strlen(*q) + 1;
+			run_query = true;
+			l_free(*ql,*q);
+			*q = query;
+			*ql = strlen(*q) + 1;
+		}
 	}
-
 	free(var_name);
 	free(var_value);
 	return run_query;

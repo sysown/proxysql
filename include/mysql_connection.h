@@ -39,6 +39,8 @@ class MySQL_Connection {
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
 		unsigned int compression_min_length;
+		char *init_connect;
+		bool init_connect_sent;
 		uint8_t protocol_version;
 		uint8_t charset;
 		bool autocommit;
@@ -123,6 +125,7 @@ class MySQL_Connection {
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, uint8_t nr);
 	int async_query(short event, char *stmt, unsigned long length);
+	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
 	int async_ping(short event);
 	void async_free_result();
 	bool IsActiveTransaction();

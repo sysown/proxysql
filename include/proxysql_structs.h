@@ -116,6 +116,7 @@ enum session_status {
 	CHANGING_AUTOCOMMIT,
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
+	SETTING_INIT_CONNECT,
 	FAST_FORWARD,
 	NONE
 };
@@ -697,6 +698,7 @@ GOptionEntry cmd_option_entries[] =
 MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
+__thread char *mysql_thread___init_connect;
 __thread int mysql_thread___max_transaction_time;
 __thread int mysql_thread___threshold_query_length;
 __thread int mysql_thread___threshold_resultset_size;
@@ -772,6 +774,7 @@ extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
+extern __thread char *mysql_thread___init_connect;
 extern __thread int mysql_thread___max_transaction_time;
 extern __thread int mysql_thread___threshold_query_length;
 extern __thread int mysql_thread___threshold_resultset_size;

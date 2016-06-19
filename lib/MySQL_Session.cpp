@@ -962,6 +962,12 @@ handler_again:
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				// these checks need to be performed only if we connect to a real mysql_server
+				status=PROCESSING_QUERY;
+				mybe->server_myds->max_connect_time=0;
+				// we insert it in mypolls only if not already there
+				if (myds->mypolls==NULL) {
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+				}
 				if (default_hostgroup>=0) {
 					if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
 						if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
@@ -974,6 +980,16 @@ handler_again:
 						}
 					}
 					if (mirror==false) { // do not care about autocommit and charset if mirror
+						if (mybe->server_myds->myconn->options.init_connect_sent==false) {
+							// we needs to set it to true
+							mybe->server_myds->myconn->options.init_connect_sent=true;
+							if (mysql_thread___init_connect) {
+								// we send init connect queries only if set
+								mybe->server_myds->myconn->options.init_connect=strdup(mysql_thread___init_connect);
+								previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(SETTING_INIT_CONNECT);
+							}
+						}
 					if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 						previous_status.push(PROCESSING_QUERY);
 						NEXT_IMMEDIATE(CHANGING_CHARSET);
@@ -994,12 +1010,6 @@ handler_again:
 						}
 					}
 					}
-				}
-				status=PROCESSING_QUERY;
-				mybe->server_myds->max_connect_time=0;
-				// we insert it in mypolls only if not already there
-				if (myds->mypolls==NULL) {
-					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 				}
 
 				if (myconn->async_state_machine==ASYNC_IDLE) {
@@ -1357,6 +1367,62 @@ handler_again:
 							return -1;
 						} else {
 							proxy_warning("Error during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
+								// we won't go back to PROCESSING_QUERY
+							st=previous_status.top();
+							previous_status.pop();
+							char sqlstate[10];
+							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+								myds->destroy_MySQL_Connection_From_Pool(true);
+								myds->fd=0;
+							status=WAITING_CLIENT_DATA;
+							client_myds->DSS=STATE_SLEEP;
+						}
+					} else {
+						// rc==1 , nothing to do for now
+					}
+				}
+			}
+			break;
+
+		case SETTING_INIT_CONNECT:
+			assert(mybe->server_myds->myconn);
+			{
+				MySQL_Data_Stream *myds=mybe->server_myds;
+				MySQL_Connection *myconn=myds->myconn;
+				myds->DSS=STATE_MARIADB_QUERY;
+				enum session_status st=status;
+				if (myds->mypolls==NULL) {
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+				}
+				int rc=myconn->async_send_simple_command(myds->revents,myconn->options.init_connect,strlen(myconn->options.init_connect));
+				if (rc==0) {
+					myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+					st=previous_status.top();
+					previous_status.pop();
+					NEXT_IMMEDIATE(st);
+				} else {
+					if (rc==-1) {
+						// the command failed
+						int myerr=mysql_errno(myconn->mysql);
+						if (myerr > 2000) {
+							bool retry_conn=false;
+							// client error, serious
+							proxy_error("Detected a broken connection while setting INIT CONNECT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+								retry_conn=true;
+							}
+							myds->destroy_MySQL_Connection_From_Pool(false);
+							myds->fd=0;
+							if (retry_conn) {
+								myds->DSS=STATE_NOT_INITIALIZED;
+								//previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
+							}
+							return -1;
+						} else {
+							proxy_warning("Error while setting INIT CONNECT: %d, %s\n", myerr, mysql_error(myconn->mysql));
 								// we won't go back to PROCESSING_QUERY
 							st=previous_status.top();
 							previous_status.pop();
