@@ -160,3 +160,4 @@ bool Proxy_file_regular(const char *);
 
 int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
+char *trim_spaces_and_quotes_in_place(char *str);
