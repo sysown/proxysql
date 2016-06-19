@@ -521,7 +521,7 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 		*ql = strlen(*q) + 1;
 	}
 
-	free(var_name);
+	free(untrimmed_var_name);
 	free(var_value);
 	return run_query;
 }
