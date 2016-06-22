@@ -20,9 +20,10 @@ class MySQL_Connection_userinfo {
 	char *username;
 	char *password;
 	char *schemaname;
+	char *sha1_pass;
 	MySQL_Connection_userinfo();
 	~MySQL_Connection_userinfo();
-	void set(char *, char *, char *);
+	void set(char *, char *, char *, char *);
 	void set(MySQL_Connection_userinfo *);
 	bool set_schemaname(char *, int);
 };

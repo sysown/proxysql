@@ -116,12 +116,14 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
      cg.bt_map.erase(lookup);
 		free(ad->username);
 		free(ad->password);
+		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
 		free(ad->default_schema);
 		free(ad);
    }
 	account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
 	ad->username=strdup(username);
 	ad->password=strdup(password);
+	ad->sha1_pass=NULL;
 	ad->use_ssl=use_ssl;
 	ad->default_hostgroup=default_hostgroup;
 	ad->default_schema=strdup(default_schema);
@@ -158,6 +160,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads) {
 		account_details_t *ado=(account_details_t *)creds_frontends.cred_array->index(i);
 		ad->username=strdup(ado->username);
 		ad->password=strdup(ado->password);
+		ad->sha1_pass=NULL;
 		ad->use_ssl=ado->use_ssl;
 		ad->default_hostgroup=ado->default_hostgroup;
 		ad->default_schema=strdup(ado->default_schema);
@@ -175,6 +178,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads) {
 		account_details_t *ado=(account_details_t *)creds_backends.cred_array->index(i);
 		ad->username=strdup(ado->username);
 		ad->password=strdup(ado->password);
+		ad->sha1_pass=NULL;
 		ad->use_ssl=ado->use_ssl;
 		ad->default_hostgroup=ado->default_hostgroup;
 		ad->default_schema=strdup(ado->default_schema);
@@ -256,8 +260,37 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 		cg.bt_map.erase(lookup);
 		free(ad->username);
 		free(ad->password);
+		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
 		free(ad->default_schema);
 		free(ad);
+		ret=true;
+	}
+	spin_wrunlock(&cg.lock);
+
+	return ret;
+};
+
+bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type usertype, void *sha_pass) {
+	bool ret=false;
+	uint64_t hash1, hash2;
+	SpookyHash *myhash=new SpookyHash();
+	myhash->Init(1,2);
+	myhash->Update(username,strlen(username));
+	myhash->Final(&hash1,&hash2);
+	delete myhash;
+
+	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+
+	spin_wrlock(&cg.lock);
+	btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	lookup = cg.bt_map.find(hash1);
+	if (lookup != cg.bt_map.end()) {
+		account_details_t *ad=lookup->second;
+		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
+		if (sha_pass) {
+			ad->sha1_pass=malloc(SHA_DIGEST_LENGTH);
+			memcpy(ad->sha1_pass,sha_pass,SHA_DIGEST_LENGTH);
+		}
 		ret=true;
 	}
    spin_wrunlock(&cg.lock);
@@ -267,7 +300,7 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 
 
 
-char * MySQL_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections) {
+char * MySQL_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass) {
 	char *ret=NULL;
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
@@ -290,6 +323,12 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 		if (transaction_persistent) *transaction_persistent=ad->transaction_persistent;
 		if (fast_forward) *fast_forward=ad->fast_forward;
 		if (max_connections) *max_connections=ad->max_connections;
+		if (sha1_pass) {
+			if (ad->sha1_pass) {
+				*sha1_pass=malloc(SHA_DIGEST_LENGTH);
+				memcpy(*sha1_pass,ad->sha1_pass,SHA_DIGEST_LENGTH);
+			}
+		}
 	}
 	spin_rdunlock(&cg.lock);
 	return ret;
@@ -310,6 +349,7 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
      	cg.bt_map.erase(lookup);
 			free(ad->username);
 			free(ad->password);
+			if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
 			free(ad);
 		}
 	}

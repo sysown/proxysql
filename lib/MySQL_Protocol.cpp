@@ -39,6 +39,21 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 #endif
 
 
+char *sha1_pass_hex(char *sha1_pass) {
+	if (sha1_pass==NULL) return NULL;
+	char *buff=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
+	buff[0]='*';
+	buff[SHA_DIGEST_LENGTH*2+1]='\0';
+	int i;
+	uint8_t a;
+	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
+		memcpy(&a,sha1_pass+i,1);
+		sprintf(buff+1+2*i, "%02x", a);
+	}
+	return buff;
+}
+
+
 double proxy_my_rnd(struct rand_struct *rand_st) {
   rand_st->seed1= (rand_st->seed1*3+rand_st->seed2) % rand_st->max_value;
   rand_st->seed2= (rand_st->seed1+rand_st->seed2+33) % rand_st->max_value;
@@ -110,25 +125,73 @@ void proxy_my_crypt(char *to, const uchar *s1, const uchar *s2, uint len) {
 
 
 
+unsigned char decode_char(char x) {
+	if (x >= '0' && x <= '9')
+		return (x - 0x30);
+	else if (x >= 'A' && x <= 'F')
+		return(x - 0x37);
+	else if (x >= 'a' && x <= 'f')
+		return(x - 0x57);
+	else {
+		proxy_error("Invalid char");
+		return 0;
+	}
+}
 
-void proxy_scramble(char *to, const char *message, const char *password)
-{
-  uint8 hash_stage1[SHA_DIGEST_LENGTH];
-  uint8 hash_stage2[SHA_DIGEST_LENGTH];
 
-  /* Two stage SHA1 hash of the password. */
-  proxy_compute_two_stage_sha1_hash(password, strlen(password), hash_stage1,
-                              hash_stage2);
 
-  /* create crypt string as sha1(message, hash_stage2) */;
-  proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH,
-                          (const char *) hash_stage2, SHA_DIGEST_LENGTH);
-  proxy_my_crypt(to, (const uchar *) to, hash_stage1, SCRAMBLE_LENGTH);
+void unhex_pass(uint8_t *out, const char *in) {
+	int i=0;
+	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
+		// this can be simplified a lot, but leaving like this to make it easy to debug
+		uint8_t c=0, d=0;
+		c=decode_char(in[i*2]);
+		c=(c*16) & 0xF0;
+		d=decode_char(in[i*2+1]);
+		d=d & 0x0F;
+		c+=d;
+		out[i]=c;
+	}
 }
 
 
 
 
+void proxy_scramble(char *to, const char *message, const char *password)
+{
+	uint8 hash_stage1[SHA_DIGEST_LENGTH];
+	uint8 hash_stage2[SHA_DIGEST_LENGTH];
+
+//	if (password[0]=='*') {
+//		// the password is a SHA1(SHA1(real_password))
+//		unhex_pass(hash_stage2,password+1);
+//	} else {
+		/* Two stage SHA1 hash of the password. */
+	proxy_compute_two_stage_sha1_hash(password, strlen(password), hash_stage1, hash_stage2);
+//	}
+	/* create crypt string as sha1(message, hash_stage2) */;
+	proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
+	proxy_my_crypt(to, (const uchar *) to, hash_stage1, SCRAMBLE_LENGTH);
+	return;
+}
+
+
+bool proxy_scramble_sha1(char *pass_reply,  const char *message, const char *sha1_sha1_pass, char *sha1_pass) {
+	bool ret=false;
+	uint8 hash_stage1[SHA_DIGEST_LENGTH];
+	uint8 hash_stage2[SHA_DIGEST_LENGTH];
+	uint8 hash_stage3[SHA_DIGEST_LENGTH];
+	uint8 to[SHA_DIGEST_LENGTH];
+	unhex_pass(hash_stage2,sha1_sha1_pass);
+	proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
+	proxy_my_crypt((char *)hash_stage1,(const uchar *) pass_reply, to, SCRAMBLE_LENGTH);
+	proxy_compute_sha1_hash(hash_stage3, (const char *) hash_stage1, SHA_DIGEST_LENGTH);
+	if (memcmp(hash_stage2,hash_stage3,SHA_DIGEST_LENGTH)==0) {
+		memcpy(sha1_pass,hash_stage1,SHA_DIGEST_LENGTH);
+		ret=true;
+	}
+	return ret;
+}
 
 
 
@@ -1064,7 +1127,8 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	memcpy(pass, pkt, 20);
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
+	void *sha1_pass=NULL;
+	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
 	if (password==NULL) {
 		ret=false;
@@ -1072,14 +1136,30 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 //		if (pass_len==0 && strlen(password)==0) {
 //			ret=true;
 //		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=true;
+			if (password[0]!='*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					ret=true;
+				}
+			} else {
+				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+				if (ret) {
+					if (sha1_pass==NULL) {
+						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+						GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
+						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+						userinfo->sha1_pass=sha1_pass_hex(reply);
+					}
+				}
 			}
 //		}
 //		if (_ret_use_ssl==true) {
 //			ret=false;
 //		}
+	}
+	if (sha1_pass) {
+		free(sha1_pass);
+		sha1_pass=NULL;
 	}
 	return ret;
 }
@@ -1111,7 +1191,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
+	void *sha1_pass=NULL;
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
@@ -1121,9 +1202,27 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=true;
+			if (password[0]!='*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					ret=true;
+				} else {
+					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+					if (ret) {
+						if (sha1_pass==NULL) {
+							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+							if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+							userinfo->sha1_pass=sha1_pass_hex(reply);
+						}
+					}
+					if (sha1_pass==NULL) {
+					// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+						userinfo->sha1_pass=sha1_pass_hex(reply);
+					}
+				}
 			}
 		}
 		if (_ret_use_ssl==true) {
@@ -1151,6 +1250,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		free(password);
 		password=NULL;
 	}
+	if (sha1_pass) {
+		free(sha1_pass);
+		sha1_pass=NULL;
+	}
 
 	return ret;
 }
@@ -1170,6 +1273,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	bool _ret_use_ssl=false;
 
 	memset(pass,0,128);
+	void *sha1_pass=NULL;
 #ifdef DEBUG
 	unsigned char *_ptr=pkt;
 #endif
@@ -1205,7 +1309,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	bool transaction_persistent;
 	bool fast_forward;
 	int max_connections;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections);
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
 	//assert(default_hostgroup>=0);
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->default_schema=default_schema; // just the pointer is passed
@@ -1219,9 +1323,21 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=true;
+			if (password[0]!='*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					ret=true;
+				}
+			} else {
+				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+				if (ret) {
+					if (sha1_pass==NULL) {
+						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+						userinfo->sha1_pass=sha1_pass_hex(reply);
+					}
+				}
 			}
 		}
 		if (_ret_use_ssl==true) {
@@ -1249,7 +1365,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,len); }
 #endif
 
-	if (use_ssl) return true;
+	if (use_ssl) {
+		ret=true;
+		goto __exit_process_pkt_handshake_response;
+	}
 
 	if (ret==true) {
 
@@ -1264,10 +1383,16 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		userinfo->username=strdup((const char *)user);
 		if (pass_len) userinfo->password=strdup((const char *)"");
 	}
+
+__exit_process_pkt_handshake_response:
 	//if (password) free(password);
 	if (password) {
 		free(password);
 		password=NULL;
+	}
+	if (sha1_pass) {
+		free(sha1_pass);
+		sha1_pass=NULL;
 	}
 
 	//l_free(len,pkt);

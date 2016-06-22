@@ -42,6 +42,7 @@ mysql_status(short event, short cont) {
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
 	password=NULL;
+	sha1_pass=NULL;
 	schemaname=NULL;
 	hash=0;
 	//schemaname=strdup(mysql_thread___default_schema);
@@ -50,6 +51,7 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
 	if (password) free(password);
+	if (sha1_pass) free(sha1_pass);
 	if (schemaname) free(schemaname);
 }
 
@@ -89,7 +91,7 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 	return hash;
 }
 
-void MySQL_Connection_userinfo::set(char *u, char *p, char *s) {
+void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (u) {
 		if (username) free(username);
 		username=strdup(u);
@@ -102,11 +104,17 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s) {
 		if (schemaname) free(schemaname);
 		schemaname=strdup(s);
 	}
+	if (sh1) {
+		if (sha1_pass) {
+			free(sha1_pass);
+		}
+		sha1_pass=strdup(sh1);
+	}
 	compute_hash();
 }
 
 void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
-	set(ui->username, ui->password, ui->schemaname);
+	set(ui->username, ui->password, ui->schemaname, ui->sha1_pass);
 }
 
 
@@ -321,10 +329,18 @@ void MySQL_Connection::connect_start() {
 	if (parent->compression)
 		client_flags += CLIENT_COMPRESS;
 	client_flags += CLIENT_MULTI_STATEMENTS; // FIXME: add global variable
+	char *auth_password=NULL;
+	if (userinfo->password) {
+		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
+			auth_password=userinfo->sha1_pass;
+		} else {
+			auth_password=userinfo->password;
+		}
+	}
 	if (parent->port) {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, client_flags);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, userinfo->password, userinfo->schemaname, parent->port, parent->address, client_flags);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
 }
@@ -338,7 +354,15 @@ void MySQL_Connection::change_user_start() {
 	PROXY_TRACE();
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui=myds->sess->client_myds->myconn->userinfo;
-	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, _ui->password, _ui->schemaname);
+	char *auth_password=NULL;
+	if (userinfo->password) {
+		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
+			auth_password=userinfo->sha1_pass;
+		} else {
+			auth_password=userinfo->password;
+		}
+	}
+	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
 }
 
 void MySQL_Connection::change_user_cont(short event) {
