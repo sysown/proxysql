@@ -1147,9 +1147,9 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 					if (sha1_pass==NULL) {
 						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 						GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
-						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-						userinfo->sha1_pass=sha1_pass_hex(reply);
 					}
+					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex(reply);
 				}
 			}
 //		}
@@ -1212,13 +1212,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 						if (sha1_pass==NULL) {
 							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
-							if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-							userinfo->sha1_pass=sha1_pass_hex(reply);
 						}
-					}
-					if (sha1_pass==NULL) {
-					// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
 						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
 						userinfo->sha1_pass=sha1_pass_hex(reply);
 					}
@@ -1334,8 +1328,9 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 					if (sha1_pass==NULL) {
 						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
-						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-						userinfo->sha1_pass=sha1_pass_hex(reply);
+					}
+					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex(reply);
 					}
 				}
 			}
@@ -1345,7 +1340,6 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			// it means that a client is required to use SSL , but it is not
 			ret=false;
 		}
-	}
 	}
   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
             (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));

@@ -162,9 +162,11 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	ad->sha1_pass=NULL;
 	if (strlen(password)) {
 		if (password[0]=='*') { // password is sha1(sha1(real_password))
-			if (strcmp(password,oldpass)==0) { // pass is unchanged
-				ad->sha1_pass=malloc(SHA_DIGEST_LENGTH);
-				memcpy(ad->sha1_pass,sha1_pass,SHA_DIGEST_LENGTH);
+			if (oldpass) {
+				if (strcmp(password,oldpass)==0) { // pass is unchanged
+					ad->sha1_pass=malloc(SHA_DIGEST_LENGTH);
+					memcpy(ad->sha1_pass,sha1_pass,SHA_DIGEST_LENGTH);
+				}
 			}
 		}
 	}
