@@ -3521,9 +3521,13 @@ void ProxySQL_Admin::__refresh_users() {
 	__delete_inactive_users(USERNAME_BACKEND);
 	__delete_inactive_users(USERNAME_FRONTEND);
 	//add_default_user((char *)"admin",(char *)"admin");
+	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
+	GloMyAuth->set_all_inactive(USERNAME_FRONTEND);
 	add_admin_users();
 	__add_active_users(USERNAME_BACKEND);
 	__add_active_users(USERNAME_FRONTEND);
+	GloMyAuth->remove_inactives(USERNAME_BACKEND);
+	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
 	set_variable((char *)"admin_credentials",(char *)"");
 }
 

@@ -20,6 +20,7 @@ typedef struct _account_details_t {
 	int num_connections_used;
 	bool __frontend;	// this is used only during the dump
 	bool __backend;	// this is used only during the dump
+	bool __active;
 } account_details_t;
 
 #ifdef DEBUG
@@ -56,13 +57,15 @@ class MySQL_Authentication {
 	MySQL_Authentication();
 	~MySQL_Authentication();
 	bool add(char *username, char *password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections);
-	bool del(char *username, enum cred_username_type usertype);
+	bool del(char *username, enum cred_username_type usertype, bool set_lock=true);
 	bool reset();
 	void print_version();
 	char * lookup(char *username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass);
 	int dump_all_users(account_details_t ***);
 	int increase_frontend_user_connections(char *username);
 	void decrease_frontend_user_connections(char *username);
+	void set_all_inactive(enum cred_username_type usertype);
+	void remove_inactives(enum cred_username_type usertype);
 	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
 //	void rdlock();
 //	void rdunlock();
