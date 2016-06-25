@@ -440,11 +440,12 @@ void ProxySQL_Main_init_phase3___start_all() {
 		GloMTH->start_listeners();
 		std::cerr << "Main phase3 : MySQL Threads Handler listeners started in ";
 	}
-	{
-		cpu_timer t;
-		ProxySQL_Main_init_MySQL_Monitor_module();
-		std::cerr << "Main phase3 : MySQL Monitor initialized in ";
-	}
+	if (GloVars.global.monitor==true)
+		{
+			cpu_timer t;
+			ProxySQL_Main_init_MySQL_Monitor_module();
+			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
+		}
 }
 
 
