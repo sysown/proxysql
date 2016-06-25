@@ -1227,7 +1227,6 @@ void MySQL_Connection::close_mysql() {
 		send(fd, buff, 5, MSG_NOSIGNAL);
 	}
 	int rc=0;
-	mysql_close_no_command(mysql);
 	if (mysql->net.vio) {
 		rc=shutdown(fd, SHUT_RDWR);
 		if (rc) {
@@ -1236,6 +1235,7 @@ void MySQL_Connection::close_mysql() {
 		}
 		close(fd);
 	}
+	mysql_close_no_command(mysql);
 }
 
 
