@@ -7,7 +7,7 @@
 #define QUERY1	"SELECT ?"
 #define NUMPREP	100000
 #define NUMPRO	1000
-#define NTHREADS	40
+#define NTHREADS	8
 
 int shutdown_test=0;
 

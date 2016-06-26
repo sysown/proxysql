@@ -230,13 +230,16 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 	pthread_mutex_unlock(&mutex);
 }
 
+/*
 enum MySQL_Monitor_State_Data_Task_Type {
 	MON_CONNECT,
 	MON_PING,
 	MON_READ_ONLY,
 	MON_REPLICATION_LAG
 };
+*/
 
+/*
 class MySQL_Monitor_State_Data {
 	public:
 	MySQL_Monitor_State_Data_Task_Type task_id;
@@ -257,7 +260,8 @@ class MySQL_Monitor_State_Data {
 	MYSQL_ROW *row;
 	unsigned int repl_lag;
 	unsigned int hostgroup_id;
-	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0) {
+*/
+MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl) {
 		task_id=MON_CONNECT;
 		mysql=NULL;
 		result=NULL;
@@ -270,8 +274,9 @@ class MySQL_Monitor_State_Data {
 		use_ssl=_use_ssl;
 		ST=0;
 		ev_mysql=NULL;
-	}
-	~MySQL_Monitor_State_Data() {
+	};
+
+MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 		if (hostname) {
 			free(hostname);
 		}
@@ -284,13 +289,14 @@ class MySQL_Monitor_State_Data {
 			free(mysql_error_msg);
 		}
 	}
-	void unregister() {
+void MySQL_Monitor_State_Data::unregister() {
 		if (ev_mysql) {
 			event_del(ev_mysql);
 			event_free(ev_mysql);
 		}
 	}
-	int handler(int fd, short event) {
+
+int MySQL_Monitor_State_Data::handler(int fd, short event) {
 		int status;
 again:
 		switch (ST) {
@@ -611,7 +617,7 @@ again:
 		}
 		return 0;
 	}
-	void next_event(int new_st, int status) {
+void MySQL_Monitor_State_Data::next_event(int new_st, int status) {
 		short wait_event= 0;
 		struct timeval tv, *ptv;
 		int fd;
@@ -641,7 +647,6 @@ again:
 		event_add(ev_mysql, ptv);
 		ST= new_st;
 	}
-};
 
 
 static void
@@ -1148,6 +1153,9 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
+	unsigned int num_fields=0;
+	unsigned int k=0;
+	MYSQL_FIELD *fields=NULL;
 	while (shutdown==false) {
 
 		unsigned int glover;
@@ -1239,18 +1247,20 @@ __end_monitor_read_only_loop:
 			while (i>0) {
 				i--;
 				int read_only=1; // as a safety mechanism , read_only=1 is the default
-				MySQL_Monitor_State_Data *mmsd=sds[i];
+				MySQL_Monitor_State_Data *mmsd=NULL;
+				mmsd=sds[i];
 				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				if (mmsd->result) {
-					unsigned int num_fields;
-					unsigned int k;
-					MYSQL_FIELD *fields=NULL;
+					num_fields=0;
+					k=0;
+					fields=NULL;
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
+					VALGRIND_DISABLE_ERROR_REPORTING;
 					for(k = 0; k < num_fields; k++) {
 						//if (strcmp("VARIABLE_NAME", fields[k].name)==0) {
 						if (strcmp("Value", fields[k].name)==0) {
@@ -1266,12 +1276,15 @@ __end_monitor_read_only_loop:
 							}
 						}
 					}
+					VALGRIND_ENABLE_ERROR_REPORTING;
 //					if (repl_lag>=0) {
 						rc=sqlite3_bind_int64(statement, 5, read_only); assert(rc==SQLITE_OK);
 //					} else {
 //						rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 //					}
+					VALGRIND_DISABLE_ERROR_REPORTING;
 					mysql_free_result(mmsd->result);
+					VALGRIND_ENABLE_ERROR_REPORTING;
 					mmsd->result=NULL;
 				} else {
 					rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
@@ -1328,6 +1341,10 @@ void * MySQL_Monitor::monitor_replication_lag() {
 	unsigned long long t2;
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
+
+	unsigned int num_fields=0;
+	unsigned int k=0;
+	MYSQL_FIELD *fields=NULL;
 
 	while (shutdown==false) {
 
@@ -1426,9 +1443,9 @@ __end_monitor_replication_lag_loop:
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				if (mmsd->result) {
-					unsigned int num_fields;
-					unsigned int k;
-					MYSQL_FIELD *fields;
+					num_fields=0;
+					k=0;
+					fields=NULL;
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
