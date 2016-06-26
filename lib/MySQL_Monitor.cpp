@@ -1260,7 +1260,6 @@ __end_monitor_read_only_loop:
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
-					VALGRIND_DISABLE_ERROR_REPORTING;
 					for(k = 0; k < num_fields; k++) {
 						//if (strcmp("VARIABLE_NAME", fields[k].name)==0) {
 						if (strcmp("Value", fields[k].name)==0) {
@@ -1276,15 +1275,12 @@ __end_monitor_read_only_loop:
 							}
 						}
 					}
-					VALGRIND_ENABLE_ERROR_REPORTING;
 //					if (repl_lag>=0) {
 						rc=sqlite3_bind_int64(statement, 5, read_only); assert(rc==SQLITE_OK);
 //					} else {
 //						rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 //					}
-					VALGRIND_DISABLE_ERROR_REPORTING;
 					mysql_free_result(mmsd->result);
-					VALGRIND_ENABLE_ERROR_REPORTING;
 					mmsd->result=NULL;
 				} else {
 					rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
