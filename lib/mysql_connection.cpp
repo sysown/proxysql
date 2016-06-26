@@ -1216,7 +1216,7 @@ void MySQL_Connection::optimize() {
 // if avoids that a QUIT command stops forever
 // FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if (send_quit) {
+	if ((send_quit) && (mysql->net.vio)) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;
@@ -1226,8 +1226,9 @@ void MySQL_Connection::close_mysql() {
 		int fd=mysql->net.fd;
 		send(fd, buff, 5, MSG_NOSIGNAL);
 	}
-	int rc=0;
+//	int rc=0;
 	mysql_close_no_command(mysql);
+/*
 	if (mysql->net.vio) {
 		rc=shutdown(fd, SHUT_RDWR);
 		if (rc) {
@@ -1236,6 +1237,7 @@ void MySQL_Connection::close_mysql() {
 		}
 		close(fd);
 	}
+*/
 }
 
 

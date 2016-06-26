@@ -36,24 +36,19 @@ static MySQL_Monitor *GloMyMon;
 static void state_machine_handler(int fd, short event, void *arg);
 
 static void close_mysql(MYSQL *my) {
-	char quit_buff[5];
-	memset(quit_buff,0,5);
-	quit_buff[0]=1;
-	quit_buff[4]=1;
-	int fd=my->net.fd;
-	int wb=write(fd,quit_buff,5);
-	fd+=wb; // dummy, to make compiler happy
-	fd-=wb; // dummy, to make compiler happy
-	mysql_close_no_command(my);
-	int rc=0;
 	if (my->net.vio) {
-		rc=shutdown(fd, SHUT_RDWR);
-		if (rc==0) {
-			proxy_error("shutdown(): FD=%d , code=%d\n", fd, errno);
-			assert(rc==0);
-		}
-		close(fd);
+		char buff[5];
+		mysql_hdr myhdr;
+		myhdr.pkt_id=0;
+		myhdr.pkt_length=1;
+		memcpy(buff, &myhdr, sizeof(mysql_hdr));
+		buff[4]=0x01;
+		int fd=my->net.fd;
+		int wb=send(fd, buff, 5, MSG_NOSIGNAL);
+		fd+=wb; // dummy, to make compiler happy
+		fd-=wb; // dummy, to make compiler happy
 	}
+	mysql_close_no_command(my);
 }
 
 
