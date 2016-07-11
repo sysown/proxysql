@@ -529,6 +529,27 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
+	if ( (pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
+		char *idx=NULL;
+		char *p=(char *)pkt->ptr+37;
+		idx=(char *)memchr(p,'=',pkt->size-37);
+		//idx=memchr(pkt->ptr+37,'=',pkt->size-37);
+		if (idx) { // we found =
+			PtrSize_t pkt_2;
+			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			mysql_hdr Hdr;
+			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
+			Hdr.pkt_length=pkt_2.size-5;
+			memcpy((char *)pkt_2.ptr+5,(char *)pkt->ptr+5,1);
+			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
+			l_free(pkt->size,pkt->ptr);
+			pkt->size=pkt_2.size;
+			pkt->ptr=pkt_2.ptr;
+		}
+	}
 	if ( (pkt->size < 35) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
 		char *name=trim_spaces_and_quotes_in_place(unstripped);
