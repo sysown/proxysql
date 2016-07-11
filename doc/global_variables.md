@@ -24,6 +24,8 @@ SET admin-version = '1.1.1beta8';
 
 Next, we're going to explain each type of variable in detail.
 
+## Admin Variables
+
 ### `admin-admin_credentials`
 
 This is a colon separated user:password pair, that can be used to authenticate to the admin interface with read-write rights. For read-only credentials that can be used to connect to the admin, see the variable `admin-stats_credentials`. Note that the admin interface listens on a separate port from the main ProxySQL thread. This port is controlled through the variable `admin-mysql_ifaces`.
@@ -35,6 +37,15 @@ Default value: `admin:admin`.
 Semicolon-separated list of hostname:port entries for interfaces on which the admin interface should listen on. Note that this also supports UNIX domain sockets for the cases where the connection is done from an application on the same machine.
 
 Default value: `127.0.0.1:6032`.
+
+Example: `SET admin-mysql_ifaces='127.0.0.1:6032;/tmp/proxysql_admin.sock'`
+
+### `admin-read_only`
+
+When this variable is set to true and loaded at runtime, the Admin module does not accept write anymore. This is useful to ensure that ProxySQL is not reconfigured.
+When `admin-read_only=true`, the only way to revert it to false at runtime (and make the Admin module writable again) is to run the command `PROXYSQL READWRITE`.
+
+Default value: `false`
 
 ### `admin-refresh_interval`
 
@@ -57,6 +68,18 @@ Not currently used (planned usage in a future version).
 ### `admin-telnet_stats_ifaces`
 
 Not currently used (planned usage in a future version).
+
+### `admin-version`
+
+This variable displays ProxySQL version. This variable is read only.
+
+## MySQL Variables
+
+### `mysql-client_found_rows`
+
+When set to `true`, client flag `CLIENT_FOUND_ROWS` is set when connecting to MySQL backends.
+
+Default value: `true`
 
 ### `mysql-commands_stats`
 
@@ -90,9 +113,25 @@ The timeout for connecting to a backend server from the proxy. When this timeout
 
 Default value: `10000` (miliseconds, the equivalent of 10 seconds)
 
+### `mysql-connection_max_age_ms`
+
+When `mysql-connection_max_age_ms` is set to a value greater than 0, inactive connections in the connection pool (therefore not currently used by any session) are closed if they were created more than `mysql-connection_max_age_ms` milliseconds ago. By default, connections aren't closed based on their age.
+
+Default value: 0 (milliseconds)
+
 ### `mysql-default_charset`
 
-The default server charset to be used in the communication with the MySQL client.
+The default server charset to be used in the communication with the MySQL clients. Note that this is the defult for client connections, not for backend connections.
+
+Default value: `utf8`
+
+### `mysql-default_max_latency_ms`
+
+ProxySQL uses a mechanism to automatically ignore hosts if their latency is excessive. Note that hosts are not disabled, but only ignored: in other words, ProxySQL will prefer hosts with a smaller latency. It is possible to configure the maximum latency for each backend from `mysql_users` table, column `max_latency_ms`. If `mysql_users`.`max_latency_ms` is 0, the default value `mysql-default_max_latency_ms` applies.
+
+Default: 1000 (millisecond)
+
+Note: due to a limitation in SSL implementation, it is recommended to increase `mysql-default_max_latency_ms` if using SSL.
 
 ### `mysql-default_query_delay`
 
@@ -112,9 +151,27 @@ Not used for now.
 
 ### `mysql-default_schema`
 
-The default schema to be used in conjunction with incoming MySQL client connections which do not specify a schema name.
+The default schema to be used for incoming MySQL client connections which do not specify a schema name. This is required because ProxySQL doesn't allow connection without a schema.
 
 Default value: `information_schema`
+
+### `mysql-enforce_autocommit_on_reads`
+
+ProxySQL tracks the status of `autocommit` as specified by the client, and ensures that `autocommit` is set correct on backend connections. This implementation is problematic if a client starts a transaction using autocommit, and read/write split is implemented via query rules. In fact, if a read is sent to a slave and ProxySQL sets `autocommit=0` on slave, this will result in 2 transactions (one on master and one on slave). To prevent this to happen, if `mysql-enforce_autocommit_on_reads=false` (the default), ProxySQL won't change the value of `autocommit` on backend connections for `SELECT` stataments.
+
+Default value: `false`
+
+### `mysql-eventslog_filename`
+
+If this variable is set, ProxySQL will log all traffic to the specified filename. Note that the log file is not a text file, but a binary log with encodided traffic.
+
+Default value: empty string, not set
+
+### `mysql-eventslog_filesize`
+
+This variable specifies the maximum size of files created by ProxySQL logger as specified in `mysql-eventslog_filename`. When the maximum size is reached, the file is rotated.
+
+Default value: 104857600 (100MB)
 
 ### `mysql-free_connections_pct`
 
