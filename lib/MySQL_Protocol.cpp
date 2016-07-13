@@ -1393,6 +1393,18 @@ __exit_process_pkt_handshake_response:
 	return ret;
 }
 
+void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l) {
+	mysql_hdr hdr;
+	hdr.pkt_id=sid;
+	hdr.pkt_length=1+s->length();
+	*l=hdr.pkt_length+sizeof(mysql_hdr);
+	void *pkt=malloc(*l);
+	memcpy(pkt,&hdr,sizeof(mysql_hdr));
+	uint8_t c=_MYSQL_COM_QUERY;
+	memcpy((char *)pkt+4,&c,1);
+	memcpy((char *)pkt+5,s->c_str(),s->length());
+	return pkt;
+}
 
 MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my) {
 	transfer_started=false;

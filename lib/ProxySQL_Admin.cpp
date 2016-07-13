@@ -1,3 +1,8 @@
+#include <iostream>     // std::cout
+#include <algorithm>    // std::sort
+#include <vector>       // std::vector
+#include "re2/re2.h"
+#include "re2/regexp.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -1634,6 +1639,65 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+	{
+		bool rc;
+		rc=RE2::PartialMatch(query_no_space,*(RE2 *)(pa->match_regexes.re[0]));
+		if (rc) {
+			string *new_query=new std::string(query_no_space);
+			RE2::Replace(new_query,(char *)"^(\\w+)\\s+@@(\\w+)\\s*",(char *)"SELECT variable_value AS '@@max_allowed_packet' FROM global_variables WHERE variable_name='mysql-max_allowed_packet'");
+			free(query);
+			query_length=new_query->length()+1;
+			query=(char *)malloc(query_length);
+			memcpy(query,new_query->c_str(),query_length-1);
+			query[query_length-1]='\0';
+			goto __run_query;
+		}
+	}
+	{
+		bool rc;
+		//RE2 *re=(RE2 *)pa->match_regexes.re;
+		rc=RE2::PartialMatch(query_no_space,*(RE2 *)(pa->match_regexes.re[1]));
+		if (rc) {
+			string *new_query=new std::string(query_no_space);
+			//RE2::Replace(new_query,(char *)"-",(char *)"_");
+			RE2::Replace(new_query,(char *)"^(\\w+)  *@@([0-9A-Za-z_-]+) *",(char *)"SELECT variable_value AS '@@\\2' FROM global_variables WHERE variable_name='\\2'");
+			free(query);
+			query_length=new_query->length()+1;
+			query=(char *)malloc(query_length);
+			memcpy(query,new_query->c_str(),query_length-1);
+			query[query_length-1]='\0';
+			goto __run_query;
+		}
+	}
+	{
+		bool rc;
+		rc=RE2::PartialMatch(query_no_space,*(RE2 *)(pa->match_regexes.re[2]));
+		if (rc) {
+			string *new_query=new std::string(query_no_space);
+			RE2::Replace(new_query,(char *)"([Ss][Hh][Oo][Ww]\\s+[Vv][Aa][Rr][Ii][Aa][Bb][Ll][Ee][Ss]\\s+[Ww][Hh][Ee][Rr][Ee])",(char *)"SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE");
+			free(query);
+			query_length=new_query->length()+1;
+			query=(char *)malloc(query_length);
+			memcpy(query,new_query->c_str(),query_length-1);
+			query[query_length-1]='\0';
+			goto __run_query;
+		}
+	}
+	{
+		bool rc;
+		rc=RE2::PartialMatch(query_no_space,*(RE2 *)(pa->match_regexes.re[3]));
+		if (rc) {
+			string *new_query=new std::string(query_no_space);
+			RE2::Replace(new_query,(char *)"([Ss][Hh][Oo][Ww]\\s+[Vv][Aa][Rr][Ii][Aa][Bb][Ll][Ee][Ss]\\s+[Ll][Ii][Kk][Ee])",(char *)"SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE");
+			free(query);
+			query_length=new_query->length()+1;
+			query=(char *)malloc(query_length);
+			memcpy(query,new_query->c_str(),query_length-1);
+			query[query_length-1]='\0';
+			goto __run_query;
+		}
+	}
+
 	if (!strncasecmp("SET ", query_no_space, 4)) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received SET\n");
 		run_query = admin_handler_command_set(query_no_space, query_no_space_length, sess, pa, &query, &query_length);
@@ -2298,6 +2362,16 @@ ProxySQL_Admin::ProxySQL_Admin() {
 #endif /* DEBUG */
 	// create the scheduler
 	scheduler=new ProxySQL_External_Scheduler();
+
+	match_regexes.opt=(re2::RE2::Options *)new re2::RE2::Options(RE2::Quiet);
+	re2::RE2::Options *opt2=(re2::RE2::Options *)match_regexes.opt;
+	opt2->set_case_sensitive(false);
+	//match_regexes.re1=(RE2 *)new RE2("^SELECT @@\\w+ *", *opt2);
+	match_regexes.re=(void **)malloc(sizeof(void *)*10);
+	match_regexes.re[0]=(RE2 *)new RE2("^SELECT\\s+@@max_allowed_packet\\s*", *opt2);
+	match_regexes.re[1]=(RE2 *)new RE2("^SELECT\\s+@@[0-9A-Za-z_-]+\\s*", *opt2);
+	match_regexes.re[2]=(RE2 *)new RE2("SHOW\\s+VARIABLES\\s+WHERE", *opt2);
+	match_regexes.re[3]=(RE2 *)new RE2("SHOW\\s+VARIABLES\\s+LIKE", *opt2);
 };
 
 void ProxySQL_Admin::wrlock() {
@@ -2525,6 +2599,12 @@ void ProxySQL_Admin::admin_shutdown() {
 
 ProxySQL_Admin::~ProxySQL_Admin() {
 	admin_shutdown();
+	delete (RE2 *)match_regexes.re[0];
+	delete (RE2 *)match_regexes.re[1];
+	delete (RE2 *)match_regexes.re[2];
+	delete (RE2 *)match_regexes.re[3];
+	free(match_regexes.re);
+	delete (re2::RE2::Options *)match_regexes.opt;
 };
 
 

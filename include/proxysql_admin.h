@@ -74,6 +74,7 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 	} variables;
 
+
 	ProxySQL_External_Scheduler *scheduler;
 
 	void dump_mysql_collations();
@@ -121,6 +122,12 @@ class ProxySQL_Admin {
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 	public:
+	struct {
+		//re2::RE2::Options *opt;
+		//RE2 *re1;
+		void *opt;
+		void **re;
+	} match_regexes;
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
 	SQLite3DB *admindb;	// in memory
