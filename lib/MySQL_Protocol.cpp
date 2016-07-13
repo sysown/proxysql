@@ -1312,7 +1312,26 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	(*myds)->sess->session_fast_forward=fast_forward;
 	(*myds)->sess->user_max_connections=max_connections;
 	if (password==NULL) {
-		ret=false;
+		// this is a workaround for bug #603
+		if ((*myds)->sess->admin==true) {
+			if (strcmp((const char *)user,mysql_thread___monitor_username)==0) {
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					(*myds)->sess->default_hostgroup=STATS_HOSTGROUP;
+					(*myds)->sess->default_schema=strdup((char *)"main"); // just the pointer is passed
+					(*myds)->sess->schema_locked=false;
+					(*myds)->sess->transaction_persistent=false;
+					(*myds)->sess->session_fast_forward=false;
+					(*myds)->sess->user_max_connections=0;
+					password=l_strdup(mysql_thread___monitor_password);
+				ret=true;
+				}
+			} else {
+				ret=false;
+			}
+		} else {
+			ret=false;
+		}
 	} else {
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;

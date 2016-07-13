@@ -2932,12 +2932,13 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	size_t vallen=strlen(value);
 
 	if (!strcasecmp(name,"admin_credentials")) {
-		// always (re)add monitor user
-		if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
-			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
-			}
-		}
+		// Removing this code due to bug #603
+//		// always (re)add monitor user
+//		if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
+//			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
+//				GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
+//			}
+//		}
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
