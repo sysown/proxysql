@@ -355,6 +355,7 @@ void MySQL_Connection::change_user_start() {
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui=myds->sess->client_myds->myconn->userinfo;
 	char *auth_password=NULL;
+	userinfo->set(_ui);	// fix for bug #605
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
 			auth_password=userinfo->sha1_pass;
