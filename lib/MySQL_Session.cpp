@@ -1749,9 +1749,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		&&
 		( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) || strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 ) // Do not delete this line. See bug #492
 	)	{
-		if (default_hostgroup<0 && admin==true) {
-			if (default_hostgroup==STATS_HOSTGROUP) {
-				stats=true;
+		if (admin==true) {
+			if ( (default_hostgroup<0) || (strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0) ) {
+				if (default_hostgroup==STATS_HOSTGROUP) {
+					stats=true;
+				}
 			}
 		}
 		l_free(pkt->size,pkt->ptr);
