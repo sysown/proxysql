@@ -1180,6 +1180,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_query_digest=false;
 	bool stats_mysql_query_digest_reset=false;
 	bool stats_mysql_global=false;
+	bool stats_mysql_commands_counters=false;
+	bool stats_mysql_query_rules=false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1200,6 +1202,10 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_global=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_connection_pool"))
 		{ stats_mysql_connection_pool=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_commands_counters"))
+		{ stats_mysql_commands_counters=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_query_rules"))
+		{ stats_mysql_query_rules=true; refresh=true; }
 	if (admin) {
 		if (strstr(query_no_space,"global_variables"))
 			{ dump_global_variables=true; refresh=true; }
@@ -1233,6 +1239,10 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_connection_pool();
 		if (stats_mysql_global)
 			stats___mysql_global();
+		if (stats_mysql_query_rules)
+			stats___mysql_query_rules();
+		if (stats_mysql_commands_counters)
+			stats___mysql_commands_counters();
 		if (admin) {
 			if (dump_global_variables) {
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
@@ -2081,8 +2091,8 @@ void *child_mysql(void *arg) {
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 
-	unsigned long oldtime=monotonic_time();
-	unsigned long curtime=monotonic_time();
+//	unsigned long oldtime=monotonic_time(); // removed due to #608
+//	unsigned long curtime=monotonic_time(); // removed due to #608
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -2094,6 +2104,7 @@ void *child_mysql(void *arg) {
 		//rc=poll(fds,nfds,2000);
 		rc=poll(fds,nfds,__sync_fetch_and_add(&__admin_refresh_interval,0));
 		{
+/* code removed from here. See #608
 			//FIXME: cleanup this block
 			curtime=monotonic_time();
 			if (curtime>oldtime+__admin_refresh_interval) {
@@ -2105,6 +2116,7 @@ void *child_mysql(void *arg) {
 				SPA->stats___mysql_commands_counters();
 				pthread_mutex_unlock(&admin_mutex);
 			}
+*/
 		}
 		if (rc == -1) {
 			if (errno == EINTR) {
