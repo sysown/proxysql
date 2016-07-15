@@ -1535,6 +1535,9 @@ bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 void MySQL_ResultSet::buffer_to_PSarrayOut() {
 	if (buffer_used==0)
 		return;	// exit immediately if the buffer is empty
+	if (buffer_used < RESULTSET_BUFLEN/2) {
+		buffer=(unsigned char *)realloc(buffer,buffer_used);
+	}
 	PSarrayOUT->add(buffer,buffer_used);
 	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
 	buffer_used=0;

@@ -319,7 +319,29 @@ void MySQL_Session::writeout() {
 	//if (server_myds) server_myds->set_pollout();
 	if (client_myds) {
 		if (mirror==false) {
-			client_myds->write_to_net_poll();
+			bool runloop=false;
+			int retbytes=client_myds->write_to_net_poll();
+			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+				runloop=true;
+			}
+			while (runloop) {
+				runloop=false; // the default
+				client_myds->array2buffer_full();
+				//nfds_t nfds=1;
+				struct pollfd fds;
+				fds.fd=client_myds->fd;
+				fds.events=POLLOUT;
+				fds.revents=0;
+				int retpoll=poll(&fds, 1, 0);
+				if (retpoll>0) {
+					if (fds.revents==POLLOUT) {
+						retbytes=client_myds->write_to_net_poll();
+						if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+							runloop=true;
+						}
+					}
+				}
+			}
 		}
 	}
 	//if (server_myds && server_myds->net_failure==false) server_myds->write_to_net_poll();
