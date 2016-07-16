@@ -944,8 +944,13 @@ handler_again:
 					set_status(NONE);
 					return -1;
 				} else {
-					if (rc==-1) {
-						proxy_error("Detected a broken connection during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
+					if (rc==-1 || rc==-2) {
+						if (rc==-2) {
+							proxy_error("Ping timeout during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
+						} else { // rc==-1
+							int myerr=mysql_errno(myconn->mysql);
+							proxy_error("Detected a broken connection during ping on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+						}
 						myds->destroy_MySQL_Connection_From_Pool(false);
 						myds->fd=0;
 						delete mybe->server_myds;
