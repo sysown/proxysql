@@ -4571,6 +4571,9 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 						perror("execve()");
 						exit(EXIT_FAILURE);
 					}
+				} else {
+					int status;
+					waitpid(cpid, &status, 0);
 				}
 				free(newargs);
 			}
