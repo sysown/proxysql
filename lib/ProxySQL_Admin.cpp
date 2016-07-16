@@ -4524,6 +4524,15 @@ void ProxySQL_External_Scheduler::update_table(SQLite3_result *resultset) {
 	spin_wrunlock(&rwlock);
 }
 
+// this fuction will be called a s a deatached thread
+void * waitpid_thread(void *arg) {
+	pid_t *cpid_ptr=(pid_t *)arg;
+	int status;
+	waitpid(*cpid_ptr, &status, 0);
+	free(cpid_ptr);
+	return NULL;
+}
+
 unsigned long long ProxySQL_External_Scheduler::run_once() {
 	Scheduler_Row *sr=NULL;
 	unsigned long long curtime=monotonic_time();
@@ -4572,8 +4581,17 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 						exit(EXIT_FAILURE);
 					}
 				} else {
-					int status;
-					waitpid(cpid, &status, 0);
+					pthread_attr_t attr;
+					pthread_attr_init(&attr);
+					pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+					pthread_attr_setstacksize (&attr, 64*1024);
+					pid_t *cpid_ptr=(pid_t *)malloc(sizeof(pid_t));
+					*cpid_ptr=cpid;
+					pthread_t thr;
+					if (pthread_create(&thr, &attr, waitpid_thread, (void *)cpid_ptr) !=0 ) {
+						perror("Thread creation");
+						exit(EXIT_FAILURE);
+					}
 				}
 				free(newargs);
 			}
