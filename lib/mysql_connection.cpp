@@ -1186,6 +1186,10 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				set_status_user_variable(true);
 			}
 		}
+		// For issue #555 , multiplexing is disabled if --safe-updates is used
+		if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
+				set_status_user_variable(true);
+		}
 	}
 	if (get_status_temporary_table()==false) { // we search for temporary if not already set
 		if (!strncasecmp(query_digest_text,"CREATE TEMPORARY TABLE ", strlen("CREATE TEMPORARY TABLE "))) {
