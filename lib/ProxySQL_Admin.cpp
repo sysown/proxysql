@@ -38,7 +38,10 @@ struct cpu_timer
 	~cpu_timer()
 	{
 		unsigned long long end = monotonic_time();
+#ifdef DEBUG
 		std::cerr << double( end - begin ) / 1000000 << " secs.\n" ;
+#endif
+		begin=end-begin; // make the compiler happy
 	};
 	unsigned long long begin;
 };
@@ -2569,7 +2572,9 @@ bool ProxySQL_Admin::init() {
 	}
 	do { usleep(50); } while (__sync_fetch_and_sub(&load_main_,0)==0);
 	load_main_=0;
+#ifdef DEBUG
 	std::cerr << "Admin initialized in ";
+#endif
 	return true;
 };
 
