@@ -453,6 +453,7 @@ void MySQL_Connection::store_result_cont(short event) {
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 MDB_ASYNC_ST MySQL_Connection::handler(short event) {
+	unsigned int processed_bytes=0;	// issue #527 : this variable will store the amount of bytes processed during this event
 	if (mysql==NULL) {
 		// it is the first time handler() is being called
 		async_state_machine=ASYNC_CONNECT_START;
@@ -697,7 +698,12 @@ handler_again:
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
-					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
+					if (processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*2) {
+						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+					} else {
+						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
+					}
 				} else {
 					MyRS->add_eof();
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
@@ -947,8 +953,10 @@ int MySQL_Connection::async_ping(short event) {
 			return 0;
 			break;
 		case ASYNC_PING_FAILED:
-		case ASYNC_PING_TIMEOUT:
 			return -1;
+			break;
+		case ASYNC_PING_TIMEOUT:
+			return -2;
 			break;
 		case ASYNC_IDLE:
 			async_state_machine=ASYNC_PING_START;
@@ -964,8 +972,10 @@ int MySQL_Connection::async_ping(short event) {
 			return 0;
 			break;
 		case ASYNC_PING_FAILED:
-		case ASYNC_PING_TIMEOUT:
 			return -1;
+			break;
+		case ASYNC_PING_TIMEOUT:
+			return -2;
 			break;
 		default:
 			return 1;
