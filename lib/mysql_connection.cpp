@@ -699,7 +699,7 @@ handler_again:
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
 					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
-					if (processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*2) {
+					if (processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 					} else {
 						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
