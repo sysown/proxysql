@@ -1,6 +1,6 @@
 # Scheduler
 
-Scheduler is a feature introduced in v1.2.0h.
+Scheduler is a feature introduced in v1.2.0.
 
 Scheduler is a cron-like implementation integrated inside ProxySQL with millisecond granularity. It is possible to be configured only through the Admin interface: configuration from config file is not supported yet and not in the roadmap.
 
