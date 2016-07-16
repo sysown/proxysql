@@ -2,7 +2,13 @@
 
 Scheduler is a feature introduced in v1.2.0h.
 
-Scheduler is a cron-like implementation integrated inside ProxySQL with millisecond granularity. It is possible to be configured only though the Admin interface: configuration from config file is not supported yet.
+Scheduler is a cron-like implementation integrated inside ProxySQL with millisecond granularity. It is possible to be configured only through the Admin interface: configuration from config file is not supported yet and not in the roadmap.
+
+## Motivation
+
+Scheduler allows ProxySQL to run custom scripts at regular interval for multiple purposes. The main motivation is the ability to reconfigure ProxySQL in case of external events that such custom scripts can detect.
+
+## Implementation
 
 The current implementation is suppsted by two tables:
 ```sql
@@ -45,6 +51,24 @@ In details:
 * `filename` : full path of the executable to be executed
 * `arg1` to `arg5` : arguments (maximum 5) that can be passed to the job
 
+For reference only, table `runtime_scheduler` has the same identical tructure:
+```sql
+Admin> SHOW CREATE TABLE runtime_scheduler\G
+*************************** 1. row ***************************
+       table: runtime_scheduler
+Create Table: CREATE TABLE runtime_scheduler (
+id INTEGER NOT NULL,
+interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL,
+filename VARCHAR NOT NULL,
+arg1 VARCHAR,
+arg2 VARCHAR,
+arg3 VARCHAR,
+arg4 VARCHAR,
+arg5 VARCHAR,
+PRIMARY KEY(id))
+1 row in set (0.00 sec)
+```
+
 As for the rest of configuration tables in ProxySQL, after editing the data in this table, configuration needs to be loaded at runtime to be effective, and saved to disk to be persistent.
 For this reason ProxySQL has new commands to support Scheduler:
 * `LOAD SCHEDULER TO RUNTIME` and `LOAD SCHEDULER FROM MEMORY` : load the configuration from `main`.`scheduler` to runtime, and becomes effective;
@@ -52,4 +76,4 @@ For this reason ProxySQL has new commands to support Scheduler:
 * `SAVE SCHEDULER FROM RUNTIME` and `SAVE SCHEDULER TO MEMORY` : save the configuration from runtime to `main`.`scheduler`;
 * `SAVE SCHEDULER FROM MEMORY` and `SAVE SCHEDULER TO DISK` : save the configuration from `main`.`scheduler` to `disk`.`scheduler`, and becomes persistent across restart.
 
-The scheduler is implemented calling `fork()` and then `excve()`. If `execve()` fails, the error is reported into error log.
+The scheduler is implemented calling `fork()` and then `excve()`. If `execve()` fails the error is reported into error log.
