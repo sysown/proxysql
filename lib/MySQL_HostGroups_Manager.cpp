@@ -1136,8 +1136,8 @@ void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 								break;
 							}
 						case MYSQL_SERVER_STATUS_ONLINE:
-						case MYSQL_SERVER_STATUS_OFFLINE_SOFT:
 							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED;
+						case MYSQL_SERVER_STATUS_OFFLINE_SOFT:
 							mysrvc->shunned_automatic=true;
 							mysrvc->shunned_and_kill_all_connections=true;
 							mysrvc->ConnectionsFree->drop_all_connections();
