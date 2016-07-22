@@ -8,10 +8,10 @@
 #define QUEUE_T_DEFAULT_SIZE	32768
 
 typedef struct _queue_t {
-    void *buffer;
-    unsigned int size;
-    unsigned int head;
-    unsigned int tail;
+	void *buffer;
+	unsigned int size;
+	unsigned int head;
+	unsigned int tail;
 	unsigned int partial;
 	//unsigned char *pkt;
 	PtrSize_t pkt;
@@ -66,51 +66,11 @@ class MySQL_Data_Stream
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
-	unsigned int connect_tries;
-	ProxySQL_Poll *mypolls;
-	int array2buffer_full();
-	//int listener;
-	MySQL_Connection *myconn;
-	MySQL_Protocol myprot;
-	int connect_retries_on_failure;
-	enum mysql_data_stream_status DSS;
-	enum MySQL_DS_type myds_type;
-	MySQL_Session *sess;  // pointer to the session using this data stream
-	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
+
+	queue_t queueIN;
 	uint64_t pkts_recv; // counter of received packets
+	queue_t queueOUT;
 	uint64_t pkts_sent; // counter of sent packets
-	bytes_stats_t bytes_info; // bytes statistics
-	int fd; // file descriptor
-
-	struct sockaddr *client_addr;
-	socklen_t client_addrlen;
-
-	unsigned long long wait_until;
-	unsigned long long killed_at;
-	unsigned long long max_connect_time;
-	int poll_fds_idx;
-	short revents;
-
-	bool encrypted;
-	SSL *ssl;
-
-	queue_t queueIN;	
-	queue_t queueOUT;	
-	//struct evbuffer *evbIN;
-	//struct evbuffer *evbOUT;
-	//GPtrArray *QarrayIN;
-	//GPtrArray *QarrayOUT;
-	PtrSizeArray *PSarrayIN;
-	PtrSizeArray *PSarrayOUT;
-	PtrSizeArray *PSarrayOUTpending;
-	PtrSizeArray *resultset;
-	unsigned int resultset_length;
-
-	int active_transaction; // 1 if there is an active transaction
-	int active; // data stream is active. If not, shutdown+close needs to be called
-	int status; // status . FIXME: make it a ORable variable
-
-	bool net_failure;
 
 	struct {
 		PtrSize_t pkt;
@@ -121,7 +81,60 @@ class MySQL_Data_Stream
 		unsigned int partial;
 	} CompPktOUT;
 
+	MySQL_Protocol myprot;
+	MyDS_real_query mysql_real_query;
+	bytes_stats_t bytes_info; // bytes statistics
+
 	PtrSize_t multi_pkt;
+
+	unsigned long long wait_until;
+	unsigned long long killed_at;
+	unsigned long long max_connect_time;
+
+	PtrSizeArray *PSarrayIN;
+	PtrSizeArray *PSarrayOUT;
+	//PtrSizeArray *PSarrayOUTpending;
+	PtrSizeArray *resultset;
+	unsigned int resultset_length;
+
+	ProxySQL_Poll *mypolls;
+	//int listener;
+	MySQL_Connection *myconn;
+	MySQL_Session *sess;  // pointer to the session using this data stream
+	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
+	SSL *ssl;
+	struct sockaddr *client_addr;
+
+	struct {
+		char *addr;
+		int port;
+	} addr;
+	struct {
+		char *addr;
+		int port;
+	} proxy_addr;
+
+	unsigned int connect_tries;
+	int query_retries_on_failure;
+	int connect_retries_on_failure;
+	enum mysql_data_stream_status DSS;
+	enum MySQL_DS_type myds_type;
+
+	socklen_t client_addrlen;
+
+	int fd; // file descriptor
+	int poll_fds_idx;
+
+
+	int active_transaction; // 1 if there is an active transaction
+	int active; // data stream is active. If not, shutdown+close needs to be called
+	int status; // status . FIXME: make it a ORable variable
+
+	short revents;
+
+	bool encrypted;
+	bool net_failure;
+
 	uint8_t pkt_sid;
 
 //	struct {
@@ -129,12 +142,11 @@ class MySQL_Data_Stream
 //		unsigned int size;
 //	} mysql_real_query;
 
-	MyDS_real_query mysql_real_query;
 
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
 
-
+	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
 	void shut_soft();
@@ -165,7 +177,7 @@ class MySQL_Data_Stream
 	void check_data_flow();
 	int assign_fd_from_mysql_conn();
 
-	void move_from_OUT_to_OUTpending();
+	//void move_from_OUT_to_OUTpending();
 	unsigned char * resultset2buffer(bool);
 	void buffer2resultset(unsigned char *, unsigned int);
 
@@ -192,7 +204,7 @@ class MySQL_Data_Stream
 		MyHGM->destroy_MyConn_from_pool(mc);
 	}
 	void free_mysql_real_query();	
-
+	void reinit_queues();
 //	void destroy_MySQL_Connection() {
 //		MySQL_Connection *mc=myconn;
 //		detach_connection();

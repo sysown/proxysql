@@ -16,11 +16,10 @@
    }
    my_free((gptr)mysql->options.extension, MYF(MY_ALLOW_ZERO_PTR));
    /* clear all pointer */
-@@ -2256,6 +2267,36 @@
- 
+@@ -2257,6 +2268,44 @@
      /* reset the connection in all active statements 
         todo: check stmt->mysql in mysql_stmt* functions ! */
-+    for (;li_stmt;li_stmt= li_stmt->next)
+     for (;li_stmt;li_stmt= li_stmt->next)
 +    {
 +      stmt= (MYSQL_STMT *)li_stmt->data;
 +      stmt->mysql= NULL;
@@ -48,8 +47,17 @@
 +  {
 +    LIST *li_stmt= mysql->stmts;
 +
++    if (mysql->methods) {
++			if (mysql->net.vio) {
++				free_old_query(mysql);
++				mysql->status=MYSQL_STATUS_READY; /* Force command */
++    		mysql->reconnect=0;
++				end_server(mysql);
++			}
++		}
 +    /* reset the connection in all active statements 
 +       todo: check stmt->mysql in mysql_stmt* functions ! */
-     for (;li_stmt;li_stmt= li_stmt->next)
++    for (;li_stmt;li_stmt= li_stmt->next)
      {
        stmt= (MYSQL_STMT *)li_stmt->data;
+       stmt->mysql= NULL;

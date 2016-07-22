@@ -39,6 +39,21 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 #endif
 
 
+char *sha1_pass_hex(char *sha1_pass) {
+	if (sha1_pass==NULL) return NULL;
+	char *buff=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
+	buff[0]='*';
+	buff[SHA_DIGEST_LENGTH*2+1]='\0';
+	int i;
+	uint8_t a;
+	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
+		memcpy(&a,sha1_pass+i,1);
+		sprintf(buff+1+2*i, "%02x", a);
+	}
+	return buff;
+}
+
+
 double proxy_my_rnd(struct rand_struct *rand_st) {
   rand_st->seed1= (rand_st->seed1*3+rand_st->seed2) % rand_st->max_value;
   rand_st->seed2= (rand_st->seed1+rand_st->seed2+33) % rand_st->max_value;
@@ -110,25 +125,73 @@ void proxy_my_crypt(char *to, const uchar *s1, const uchar *s2, uint len) {
 
 
 
+unsigned char decode_char(char x) {
+	if (x >= '0' && x <= '9')
+		return (x - 0x30);
+	else if (x >= 'A' && x <= 'F')
+		return(x - 0x37);
+	else if (x >= 'a' && x <= 'f')
+		return(x - 0x57);
+	else {
+		proxy_error("Invalid char");
+		return 0;
+	}
+}
 
-void proxy_scramble(char *to, const char *message, const char *password)
-{
-  uint8 hash_stage1[SHA_DIGEST_LENGTH];
-  uint8 hash_stage2[SHA_DIGEST_LENGTH];
 
-  /* Two stage SHA1 hash of the password. */
-  proxy_compute_two_stage_sha1_hash(password, strlen(password), hash_stage1,
-                              hash_stage2);
 
-  /* create crypt string as sha1(message, hash_stage2) */;
-  proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH,
-                          (const char *) hash_stage2, SHA_DIGEST_LENGTH);
-  proxy_my_crypt(to, (const uchar *) to, hash_stage1, SCRAMBLE_LENGTH);
+void unhex_pass(uint8_t *out, const char *in) {
+	int i=0;
+	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
+		// this can be simplified a lot, but leaving like this to make it easy to debug
+		uint8_t c=0, d=0;
+		c=decode_char(in[i*2]);
+		c=(c*16) & 0xF0;
+		d=decode_char(in[i*2+1]);
+		d=d & 0x0F;
+		c+=d;
+		out[i]=c;
+	}
 }
 
 
 
 
+void proxy_scramble(char *to, const char *message, const char *password)
+{
+	uint8 hash_stage1[SHA_DIGEST_LENGTH];
+	uint8 hash_stage2[SHA_DIGEST_LENGTH];
+
+//	if (password[0]=='*') {
+//		// the password is a SHA1(SHA1(real_password))
+//		unhex_pass(hash_stage2,password+1);
+//	} else {
+		/* Two stage SHA1 hash of the password. */
+	proxy_compute_two_stage_sha1_hash(password, strlen(password), hash_stage1, hash_stage2);
+//	}
+	/* create crypt string as sha1(message, hash_stage2) */;
+	proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
+	proxy_my_crypt(to, (const uchar *) to, hash_stage1, SCRAMBLE_LENGTH);
+	return;
+}
+
+
+bool proxy_scramble_sha1(char *pass_reply,  const char *message, const char *sha1_sha1_pass, char *sha1_pass) {
+	bool ret=false;
+	uint8 hash_stage1[SHA_DIGEST_LENGTH];
+	uint8 hash_stage2[SHA_DIGEST_LENGTH];
+	uint8 hash_stage3[SHA_DIGEST_LENGTH];
+	uint8 to[SHA_DIGEST_LENGTH];
+	unhex_pass(hash_stage2,sha1_sha1_pass);
+	proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
+	proxy_my_crypt((char *)hash_stage1,(const uchar *) pass_reply, to, SCRAMBLE_LENGTH);
+	proxy_compute_sha1_hash(hash_stage3, (const char *) hash_stage1, SHA_DIGEST_LENGTH);
+	if (memcmp(hash_stage2,hash_stage3,SHA_DIGEST_LENGTH)==0) {
+		memcpy(sha1_pass,hash_stage1,SHA_DIGEST_LENGTH);
+		ret=true;
+	}
+	return ret;
+}
 
 
 
@@ -400,7 +463,7 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 static unsigned char protocol_version=10;
 //static uint16_t server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
 //static uint8_t server_language=33;
-static uint16_t server_status=1;
+static uint16_t server_status=SERVER_STATUS_AUTOCOMMIT;
 //static char *mysql_server_version = (char *)"5.1.30";
 
 //bool MySQL_Protocol::generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
@@ -438,6 +501,9 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
 
 //bool MySQL_Protocol::generate_pkt_EOF(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status) {
 bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	mysql_hdr myhdr;
 	myhdr.pkt_id=sequence_id;
 	myhdr.pkt_length=5;
@@ -473,6 +539,9 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 
 //bool MySQL_Protocol::generate_pkt_ERR(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
 bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	mysql_hdr myhdr;
 	uint32_t sql_message_len=( sql_message ? strlen(sql_message) : 0 );
 	myhdr.pkt_id=sequence_id;
@@ -496,6 +565,8 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_ERR;
 				break;
+			case STATE_OK:
+				break;
 			default:
 				assert(0);
 		}
@@ -511,7 +582,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 
 //bool MySQL_Protocol::generate_pkt_OK(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, unsigned int last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
 bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
-
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	char affected_rows_prefix;
 	uint8_t affected_rows_len=mysql_encode_length(affected_rows, &affected_rows_prefix);
 	char last_insert_id_prefix;
@@ -556,6 +629,8 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			case STATE_QUERY_SENT_NET:
 				(*myds)->DSS=STATE_OK;
 				break;
+			case STATE_OK:
+				break;
 			default:
 				assert(0);
 		}
@@ -570,6 +645,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 
 //bool MySQL_Protocol::generate_pkt_column_count(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
 bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 
 	char count_prefix=0;
 	uint8_t count_len=mysql_encode_length(count, &count_prefix);
@@ -606,6 +684,9 @@ bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned i
 //bool MySQL_Protocol::generate_pkt_field(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
 bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue) {
 
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	char *def=(char *)"def";
 	uint32_t def_strlen=strlen(def);
 	char def_prefix;
@@ -722,6 +803,9 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 }
 
 uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
 	int col=0;
 	unsigned int rowlen=0;
 	uint8_t pkt_sid=sequence_id;
@@ -1043,7 +1127,8 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	memcpy(pass, pkt, 20);
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
+	void *sha1_pass=NULL;
+	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
 	if (password==NULL) {
 		ret=false;
@@ -1051,14 +1136,30 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 //		if (pass_len==0 && strlen(password)==0) {
 //			ret=true;
 //		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=true;
+			if (password[0]!='*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					ret=true;
+				}
+			} else {
+				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+				if (ret) {
+					if (sha1_pass==NULL) {
+						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+						GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
+					}
+					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex(reply);
+				}
 			}
 //		}
 //		if (_ret_use_ssl==true) {
 //			ret=false;
 //		}
+	}
+	if (sha1_pass) {
+		free(sha1_pass);
+		sha1_pass=NULL;
 	}
 	return ret;
 }
@@ -1090,7 +1191,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL);
+	void *sha1_pass=NULL;
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
@@ -1100,9 +1202,21 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=true;
+			if (password[0]!='*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					ret=true;
+				} else {
+					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+					if (ret) {
+						if (sha1_pass==NULL) {
+							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						}
+						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+						userinfo->sha1_pass=sha1_pass_hex(reply);
+					}
+				}
 			}
 		}
 		if (_ret_use_ssl==true) {
@@ -1130,6 +1244,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		free(password);
 		password=NULL;
 	}
+	if (sha1_pass) {
+		free(sha1_pass);
+		sha1_pass=NULL;
+	}
 
 	return ret;
 }
@@ -1149,6 +1267,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	bool _ret_use_ssl=false;
 
 	memset(pass,0,128);
+	void *sha1_pass=NULL;
 #ifdef DEBUG
 	unsigned char *_ptr=pkt;
 #endif
@@ -1184,7 +1303,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	bool transaction_persistent;
 	bool fast_forward;
 	int max_connections;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections);
+	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
 	//assert(default_hostgroup>=0);
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->default_schema=default_schema; // just the pointer is passed
@@ -1193,14 +1312,46 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	(*myds)->sess->session_fast_forward=fast_forward;
 	(*myds)->sess->user_max_connections=max_connections;
 	if (password==NULL) {
-		ret=false;
+		// this is a workaround for bug #603
+		if ((*myds)->sess->admin==true) {
+			if (strcmp((const char *)user,mysql_thread___monitor_username)==0) {
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					(*myds)->sess->default_hostgroup=STATS_HOSTGROUP;
+					(*myds)->sess->default_schema=strdup((char *)"main"); // just the pointer is passed
+					(*myds)->sess->schema_locked=false;
+					(*myds)->sess->transaction_persistent=false;
+					(*myds)->sess->session_fast_forward=false;
+					(*myds)->sess->user_max_connections=0;
+					password=l_strdup(mysql_thread___monitor_password);
+				ret=true;
+				}
+			} else {
+				ret=false;
+			}
+		} else {
+			ret=false;
+		}
 	} else {
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-				ret=true;
+			if (password[0]!='*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					ret=true;
+				}
+			} else {
+				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+				if (ret) {
+					if (sha1_pass==NULL) {
+						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+					}
+					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex(reply);
+					}
+				}
 			}
 		}
 		if (_ret_use_ssl==true) {
@@ -1208,7 +1359,6 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			// it means that a client is required to use SSL , but it is not
 			ret=false;
 		}
-	}
 	}
   proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
             (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
@@ -1228,7 +1378,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,len); }
 #endif
 
-	if (use_ssl) return true;
+	if (use_ssl) {
+		ret=true;
+		goto __exit_process_pkt_handshake_response;
+	}
 
 	if (ret==true) {
 
@@ -1243,16 +1396,34 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		userinfo->username=strdup((const char *)user);
 		if (pass_len) userinfo->password=strdup((const char *)"");
 	}
+
+__exit_process_pkt_handshake_response:
 	//if (password) free(password);
 	if (password) {
 		free(password);
 		password=NULL;
+	}
+	if (sha1_pass) {
+		free(sha1_pass);
+		sha1_pass=NULL;
 	}
 
 	//l_free(len,pkt);
 	return ret;
 }
 
+void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l) {
+	mysql_hdr hdr;
+	hdr.pkt_id=sid;
+	hdr.pkt_length=1+s->length();
+	*l=hdr.pkt_length+sizeof(mysql_hdr);
+	void *pkt=malloc(*l);
+	memcpy(pkt,&hdr,sizeof(mysql_hdr));
+	uint8_t c=_MYSQL_COM_QUERY;
+	memcpy((char *)pkt+4,&c,1);
+	memcpy((char *)pkt+5,s->c_str(),s->length());
+	return pkt;
+}
 
 MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my) {
 	transfer_started=false;
@@ -1261,9 +1432,14 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	mysql=_my;
 	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
 	buffer_used=0;
-	myds=myprot->get_myds();
-	sid=myds->pkt_sid+1;
-	PSarrayOUT = new PtrSizeArray();
+	myds=NULL;
+	sid=0;
+	PSarrayOUT = NULL;
+	if (myprot) { // if myprot = NULL , this is a mirror
+		myds=myprot->get_myds();
+		sid=myds->pkt_sid+1;
+		PSarrayOUT = new PtrSizeArray();
+	}
 	result=_res;
 	resultset_size=0;
 	num_rows=0;
@@ -1271,6 +1447,9 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	PtrSize_t pkt;
 	// immediately generate the first set of packets
 	// columns count
+	if (myprot==NULL) {
+		return; // this is a mirror
+	}
 	myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields);
 	sid++;
 	PSarrayOUT->add(pkt.ptr,pkt.size);
@@ -1308,12 +1487,20 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 		free(buffer);
 		buffer=NULL;
 	}
+	if (myds) myds->pkt_sid=sid-1;
 }
 
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 	unsigned long *lengths=mysql_fetch_lengths(result);
-	unsigned int pkt_length;
-	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row);
+	unsigned int pkt_length=0;
+	if (myprot) {
+		sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row);
+	} else {
+		unsigned int col=0;
+		for (col=0; col<num_fields; col++) {
+			pkt_length+=( row[col] ? lengths[col]+mysql_encode_length(lengths[col],NULL) : 1 );
+		}
+	}
 	sid++;
 	resultset_size+=pkt_length;
 	num_rows++;
@@ -1322,28 +1509,35 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 
 void MySQL_ResultSet::add_eof() {
 	PtrSize_t pkt;
-	buffer_to_PSarrayOut();
-	unsigned int nTrx=myds->sess->NumActiveTransactions();
-	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-	if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-	myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
-	PSarrayOUT->add(pkt.ptr,pkt.size);
-	sid++;
-	resultset_size+=pkt.size;
+	if (myprot) {
+		buffer_to_PSarrayOut();
+		unsigned int nTrx=myds->sess->NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
+		PSarrayOUT->add(pkt.ptr,pkt.size);
+		sid++;
+		resultset_size+=pkt.size;
+	}
 	resultset_completed=true;
 }
 
 bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 	transfer_started=true;
-	PSarrayFinal->copy_add(PSarrayOUT,0,PSarrayOUT->len);
-	while (PSarrayOUT->len)
-		PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
+	if (myprot) {
+		PSarrayFinal->copy_add(PSarrayOUT,0,PSarrayOUT->len);
+		while (PSarrayOUT->len)
+			PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
+	}
 	return resultset_completed;
 }
 
 void MySQL_ResultSet::buffer_to_PSarrayOut() {
 	if (buffer_used==0)
 		return;	// exit immediately if the buffer is empty
+	if (buffer_used < RESULTSET_BUFLEN/2) {
+		buffer=(unsigned char *)realloc(buffer,buffer_used);
+	}
 	PSarrayOUT->add(buffer,buffer_used);
 	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
 	buffer_used=0;

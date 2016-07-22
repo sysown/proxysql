@@ -63,7 +63,29 @@ static inline void * l_stack_pop (l_stack **s) {
   return d;
 }
 
+inline int mystrcasecmp(const char *a, const char *b) {
+	char ca;
+	char cb;
+	do {
+		cb = *b++;
+		ca = *a++;
 
+		if (cb >= 'a' && cb <= 'z') {
+			cb -= 0x20;
+		}
+		if (ca != cb)
+			return 1;
+	} while (cb);
+
+	return 0;
+/*
+	if (*a == 0) {
+		return 0;
+	} else {
+		return 1;
+	}
+*/
+}
 
 static inline char * l_strdup(const char *s) {
 	size_t len=strlen(s)+1;

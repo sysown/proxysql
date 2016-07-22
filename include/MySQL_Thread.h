@@ -138,9 +138,10 @@ class MySQL_Thread
 {
 
 	private:
+  unsigned long long last_processing_idles;
 	MySQL_Connection **my_idle_conns;
   bool processing_idles;
-  unsigned long long last_processing_idles;
+	bool maintenance_loop;
 
 
 	protected:
@@ -148,14 +149,13 @@ class MySQL_Thread
 
 	public:
 
-	int pipefd[2];
-	unsigned long long curtime;
-	unsigned long long last_maintenance_time;
-	bool maintenance_loop;
 	ProxySQL_Poll mypolls;
 	pthread_t thread_id;
-	int shutdown;
+	unsigned long long curtime;
+	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
+	int pipefd[2];
+	int shutdown;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss
@@ -165,6 +165,7 @@ class MySQL_Thread
 		unsigned long long queries_slow;
 		unsigned long long queries_backends_bytes_sent;
 		unsigned long long queries_backends_bytes_recv;
+		unsigned int active_transactions;
 	} status_variables;
 
 
@@ -196,7 +197,6 @@ typedef MySQL_Thread * create_MySQL_Thread_t();
 typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
 
 
-
 class iface_info {
 	public:
 	char *iface;
@@ -218,6 +218,7 @@ class iface_info {
 
 
 
+
 class MySQL_Listeners_Manager {
 	private:
 	PtrArray *ifaces;
@@ -228,6 +229,7 @@ class MySQL_Listeners_Manager {
 	int add(const char *address, int port);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
+	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
 };
@@ -246,6 +248,7 @@ class MySQL_Threads_Handler
 		int monitor_connect_interval;
 		int monitor_connect_timeout;
 		int monitor_ping_interval;
+		int monitor_ping_max_failures;
 		int monitor_ping_timeout;
 		int monitor_read_only_interval;
 		int monitor_read_only_timeout;
@@ -263,8 +266,10 @@ class MySQL_Threads_Handler
 		int ping_timeout_server;
 		int shun_on_failures;
 		int shun_recovery_time_sec;
+		int query_retries_on_failure;
 		int connect_retries_on_failure;
 		int connect_retries_delay;
+		int connection_max_age_ms;
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
@@ -281,14 +286,17 @@ class MySQL_Threads_Handler
 		bool client_found_rows;
 		bool multiplexing;
 		bool enforce_autocommit_on_reads;
+		int max_allowed_packet;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
 		int wait_timeout;
 		int max_connections;
+		int default_max_latency_ms;
 		int default_query_delay;
 		int default_query_timeout;
 		int long_query_time;
+		char *init_connect;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
@@ -297,6 +305,11 @@ class MySQL_Threads_Handler
 		int poll_timeout_on_failure;
 		char *eventslog_filename;
 		int eventslog_filesize;
+		// SSL related, proxy to server
+		char * ssl_p2s_ca;
+		char * ssl_p2s_cert;
+		char * ssl_p2s_key;
+		char * ssl_p2s_cipher;
 	} variables;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;
@@ -338,6 +351,10 @@ class MySQL_Threads_Handler
 	unsigned long long get_slow_queries();
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
+	unsigned int get_active_transations();
+	iface_info *MLM_find_iface_from_fd(int fd) {
+		return MLM->find_iface_from_fd(fd);
+	}
 };
 
 

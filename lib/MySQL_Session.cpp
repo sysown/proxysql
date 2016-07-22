@@ -57,6 +57,7 @@ static void * kill_query_thread(void *arg) {
 	}
 	char buf[100];
 	sprintf(buf,"KILL QUERY %lu", ka->id);
+	// FIXME: these 2 calls are blocking, fortunately on their own thread
 	mysql_query(mysql,buf);
 	mysql_close(mysql);
 __exit_kill_query_thread:
@@ -188,6 +189,7 @@ MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	pause_until=0;
 	qpo=NULL;
+	start_time=0;
 	command_counters=new StatCounters(15,10,false);
 	healthy=1;
 	autocommit=true;
@@ -201,6 +203,7 @@ MySQL_Session::MySQL_Session() {
 	default_schema=NULL;
 	schema_locked=false;
 	session_fast_forward=false;
+	started_sending_data_to_client=false;
 	admin_func=NULL;
 	//client_fd=0;
 	//server_fd=0;
@@ -208,6 +211,9 @@ MySQL_Session::MySQL_Session() {
 	//server_myds=NULL;
 	to_process=0;
 	mybe=NULL;
+	mirror=false;
+	mirrorPkt.ptr=NULL;
+	mirrorPkt.size=0;
 	mybes= new PtrArray(4);
 	set_status(NONE);
 
@@ -215,6 +221,8 @@ MySQL_Session::MySQL_Session() {
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
+	mirror_hostgroup=-1;
+	mirror_flagOUT=-1;
 	transaction_persistent_hostgroup=-1;
 	transaction_persistent=false;
 	active_transactions=0;
@@ -233,12 +241,13 @@ MySQL_Session::~MySQL_Session() {
 	reset_all_backends();
 	delete mybes;
 	if (default_schema) {
-		int s=strlen(default_schema);
-		l_free(s+1,default_schema);
+//		int s=strlen(default_schema);
+//		l_free(s+1,default_schema);
+		free(default_schema);
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
-	if (admin==false && connections_handler==false) {
+	if (admin==false && connections_handler==false && mirror==false) {
 		__sync_fetch_and_sub(&MyHGM->status.client_connections,1);
 	}
 }
@@ -298,8 +307,8 @@ void MySQL_Session::writeout() {
 				if (mybe->server_myds->poll_fds_idx>-1) { // NOTE: attempt to force writes
 					mybe->server_myds->array2buffer_full();
 				}
-			} else {
-				mybe->server_myds->move_from_OUT_to_OUTpending();
+//			} else {
+//				mybe->server_myds->move_from_OUT_to_OUTpending();
 			}
 		} else {
 			mybe->server_myds->array2buffer_full();
@@ -308,7 +317,33 @@ void MySQL_Session::writeout() {
 	// FIXME: experimental
 	//if (client_myds) client_myds->set_pollout();
 	//if (server_myds) server_myds->set_pollout();
-	if (client_myds) client_myds->write_to_net_poll();
+	if (client_myds) {
+		if (mirror==false) {
+			bool runloop=false;
+			int retbytes=client_myds->write_to_net_poll();
+			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+				runloop=true;
+			}
+			while (runloop) {
+				runloop=false; // the default
+				client_myds->array2buffer_full();
+				//nfds_t nfds=1;
+				struct pollfd fds;
+				fds.fd=client_myds->fd;
+				fds.events=POLLOUT;
+				fds.revents=0;
+				int retpoll=poll(&fds, 1, 0);
+				if (retpoll>0) {
+					if (fds.revents==POLLOUT) {
+						retbytes=client_myds->write_to_net_poll();
+						if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+							runloop=true;
+						}
+					}
+				}
+			}
+		}
+	}
 	//if (server_myds && server_myds->net_failure==false) server_myds->write_to_net_poll();
 	if (mybe) {
 		if (mybe->server_myds) mybe->server_myds->write_to_net_poll();
@@ -319,37 +354,44 @@ void MySQL_Session::writeout() {
 
 // FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
-	if (
-		( strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0 )
-		||
-		( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 )
-	) {
-		char c=((char *)pkt->ptr)[5];
-		if (c=='c' || c=='C') {
-			__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
-		} else {
-			__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
-		}
-		unsigned int nTrx=NumActiveTransactions();
-		if (nTrx) {
-			// there is an active transaction, we must forward the request
-			return false;
-		} else {
-			// there is no active transaction, we will just reply OK
-			client_myds->DSS=STATE_QUERY_SENT_NET;
-			uint16_t setStatus = 0;
-			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
-			l_free(pkt->size,pkt->ptr);
-			if (c=='c' || c=='C') {
-				__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
-			} else {
-				__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
+	char c=((char *)pkt->ptr)[5];
+	bool ret=false;
+	if (c=='c' || c=='C') {
+		if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
+				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
+				ret=true;
 			}
-			return true;
+		} else {
+			if (c=='r' || c=='R') {
+				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
+					__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
+					ret=true;
+				}
+			}
 		}
+
+	if (ret==false) {
+		return false;	// quick exit
+	}
+	unsigned int nTrx=NumActiveTransactions();
+	if (nTrx) {
+		// there is an active transaction, we must forward the request
+		return false;
+	} else {
+		// there is no active transaction, we will just reply OK
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		uint16_t setStatus = 0;
+		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+		if (c=='c' || c=='C') {
+			__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
+		} else {
+			__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
+		}
+		return true;
 	}
 	return false;
 }
@@ -366,12 +408,12 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 			int fd=-1; // first digit
 			for (i=5+sal;i<pkt->size;i++) {
 				char c=((char *)pkt->ptr)[i];
-				if (c!='0' && c!='1' && c!=' ' && c!='=') return false; // found a not valid char
+				if (c!='0' && c!='1' && c!=' ' && c!='=' && c!='/') return false; // found a not valid char
 				if (eq==false) {
 					if (c!=' ' && c!='=') return false; // found a not valid char
 					if (c=='=') eq=true;
 				} else {
-					if (c!='0' && c!='1' && c!=' ') return false; // found a not valid char
+					if (c!='0' && c!='1' && c!=' ' && c!='/') return false; // found a not valid char
 					if (fd==-1) {
 						if (c=='0' || c=='1') { // found first digit
 							if (c=='0')
@@ -382,6 +424,10 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					} else {
 						if (c=='0' || c=='1') { // found second digit
 							return false;
+						} else {
+							if (c=='/' || c==' ') {
+								break;
+							}
 						}
 					}
 				}
@@ -403,7 +449,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					} else {
 						// as there is no active transaction, we do no need to forward it
 						// just change internal state
-						autocommit=false;
+						autocommit=true;
 						goto __ret_autocommit_OK;
 					}
 				}
@@ -505,8 +551,30 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
-	if ( (pkt->size < 25) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
-		char *name=strndup((char *)pkt->ptr+15,pkt->size-15);
+	if ( (pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
+		char *idx=NULL;
+		char *p=(char *)pkt->ptr+37;
+		idx=(char *)memchr(p,'=',pkt->size-37);
+		//idx=memchr(pkt->ptr+37,'=',pkt->size-37);
+		if (idx) { // we found =
+			PtrSize_t pkt_2;
+			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			mysql_hdr Hdr;
+			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
+			Hdr.pkt_length=pkt_2.size-5;
+			memcpy((char *)pkt_2.ptr+5,(char *)pkt->ptr+5,1);
+			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
+			l_free(pkt->size,pkt->ptr);
+			pkt->size=pkt_2.size;
+			pkt->ptr=pkt_2.ptr;
+		}
+	}
+	if ( (pkt->size < 35) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
+		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
+		char *name=trim_spaces_and_quotes_in_place(unstripped);
 		const CHARSET_INFO * c = proxysql_find_charset_name(name);
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		if (!c) {
@@ -525,13 +593,14 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		client_myds->DSS=STATE_SLEEP;
 		status=WAITING_CLIENT_DATA;
 		l_free(pkt->size,pkt->ptr);
-		free(name);
+		free(unstripped);
 		return true;
 	}
 
 	return false;
 }
 
+#define NEXT_IMMEDIATE(new_st) do { set_status(new_st); goto handler_again; } while (0)
 
 int MySQL_Session::handler() {
 	bool wrong_pass=false;
@@ -541,6 +610,8 @@ int MySQL_Session::handler() {
 	unsigned int j;
 	unsigned char c;
 
+	active_transactions=NumActiveTransactions();
+
 //	FIXME: Sessions without frontend are an ugly hack
 	if (session_fast_forward==false) {
 	if (client_myds==NULL) {
@@ -549,14 +620,33 @@ int MySQL_Session::handler() {
 		assert(mybe);
 		assert(mybe->server_myds);
 		goto handler_again;
-		//goto __exit_DSS__STATE_NOT_INITIALIZED;
+	} else {
+		if (mirror==true) {
+			if (mirrorPkt.ptr) { // this is the first time we call handler()
+				pkt.ptr=mirrorPkt.ptr;
+				pkt.size=mirrorPkt.size;
+				mirrorPkt.ptr=NULL; // this will prevent the copy to happen again
+			} else {
+				if (status==WAITING_CLIENT_DATA) {
+					// we are being called a second time with WAITING_CLIENT_DATA
+					return 0;
+				}
+			}
+		}
 	}
 	}
 
 __get_pkts_from_client:
 
-	for (j=0; j<client_myds->PSarrayIN->len;) {
-		client_myds->PSarrayIN->remove_index(0,&pkt);
+	//for (j=0; j<client_myds->PSarrayIN->len;) {
+	// implement a more complex logic to run even in case of mirror
+	// if client_myds , this is a regular client
+	// if client_myds == NULL , it is a mirror
+	//     process mirror only status==WAITING_CLIENT_DATA
+	for (j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
+		if (mirror==false) {
+			client_myds->PSarrayIN->remove_index(0,&pkt);
+		}
 		//prot.parse_mysql_pkt(&pkt,client_myds);
 		switch (status) {
 
@@ -576,9 +666,10 @@ __get_pkts_from_client:
 				break;
 
 			case WAITING_CLIENT_DATA:
+				// this is handled only for real traffic, not mirror
 				if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) {
 					// we are handling a multi-packet
-					switch (client_myds->DSS) {
+					switch (client_myds->DSS) { // real traffic only
 						case STATE_SLEEP:
 							client_myds->DSS=STATE_SLEEP_MULTI_PACKET;
 							break;
@@ -618,12 +709,19 @@ __get_pkts_from_client:
 						}
 						if (client_myds->DSS!=STATE_SLEEP) // if DSS==STATE_SLEEP , we continue
 							break;
-					case STATE_SLEEP:
+					case STATE_SLEEP:	// only this section can be executed ALSO by mirror
 						command_counters->incr(thread->curtime/1000000);
 						if (transaction_persistent_hostgroup==-1) {
 							current_hostgroup=default_hostgroup;
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n");
+						if (session_fast_forward==true) { // if it is fast forward
+							mybe=find_or_create_backend(current_hostgroup); // set a backend
+							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
+							mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
+							previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
+							NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
+						}
 						//unsigned char c;
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						switch ((enum_mysql_command)c) {
@@ -646,12 +744,63 @@ __get_pkts_from_client:
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
-									if (rc_break==true) { break; }
+									if (rc_break==true) {
+										if (mirror==false) {
+											break;
+										} else {
+											return -1;
+										}
+									}
+									//if (mirror==true) {
+									//	// this is not required anymore, because now
+									//	// GloQPro->process_mysql_query() knows if we are inside a mirror session
+									//	// and changes qpo->default_hostgroup
+									//	default_hostgroup=mirror_hostgroup;
+									//}
+									if (mirror==false) {
+										if (pkt.size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
+											MySQL_Session *newsess=new MySQL_Session();
+											newsess->client_myds = new MySQL_Data_Stream();
+											newsess->client_myds->DSS=STATE_SLEEP;
+											newsess->client_myds->sess=newsess;
+											newsess->client_myds->myds_type=MYDS_FRONTEND;
+											newsess->client_myds->PSarrayOUT= new PtrSizeArray();
+											newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
+											thread->register_session(newsess);
+											newsess->status=WAITING_CLIENT_DATA;
+											MySQL_Connection *myconn=new MySQL_Connection;
+											myconn->userinfo->set(client_myds->myconn->userinfo);
+											newsess->client_myds->attach_connection(myconn);
+											newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
+											newsess->to_process=1;
+											if (qpo->mirror_hostgroup>= 0) {
+												newsess->mirror_hostgroup=qpo->mirror_hostgroup; // in the new session we copy the mirror hostgroup
+											} else {
+												newsess->mirror_hostgroup=default_hostgroup; // copy the default
+											}
+											newsess->mirror_flagOUT=qpo->mirror_flagOUT; // in the new session we copy the mirror flagOUT
+											newsess->default_schema=strdup(default_schema);
+											newsess->mirror=true;
+											newsess->mirrorPkt.size=pkt.size;
+											newsess->mirrorPkt.ptr=l_alloc(newsess->mirrorPkt.size);
+											memcpy(newsess->mirrorPkt.ptr,pkt.ptr,pkt.size);
+											newsess->handler(); // execute immediately
+											newsess->to_process=0;
+										}
+									}
 
 									if (autocommit_on_hostgroup>=0) {
 									}
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
+									// set query retries
+									mybe->server_myds->query_retries_on_failure=mysql_thread___query_retries_on_failure;
+									// if a number of retries is set in mysql_query_rules, that takes priority
+									if (qpo) {
+										if (qpo->retries >= 0) {
+											mybe->server_myds->query_retries_on_failure=qpo->retries;
+										}
+									}
 									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
 									mybe->server_myds->wait_until=0;
 									pause_until=0;
@@ -752,14 +901,21 @@ __get_pkts_from_client:
 	}
 
 
-#define NEXT_IMMEDIATE(new_st) do { set_status(new_st); goto handler_again; } while (0)
 
 handler_again:
 
 	switch (status) {
 		case FAST_FORWARD:
-			fprintf(stderr,"FAST_FORWARD\n");
-			// FIXME: to implement
+			if (mybe->server_myds->mypolls==NULL) {
+				// register the mysql_data_stream
+				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+			}
+			// copy all packets from backend to frontend
+			for (unsigned int k=0; k < mybe->server_myds->PSarrayIN->len; k++) {
+				PtrSize_t pkt;
+				mybe->server_myds->PSarrayIN->remove_index(0,&pkt);
+				client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+			}
 			break;
 		case CONNECTING_CLIENT:
 			//fprintf(stderr,"CONNECTING_CLIENT\n");
@@ -788,8 +944,13 @@ handler_again:
 					set_status(NONE);
 					return -1;
 				} else {
-					if (rc==-1) {
-						proxy_error("Detected a broken connection during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
+					if (rc==-1 || rc==-2) {
+						if (rc==-2) {
+							proxy_error("Ping timeout during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
+						} else { // rc==-1
+							int myerr=mysql_errno(myconn->mysql);
+							proxy_error("Detected a broken connection during ping on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+						}
 						myds->destroy_MySQL_Connection_From_Pool(false);
 						myds->fd=0;
 						delete mybe->server_myds;
@@ -850,6 +1011,12 @@ handler_again:
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				// these checks need to be performed only if we connect to a real mysql_server
+				status=PROCESSING_QUERY;
+				mybe->server_myds->max_connect_time=0;
+				// we insert it in mypolls only if not already there
+				if (myds->mypolls==NULL) {
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+				}
 				if (default_hostgroup>=0) {
 					if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
 						if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
@@ -861,6 +1028,17 @@ handler_again:
 							NEXT_IMMEDIATE(CHANGING_SCHEMA);
 						}
 					}
+					if (mirror==false) { // do not care about autocommit and charset if mirror
+						if (mybe->server_myds->myconn->options.init_connect_sent==false) {
+							// we needs to set it to true
+							mybe->server_myds->myconn->options.init_connect_sent=true;
+							if (mysql_thread___init_connect) {
+								// we send init connect queries only if set
+								mybe->server_myds->myconn->options.init_connect=strdup(mysql_thread___init_connect);
+								previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(SETTING_INIT_CONNECT);
+							}
+						}
 					if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 						previous_status.push(PROCESSING_QUERY);
 						NEXT_IMMEDIATE(CHANGING_CHARSET);
@@ -880,12 +1058,7 @@ handler_again:
 							NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
 						}
 					}
-				}
-				status=PROCESSING_QUERY;
-				mybe->server_myds->max_connect_time=0;
-				// we insert it in mypolls only if not already there
-				if (myds->mypolls==NULL) {
-					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+					}
 				}
 
 				if (myconn->async_state_machine==ASYNC_IDLE) {
@@ -946,18 +1119,25 @@ handler_again:
 				} else {
 					if (rc==-1) {
 						// the query failed
-						if (myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-							// the query failed because the server is offline hard
+						if (
+							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
+							||
+							(myconn->parent->status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+						) {
 							if (mysql_thread___connect_timeout_server_max) {
 								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
 							}
 							bool retry_conn=false;
 							proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
-								// transfer to frontend has started, we cannot retry
-								} else {
-									retry_conn=true;
+							if (myds->query_retries_on_failure > 0) {
+								myds->query_retries_on_failure--;
+								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+									// transfer to frontend has started, we cannot retry
+									} else {
+										retry_conn=true;
+										proxy_warning("Retrying query.\n");
+									}
 								}
 							}
 							myds->destroy_MySQL_Connection_From_Pool(false);
@@ -973,13 +1153,17 @@ handler_again:
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on (%d,%s,%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
-								// transfer to frontend has started, we cannot retry
-								} else {
-									retry_conn=true;
+							if (myds->query_retries_on_failure > 0) {
+								myds->query_retries_on_failure--;
+								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+									// transfer to frontend has started, we cannot retry
+									} else {
+										retry_conn=true;
+										proxy_warning("Retrying query.\n");
+									}
 								}
 							}
 							myds->destroy_MySQL_Connection_From_Pool(false);
@@ -1005,8 +1189,12 @@ handler_again:
 								case 1290: // read-only
 								case 1047: // WSREP has not yet prepared node for application use
 								case 1053: // Server shutdown in progress
-									if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-										retry_conn=true;
+									if (myds->query_retries_on_failure > 0) {
+										myds->query_retries_on_failure--;
+										if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+											retry_conn=true;
+											proxy_warning("Retrying query.\n");
+										}
 									}
 									myds->destroy_MySQL_Connection_From_Pool(true);
 									myds->fd=0;
@@ -1016,6 +1204,9 @@ handler_again:
 										NEXT_IMMEDIATE(CONNECTING_SERVER);
 									}
 									return -1;
+									break;
+								case 1153: // ER_NET_PACKET_TOO_LARGE
+									proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 									break;
 								default:
 									break; // continue normally
@@ -1041,10 +1232,32 @@ handler_again:
 							}
 						}
 					} else {
-						// rc==1 , query is still running
-						// start sending to frontend if mysql_thread___threshold_resultset_size is reached
-						if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int) mysql_thread___threshold_resultset_size) {
-							myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+						switch (rc) {
+							// rc==1 , query is still running
+							// start sending to frontend if mysql_thread___threshold_resultset_size is reached
+							case 1:
+								if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int) mysql_thread___threshold_resultset_size) {
+									myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+								}
+								break;
+							// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
+							case 2:
+								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
+										delete myconn->MyRS;
+										myconn->MyRS=NULL;
+									}
+									NEXT_IMMEDIATE(PROCESSING_QUERY);
+								break;
+							// rc==3 , a multi statement query is still running
+							// start sending to frontend if mysql_thread___threshold_resultset_size is reached
+							case 3:
+								if (myconn->MyRS && myconn->MyRS->result && myconn->MyRS->resultset_size > (unsigned int) mysql_thread___threshold_resultset_size) {
+									myconn->MyRS->get_resultset(client_myds->PSarrayOUT);
+								}
+								break;
+							default:
+								break;
 						}
 					}
 				}
@@ -1224,6 +1437,62 @@ handler_again:
 			}
 			break;
 
+		case SETTING_INIT_CONNECT:
+			assert(mybe->server_myds->myconn);
+			{
+				MySQL_Data_Stream *myds=mybe->server_myds;
+				MySQL_Connection *myconn=myds->myconn;
+				myds->DSS=STATE_MARIADB_QUERY;
+				enum session_status st=status;
+				if (myds->mypolls==NULL) {
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+				}
+				int rc=myconn->async_send_simple_command(myds->revents,myconn->options.init_connect,strlen(myconn->options.init_connect));
+				if (rc==0) {
+					myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+					st=previous_status.top();
+					previous_status.pop();
+					NEXT_IMMEDIATE(st);
+				} else {
+					if (rc==-1) {
+						// the command failed
+						int myerr=mysql_errno(myconn->mysql);
+						if (myerr > 2000) {
+							bool retry_conn=false;
+							// client error, serious
+							proxy_error("Detected a broken connection while setting INIT CONNECT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+								retry_conn=true;
+							}
+							myds->destroy_MySQL_Connection_From_Pool(false);
+							myds->fd=0;
+							if (retry_conn) {
+								myds->DSS=STATE_NOT_INITIALIZED;
+								//previous_status.push(PROCESSING_QUERY);
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
+							}
+							return -1;
+						} else {
+							proxy_warning("Error while setting INIT CONNECT: %d, %s\n", myerr, mysql_error(myconn->mysql));
+								// we won't go back to PROCESSING_QUERY
+							st=previous_status.top();
+							previous_status.pop();
+							char sqlstate[10];
+							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+								myds->destroy_MySQL_Connection_From_Pool(true);
+								myds->fd=0;
+							status=WAITING_CLIENT_DATA;
+							client_myds->DSS=STATE_SLEEP;
+						}
+					} else {
+						// rc==1 , nothing to do for now
+					}
+				}
+			}
+			break;
+
 		case CHANGING_SCHEMA:
 			//fprintf(stderr,"CHANGING_SCHEMA\n");
 			assert(mybe->server_myds->myconn);
@@ -1333,12 +1602,14 @@ handler_again:
 				assert(st==status);
 				unsigned long long curtime=monotonic_time();
 				//mybe->server_myds->myprot.init(&mybe->server_myds, mybe->server_myds->myconn->userinfo, this);
-				if (myds->mypolls==NULL) {
-					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
-				}
 /* */
 				assert(myconn->async_state_machine!=ASYNC_IDLE);
 				rc=myconn->async_connect(myds->revents);
+				if (myds->mypolls==NULL) {
+					// connection yet not in mypolls
+					myds->assign_fd_from_mysql_conn();
+					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
+				}
 				switch (rc) {
 					case 0:
 						myds->myds_type=MYDS_BACKEND;
@@ -1347,6 +1618,11 @@ handler_again:
 						st=previous_status.top();
 						previous_status.pop();
 						myds->wait_until=0;
+						if (session_fast_forward==true) {
+							// we have a successful connection and session_fast_forward enabled
+							// set DSS=STATE_SLEEP or it will believe it have to use MARIADB client library
+							myds->DSS=STATE_SLEEP;
+						}
 						NEXT_IMMEDIATE(st);
 						break;
 					case -1:
@@ -1488,8 +1764,8 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 		// FIXME: this should become close connection
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
-		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
+		sprintf(_s,"ProxySQL Error: Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
 		free(_s);
 	}
 }
@@ -1500,9 +1776,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		&&
 		( (default_hostgroup<0 && admin==true) || (default_hostgroup>=0 && admin==false) || strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 ) // Do not delete this line. See bug #492
 	)	{
-		if (default_hostgroup<0 && admin==true) {
-			if (default_hostgroup==STATS_HOSTGROUP) {
-				stats=true;
+		if (admin==true) {
+			if ( (default_hostgroup<0) || (strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0) ) {
+				if (default_hostgroup==STATS_HOSTGROUP) {
+					stats=true;
+				}
 			}
 		}
 		l_free(pkt->size,pkt->ptr);
@@ -1560,8 +1838,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		// FIXME: this should become close connection
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
-		sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
+		sprintf(_s,"ProxySQL Error: Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 		free(_s);
 		client_myds->DSS=STATE_SLEEP;
@@ -1688,18 +1966,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt) {
-	if (qpo->error_msg) {
-		client_myds->DSS=STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"#42000",qpo->error_msg);
-//		client_myds->DSS=STATE_SLEEP;
-//		status=WAITING_CLIENT_DATA;
-		l_free(pkt->size,pkt->ptr);
-//		CurrentQuery.end();
-//		GloQPro->delete_QP_out(qpo);
-//		qpo=NULL;
-		RequestEnd(NULL);
-		return true;
-	}
 	if (qpo->new_query) {
 		// the query was rewritten
 		l_free(pkt->size,pkt->ptr);	// free old pkt
@@ -1716,6 +1982,32 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin((unsigned char *)pkt->ptr,pkt->size,true);
 		delete qpo->new_query;
+	}
+
+	if (pkt->size > (unsigned int) mysql_thread___max_allowed_packet) {
+		// ER_NET_PACKET_TOO_LARGE
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01",(char *)"Got a packet bigger than 'max_allowed_packet' bytes");
+		l_free(pkt->size,pkt->ptr);
+		RequestEnd(NULL);
+		return true;
+	}
+
+	if (qpo->error_msg) {
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
+//		client_myds->DSS=STATE_SLEEP;
+//		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+//		CurrentQuery.end();
+//		GloQPro->delete_QP_out(qpo);
+//		qpo=NULL;
+		RequestEnd(NULL);
+		return true;
+	}
+	if (mirror==true) { // for mirror session we exit here
+		current_hostgroup=qpo->destination_hostgroup;
+		return false;
 	}
 	if (qpo->cache_ttl>0) {
 		uint32_t resbuf=0;
@@ -1795,8 +2087,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		// FIXME: this should become close connection
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
-			sprintf(_s,"Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"#28000", _s);
+			sprintf(_s,"ProxySQL Error: Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
 			free(_s);
 		}
 	} else {
@@ -1845,6 +2137,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mybe->server_myds->DSS=STATE_READY;
 		if (session_fast_forward==true) {
 			status=FAST_FORWARD;
+			mybe->server_myds->myconn->reusable=false; // the connection cannot be usable anymore
 		}
 	}
 }
@@ -1885,12 +2178,16 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			unsigned int nTrx=NumActiveTransactions();
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
+				setStatus += SERVER_MORE_RESULTS_EXIST;
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status|setStatus,mysql->warning_count,mysql->info);
+			client_myds->pkt_sid++;
 		} else {
 			// error
 			char sqlstate[10];
 			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
+			client_myds->pkt_sid++;
 		}
 	}
 }
@@ -1997,7 +2294,11 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// so we track the time here
 	CurrentQuery.end_time=thread->curtime;
 
-	GloMyLogger->log_request(this);
+	if (qpo) {
+		if (qpo->log==1) {
+			GloMyLogger->log_request(this, myds);	// we send for logging only if logging is enabled for this query
+		}
+	}
 
 	// clean qpo
 	if (qpo) {
@@ -2018,4 +2319,5 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	client_myds->DSS=STATE_SLEEP;
 	// finalize the query
 	CurrentQuery.end();
+	started_sending_data_to_client=false;
 }

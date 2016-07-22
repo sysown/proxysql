@@ -22,10 +22,14 @@ class MySQL_Event {
 	size_t client_len;
 	uint64_t total_length;
 	unsigned char buf[10];
+	enum log_event_type et;
+	uint64_t hid;
 	public:
-	MySQL_Event(uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest);
+	MySQL_Event(uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f);
+	uint64_t write_query(std::fstream *f);
 	void set_query(const char *ptr, int len);
+	void set_server(int _hid, const char *ptr, int len);
 };
 
 class MySQL_Logger {
@@ -49,7 +53,7 @@ class MySQL_Logger {
 	unsigned int find_next_id();
 	void set_datadir(char *);
 	void set_base_filename();
-	void log_request(MySQL_Session *);
+	void log_request(MySQL_Session *, MySQL_Data_Stream *);
 	void flush();
 };
 

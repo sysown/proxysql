@@ -37,7 +37,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=18;
+		num_fields=26;
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -45,19 +45,35 @@ class QP_rule_text {
 		pta[2]=strdup_null(QPr->username);
 		pta[3]=strdup_null(QPr->schemaname);
 		itostr(pta[4], (long long)QPr->flagIN);
-		pta[5]=strdup_null(QPr->match_digest);
-		pta[6]=strdup_null(QPr->match_pattern);
-		itostr(pta[7], (long long)QPr->negate_match_pattern);
-		itostr(pta[8], (long long)QPr->flagOUT);
-		pta[9]=strdup_null(QPr->replace_pattern);
-		itostr(pta[10], (long long)QPr->destination_hostgroup);
-		itostr(pta[11], (long long)QPr->cache_ttl);
-		itostr(pta[12], (long long)QPr->reconnect);
-		itostr(pta[13], (long long)QPr->timeout);
-		itostr(pta[14], (long long)QPr->delay);
-		pta[15]=strdup_null(QPr->error_msg);
-		itostr(pta[16], (long long)QPr->apply);
-		itostr(pta[17], (long long)QPr->hits);
+
+		pta[5]=strdup_null(QPr->client_addr);
+		pta[6]=strdup_null(QPr->proxy_addr);
+		itostr(pta[7], (long long)QPr->proxy_port);
+
+		char buf[20];
+		//uint32_t d32[2];
+		//memcpy(&d32,&QPr->digest,sizeof(QPr->digest));
+		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
+    pta[8]=strdup(buf);
+
+		pta[9]=strdup_null(QPr->match_digest);
+		pta[10]=strdup_null(QPr->match_pattern);
+		itostr(pta[11], (long long)QPr->negate_match_pattern);
+		itostr(pta[12], (long long)QPr->flagOUT);
+		pta[13]=strdup_null(QPr->replace_pattern);
+		itostr(pta[14], (long long)QPr->destination_hostgroup);
+		itostr(pta[15], (long long)QPr->cache_ttl);
+		itostr(pta[16], (long long)QPr->reconnect);
+		itostr(pta[17], (long long)QPr->timeout);
+		itostr(pta[18], (long long)QPr->retries);
+		itostr(pta[19], (long long)QPr->delay);
+		itostr(pta[20], (long long)QPr->mirror_flagOUT);
+		itostr(pta[21], (long long)QPr->mirror_hostgroup);
+		pta[22]=strdup_null(QPr->error_msg);
+		itostr(pta[23], (long long)QPr->log);
+		itostr(pta[24], (long long)QPr->apply);
+		itostr(pta[25], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -140,9 +156,10 @@ class QP_query_digest_stats {
 		assert(username);
 		pta[1]=strdup(username);
 
-		uint32_t d32[2];
-		memcpy(&d32,&digest,sizeof(digest));
-		sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		//uint32_t d32[2];
+		//memcpy(&d32,&digest,sizeof(digest));
+		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
+		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
 		pta[2]=strdup(buf);
 
 		assert(digest_text);
@@ -258,74 +275,12 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 	qrs->clear();
 }
 
-/*
-class Command_Counter {
-	private:
-	int cmd_idx;
-	int _add_idx(unsigned long long t) {
-		if (t<=100) return 0;
-		if (t<=500) return 1;
-		if (t<=1000) return 2;
-		if (t<=5000) return 3;
-		if (t<=10000) return 4;
-		if (t<=50000) return 5;
-		if (t<=100000) return 6;
-		if (t<=500000) return 7;
-		if (t<=1000000) return 8;
-		if (t<=5000000) return 9;
-		if (t<=10000000) return 10;
-		return 11;
-	}
-	public:
-	unsigned long long total_time;
-	unsigned long long counters[13];
-	Command_Counter(int a) {
-		total_time=0;
-		cmd_idx=a;
-		total_time=0;
-		for (int i=0; i<13; i++) {
-			counters[i]=0;
-		}
-	}
-	unsigned long long add_time(unsigned long long t) {
-		total_time+=t;
-		counters[0]++;
-		int i=_add_idx(t);
-		counters[i+1]++;
-		return total_time;
-	}
-	char **get_row() {
-		char **pta=(char **)malloc(sizeof(char *)*15);
-		pta[0]=commands_counters_desc[cmd_idx];
-		itostr(pta[1],total_time);
-		for (int i=0;i<13;i++) itostr(pta[i+2], counters[i]);
-		return pta;
-	}
-	void free_row(char **pta) {
-		for (int i=1;i<15;i++) free(pta[i]);
-		free(pta);
-	}
-};
-*/
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
 //__thread unsigned int _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 __thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 
-/*
-class Standard_Query_Processor: public Query_Processor {
-
-private:
-rwlock_t rwlock;
-std::vector<QP_rule_t *> rules;
-//unsigned int commands_counters[MYSQL_COM_QUERY___NONE];
-Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
-
-volatile unsigned int version;
-protected:
-public:
-*/
 Query_Processor::Query_Processor() {
 #ifdef DEBUG
 	if (glovars.has_debug==false) {
@@ -423,7 +378,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int delay, char *error_msg, bool apply) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int log, bool apply) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -439,12 +394,29 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->cache_ttl=cache_ttl;
 	newQR->reconnect=reconnect;
 	newQR->timeout=timeout;
+	newQR->retries=retries;
 	newQR->delay=delay;
+	newQR->mirror_flagOUT=mirror_flagOUT;
+	newQR->mirror_hostgroup=mirror_hostgroup;
 	newQR->error_msg=(error_msg ? strdup(error_msg) : NULL);
 	newQR->apply=apply;
 	newQR->regex_engine1=NULL;
 	newQR->regex_engine2=NULL;
 	newQR->hits=0;
+
+	newQR->client_addr=(client_addr ? strdup(client_addr) : NULL);
+	newQR->proxy_addr=(proxy_addr ? strdup(proxy_addr) : NULL);
+	newQR->proxy_port=proxy_port;
+	newQR->log=log;
+	newQR->digest=0;
+	if (digest) {
+		unsigned long long num=strtoull(digest,NULL,0);
+		if (num!=ULLONG_MAX && num!=0) {
+			newQR->digest=num;
+		} else {
+			proxy_error("Incorrect digest for rule_id %d : %s\n" , rule_id, digest);
+		}
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_digest=\"%s\", %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_digest, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
 	return newQR;
 };
@@ -533,7 +505,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(18);
+	SQLite3_result *result=new SQLite3_result(26);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -541,6 +513,10 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"username");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
 	result->add_column_definition(SQLITE_TEXT,"flagIN");
+	result->add_column_definition(SQLITE_TEXT,"client_addr");
+	result->add_column_definition(SQLITE_TEXT,"proxy_addr");
+	result->add_column_definition(SQLITE_TEXT,"proxy_port");
+	result->add_column_definition(SQLITE_TEXT,"digest");
 	result->add_column_definition(SQLITE_TEXT,"match_digest");
 	result->add_column_definition(SQLITE_TEXT,"match_pattern");
 	result->add_column_definition(SQLITE_TEXT,"negate_match_pattern");
@@ -550,8 +526,12 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"cache_ttl");
 	result->add_column_definition(SQLITE_TEXT,"reconnect");
 	result->add_column_definition(SQLITE_TEXT,"timeout");
+	result->add_column_definition(SQLITE_TEXT,"retries");
 	result->add_column_definition(SQLITE_TEXT,"delay");
+	result->add_column_definition(SQLITE_TEXT,"mirror_flagOUT");
+	result->add_column_definition(SQLITE_TEXT,"mirror_hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"error_msg");
+	result->add_column_definition(SQLITE_TEXT,"log");
 	result->add_column_definition(SQLITE_TEXT,"apply");
 	result->add_column_definition(SQLITE_TEXT,"hits");
 	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
@@ -644,7 +624,20 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			qr1=*it;
 			if (qr1->active) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
-				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN, qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern, qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup, qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->delay, qr1->error_msg, qr1->apply);
+				char buf[20];
+				if (qr1->digest) { // not 0
+					//uint32_t d32[2];
+					//memcpy(&d32,&qr1->digest,sizeof(qr1->digest));
+					//sprintf(buf,"0x%X%X", d32[0], d32[1]);
+					sprintf(buf,"0x%016llX", (long long unsigned int)qr1->digest);
+				}
+				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN,
+					qr1->client_addr, qr1->proxy_addr, qr1->proxy_port,
+					( qr1->digest ? buf : NULL ) ,
+					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern,
+					qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup,
+					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
+					qr1->error_msg, qr1->log, qr1->apply);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: \n", qr2->rule_id, qr2->match_digest);
@@ -662,6 +655,20 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	QP_rule_t *qr;
 	re2_t *re2p;
 	int flagIN=0;
+	if (sess->mirror==true) {
+		// we are into a mirror session
+		// we immediately set a destination_hostgroup
+		ret->destination_hostgroup=sess->mirror_hostgroup;
+		if (sess->mirror_flagOUT != -1) {
+			// the original session has set a mirror flagOUT
+			flagIN=sess->mirror_flagOUT;
+		} else {
+			// the original session did NOT set any mirror flagOUT
+			// so we exit here
+			// the only thing set so far is destination_hostgroup
+			goto __exit_process_mysql_query;
+		}
+	}
 	for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
 		qr=*it;
 		if (qr->flagIN != flagIN) {
@@ -681,7 +688,35 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			}
 		}
 
-		// match on digest
+		// match on client address
+		if (qr->client_addr && strlen(qr->client_addr)) {
+			if (sess->client_myds->addr.addr) {
+				if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
+					continue;
+				}
+			}
+		}
+
+		// match on proxy_addr & proxy_port
+		if (qr->proxy_addr && strlen(qr->proxy_addr)) {
+			if (sess->client_myds->proxy_addr.addr) {
+				if (strcmp(qr->proxy_addr,sess->client_myds->proxy_addr.addr)!=0) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_addr\n", qr->rule_id);
+					continue;
+				}
+				if (qr->proxy_port>=0) {
+					if (qr->proxy_port!=sess->client_myds->proxy_addr.port) {
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_port\n", qr->rule_id);
+						continue;
+					}
+				}
+			}
+		}
+
+
+
+		// match on query digest
 		if (qp && qp->digest_text ) { // we call this only if we have a query digest
 			re2p=(re2_t *)qr->regex_engine1;
 			if (qr->match_digest) {
@@ -715,30 +750,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		// if we arrived here, we have a match
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 
-/*
-{
-		// FIXME: this block of code is only for testing
-		if ((qr->hits%20)==0) {
-			spin_rdlock(&rwlock);
-			if (__sync_add_and_fetch(&version,0) == _thr_SQP_version) { // extra safety check to avoid race conditions
-				__sync_fetch_and_add(&qr->parent->hits,20);
-			}
-*/
-/*
-			QP_rule_t *qrg;
-			for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
-				qrg=*it;
-				if (qrg->rule_id==qr->rule_id) {
-					__sync_fetch_and_add(&qrg->hits,20);
-					break;
-				}
-			}
-*/
-/*
-			spin_rdunlock(&rwlock);
-		}
-}
-*/
 		if (qr->flagOUT >= 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
 			flagIN=qr->flagOUT;
@@ -754,14 +765,29 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
       ret->timeout=qr->timeout;
     }
+    if (qr->retries >= 0) {
+			// Note: negative retries means this rule doesn't change
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will%s be re-executed %d times in case of failure\n", qr->rule_id, qr->retries);
+      ret->retries=qr->retries;
+    }
     if (qr->delay >= 0) {
 			// Note: negative delay means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
       ret->delay=qr->delay;
     }
+    if (qr->mirror_flagOUT >= 0) {
+			// Note: negative mirror_flagOUT means this rule doesn't change the mirror flagOUT
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror flagOUT: %d\n", qr->rule_id, qr->mirror_flagOUT);
+      ret->mirror_flagOUT=qr->mirror_flagOUT;
+    }
+    if (qr->mirror_hostgroup >= 0) {
+			// Note: negative mirror_hostgroup means this rule doesn't change the mirror
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror hostgroup: %d. A new session will be created\n", qr->rule_id, qr->mirror_hostgroup);
+      ret->mirror_hostgroup=qr->mirror_hostgroup;
+    }
     if (qr->error_msg) {
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->error_msg);
-			proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
+			//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
       ret->error_msg=strdup(qr->error_msg);
     }
     if (qr->cache_ttl >= 0) {
@@ -790,9 +816,11 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 __exit_process_mysql_query:
 	// FIXME : there is too much data being copied around
 	l_free(len+1,query);
-	if (qp && qp->first_comment) {
-		// we have a comment to parse
-		query_parser_first_comment(ret, qp->first_comment);
+	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
+		if (qp && qp->first_comment) {
+			// we have a comment to parse
+			query_parser_first_comment(ret, qp->first_comment);
+		}
 	}
 	return ret;
 };
@@ -829,21 +857,26 @@ void Query_Processor::update_query_processor_stats() {
 	spin_rdunlock(&rwlock);
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) {
 		for (int j=0; j<13; j++) {
-			__sync_fetch_and_add(&commands_counters[i]->counters[j],_thr_commands_counters[i]->counters[j]);
-			_thr_commands_counters[i]->counters[j]=0;
+			if (_thr_commands_counters[i]->counters[j]) {
+				__sync_fetch_and_add(&commands_counters[i]->counters[j],_thr_commands_counters[i]->counters[j]);
+				_thr_commands_counters[i]->counters[j]=0;
+			}
 		}
-		__sync_fetch_and_add(&commands_counters[i]->total_time,_thr_commands_counters[i]->total_time);
+		if (_thr_commands_counters[i]->total_time)
+			__sync_fetch_and_add(&commands_counters[i]->total_time,_thr_commands_counters[i]->total_time);
 		_thr_commands_counters[i]->total_time=0;
 	}
 };
 
 
 void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags) {
-	//SQP_par_t *qp=(SQP_par_t *)malloc(sizeof(SQP_par_t));
-	if (mysql_thread___commands_stats)
-		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
+	// trying to get rid of libinjection
+	// instead of initializing qp->sf , we copy query info later in this function
+//	if (mysql_thread___commands_stats)
+//		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
+	qp->query_prefix=NULL;
 	//qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
 	//qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
 	if (mysql_thread___query_digests) {
@@ -854,13 +887,16 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
 		}
 #endif /* DEBUG */
+	} else {
+		// if mysql_thread___query_digests==false but we still want command statistics, we copy the prefix of the query
+		if (mysql_thread___commands_stats) {
+			qp->query_prefix=strndup(query,32);
+		}
 	}
-	//return (void *)qp;
 };
 
 enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_t *qp) {
 	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(qp);
-	//_thr_commands_counters[ret]++;
 	return ret;
 }
 
@@ -868,13 +904,10 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
-	//SQP_par_t *qp=(SQP_par_t *)p;
 
 	if (qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
 		uint64_t hash2;
-		//SpookyHash *myhash=new SpookyHash();
-		//myhash->Init(19,3);
 		SpookyHash myhash;
 		myhash.Init(19,3);
 		assert(sess);
@@ -896,14 +929,10 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 }
 
 void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
-	//SQP_par_t *qp=(SQP_par_t *)p;
 	spin_wrlock(&digest_rwlock);
 
 	QP_query_digest_stats *qds;	
 
-	//btree::btree_map<uint64_t, void *>::iterator it;
-	//it=digest_bt_map.find(qp->digest_total);
-	//if (it != digest_bt_map.end()) {
 	std::unordered_map<uint64_t, void *>::iterator it;
 	it=digest_umap.find(qp->digest_total);
 	if (it != digest_umap.end()) {
@@ -913,7 +942,6 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 	} else {
 		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
 		qds->add_time(t,n);
-		//digest_bt_map.insert(std::make_pair(qp->digest_total,(void *)qds));
 		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
 	}
 
@@ -934,118 +962,156 @@ uint64_t Query_Processor::get_digest(SQP_par_t *qp) {
 
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_par_t *qp) {
 	//SQP_par_t *qp=(SQP_par_t *)args;
-	while (libinjection_sqli_tokenize(&qp->sf)) {
-		if (qp->sf.current->type=='E' || qp->sf.current->type=='k' || qp->sf.current->type=='T')	{
-			char c1=toupper(qp->sf.current->val[0]);
-			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", qp->sf.current->val, c1);
-			switch (c1) {
-				case 'A':
-					if (!strcasecmp("ALTER",qp->sf.current->val)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
-						while (libinjection_sqli_tokenize(&qp->sf)) {
-							if (qp->sf.current->type=='c') continue;
-							if (qp->sf.current->type=='n') {
-								if (!strcasecmp("OFFLINE",qp->sf.current->val)) continue;
-								if (!strcasecmp("ONLINE",qp->sf.current->val)) continue;
-							}
-							if (qp->sf.current->type=='k') {
-								if (!strcasecmp("IGNORE",qp->sf.current->val)) continue;
-								if (!strcasecmp("TABLE",qp->sf.current->val))
-									return MYSQL_COM_QUERY_ALTER_TABLE;
-							}
-							return MYSQL_COM_QUERY_UNKNOWN;
-						}
-					}
-					if (!strcasecmp("ANALYZE",qp->sf.current->val)) { // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE
-						while (libinjection_sqli_tokenize(&qp->sf)) {
-							if (qp->sf.current->type=='c') continue;
-							if (qp->sf.current->type=='n') {
-								if (!strcasecmp("LOCAL",qp->sf.current->val)) continue;
-							}
-							if (qp->sf.current->type=='k') {
-								if (!strcasecmp("NO_WRITE_TO_BINLOG",qp->sf.current->val)) continue;
-								if (!strcasecmp("TABLE",qp->sf.current->val))
-									return MYSQL_COM_QUERY_ANALYZE_TABLE;
-							}
-							return MYSQL_COM_QUERY_UNKNOWN;
-						}
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'B':
-					if (!strcasecmp("BEGIN",qp->sf.current->val)) { // BEGIN
-						return MYSQL_COM_QUERY_BEGIN;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'C':
-					if (!strcasecmp("COMMIT",qp->sf.current->val)) { // COMMIT
-						return MYSQL_COM_QUERY_COMMIT;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'D':
-					if (!strcasecmp("DELETE",qp->sf.current->val)) { // DELETE
-						return MYSQL_COM_QUERY_DELETE;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'I':
-					if (!strcasecmp("INSERT",qp->sf.current->val)) { // INSERT
-						return MYSQL_COM_QUERY_INSERT;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'R':
-					if (!strcasecmp("ROLLBACK",qp->sf.current->val)) { // ROLLBACK
-						return MYSQL_COM_QUERY_ROLLBACK;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'S':
-					if (!strcasecmp("SELECT",qp->sf.current->val)) { // SELECT
-						return MYSQL_COM_QUERY_SELECT;
-					}
-					if (!strcasecmp("SET",qp->sf.current->val)) { // SET
-						return MYSQL_COM_QUERY_SET;
-					}
-					if (!strcasecmp("SHOW",qp->sf.current->val)) { // SHOW
-						while (libinjection_sqli_tokenize(&qp->sf)) {
-							if (qp->sf.current->type=='c') continue;
-/*
-							if (qp->sf.current->type=='n') {
-								if (!strcasecmp("OFFLINE",qp->sf.current->val)) continue;
-								if (!strcasecmp("ONLINE",qp->sf.current->val)) continue;
-							}
-*/
-							if (qp->sf.current->type=='k') {
-								if (!strcasecmp("TABLE",qp->sf.current->val)) {
-									while (libinjection_sqli_tokenize(&qp->sf)) {
-										if (qp->sf.current->type=='c') continue;
-										if (qp->sf.current->type=='n') {
-											if (!strcasecmp("STATUS",qp->sf.current->val))
-												return MYSQL_COM_QUERY_SHOW_TABLE_STATUS;
-										}
-									}
-								}
-							}
-							return MYSQL_COM_QUERY_UNKNOWN;
-						}
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				case 'U':
-					if (!strcasecmp("UPDATE",qp->sf.current->val)) { // UPDATE
-						return MYSQL_COM_QUERY_UPDATE;
-					}
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-				default:
-					return MYSQL_COM_QUERY_UNKNOWN;
-					break;
-			}
-		}
+	char *text=NULL; // this new variable is a pointer to either qp->digest_text , or to the query
+	if (qp->digest_text) {
+		text=qp->digest_text;
+	} else {
+		text=qp->query_prefix;
 	}
-	return MYSQL_COM_QUERY_UNKNOWN;
+
+
+	enum MYSQL_COM_QUERY_command ret=MYSQL_COM_QUERY_UNKNOWN;
+	char c1;
+
+  tokenizer_t tok = tokenizer( text, " ", TOKENIZER_NO_EMPTIES );
+  char* token=NULL;
+	token=(char *)tokenize(&tok);
+	if (token==NULL) {
+		goto __exit__query_parser_command_type;
+	}
+
+	//c1=toupper(token[0]);
+	c1=token[0];
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", token, c1);
+	switch (c1) {
+		case 'a':
+		case 'A':
+			if (!mystrcasecmp("ALTER",token)) { // ALTER [ONLINE | OFFLINE] [IGNORE] TABLE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!mystrcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_ALTER_TABLE;
+				} else {
+					if (!mystrcasecmp("OFFLINE",token) || !mystrcasecmp("ONLINE",token)) {
+						token=(char *)tokenize(&tok);
+						if (token==NULL) break;
+						if (!mystrcasecmp("TABLE",token)) {
+							ret=MYSQL_COM_QUERY_ALTER_TABLE;
+						} else {
+							if (!mystrcasecmp("IGNORE",token)) {
+								if (token==NULL) break;
+								token=(char *)tokenize(&tok);
+								if (!mystrcasecmp("TABLE",token))
+									ret=MYSQL_COM_QUERY_ALTER_TABLE;
+							}
+						}
+					} else {
+						if (!mystrcasecmp("IGNORE",token)) {
+							if (token==NULL) break;
+							token=(char *)tokenize(&tok);
+							if (!mystrcasecmp("TABLE",token))
+								ret=MYSQL_COM_QUERY_ALTER_TABLE;
+						}
+					}
+				}
+				break;
+			}
+			if (!mystrcasecmp("ANALYZE",token)) { // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_ANALYZE_TABLE;
+				} else {
+					if (!strcasecmp("NO_WRITE_TO_BINLOG",token) || !strcasecmp("LOCAL",token)) {
+						token=(char *)tokenize(&tok);
+						if (token==NULL) break;
+						if (!strcasecmp("TABLE",token)) {
+							ret=MYSQL_COM_QUERY_ANALYZE_TABLE;
+						}
+					}
+				}
+				break;
+			}
+			break;
+		case 'b':
+		case 'B':
+			if (!strcasecmp("BEGIN",token)) { // BEGIN
+				ret=MYSQL_COM_QUERY_BEGIN;
+			}
+			break;
+		case 'c':
+		case 'C':
+			if (!strcasecmp("COMMIT",token)) { // COMMIT
+				ret=MYSQL_COM_QUERY_COMMIT;
+			}
+			break;
+		case 'd':
+		case 'D':
+			if (!strcasecmp("DELETE",token)) { // DELETE
+				ret=MYSQL_COM_QUERY_DELETE;
+			}
+			break;
+		case 'i':
+		case 'I':
+			if (!strcasecmp("INSERT",token)) { // INSERT
+				ret=MYSQL_COM_QUERY_INSERT;
+			}
+			break;
+		case 'r':
+		case 'R':
+			if (!strcasecmp("ROLLBACK",token)) { // ROLLBACK
+				ret=MYSQL_COM_QUERY_ROLLBACK;
+			}
+			break;
+		case 's':
+		case 'S':
+			if (!mystrcasecmp("SELECT",token)) { // SELECT
+				ret=MYSQL_COM_QUERY_SELECT;
+				break;
+			}
+			if (!mystrcasecmp("SET",token)) { // SET
+				ret=MYSQL_COM_QUERY_SET;
+				break;
+			}
+			if (!mystrcasecmp("SHOW",token)) { // SHOW
+				ret=MYSQL_COM_QUERY_SHOW;
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					token=(char *)tokenize(&tok);
+					if (token==NULL) break;
+					if (!strcasecmp("STATUS",token)) {
+						ret=MYSQL_COM_QUERY_SHOW_TABLE_STATUS;
+					}
+				}
+				break;
+			}
+			if (!mystrcasecmp("START",token)) { // START
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TRANSACTION",token)) {
+					ret=MYSQL_COM_QUERY_START_TRANSACTION;
+				}
+				break;
+			}
+			break;
+		case 'u':
+		case 'U':
+			if (!strcasecmp("UPDATE",token)) { // UPDATE
+				ret=MYSQL_COM_QUERY_UPDATE;
+			}
+			break;
+		default:
+			break;
+	}
+
+__exit__query_parser_command_type:
+  free_tokenizer( &tok );
+	if (qp->query_prefix) {
+		free(qp->query_prefix);
+		qp->query_prefix=NULL;
+	}
+	return ret;
 }
 
 bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {
@@ -1072,6 +1138,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					qpo->delay=t;
 				}
 			}
+			if (!strcasecmp(key,"query_retries")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->retries=t;
+				}
+			}
 			if (!strcasecmp(key,"query_timeout")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
@@ -1082,6 +1154,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					qpo->destination_hostgroup=t;
+				}
+			}
+			if (!strcasecmp(key,"mirror")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->mirror_hostgroup=t;
 				}
 			}
 		}
@@ -1095,7 +1173,6 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 
 
 void Query_Processor::query_parser_free(SQP_par_t *qp) {
-	//SQP_par_t *qp=(SQP_par_t *)args;
 	if (qp->digest_text) {
 		free(qp->digest_text);
 		qp->digest_text=NULL;
@@ -1104,5 +1181,4 @@ void Query_Processor::query_parser_free(SQP_par_t *qp) {
 		free(qp->first_comment);
 		qp->first_comment=NULL;
 	}
-	//free(qp);
 };

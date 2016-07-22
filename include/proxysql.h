@@ -63,8 +63,6 @@
 
 #include "proxysql_mem.h"
 
-#include "../deps/libinjection/libinjection.h"
-#include "../deps/libinjection/libinjection_sqli.h"
 
 #include "proxysql_structs.h"
 #include "proxysql_debug.h"
@@ -87,8 +85,8 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_VERSION	"1.1.2" DEB
-#define PROXYSQL_CODENAME	"Kleon"
+#define PROXYSQL_VERSION	"1.2.0k" DEB
+#define PROXYSQL_CODENAME	"Truls"
 
 #ifndef PROXYSQL_FUNC_DEFS
 #define PROXYSQL_FUNC_DEFS

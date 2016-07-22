@@ -47,27 +47,42 @@ bool SQLite3DB::execute(const char *str) {
 	assert(url);
 	assert(db);
 	char *err=NULL;
-	sqlite3_exec(db, str, NULL, 0, &err);
-	if(err!=NULL) {
-        proxy_error("SQLITE error: %s --- %s\n", err, str);
-		if (assert_on_error) {
-			assert(err==0);
+	int rc=0;
+	do {
+	rc=sqlite3_exec(db, str, NULL, 0, &err);
+//	fprintf(stderr,"%d : %s\n", rc, str);
+		if(err!=NULL) {
+			if (rc!=SQLITE_LOCKED) {
+				proxy_error("SQLITE error: %s --- %s\n", err, str);
+				if (assert_on_error) {
+					assert(err==0);
+				}
+			}
+			sqlite3_free(err);
+			err=NULL;
 		}
-		return false;		
+		if (rc==SQLITE_LOCKED) { // the execution of sqlite3_exec() failed because locked
+			usleep(USLEEP_SQLITE_LOCKED);
+		}
+	} while (rc==SQLITE_LOCKED);
+	if (rc==SQLITE_OK) {
+		return true;
 	}
-	return true;
+	return false;
 }
 
 
 bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int *affected_rows, SQLite3_result **resultset) {
 	int rc;
-	sqlite3_stmt *statement;
+	sqlite3_stmt *statement=NULL;
 	*error=NULL;
 	bool ret=false;
+	VALGRIND_DISABLE_ERROR_REPORTING;
 	if(sqlite3_prepare_v2(db, str, -1, &statement, 0) != SQLITE_OK) {
 		*error=strdup(sqlite3_errmsg(db));
 		goto __exit_execute_statement;
 	}
+	VALGRIND_ENABLE_ERROR_REPORTING;
 	*cols = sqlite3_column_count(statement);
 	if (*cols==0) { // not a SELECT
 		*resultset=NULL;

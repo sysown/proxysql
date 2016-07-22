@@ -35,6 +35,7 @@ class ProxySQL_GlobalVariables {
 		unsigned long long start_time;
 		bool gdbg;
 		bool nostart;
+		bool monitor;
 //		bool use_proxysql_mem;
 		pthread_mutex_t start_mutex;
 		bool foreground;

@@ -42,6 +42,7 @@ mysql_status(short event, short cont) {
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
 	password=NULL;
+	sha1_pass=NULL;
 	schemaname=NULL;
 	hash=0;
 	//schemaname=strdup(mysql_thread___default_schema);
@@ -50,6 +51,7 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
 	if (password) free(password);
+	if (sha1_pass) free(sha1_pass);
 	if (schemaname) free(schemaname);
 }
 
@@ -89,7 +91,7 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 	return hash;
 }
 
-void MySQL_Connection_userinfo::set(char *u, char *p, char *s) {
+void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (u) {
 		if (username) free(username);
 		username=strdup(u);
@@ -102,16 +104,26 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s) {
 		if (schemaname) free(schemaname);
 		schemaname=strdup(s);
 	}
+	if (sh1) {
+		if (sha1_pass) {
+			free(sha1_pass);
+		}
+		sha1_pass=strdup(sh1);
+	}
 	compute_hash();
 }
 
 void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
-	set(ui->username, ui->password, ui->schemaname);
+	set(ui->username, ui->password, ui->schemaname, ui->sha1_pass);
 }
 
 
 bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
-	if ((schemaname==NULL) || (strncmp(_new,schemaname,l))) {
+	int _l=0;
+	if (schemaname) {
+		_l=strlen(schemaname); // bug fix for #609
+	}
+	if ((schemaname==NULL) || (strncmp(_new,schemaname, (l > _l ? l : _l) ))) {
 		if (schemaname) {
 			free(schemaname);
 			schemaname=NULL;
@@ -153,32 +165,33 @@ MySQL_Connection::MySQL_Connection() {
 	options.compression_min_length=0;
 	options.server_version=NULL;
 	options.autocommit=true;
+	options.init_connect=NULL;
+	options.init_connect_sent=false;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
 	query.length=0;
 	largest_query_length=0;
 	MyRS=NULL;
+	creation_time=0;
+	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 };
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 	if (options.server_version) free(options.server_version);
+	if (options.init_connect) free(options.init_connect);
 	if (userinfo) {
 		delete userinfo;
 		userinfo=NULL;
 	}
 	if (mysql) {
 		// always decrease the counter
-		__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
+		if (ret_mysql)
+			__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
 		async_free_result();
-		if (send_quit) {
-			mysql_close(mysql);
-		} else {
-			mysql_close_no_command(mysql);
-			shutdown(fd, SHUT_RDWR);
-		}
+		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
 	}
 //	// FIXME: with the use of mysql client library , this part should be gone.
@@ -303,6 +316,9 @@ void MySQL_Connection::connect_start() {
 	mysql=mysql_init(NULL);
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+	if (parent->use_ssl) {
+		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
+	}
 	unsigned int timeout= 1;
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
 	const CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
@@ -316,10 +332,19 @@ void MySQL_Connection::connect_start() {
 		client_flags += CLIENT_FOUND_ROWS;
 	if (parent->compression)
 		client_flags += CLIENT_COMPRESS;
+	client_flags += CLIENT_MULTI_STATEMENTS; // FIXME: add global variable
+	char *auth_password=NULL;
+	if (userinfo->password) {
+		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
+			auth_password=userinfo->sha1_pass;
+		} else {
+			auth_password=userinfo->password;
+		}
+	}
 	if (parent->port) {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, userinfo->password, userinfo->schemaname, parent->port, NULL, client_flags);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, userinfo->password, userinfo->schemaname, parent->port, parent->address, client_flags);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
 }
@@ -333,7 +358,16 @@ void MySQL_Connection::change_user_start() {
 	PROXY_TRACE();
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui=myds->sess->client_myds->myconn->userinfo;
-	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, _ui->password, _ui->schemaname);
+	char *auth_password=NULL;
+	userinfo->set(_ui);	// fix for bug #605
+	if (userinfo->password) {
+		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
+			auth_password=userinfo->sha1_pass;
+		} else {
+			auth_password=userinfo->password;
+		}
+	}
+	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
 }
 
 void MySQL_Connection::change_user_cont(short event) {
@@ -423,6 +457,7 @@ void MySQL_Connection::store_result_cont(short event) {
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 MDB_ASYNC_ST MySQL_Connection::handler(short event) {
+	unsigned int processed_bytes=0;	// issue #527 : this variable will store the amount of bytes processed during this event
 	if (mysql==NULL) {
 		// it is the first time handler() is being called
 		async_state_machine=ASYNC_CONNECT_START;
@@ -456,7 +491,7 @@ handler_again:
 		case ASYNC_CONNECT_END:
 			if (!ret_mysql) {
 				// always increase the counter
-				proxy_error("Failed to mysql_real_connect() on %s:%d , %d: %s\n", parent->address, parent->port, mysql_errno(mysql), mysql_error(mysql));
+				proxy_error("Failed to mysql_real_connect() on %s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
     		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
     		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
@@ -465,6 +500,27 @@ handler_again:
 		case ASYNC_CONNECT_SUCCESSFUL:
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
+			//assert(mysql->net.vio->async_context);
+			//mysql->net.vio->async_context= mysql->options.extension->async_context;
+			//if (parent->use_ssl) {
+			{
+				// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
+				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+				int f=fcntl(mysql->net.fd, F_GETFL);
+#ifdef FD_CLOEXEC
+				// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
+				fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK|FD_CLOEXEC);
+#else
+				fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
+#endif /* FD_CLOEXEC */
+			}
+			//if (parent->use_ssl) {
+				// mariadb client library disables NONBLOCK for SSL connections ... re-enable it!
+				//mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+				//ioctl_FIONBIO(mysql->net.fd,1);
+				//vio_blocking(mysql->net.vio, FALSE, 0);
+				//fcntl(mysql->net.vio->sd, F_SETFL, O_RDWR|O_NONBLOCK);
+			//}
 			break;
 		case ASYNC_CONNECT_FAILED:
 			parent->connect_error(mysql_errno(mysql));
@@ -512,9 +568,15 @@ handler_again:
 			break;
 		case ASYNC_PING_CONT:
 			assert(myds->sess->status==PINGING_SERVER);
-			ping_cont(event);
+			if (event) {
+				ping_cont(event);
+			}
 			if (async_exit_status) {
-				next_event(ASYNC_PING_CONT);
+				if (myds->sess->thread->curtime >= myds->wait_until) {
+					NEXT_IMMEDIATE(ASYNC_PING_TIMEOUT);
+				} else {
+					next_event(ASYNC_PING_CONT);
+				}
 			} else {
 				NEXT_IMMEDIATE(ASYNC_PING_END);
 			}
@@ -529,6 +591,8 @@ handler_again:
 		case ASYNC_PING_SUCCESSFUL:
 			break;
 		case ASYNC_PING_FAILED:
+			break;
+		case ASYNC_PING_TIMEOUT:
 			break;
 		case ASYNC_QUERY_START:
 			real_query_start();
@@ -557,6 +621,36 @@ handler_again:
 #endif
 			}
 			break;
+
+		case ASYNC_NEXT_RESULT_START:
+			async_exit_status = mysql_next_result_start(&interr, mysql);
+			if (async_exit_status) {
+				next_event(ASYNC_NEXT_RESULT_CONT);
+			} else {
+#ifdef PROXYSQL_USE_RESULT
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+#else
+				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+#endif
+			}
+			break;
+
+		case ASYNC_NEXT_RESULT_CONT:
+			async_exit_status = mysql_next_result_cont(&interr, mysql, mysql_status(event, true));
+			if (async_exit_status) {
+				next_event(ASYNC_NEXT_RESULT_CONT);
+			} else {
+#ifdef PROXYSQL_USE_RESULT
+				NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
+#else
+				NEXT_IMMEDIATE(ASYNC_STORE_RESULT_START);
+#endif
+			}
+			break;
+
+		case ASYNC_NEXT_RESULT_END:
+			break;
+
 		case ASYNC_STORE_RESULT_START:
 			if (mysql_errno(mysql)) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
@@ -584,7 +678,11 @@ handler_again:
 			if (mysql_result==NULL) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			} else {
-				MyRS=new MySQL_ResultSet(&myds->sess->client_myds->myprot, mysql_result, mysql);
+				if (myds->sess->mirror==false) {
+					MyRS=new MySQL_ResultSet(&myds->sess->client_myds->myprot, mysql_result, mysql);
+				} else {
+					MyRS=new MySQL_ResultSet(NULL, mysql_result, mysql);
+				}
 				async_fetch_row_start=false;
 				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
 			}
@@ -604,7 +702,12 @@ handler_again:
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
-					NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
+					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
+					if (processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8) {
+						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+					} else {
+						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
+					}
 				} else {
 					MyRS->add_eof();
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
@@ -612,6 +715,14 @@ handler_again:
 			}
 			break;
 		case ASYNC_QUERY_END:
+			if (mysql_result) {
+				mysql_free_result(mysql_result);
+				mysql_result=NULL;
+			}
+			//if (mysql_next_result(mysql)==0) {
+			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
+				async_state_machine=ASYNC_NEXT_RESULT_START;
+			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_START:
 			set_autocommit_start();
@@ -758,6 +869,7 @@ int MySQL_Connection::async_connect(short event) {
 	if (async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
 		async_state_machine=ASYNC_IDLE;
 		myds->wait_until=0;
+		creation_time=myds->sess->thread->curtime;
 		return 0;
 	}
 	handler(event);
@@ -789,10 +901,16 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
-	if (parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD)
+	if (
+		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+	) {
 		return -1;
+	}
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
+			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end
 			return 0;
 			break;
 		case ASYNC_IDLE:
@@ -809,6 +927,16 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 		} else {
 			return 0;
 		}
+	}
+	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
+		// if we reached this point it measn we are processing a multi-statement
+		// and we need to exit to give control to MySQL_Session
+		processing_multi_statement=true;
+		return 2;
+	}
+	if (processing_multi_statement==true) {
+		// we are in the middle of processing a multi-statement
+		return 3;
 	}
 	return 1;
 }
@@ -831,6 +959,9 @@ int MySQL_Connection::async_ping(short event) {
 		case ASYNC_PING_FAILED:
 			return -1;
 			break;
+		case ASYNC_PING_TIMEOUT:
+			return -2;
+			break;
 		case ASYNC_IDLE:
 			async_state_machine=ASYNC_PING_START;
 		default:
@@ -846,6 +977,9 @@ int MySQL_Connection::async_ping(short event) {
 			break;
 		case ASYNC_PING_FAILED:
 			return -1;
+			break;
+		case ASYNC_PING_TIMEOUT:
+			return -2;
 			break;
 		default:
 			return 1;
@@ -1056,6 +1190,10 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				set_status_user_variable(true);
 			}
 		}
+		// For issue #555 , multiplexing is disabled if --safe-updates is used
+		if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
+				set_status_user_variable(true);
+		}
 	}
 	if (get_status_temporary_table()==false) { // we search for temporary if not already set
 		if (!strncasecmp(query_digest_text,"CREATE TEMPORARY TABLE ", strlen("CREATE TEMPORARY TABLE "))) {
@@ -1063,7 +1201,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		}
 	}
 	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
-		if (!strncasecmp(query_digest_text,"LOCK TABLES", strlen("LOCK TABLES"))) {
+		if (!strncasecmp(query_digest_text,"LOCK TABLE", strlen("LOCK TABLE"))) {
 			set_status_lock_tables(true);
 		}
 	}
@@ -1091,4 +1229,83 @@ void MySQL_Connection::optimize() {
 			mysql->net.buff_end=mysql->net.buff+mysql->net.max_packet;
 		}
 	}
+}
+
+// close_mysql() is a replacement for mysql_close()
+// if avoids that a QUIT command stops forever
+// FIXME: currently doesn't support encryption and compression
+void MySQL_Connection::close_mysql() {
+	if ((send_quit) && (mysql->net.vio)) {
+		char buff[5];
+		mysql_hdr myhdr;
+		myhdr.pkt_id=0;
+		myhdr.pkt_length=1;
+		memcpy(buff, &myhdr, sizeof(mysql_hdr));
+		buff[4]=0x01;
+		int fd=mysql->net.fd;
+		send(fd, buff, 5, MSG_NOSIGNAL);
+	}
+//	int rc=0;
+	mysql_close_no_command(mysql);
+/*
+	if (mysql->net.vio) {
+		rc=shutdown(fd, SHUT_RDWR);
+		if (rc) {
+			proxy_error("shutdown(): FD=%d , code=%d\n", fd, errno);
+			assert(rc==0);
+		}
+		close(fd);
+	}
+*/
+}
+
+
+// this function is identical to async_query() , with the only exception that MyRS should never be set
+int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigned long length) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	if (
+		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+	) {
+		return -1;
+	}
+	switch (async_state_machine) {
+		case ASYNC_QUERY_END:
+			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end
+			return 0;
+			break;
+		case ASYNC_IDLE:
+			set_query(stmt,length);
+			async_state_machine=ASYNC_QUERY_START;
+		default:
+			handler(event);
+			break;
+	}
+	if (MyRS) {
+		// this is a severe mistake, we shouldn't have reach here
+		// for now we do not assert but report the error
+		proxy_error("Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
+	}
+	if (async_state_machine==ASYNC_QUERY_END) {
+		if (mysql_errno(mysql)) {
+			return -1;
+		} else {
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+		}
+	}
+	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
+		// if we reached this point it measn we are processing a multi-statement
+		// and we need to exit to give control to MySQL_Session
+		processing_multi_statement=true;
+		return 2;
+	}
+	if (processing_multi_statement==true) {
+		// we are in the middle of processing a multi-statement
+		return 3;
+	}
+	return 1;
 }

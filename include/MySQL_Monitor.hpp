@@ -21,6 +21,41 @@
 
 class MySQL_Monitor_Connection_Pool;
 
+enum MySQL_Monitor_State_Data_Task_Type {
+	MON_CONNECT,
+	MON_PING,
+	MON_READ_ONLY,
+	MON_REPLICATION_LAG
+};
+
+class MySQL_Monitor_State_Data {
+  public:
+  MySQL_Monitor_State_Data_Task_Type task_id;
+  struct timeval tv_out;
+  unsigned long long t1;
+  unsigned long long t2;
+  int ST;
+  char *hostname;
+  int port;
+  bool use_ssl;
+  struct event *ev_mysql;
+  MYSQL *mysql;
+  struct event_base *base;
+  MYSQL_RES *result;
+  MYSQL *ret;
+  int interr;
+  char * mysql_error_msg;
+  MYSQL_ROW *row;
+  unsigned int repl_lag;
+  unsigned int hostgroup_id;
+	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0);
+	~MySQL_Monitor_State_Data();
+	int handler(int fd, short event);
+	void next_event(int new_st, int status);
+	void unregister();
+};
+
+
 class MySQL_Monitor {
 	private:
 	//unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;

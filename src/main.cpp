@@ -29,6 +29,32 @@ static const char * proxysql_pid_file() {
 }
 
 
+/*struct cpu_timer
+{
+	~cpu_timer()
+	{
+		auto end = std::clock() ;
+		std::cerr << double( end - begin ) / CLOCKS_PER_SEC << " secs.\n" ;
+	};
+	const std::clock_t begin = std::clock() ;
+};
+*/
+struct cpu_timer
+{
+	cpu_timer() {
+		begin = monotonic_time();
+	}
+	~cpu_timer()
+	{
+		unsigned long long end = monotonic_time();
+#ifdef DEBUG
+		std::cerr << double( end - begin ) / 1000000 << " secs.\n" ;
+#endif /* DEBUG */
+		begin=end-begin; // here only to make compiler happy
+	};
+	unsigned long long begin;
+};
+
 /*
 void ProxySQL_Main_init_SSL_module() {
 	SSL_library_init();
@@ -103,7 +129,8 @@ static volatile int load_;
 
 //__thread l_sfp *__thr_sfp=NULL;
 
-const char *malloc_conf = "xmalloc:true,lg_tcache_max:16";
+const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay";
+//const char *malloc_conf = "prof_leak:true,lg_prof_sample:0,prof_final:true,xmalloc:true,lg_tcache_max:16";
 
 int listen_fd;
 int socket_fd;
@@ -257,8 +284,13 @@ void ProxySQL_Main_init_MySQL_Monitor_module() {
 }
 
 void ProxySQL_Main_join_all_threads() {
+	cpu_timer t;
 	if (GloMTH) {
+		cpu_timer t;
 		GloMTH->shutdown_threads();
+#ifdef DEBUG
+		std::cerr << "GloMTH joined in ";
+#endif
 	}
 	if (GloQC) {
 		GloQC->shutdown=1;
@@ -270,44 +302,91 @@ void ProxySQL_Main_join_all_threads() {
 
 	// join GloMyMon thread
 	if (GloMyMon) {
+		cpu_timer t;
 		MyMon_thread->join();
+#ifdef DEBUG
+		std::cerr << "GloMyMon joined in ";
+#endif
 	}
 
 	// join GloQC thread
 	if (GloQC) {
+		cpu_timer t;
 		pthread_join(GloQC->purge_thread_id, NULL);
+#ifdef DEBUG
+		std::cerr << "GloQC joined in ";
+#endif
 	}
+#ifdef DEBUG
+	std::cerr << "All threads joined in ";
+#endif
 }
 
 void ProxySQL_Main_shutdown_all_modules() {
 	if (GloMyMon) {
+		cpu_timer t;
 		delete GloMyMon;
 		GloMyMon=NULL;
+#ifdef DEBUG
+		std::cerr << "GloMyMon shutdown in ";
+#endif
 	}
 
 	if (GloQC) {
+		cpu_timer t;
 		delete GloQC;
 		GloQC=NULL;
+#ifdef DEBUG
+		std::cerr << "GloQC shutdown in ";
+#endif
 	}
 	if (GloQPro) {
+		cpu_timer t;
 		delete GloQPro;
 		GloQPro=NULL;
+#ifdef DEBUG
+		std::cerr << "GloQPro shutdown in ";
+#endif
 	}
 	if (GloMyAuth) {
+		cpu_timer t;
 		delete GloMyAuth;
 		GloMyAuth=NULL;
+#ifdef DEBUG
+		std::cerr << "GloMyAuth shutdown in ";
+#endif
 	}
 	if (GloMTH) {
+		cpu_timer t;
 		delete GloMTH;
 		GloMTH=NULL;
+#ifdef DEBUG
+		std::cerr << "GloMTH shutdown in ";
+#endif
 	}
 	if (GloMyLogger) {
+		cpu_timer t;
 		delete GloMyLogger;
 		GloMyLogger=NULL;
+#ifdef DEBUG
+		std::cerr << "GloMyLogger shutdown in ";
+#endif
 	}
 
-	delete GloAdmin;
-	delete MyHGM;
+	{
+		cpu_timer t;
+		delete GloAdmin;
+#ifdef DEBUG
+		std::cerr << "GloAdmin shutdown in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		delete MyHGM;
+#ifdef DEBUG
+		std::cerr << "GloHGM shutdown in ";
+#endif
+	}
 }
 
 void ProxySQL_Main_init() {
@@ -354,31 +433,78 @@ void ProxySQL_Main_init_phase2___not_started() {
 
 void ProxySQL_Main_init_phase3___start_all() {
 
-	GloMyLogger->set_datadir(GloVars.datadir);
-
+	{
+		cpu_timer t;
+		GloMyLogger->set_datadir(GloVars.datadir);
+#ifdef DEBUG
+		std::cerr << "Main phase3 : GloMyLogger initialized in ";
+#endif
+	}
 	// load all mysql servers to GloHGH
-	GloAdmin->init_mysql_servers();
-	ProxySQL_Main_init_Query_module();
-	ProxySQL_Main_init_MySQL_Threads_Handler_module();
-	ProxySQL_Main_init_Query_Cache_module();
+	{
+		cpu_timer t;
+		GloAdmin->init_mysql_servers();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : GloAdmin initialized in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_Query_module();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : Query Processor initialized in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_MySQL_Threads_Handler_module();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : MySQL Threads Handler initialized in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_Query_Cache_module();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : Query Cache initialized in ";
+#endif
+	}
 
 	do { /* nothing */ } while (load_ != 1);
 	load_ = 0;
 
-	GloMTH->start_listeners();
-	ProxySQL_Main_init_MySQL_Monitor_module();
+	{
+		cpu_timer t;
+		GloMTH->start_listeners();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : MySQL Threads Handler listeners started in ";
+#endif
+	}
+	if (GloVars.global.monitor==true)
+		{
+			cpu_timer t;
+			ProxySQL_Main_init_MySQL_Monitor_module();
+#ifdef DEBUG
+			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
+#endif
+		}
 }
 
 
 
 void ProxySQL_Main_init_phase4___shutdown() {
+	cpu_timer t;
 	ProxySQL_Main_join_all_threads();
 
+	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
 	if (GloVars.global.nostart) {
 		pthread_mutex_unlock(&GloVars.global.start_mutex);
 	}
 
 	ProxySQL_Main_shutdown_all_modules();
+#ifdef DEBUG
+	std::cerr << "Main init phase4 shutdown completed in ";
+#endif
 }
 
 
@@ -487,14 +613,30 @@ bool ProxySQL_daemonize_phase3() {
 
 int main(int argc, const char * argv[]) {
 
-	ProxySQL_Main_init();
-	ProxySQL_Main_process_global_variables(argc, argv);
-	GloVars.global.start_time=monotonic_time(); // always initialize it
+	{
+		cpu_timer t;
+		ProxySQL_Main_init();
+#ifdef DEBUG
+		std::cerr << "Main init phase0 completed in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		ProxySQL_Main_process_global_variables(argc, argv);
+		GloVars.global.start_time=monotonic_time(); // always initialize it
+#ifdef DEBUG
+		std::cerr << "Main init global variables completed in ";
+#endif
+	}
 
 	if (GloVars.global.foreground==false) {
-
-		ProxySQL_daemonize_phase1((char *)argv[0]);
-
+		{
+			cpu_timer t;
+			ProxySQL_daemonize_phase1((char *)argv[0]);
+#ifdef DEBUG
+			std::cerr << "Main daemonize phase1 completed in ";
+#endif
+		}
 	/* Do the fork */
 		if ((pid = daemon_fork()) < 0) {
 			/* Exit on error */
@@ -507,12 +649,16 @@ int main(int argc, const char * argv[]) {
 
 		} else { /* The daemon */
 
+			cpu_timer t;
 			GloVars.global.start_time=monotonic_time();
 			GloVars.install_signal_handler();
 			if (ProxySQL_daemonize_phase2()==false) {
 				goto finish;
 			}
 
+#ifdef DEBUG
+			std::cerr << "Main daemonize phase1 completed in ";
+#endif
 		}
 
 	laststart=0;
@@ -550,22 +696,36 @@ gotofork:
 
 __start_label:
 
-	ProxySQL_Main_init_phase2___not_started();
-
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_phase2___not_started();
+#ifdef DEBUG
+		std::cerr << "Main init phase2 completed in ";
+#endif
+	}
 	if (glovars.shutdown) {
 		goto __shutdown;
 	}
 
-	ProxySQL_Main_init_phase3___start_all();
-
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_phase3___start_all();
+#ifdef DEBUG
+		std::cerr << "Main init phase3 completed in ";
+#endif
+	}
 
 	while (glovars.shutdown==0) {
-		sleep(1);   // FIXME: TERRIBLE UGLY
+		usleep(500000);   // FIXME: TERRIBLE UGLY
 	}
-		
+
 __shutdown:
 
+	proxy_info("Starting shutdown...\n");
+
 	ProxySQL_Main_init_phase4___shutdown();
+
+	proxy_info("Shutdown completed!\n");
 
 	if (glovars.reload) {
 		if (glovars.reload==2) {

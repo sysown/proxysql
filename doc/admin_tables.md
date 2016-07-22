@@ -116,11 +116,16 @@ The fields have the following semantics:
 * default_schema - the schema to which the connection should change by default
 * schema_locked - not supported yet (TODO: check)
 * transaction_persistent - if this is set for the user with which the MySQL client is connecting to ProxySQL (thus a "frontend" user - see below), transactions started within a hostgroup will remain within that hostgroup regardless of any other rules
-* fast_forward - feature currently disabled. Originally, it set it bypass the query processing layer (rewriting, caching) and pass through the query directly as is to the backend server. Users flagged as such 
+* fast_forward - if set it bypass the query processing layer (rewriting, caching) and pass through the query directly as is to the backend server.
 * frontend - if set to 1, this (username, password) pair is used for authenticating to the ProxySQL instance
 * backend - if set to 1, this (username, password) pair is used for authenticating to the mysqld servers against any hostgroup
 
 Note, currently all users need both "frontend" and "backend" set to 1 . Future versions of ProxySQL will separate the crendentials between frontend and backend. In this way frontend will never know the credential to connect directly to the backend, forcing all the connection through ProxySQL and increasing the security of the system.
+
+Fast forward notes:
+* it doesn't require a different port : full features proxy logic and "fast forward" logic is implemented in the same code/module
+* fast forward is implemented on a per-user basis : depending from the user that connects to ProxySQL , fast forward is enabled or disabled
+* fast forward algorithm is enabled after authentication : the client still authenticates to ProxySQL, and ProxySQL will create a connection when the client will start sending traffic. This means that connections' errors are still handled during connect phase.
 
 ## `mysql_query_rules`
 

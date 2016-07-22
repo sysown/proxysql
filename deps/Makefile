@@ -1,6 +1,6 @@
 
 
-default: libevent libconfig libdaemon jemalloc mariadb_client re2 libinjection sqlite3
+default: libevent libconfig libdaemon jemalloc mariadb_client re2 sqlite3
 .PHONY: default
 
 
@@ -20,16 +20,10 @@ libevent/libevent/.libs/libevent.a:
 
 libevent: libevent/libevent/.libs/libevent.a
 
-libinjection/libinjection.a:
-	cd libinjection && ${MAKE}
-
-libinjection: libinjection/libinjection.a
-
-
 jemalloc/jemalloc/lib/libjemalloc.a:
-	cd jemalloc && rm -rf jemalloc-3.6.0
-	cd jemalloc && tar -jxf jemalloc-3.6.0.tar.bz2
-	cd jemalloc/jemalloc && CFLAGS=-O2 ./configure --enable-xmalloc
+	cd jemalloc && rm -rf jemalloc-4.2.1
+	cd jemalloc && tar -jxf jemalloc-4.2.1.tar.bz2
+	cd jemalloc/jemalloc && ./configure --enable-xmalloc --enable-munmap
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
@@ -42,6 +36,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mysql_async.c < ../mysql_async.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/password.c < ../password.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
@@ -78,7 +73,6 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
-	cd libinjection && ${MAKE} clean
 	cd libevent && rm -rf libevent-2.0.22-stable
 	cd sqlite3/sqlite3 && rm -rf *.o
 .PHONY: cleanall

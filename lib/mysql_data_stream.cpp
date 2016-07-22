@@ -97,12 +97,18 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	pkts_sent=0;
 	client_addr=NULL;
 
+	addr.addr=NULL;
+	addr.port=0;
+	proxy_addr.addr=NULL;
+	proxy_addr.port=0;
+
 	sess=NULL;
 	mysql_real_query.pkt.ptr=NULL;
 	mysql_real_query.pkt.size=0;
 	mysql_real_query.QueryPtr=NULL;
 	mysql_real_query.QuerySize=0;
 
+	query_retries_on_failure=0;
 	connect_retries_on_failure=0;
 	max_connect_time=0;
 	wait_until=0;
@@ -112,7 +118,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 
 	PSarrayIN=NULL;
 	PSarrayOUT=NULL;
-	PSarrayOUTpending=NULL;
+	//PSarrayOUTpending=NULL;
 	resultset=NULL;
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
@@ -148,6 +154,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		free(client_addr);
 		client_addr=NULL;
 	}
+	if (addr.addr) {
+		free(addr.addr);
+		addr.addr=NULL;
+	}
+	if (proxy_addr.addr) {
+		free(proxy_addr.addr);
+		proxy_addr.addr=NULL;
+	}
 
 	free_mysql_real_query();
 
@@ -167,13 +181,13 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		}
 		delete PSarrayOUT;
 	}
-	if (PSarrayOUTpending) {
-		while (PSarrayOUTpending->len) {
-			PSarrayOUTpending->remove_index_fast(0,&pkt);
-			l_free(pkt.size, pkt.ptr);
-		}
-		delete PSarrayOUTpending;
-	}
+//	if (PSarrayOUTpending) {
+//		while (PSarrayOUTpending->len) {
+//			PSarrayOUTpending->remove_index_fast(0,&pkt);
+//			l_free(pkt.size, pkt.ptr);
+//		}
+//		delete PSarrayOUTpending;
+//	}
 	if (resultset) {
 		while (resultset->len) {
 			resultset->remove_index_fast(0,&pkt);
@@ -228,13 +242,20 @@ void MySQL_Data_Stream::init() {
 		proxy_debug(PROXY_DEBUG_NET,1, "Init Data Stream. Session=%p, DataStream=%p -- type %d\n" , sess, this, myds_type);
 		if (PSarrayIN==NULL) PSarrayIN = new PtrSizeArray();
 		if (PSarrayOUT==NULL) PSarrayOUT= new PtrSizeArray();
-		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
+//		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
 		if (resultset==NULL) resultset = new PtrSizeArray();
 	}
 	if (myds_type!=MYDS_FRONTEND) {
 		queue_destroy(queueIN);
 		queue_destroy(queueOUT);
 	}
+}
+
+void MySQL_Data_Stream::reinit_queues() {
+	if (queueIN.buffer==NULL)
+		queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
+	if (queueOUT.buffer==NULL)
+		queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
 }
 
 // this function initializes a MySQL_Data_Stream with arguments
@@ -676,6 +697,12 @@ int MySQL_Data_Stream::array2buffer() {
 	int ret=0;
 	unsigned int idx=0;
 	bool cont=true;
+	if (sess) {
+		if (sess->mirror==true) { // if this is a mirror session, just empty it
+			idx=PSarrayOUT->len;
+			goto __exit_array2buffer;
+		}
+	}
 	while (cont) {
 		VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT)==0) {
@@ -813,6 +840,11 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 			close(s);
 			return -1;
 		}
+#ifdef FD_CLOEXEC
+		int f_=fcntl(s, F_GETFL);
+		// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
+		fcntl(s, F_SETFL, f_|FD_CLOEXEC);
+#endif /* FD_CLOEXEC */
 		ioctl_FIONBIO(s, 1);
 		memset(&a, 0, sizeof(a));
 		a.sin_port = htons(connect_port);
@@ -830,6 +862,11 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 			close(s);
 			return -1;
 		}
+#ifdef FD_CLOEXEC
+		int f_=fcntl(s, F_GETFL);
+		// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
+		fcntl(s, F_SETFL, f_|FD_CLOEXEC);
+#endif /* FD_CLOEXEC */
 		ioctl_FIONBIO(s, 1);
 		memset(u.sun_path,0,UNIX_PATH_MAX);
 		u.sun_family = AF_UNIX;
@@ -867,6 +904,7 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 }
 
 
+/*
 void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 	unsigned int k;
 	PtrSize_t pkt2;
@@ -875,6 +913,7 @@ void MySQL_Data_Stream::move_from_OUT_to_OUTpending() {
 		PSarrayOUTpending->add(pkt2.ptr, pkt2.size);
 	}
 }
+*/
 
 /*
 int MySQL_Data_Stream::assign_mshge(unsigned int hid) {
@@ -924,10 +963,14 @@ void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
 	mc->last_time_used=sess->thread->curtime;
-	detach_connection();
-	unplug_backend();
-	//mc->async_state_machine=ASYNC_IDLE;
-	MyHGM->push_MyConn_to_pool(mc);
+	if ((mysql_thread___connection_max_age_ms) && (mc->last_time_used > mc->creation_time + mysql_thread___connection_max_age_ms * 1000)) {
+		destroy_MySQL_Connection_From_Pool(true);
+	} else {
+		detach_connection();
+		unplug_backend();
+		//mc->async_state_machine=ASYNC_IDLE;
+		MyHGM->push_MyConn_to_pool(mc);
+	}
 }
 
 void MySQL_Data_Stream::free_mysql_real_query() {

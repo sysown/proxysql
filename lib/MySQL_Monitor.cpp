@@ -35,6 +35,25 @@ static MySQL_Monitor *GloMyMon;
 
 static void state_machine_handler(int fd, short event, void *arg);
 
+static void close_mysql(MYSQL *my) {
+	if (my->net.vio) {
+		char buff[5];
+		mysql_hdr myhdr;
+		myhdr.pkt_id=0;
+		myhdr.pkt_length=1;
+		memcpy(buff, &myhdr, sizeof(mysql_hdr));
+		buff[4]=0x01;
+		int fd=my->net.fd;
+		int wb=send(fd, buff, 5, MSG_NOSIGNAL);
+		fd+=wb; // dummy, to make compiler happy
+		fd-=wb; // dummy, to make compiler happy
+	}
+	mysql_close_no_command(my);
+}
+
+
+
+
 /*
 struct state_data {
 	int ST;
@@ -211,13 +230,16 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 	pthread_mutex_unlock(&mutex);
 }
 
+/*
 enum MySQL_Monitor_State_Data_Task_Type {
 	MON_CONNECT,
 	MON_PING,
 	MON_READ_ONLY,
 	MON_REPLICATION_LAG
 };
+*/
 
+/*
 class MySQL_Monitor_State_Data {
 	public:
 	MySQL_Monitor_State_Data_Task_Type task_id;
@@ -227,6 +249,7 @@ class MySQL_Monitor_State_Data {
 	int ST;
 	char *hostname;
 	int port;
+	bool use_ssl;
 	struct event *ev_mysql;
 	MYSQL *mysql;
 	struct event_base *base;
@@ -237,7 +260,8 @@ class MySQL_Monitor_State_Data {
 	MYSQL_ROW *row;
 	unsigned int repl_lag;
 	unsigned int hostgroup_id;
-	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b) {
+*/
+MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl) {
 		task_id=MON_CONNECT;
 		mysql=NULL;
 		result=NULL;
@@ -247,32 +271,43 @@ class MySQL_Monitor_State_Data {
 		hostname=strdup(h);
 		port=p;
 		base=b;
+		use_ssl=_use_ssl;
 		ST=0;
 		ev_mysql=NULL;
-	}
-	~MySQL_Monitor_State_Data() {
+	};
+
+MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 		if (hostname) {
 			free(hostname);
 		}
-		assert(mysql==NULL); // if mysql is not NULL, there is a bug
+		//assert(mysql==NULL); // if mysql is not NULL, there is a bug
+		if (mysql) {
+			close_mysql(mysql);
+			mysql=NULL;
+		}
 		if (mysql_error_msg) {
 			free(mysql_error_msg);
 		}
 	}
-	void unregister() {
+void MySQL_Monitor_State_Data::unregister() {
 		if (ev_mysql) {
 			event_del(ev_mysql);
 			event_free(ev_mysql);
 		}
 	}
-	int handler(int fd, short event) {
+
+int MySQL_Monitor_State_Data::handler(int fd, short event) {
 		int status;
 again:
 		switch (ST) {
 			case 0:
 				mysql=mysql_init(NULL);
 				assert(mysql);
+				// FIXME: should we set timeout ?
 				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+				if (use_ssl) {
+					mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
+				}
 				if (mysql_thread___monitor_timer_cached==true) {
 					event_base_gettimeofday_cached(base, &tv_out);
 				} else {
@@ -292,8 +327,17 @@ again:
 				break;
 			case 1:
 				status= mysql_real_connect_cont(&ret, mysql, mysql_status(event));
-				if (status)
-					next_event(1, status);
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_connect_timeout * 1000) {
+						next_event(1, status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
 				else
 					//NEXT_IMMEDIATE(40);
 					NEXT_IMMEDIATE(3);
@@ -341,8 +385,17 @@ again:
 
 			case 8:
 				status=mysql_ping_cont(&interr,mysql, mysql_status(event));
-				if (status)
-					next_event(8,status);
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_ping_timeout * 1000) {
+						next_event(8,status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
 				else 
 					NEXT_IMMEDIATE(9);
 				break;
@@ -365,6 +418,13 @@ again:
 				}
 				break;
 
+			case 90: // timeout for connect , ping or replication lag
+				mysql_error_msg=strdup("timeout");
+				close_mysql(mysql);
+				mysql=NULL;
+				return -1;
+				break;
+
 			case 10:
 				if (mysql_thread___monitor_timer_cached==true) {
 					event_base_gettimeofday_cached(base, &tv_out);
@@ -381,10 +441,20 @@ again:
 
 			case 11:
 				status=mysql_query_cont(&interr,mysql, mysql_status(event));
-				if (status)
-					next_event(11,status);
-				else
+				if (status) {
+					struct timeval tv_out;
+					evutil_gettimeofday(&tv_out, NULL);
+					unsigned long long now_time;
+					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
+					if (now_time < t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
+						next_event(11,status);
+					} else {
+						NEXT_IMMEDIATE(90); // we reached a timeout
+					}
+				}
+				else {
 					NEXT_IMMEDIATE(12);
+				}
 				break;
 
 			case 12:
@@ -547,7 +617,7 @@ again:
 		}
 		return 0;
 	}
-	void next_event(int new_st, int status) {
+void MySQL_Monitor_State_Data::next_event(int new_st, int status) {
 		short wait_event= 0;
 		struct timeval tv, *ptv;
 		int fd;
@@ -577,7 +647,6 @@ again:
 		event_add(ev_mysql, ptv);
 		ST= new_st;
 	}
-};
 
 
 static void
@@ -628,8 +697,8 @@ MySQL_Monitor::MySQL_Monitor() {
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
 	admindb=new SQLite3DB();
-  admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-
+	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	admindb->execute("ATTACH DATABASE 'file:mem_monitordb?mode=memory&cache=shared' AS 'monitor'");
 	// define monitoring tables
 	tables_defs_monitor=new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT);	
@@ -715,7 +784,9 @@ void * MySQL_Monitor::monitor_connect() {
 		SQLite3_result *resultset=NULL;
 		int i=0;
 		MySQL_Monitor_State_Data **sds=NULL;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
+		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers";
+		// add support for SSL
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers GROUP BY hostname, port";
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -752,7 +823,7 @@ void * MySQL_Monitor::monitor_connect() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base, atoi(r->fields[2]));
 				sds[i]->task_id=MON_CONNECT;
 				connect__num_active_connections++;
 				total_connect__num_active_connections++;
@@ -848,7 +919,9 @@ void * MySQL_Monitor::monitor_ping() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE status!='OFFLINE_HARD'";
+		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE status!='OFFLINE_HARD'";
+		// add support for SSL
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status!='OFFLINE_HARD' GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		glover=GloMTH->get_global_version();
@@ -883,7 +956,7 @@ void * MySQL_Monitor::monitor_ping() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base, atoi(r->fields[2]));
 				sds[i]->task_id=MON_PING;
 				ping__num_active_connections++;
 				total_ping__num_active_connections++;
@@ -938,11 +1011,115 @@ __end_monitor_ping_loop:
 			free(sds);
 		}
 
-		if (resultset)
+		if (resultset) {
 			delete resultset;
+			resultset=NULL;
+		}
 
 		event_base_free(libevent_base);
 
+		// now it is time to shun all problematic hosts
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status!='OFFLINE_HARD' AND b.ping_error IS NOT NULL";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", query, error);
+		} else {
+			// get all addresses and ports
+			int i=0;
+			int j=0;
+			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
+			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				addresses[i]=strdup(r->fields[0]);
+				ports[i]=strdup(r->fields[1]);
+				i++;
+			}
+			if (resultset) {
+				delete resultset;
+				resultset=NULL;
+			}
+			char *new_query=NULL;
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
+			for (j=0;j<i;j++) {
+				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
+				int max_failures=mysql_thread___monitor_ping_max_failures;
+				sprintf(buff,new_query,addresses[j],ports[j],max_failures,max_failures);
+				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+				if (!error) {
+					if (resultset) {
+						if (resultset->rows_count) {
+							// disable host
+							proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections\n", addresses[j], ports[j], max_failures);
+							MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+						}
+						delete resultset;
+						resultset=NULL;
+					}
+				} else {
+					proxy_error("Error on %s : %s\n", query, error);
+				}
+				free(buff);
+			}
+
+			while (i) { // now free all the addresses/ports
+				i--;
+				free(addresses[i]);
+				free(ports[i]);
+			}
+			free(addresses);
+			free(ports);
+		}
+
+
+		// now it is time to update current_lantency_ms
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status!='OFFLINE_HARD' AND b.ping_error IS NULL";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", query, error);
+		} else {
+			// get all addresses and ports
+			int i=0;
+			int j=0;
+			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
+			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				addresses[i]=strdup(r->fields[0]);
+				ports[i]=strdup(r->fields[1]);
+				i++;
+			}
+			if (resultset) {
+				delete resultset;
+				resultset=NULL;
+			}
+			char *new_query=NULL;
+
+			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
+			for (j=0;j<i;j++) {
+				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
+				sprintf(buff,new_query,addresses[j],ports[j]);
+				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+				if (!error) {
+					if (resultset) {
+						if (resultset->rows_count) {
+							for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+								SQLite3_row *r=*it; // this should be called just once, but we create a generic for loop
+								// update current_latency_ms
+								MyHGM->set_server_current_latency_us(addresses[j],atoi(ports[j]), atoi(r->fields[2]));
+							}
+						}
+						delete resultset;
+						resultset=NULL;
+					}
+				} else {
+					proxy_error("Error on %s : %s\n", query, error);
+				}
+				free(buff);
+			}
+		}
 
 __sleep_monitor_ping_loop:
 		t2=monotonic_time();
@@ -976,6 +1153,9 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
+	unsigned int num_fields=0;
+	unsigned int k=0;
+	MYSQL_FIELD *fields=NULL;
 	while (shutdown==false) {
 
 		unsigned int glover;
@@ -985,7 +1165,9 @@ void * MySQL_Monitor::monitor_read_only() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD'";
+		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD'";
+		// add support for SSL
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD' GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		glover=GloMTH->get_global_version();
@@ -1022,7 +1204,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]),libevent_base, atoi(r->fields[2]));
 				sds[i]->task_id=MON_READ_ONLY;
 //				sds[i]->hostgroup_id=atoi(r->fields[0]);
 //				sds[i]->repl_lag=atoi(r->fields[3]);
@@ -1046,7 +1228,7 @@ void * MySQL_Monitor::monitor_read_only() {
 
 __end_monitor_read_only_loop:
 		if (sds) {
-			sqlite3_stmt *statement;
+			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
@@ -1065,15 +1247,16 @@ __end_monitor_read_only_loop:
 			while (i>0) {
 				i--;
 				int read_only=1; // as a safety mechanism , read_only=1 is the default
-				MySQL_Monitor_State_Data *mmsd=sds[i];
+				MySQL_Monitor_State_Data *mmsd=NULL;
+				mmsd=sds[i];
 				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				if (mmsd->result) {
-					unsigned int num_fields;
-					unsigned int k;
-					MYSQL_FIELD *fields;
+					num_fields=0;
+					k=0;
+					fields=NULL;
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
@@ -1155,6 +1338,10 @@ void * MySQL_Monitor::monitor_replication_lag() {
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
+	unsigned int num_fields=0;
+	unsigned int k=0;
+	MYSQL_FIELD *fields=NULL;
+
 	while (shutdown==false) {
 
 		unsigned int glover;
@@ -1164,7 +1351,9 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		SQLite3_result *resultset=NULL;
 		MySQL_Monitor_State_Data **sds=NULL;
 		int i=0;
-		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
+		//char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
+		// add support for SSL
+		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag, use_ssl FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
 		t1=monotonic_time();
 
 		glover=GloMTH->get_global_version();
@@ -1201,7 +1390,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				sds[i] = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]),libevent_base);
+				sds[i] = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]),libevent_base, atoi(r->fields[4]));
 				sds[i]->task_id=MON_REPLICATION_LAG;
 				sds[i]->hostgroup_id=atoi(r->fields[0]);
 				sds[i]->repl_lag=atoi(r->fields[3]);
@@ -1250,9 +1439,9 @@ __end_monitor_replication_lag_loop:
 				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				if (mmsd->result) {
-					unsigned int num_fields;
-					unsigned int k;
-					MYSQL_FIELD *fields;
+					num_fields=0;
+					k=0;
+					fields=NULL;
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);

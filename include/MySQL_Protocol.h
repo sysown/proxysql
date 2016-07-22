@@ -96,5 +96,6 @@ class MySQL_Protocol {
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
+	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */

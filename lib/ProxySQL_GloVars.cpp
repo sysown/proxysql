@@ -55,6 +55,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
+	global.monitor=true;
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
@@ -73,6 +74,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,1,0,(const char *)"Enable debugging messages with specific verbosity",(const char *)"-d",(const char *)"--debug");
 #endif /* DEBUG */
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
+	opt->add((const char *)"",0,0,0,(const char *)"Do not start Monitor Module",(const char *)"-M",(const char *)"--no-monitor");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
@@ -179,6 +181,10 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
 	if (opt->isSet("-f")) {
 		global.foreground=true;
+	}
+
+	if (opt->isSet("-M")) {
+		global.monitor=false;
 	}
 
 	if (opt->isSet("-S")) {

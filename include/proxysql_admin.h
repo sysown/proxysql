@@ -6,6 +6,41 @@
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 
 
+
+
+class Scheduler_Row {
+	public:
+	unsigned int id;
+	unsigned int interval_ms;
+	unsigned long long last;
+	unsigned long long next;
+	char *filename;
+//	char *arg1;
+//	char *arg2;
+//	char *arg3;
+//	char *arg4;
+//	char *arg5;
+	char **args;
+	Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5);
+	~Scheduler_Row();
+};
+
+
+class ProxySQL_External_Scheduler {
+	private:
+	unsigned long long next_run;
+	public:
+	unsigned int last_version;
+	unsigned int version;
+	rwlock_t rwlock;
+	std::vector<Scheduler_Row *> Scheduler_Rows;
+	ProxySQL_External_Scheduler();
+	~ProxySQL_External_Scheduler();
+	unsigned long long run_once();
+	void update_table(SQLite3_result *result);
+};
+
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -20,7 +55,6 @@ class ProxySQL_Admin {
 	int main_poll_nfds;
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
-
 	rwlock_t rwlock;
 	rwlock_t mysql_servers_rwlock;
 	void wrlock();
@@ -39,6 +73,9 @@ class ProxySQL_Admin {
 		bool debug;
 #endif /* DEBUG */
 	} variables;
+
+
+	ProxySQL_External_Scheduler *scheduler;
 
 	void dump_mysql_collations();
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
@@ -65,7 +102,7 @@ class ProxySQL_Admin {
 	void add_admin_users();
 	void __refresh_users();
 
-	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
+	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 
@@ -73,7 +110,9 @@ class ProxySQL_Admin {
 	char *get_variable(char *name);
 	bool set_variable(char *name, char *value);
 	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
-	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty);
+	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void disk_upgrade_mysql_query_rules();
+	void disk_upgrade_mysql_servers();
 
 #ifdef DEBUG
 	void add_credentials(char *type, char *credentials, int hostgroup_id);
@@ -83,12 +122,19 @@ class ProxySQL_Admin {
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 	public:
+	struct {
+		//re2::RE2::Options *opt;
+		//RE2 *re1;
+		void *opt;
+		void **re;
+	} match_regexes;
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
 	SQLite3DB *admindb;	// in memory
 	SQLite3DB *statsdb;	// in memory
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
+	int pipefd[2];
 	void print_version();
 	bool init();
 	bool get_read_only() { return variables.admin_read_only; }
@@ -120,6 +166,11 @@ class ProxySQL_Admin {
 	char * load_mysql_query_rules_to_runtime();
 	void save_mysql_query_rules_from_runtime(bool);
 
+	void load_scheduler_to_runtime();
+	void save_scheduler_runtime_to_database(bool);
+	void flush_scheduler__from_memory_to_disk();
+	void flush_scheduler__from_disk_to_memory();
+
 	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
@@ -147,5 +198,9 @@ class ProxySQL_Admin {
 
 	void mysql_servers_wrlock();
 	void mysql_servers_wrunlock();
+
+	// wrapper to call a private function
+	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
+
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

@@ -3,11 +3,18 @@
 #define PKT_PARSED 0
 #define PKT_ERROR 1
 
+#ifdef max_allowed_packet
+#undef max_allowed_packet
+#endif
 
 
 
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
+
+enum log_event_type {
+	PROXYSQL_QUERY
+};
 
 enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
 
@@ -28,6 +35,7 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_PING_END,
 	ASYNC_PING_SUCCESSFUL,
 	ASYNC_PING_FAILED,
+	ASYNC_PING_TIMEOUT,
 	ASYNC_SET_AUTOCOMMIT_START,
 	ASYNC_SET_AUTOCOMMIT_CONT,
 	ASYNC_SET_AUTOCOMMIT_END,
@@ -41,6 +49,9 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_QUERY_START,
 	ASYNC_QUERY_CONT,
 	ASYNC_QUERY_END,
+	ASYNC_NEXT_RESULT_START,
+	ASYNC_NEXT_RESULT_CONT,
+	ASYNC_NEXT_RESULT_END,
 	ASYNC_STORE_RESULT_START,
 	ASYNC_STORE_RESULT_CONT,
 	ASYNC_USE_RESULT_START,
@@ -108,6 +119,7 @@ enum session_status {
 	CHANGING_AUTOCOMMIT,
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
+	SETTING_INIT_CONNECT,
 	FAST_FORWARD,
 	NONE
 };
@@ -295,11 +307,12 @@ struct _mysql_server_t {
 */
 
 struct __SQP_query_parser_t {
-	sfilter sf;
+//	sfilter sf;
 	uint64_t digest;
+	uint64_t digest_total;
 	char *digest_text;
 	char *first_comment;
-	uint64_t digest_total;
+	char *query_prefix;
 };
 
 
@@ -688,11 +701,14 @@ GOptionEntry cmd_option_entries[] =
 MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
+__thread char *mysql_thread___init_connect;
+__thread int mysql_thread___max_allowed_packet;
 __thread int mysql_thread___max_transaction_time;
 __thread int mysql_thread___threshold_query_length;
 __thread int mysql_thread___threshold_resultset_size;
 __thread int mysql_thread___wait_timeout;
 __thread int mysql_thread___max_connections;
+__thread int mysql_thread___default_max_latency_ms;
 __thread int mysql_thread___default_query_delay;
 __thread int mysql_thread___default_query_timeout;
 __thread int mysql_thread___long_query_time;
@@ -701,8 +717,10 @@ __thread int mysql_thread___ping_interval_server_msec;
 __thread int mysql_thread___ping_timeout_server;
 __thread int mysql_thread___shun_on_failures;
 __thread int mysql_thread___shun_recovery_time_sec;
+__thread int mysql_thread___query_retries_on_failure;
 __thread int mysql_thread___connect_retries_on_failure;
 __thread int mysql_thread___connect_retries_delay;
+__thread int mysql_thread___connection_max_age_ms;
 __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
 __thread uint16_t mysql_thread___server_capabilities;
@@ -719,6 +737,12 @@ __thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
 
+/* variables used for SSL , from proxy to server (p2s) */
+__thread char * mysql_thread___ssl_p2s_ca;
+__thread char * mysql_thread___ssl_p2s_cert;
+__thread char * mysql_thread___ssl_p2s_key;
+__thread char * mysql_thread___ssl_p2s_cipher;
+
 /* variables used by events log */
 __thread char * mysql_thread___eventslog_filename;
 __thread int mysql_thread___eventslog_filesize;
@@ -728,6 +752,7 @@ __thread int mysql_thread___monitor_history;
 __thread int mysql_thread___monitor_connect_interval;
 __thread int mysql_thread___monitor_connect_timeout;
 __thread int mysql_thread___monitor_ping_interval;
+__thread int mysql_thread___monitor_ping_max_failures;
 __thread int mysql_thread___monitor_ping_timeout;
 __thread int mysql_thread___monitor_read_only_interval;
 __thread int mysql_thread___monitor_read_only_timeout;
@@ -753,11 +778,14 @@ extern MySQL_HostGroups_Manager *MyHGM;
 //extern GOptionEntry cmd_option_entries[];
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
+extern __thread char *mysql_thread___init_connect;
+extern __thread int mysql_thread___max_allowed_packet;
 extern __thread int mysql_thread___max_transaction_time;
 extern __thread int mysql_thread___threshold_query_length;
 extern __thread int mysql_thread___threshold_resultset_size;
 extern __thread int mysql_thread___wait_timeout;
 extern __thread int mysql_thread___max_connections;
+extern __thread int mysql_thread___default_max_latency_ms;
 extern __thread int mysql_thread___default_query_delay;
 extern __thread int mysql_thread___default_query_timeout;
 extern __thread int mysql_thread___long_query_time;
@@ -766,8 +794,10 @@ extern __thread int mysql_thread___ping_interval_server_msec;
 extern __thread int mysql_thread___ping_timeout_server;
 extern __thread int mysql_thread___shun_on_failures;
 extern __thread int mysql_thread___shun_recovery_time_sec;
+extern __thread int mysql_thread___query_retries_on_failure;
 extern __thread int mysql_thread___connect_retries_on_failure;
 extern __thread int mysql_thread___connect_retries_delay;
+extern __thread int mysql_thread___connection_max_age_ms;
 extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread uint16_t mysql_thread___server_capabilities;
@@ -784,6 +814,12 @@ extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
 
+/* variables used for SSL , from proxy to server (p2s) */
+extern __thread char * mysql_thread___ssl_p2s_ca;
+extern __thread char * mysql_thread___ssl_p2s_cert;
+extern __thread char * mysql_thread___ssl_p2s_key;
+extern __thread char * mysql_thread___ssl_p2s_cipher;
+
 /* variables used by events log */
 extern __thread char * mysql_thread___eventslog_filename;
 extern __thread int mysql_thread___eventslog_filesize;
@@ -793,6 +829,7 @@ extern __thread int mysql_thread___monitor_history;
 extern __thread int mysql_thread___monitor_connect_interval;
 extern __thread int mysql_thread___monitor_connect_timeout;
 extern __thread int mysql_thread___monitor_ping_interval;
+extern __thread int mysql_thread___monitor_ping_max_failures;
 extern __thread int mysql_thread___monitor_ping_timeout;
 extern __thread int mysql_thread___monitor_read_only_interval;
 extern __thread int mysql_thread___monitor_read_only_timeout;
