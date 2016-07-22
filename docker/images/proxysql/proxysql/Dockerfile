@@ -8,18 +8,21 @@ LABEL vendor=proxysql\
       com.proxysql.config=simple\
       com.proxysql.purpose=testing
 
-RUN apt-get update && apt-get install -y\
-	automake\
-	cmake\
-	make\
-	g++\
-	gcc\
-	gdb\
-	gdbserver\
-	git\
-	libmysqlclient-dev\
-	libssl-dev\
-	libtool
+RUN apt-get update && apt-get install -y \
+	automake \
+	cmake \
+	make \
+	g++ \
+	gcc \
+	gdb \
+	gdbserver \
+	git \
+	libmysqlclient-dev \
+	libssl-dev \
+	libtool \
+  && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/
 
 RUN cd /opt; git clone https://github.com/akopytov/sysbench.git
 RUN cd /opt/sysbench; ./autogen.sh; ./configure --bindir=/usr/bin; make; make install
