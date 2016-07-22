@@ -53,6 +53,17 @@ class MySQL_Monitor_State_Data {
 	int handler(int fd, short event);
 	void next_event(int new_st, int status);
 	void unregister();
+	SQLite3DB *mondb;
+	// we are copying these from MySQL_Connection
+//	short wait_events;
+//	unsigned long long timeout;
+	MDB_ASYNC_ST async_state_machine;
+	int async_exit_status;
+//	int async_ping(short);
+//	void ping_start();
+//	void ping_cont(short event);
+//	MDB_ASYNC_ST handler2(short);
+//	void next_event(MDB_ASYNC_ST new_st);
 };
 
 
@@ -73,6 +84,7 @@ class MySQL_Monitor {
 	~MySQL_Monitor();
 	void print_version();
 	void * monitor_connect();
+//	void * monitor_connect_thread(void *);
 	void * monitor_ping();
 	void * monitor_read_only();
 	void * monitor_replication_lag();
