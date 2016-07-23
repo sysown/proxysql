@@ -1,3 +1,12 @@
+/*
+	RECENT CHANGELOG
+	1.3.0723
+		* almost completely rewritten
+		* use of blocking call for new connections
+    * use of Thread Pool instead of a thread per check type
+	0.2.0902
+		* original implementation
+
 #include <map>
 #include <list>
 #include <thread>
@@ -12,7 +21,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define MYSQL_MONITOR_VERSION "0.2.0902" DEB
+#define MYSQL_MONITOR_VERSION "1.3.0723" DEB
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
