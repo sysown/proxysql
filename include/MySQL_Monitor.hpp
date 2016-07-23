@@ -42,9 +42,7 @@ class MySQL_Monitor_State_Data {
   char *hostname;
   int port;
   bool use_ssl;
-//  struct event *ev_mysql;
   MYSQL *mysql;
-//  struct event_base *base;
   MYSQL_RES *result;
   MYSQL *ret;
   int interr;
@@ -54,21 +52,10 @@ class MySQL_Monitor_State_Data {
   unsigned int hostgroup_id;
 	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0);
 	~MySQL_Monitor_State_Data();
-//	int handler(int fd, short event);
-//	void next_event(int new_st, int status);
-//	void unregister();
 	SQLite3DB *mondb;
 	bool create_new_connection();
-	// we are copying these from MySQL_Connection
-//	short wait_events;
-//	unsigned long long timeout;
 	MDB_ASYNC_ST async_state_machine;
 	int async_exit_status;
-//	int async_ping(short);
-//	void ping_start();
-//	void ping_cont(short event);
-//	MDB_ASYNC_ST handler2(short);
-//	void next_event(MDB_ASYNC_ST new_st);
 };
 
 class WorkItem {
@@ -100,7 +87,6 @@ class MySQL_Monitor {
 	~MySQL_Monitor();
 	void print_version();
 	void * monitor_connect();
-//	void * monitor_connect_thread(void *);
 	void * monitor_ping();
 	void * monitor_read_only();
 	void * monitor_replication_lag();

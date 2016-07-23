@@ -25,12 +25,6 @@ extern MySQL_Threads_Handler *GloMTH;
 
 static MySQL_Monitor *GloMyMon;
 
-#define NEXT_IMMEDIATE(new_st) do { ST= new_st; goto again; } while (0)
-
-/*
-#define NEXT_IMMEDIATE2(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
-*/
-
 #define SAFE_SQLITE3_STEP(_stmt) do {\
 	do {\
 		rc=sqlite3_step(_stmt);\
@@ -41,20 +35,7 @@ static MySQL_Monitor *GloMyMon;
 	} while (rc!=SQLITE_DONE);\
 } while (0)
 
-//static void state_machine_handler(int fd, short event, void *arg);
 
-/*
-class WorkItem {
-	public:
-		MySQL_Monitor_State_Data *mmsd;
-		void *(*routine) (void *);
-		WorkItem(MySQL_Monitor_State_Data *_mmsd, void *(*start_routine) (void *)) {
-			mmsd=_mmsd;
-			routine=start_routine;
-		}
-		~WorkItem() {}
-};
-*/
 class ConsumerThread : public Thread {
 	//wqueue<MySQL_Monitor_State_Data*>& m_queue;
 	wqueue<WorkItem*>& m_queue;
@@ -127,14 +108,6 @@ static void close_mysql(MYSQL *my) {
 }
 
 
-
-
-/*
-static int connect__num_active_connections;
-static int ping__num_active_connections;
-static int replication_lag__num_active_connections;
-static int read_only__num_active_connections;
-*/
 
 struct cmp_str {
 	bool operator()(char const *a, char const *b) const
@@ -302,418 +275,19 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 	};
 
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
-		if (hostname) {
-			free(hostname);
-		}
-		//assert(mysql==NULL); // if mysql is not NULL, there is a bug
-		if (mysql) {
-			close_mysql(mysql);
-			mysql=NULL;
-		}
-		if (mysql_error_msg) {
-			free(mysql_error_msg);
-		}
+	if (hostname) {
+		free(hostname);
 	}
-/*
-void MySQL_Monitor_State_Data::unregister() {
-		if (ev_mysql) {
-			event_del(ev_mysql);
-			event_free(ev_mysql);
-		}
+	//assert(mysql==NULL); // if mysql is not NULL, there is a bug
+	if (mysql) {
+		close_mysql(mysql);
+		mysql=NULL;
 	}
-*/
-/*
-int MySQL_Monitor_State_Data::handler(int fd, short event) {
-		int status;
-again:
-		switch (ST) {
-			case 0:
-				mysql=mysql_init(NULL);
-				assert(mysql);
-				// FIXME: should we set timeout ?
-				mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
-				if (use_ssl) {
-					mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
-				}
-				if (mysql_thread___monitor_timer_cached==true) {
-					event_base_gettimeofday_cached(base, &tv_out);
-				} else {
-					evutil_gettimeofday(&tv_out, NULL);
-				}
-				t1=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				if (port) {
-					status= mysql_real_connect_start(&ret, mysql, hostname, mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
-				} else {
-					status= mysql_real_connect_start(&ret, mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
-				}
-        if (status)
-					// Wait for connect to complete.
-					next_event(1, status);
-				else
-					NEXT_IMMEDIATE(3);
-				break;
-			case 1:
-				status= mysql_real_connect_cont(&ret, mysql, mysql_status(event));
-				if (status) {
-					struct timeval tv_out;
-					evutil_gettimeofday(&tv_out, NULL);
-					unsigned long long now_time;
-					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-					if (now_time < t1 + mysql_thread___monitor_connect_timeout * 1000) {
-						next_event(1, status);
-					} else {
-						NEXT_IMMEDIATE(90); // we reached a timeout
-					}
-				}
-				else
-					//NEXT_IMMEDIATE(40);
-					NEXT_IMMEDIATE(3);
-		break;
-
-			case 3:
-				if (!ret) {
-					mysql_error_msg=strdup(mysql_error(mysql));
-					mysql_close(mysql);
-					mysql=NULL;
-					NEXT_IMMEDIATE(50);
-				}
-				switch(task_id) {
-					case MON_CONNECT:
-						NEXT_IMMEDIATE(40);
-						break;
-					case MON_PING:
-						NEXT_IMMEDIATE(7);
-						break;
-					case MON_READ_ONLY:
-						NEXT_IMMEDIATE(20);
-						break;
-					case MON_REPLICATION_LAG:
-						NEXT_IMMEDIATE(10);
-						break;
-					default:
-						assert(0);
-						break;
-				}
-				break;
-
-			case 7:
-				if (mysql_thread___monitor_timer_cached==true) {
-					event_base_gettimeofday_cached(base, &tv_out);
-				} else {
-					evutil_gettimeofday(&tv_out, NULL);
-				}
-				t1=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				status=mysql_ping_start(&interr,mysql);
-				if (status)
-					next_event(8,status);
-				else
-					NEXT_IMMEDIATE(9);
-				break;
-
-			case 8:
-				status=mysql_ping_cont(&interr,mysql, mysql_status(event));
-				if (status) {
-					struct timeval tv_out;
-					evutil_gettimeofday(&tv_out, NULL);
-					unsigned long long now_time;
-					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-					if (now_time < t1 + mysql_thread___monitor_ping_timeout * 1000) {
-						next_event(8,status);
-					} else {
-						NEXT_IMMEDIATE(90); // we reached a timeout
-					}
-				}
-				else 
-					NEXT_IMMEDIATE(9);
-				break;
-
-			case 9:
-				if (interr) {
-					mysql_error_msg=strdup(mysql_error(mysql));
-					mysql_close(mysql);
-					mysql=NULL;
-					NEXT_IMMEDIATE(50);
-				}
-				switch(task_id) {
-					case MON_PING:
-					case MON_REPLICATION_LAG:
-						NEXT_IMMEDIATE(39);
-						break;
-					default:
-						assert(0);
-						break;
-				}
-				break;
-
-			case 90: // timeout for connect , ping or replication lag
-				mysql_error_msg=strdup("timeout");
-				close_mysql(mysql);
-				mysql=NULL;
-				return -1;
-				break;
-
-			case 10:
-				if (mysql_thread___monitor_timer_cached==true) {
-					event_base_gettimeofday_cached(base, &tv_out);
-				} else {
-					evutil_gettimeofday(&tv_out, NULL);
-				}
-				t1=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				status=mysql_query_start(&interr,mysql,"SHOW SLAVE STATUS");
-				if (status)
-					next_event(11,status);
-				else
-					NEXT_IMMEDIATE(12);
-				break;
-
-			case 11:
-				status=mysql_query_cont(&interr,mysql, mysql_status(event));
-				if (status) {
-					struct timeval tv_out;
-					evutil_gettimeofday(&tv_out, NULL);
-					unsigned long long now_time;
-					now_time=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-					if (now_time < t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
-						next_event(11,status);
-					} else {
-						NEXT_IMMEDIATE(90); // we reached a timeout
-					}
-				}
-				else {
-					NEXT_IMMEDIATE(12);
-				}
-				break;
-
-			case 12:
-				if (interr) {
-					mysql_error_msg=strdup(mysql_error(mysql));
-					mysql_close(mysql);
-					mysql=NULL;
-					NEXT_IMMEDIATE(50);
-				} else {
-					status=mysql_store_result_start(&result, mysql);
-					if (status)
-						next_event(13,status);
-					else
-						NEXT_IMMEDIATE(14);
-				}
-				break;
-
-			case 13:
-				status=mysql_store_result_cont(&result, mysql, mysql_status(event));
-				if (status)
-					next_event(13,status);
-				else
-					NEXT_IMMEDIATE(14);
-				break;
-
-			case 14:
-				if (result) {
-					if (mysql_thread___monitor_timer_cached==true) {
-						event_base_gettimeofday_cached(base, &tv_out);
-					} else {
-						evutil_gettimeofday(&tv_out, NULL);
-					}
-					t2=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-					GloMyMon->My_Conn_Pool->put_connection(hostname,port,mysql);
-					mysql=NULL;
-					return -1;
-				}	else {
-					// no resultset, consider it an error
-					mysql_error_msg=strdup(mysql_error(mysql));
-					mysql_close(mysql);
-					mysql=NULL;
-					NEXT_IMMEDIATE(50);
-				}
-				break;
-
-			case 20:
-				if (mysql_thread___monitor_timer_cached==true) {
-					event_base_gettimeofday_cached(base, &tv_out);
-				} else {
-					evutil_gettimeofday(&tv_out, NULL);
-				}
-				t1=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				status=mysql_query_start(&interr,mysql,"SHOW GLOBAL VARIABLES LIKE 'read_only'");
-				if (status)
-					next_event(21,status);
-				else
-					NEXT_IMMEDIATE(22);
-				break;
-
-			case 21:
-				status=mysql_query_cont(&interr,mysql, mysql_status(event));
-				if (status)
-					next_event(21,status);
-				else
-					NEXT_IMMEDIATE(22);
-				break;
-
-			case 22:
-				if (interr) {
-					mysql_error_msg=strdup(mysql_error(mysql));
-					mysql_close(mysql);
-					mysql=NULL;
-					NEXT_IMMEDIATE(50);
-				} else {
-					status=mysql_store_result_start(&result, mysql);
-					if (status)
-						next_event(23,status);
-					else
-						NEXT_IMMEDIATE(24);
-				}
-				break;
-
-			case 23:
-				status=mysql_store_result_cont(&result, mysql, mysql_status(event));
-				if (status)
-					next_event(23,status);
-				else
-					NEXT_IMMEDIATE(24);
-				break;
-
-			case 24:
-				if (result) {
-					if (mysql_thread___monitor_timer_cached==true) {
-						event_base_gettimeofday_cached(base, &tv_out);
-					} else {
-						evutil_gettimeofday(&tv_out, NULL);
-					}
-					t2=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-					GloMyMon->My_Conn_Pool->put_connection(hostname,port,mysql);
-					mysql=NULL;
-					return -1;
-				}	else {
-					// no resultset, consider it an error
-					// FIXME: if this happen, should be logged
-					mysql_error_msg=strdup(mysql_error(mysql));
-					mysql_close(mysql);
-					mysql=NULL;
-					NEXT_IMMEDIATE(50);
-				}
-				break;
-
-			case 39:
-				if (mysql_thread___monitor_timer_cached==true) {
-					event_base_gettimeofday_cached(base, &tv_out);
-				} else {
-					evutil_gettimeofday(&tv_out, NULL);
-				}
-				t2=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				GloMyMon->My_Conn_Pool->put_connection(hostname,port,mysql);
-				mysql=NULL;
-				return -1;
-				break;
-
-			case 40:
-				if (mysql_thread___monitor_timer_cached==true) {
-					event_base_gettimeofday_cached(base, &tv_out);
-				} else {
-					evutil_gettimeofday(&tv_out, NULL);
-				}
-				t2=(((unsigned long long) tv_out.tv_sec) * 1000000) + (tv_out.tv_usec);
-				NEXT_IMMEDIATE(50); // TEMP
-				status= mysql_close_start(mysql);
-				if (status)
-					next_event(41, status);
-				else
-					NEXT_IMMEDIATE(50);
-				break;
-
-			case 41:
-				status= mysql_close_cont(mysql, mysql_status(event));
-				if (status)
-					next_event(41, status);
-				else
-					NEXT_IMMEDIATE(50);
-				break;
-
-			case 50:
-				// We are done!
-				if (mysql) {
-					mysql_close(mysql);
-					mysql=NULL;
-				}
-				return -1;
-				break;
-
-			default:
-				assert(0);
-				break;
-
-		}
-		return 0;
-	}
-*/
-/*
-void MySQL_Monitor_State_Data::next_event(int new_st, int status) {
-		short wait_event= 0;
-		struct timeval tv, *ptv;
-		int fd;
-
-		if (status & MYSQL_WAIT_READ)
-			wait_event|= EV_READ;
-		if (status & MYSQL_WAIT_WRITE)
-			wait_event|= EV_WRITE;
-		if (wait_event)
-			fd= mysql_get_socket(mysql);
-		else
-			fd= -1;
-		if (status & MYSQL_WAIT_TIMEOUT) {
-			tv.tv_sec= 0;
-			tv.tv_usec= 10000;
-			ptv= &tv;
-		} else {
-			ptv= NULL;
-		}
-		//event_set(ev_mysql, fd, wait_event, state_machine_handler, this);
-		if (ev_mysql==NULL) {
-			ev_mysql=event_new(base, fd, wait_event, state_machine_handler, this);
-			//event_add(ev_mysql, ptv);
-		}
-		//event_del(ev_mysql);
-		event_assign(ev_mysql, base, fd, wait_event, state_machine_handler, this);
-		event_add(ev_mysql, ptv);
-		ST= new_st;
-	}
-*/
-/*
-static void
-state_machine_handler(int fd __attribute__((unused)), short event, void *arg) {
-	MySQL_Monitor_State_Data *msd=(MySQL_Monitor_State_Data *)arg;
-	struct event_base *base=msd->base;
-	int rc=msd->handler(fd, event);
-	if (rc==-1) {
-		//delete msd;
-		msd->unregister();
-		switch (msd->task_id) {
-			case MON_CONNECT:
-				connect__num_active_connections--;
-				if (connect__num_active_connections == 0)
-					event_base_loopbreak(base);
-				break;
-			case MON_PING:
-				ping__num_active_connections--;
-				if (ping__num_active_connections == 0)
-					event_base_loopbreak(base);
-				break;
-			case MON_READ_ONLY:
-				read_only__num_active_connections--;
-				if (read_only__num_active_connections == 0)
-					event_base_loopbreak(base);
-				break;
-			case MON_REPLICATION_LAG:
-				replication_lag__num_active_connections--;
-				if (replication_lag__num_active_connections == 0)
-					event_base_loopbreak(base);
-				break;
-			default:
-				assert(0);
-				break;
-		}
+	if (mysql_error_msg) {
+		free(mysql_error_msg);
 	}
 }
-*/
+
 MySQL_Monitor::MySQL_Monitor() {
 
 	GloMyMon = this;
@@ -1103,11 +677,8 @@ void * monitor_replication_lag_thread(void *arg) {
 			goto __fast_exit_monitor_replication_lag_thread;	// exit immediately
 		}
 	}
-	if (mmsd->interr) { // ping failed
+	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
-//	} else {
-//		GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-//		mmsd->mysql=NULL;
 	}
 
 __exit_monitor_replication_lag_thread:
@@ -1608,10 +1179,6 @@ void * MySQL_Monitor::monitor_replication_lag() {
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
-//	unsigned int num_fields=0;
-//	unsigned int k=0;
-//	MYSQL_FIELD *fields=NULL;
-
 	while (shutdown==false) {
 
 		unsigned int glover;
@@ -1658,7 +1225,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		}
 
 __end_monitor_replication_lag_loop:
-		/* if (sds) */ {
+		{
 			sqlite3_stmt *statement;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
