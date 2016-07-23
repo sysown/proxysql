@@ -16,7 +16,6 @@
 
 
 
-#define MONTHREADS	4
 #include <event2/event.h>
 
 extern ProxySQL_Admin *GloAdmin;
@@ -318,7 +317,12 @@ MySQL_Monitor::MySQL_Monitor() {
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_read_only_log_time_start ON mysql_server_read_only_log (time_start)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_replication_lag_log_time_start ON mysql_server_replication_lag_log (time_start)");
 
-
+	num_threads=8;
+	if (GloMTH) {
+		if (GloMTH->num_threads) {
+			num_threads=GloMTH->num_threads*2;
+		}
+	}
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -1279,8 +1283,8 @@ void * MySQL_Monitor::run() {
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 	//wqueue<WorkItem*>  queue;
-	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*MONTHREADS);
-	for (int i=0;i<MONTHREADS; i++) {
+	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
+	for (int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, i);
 		threads[i]->start();
 	}
@@ -1298,10 +1302,10 @@ void * MySQL_Monitor::run() {
 		}
 		usleep(500000);
 	}
-	for (int i=0;i<MONTHREADS; i++) {
+	for (int i=0;i<num_threads; i++) {
 		GloMyMon->queue.add(NULL);
 	}
-	for (int i=0;i<MONTHREADS; i++) {
+	for (int i=0;i<num_threads; i++) {
 		threads[i]->join();
 	}
 	free(threads);
