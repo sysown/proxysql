@@ -58,6 +58,10 @@ class ConsumerThread : public Thread {
 		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
 			WorkItem* item = (WorkItem*)m_queue.remove();
 			if (item==NULL) {
+				if (thrn) {
+					// we took a NULL item that wasn't meant to reach here! Add it again
+					GloMyMon->queue.add(NULL);
+				}
 				// this is intentional to EXIT immediately
 				return NULL;
 			}
