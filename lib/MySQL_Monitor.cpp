@@ -6,6 +6,7 @@
     * use of Thread Pool instead of a thread per check type
 	0.2.0902
 		* original implementation
+*/
 
 #include <map>
 #include <list>
