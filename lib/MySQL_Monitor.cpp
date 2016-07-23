@@ -437,7 +437,6 @@ void * monitor_ping_thread(void *arg) {
 	mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		mmsd->async_exit_status=mysql_ping_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout during ping");
@@ -445,6 +444,9 @@ void * monitor_ping_thread(void *arg) {
 		}
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_ping_thread;	// exit immediately
+		}
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status=mysql_ping_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
 	}
 	if (mmsd->interr) { // ping failed
@@ -542,7 +544,6 @@ void * monitor_read_only_thread(void *arg) {
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'read_only'");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -550,12 +551,14 @@ void * monitor_read_only_thread(void *arg) {
 		}
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_read_only_thread;	// exit immediately
+		}
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -563,6 +566,9 @@ void * monitor_read_only_thread(void *arg) {
 		}
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_read_only_thread;	// exit immediately
+		}
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
 	}
 	if (mmsd->interr) { // ping failed
@@ -668,7 +674,6 @@ void * monitor_replication_lag_thread(void *arg) {
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -676,12 +681,14 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_replication_lag_thread;	// exit immediately
+		}
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -689,6 +696,9 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_replication_lag_thread;	// exit immediately
+		}
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
 	}
 	if (mmsd->interr) { // replication lag check failed
