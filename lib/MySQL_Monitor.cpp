@@ -4,6 +4,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "thread.h"
+#include "wqueue.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -13,6 +15,8 @@
 #define MYSQL_MONITOR_VERSION "0.2.0902" DEB
 
 
+
+#define MONTHREADS	4
 #include <event2/event.h>
 
 extern ProxySQL_Admin *GloAdmin;
@@ -38,6 +42,28 @@ static MySQL_Monitor *GloMyMon;
 } while (0)
 
 static void state_machine_handler(int fd, short event, void *arg);
+
+class ConsumerThreadPing : public Thread {
+	wqueue<MySQL_Monitor_State_Data*>& m_queue;
+	void *(*routine) (void *);
+	int thrn;
+	public:
+	ConsumerThreadPing(wqueue<MySQL_Monitor_State_Data*>& queue, void *(*start_routine) (void *), int _n) : m_queue(queue) {
+		routine=start_routine;
+		thrn=_n;
+	}
+	void* run() {
+		// Remove 1 item at a time and process it. Blocks if no items are 
+		// available to process.
+		for (int i = 0;; i++) {
+			printf("thread %d, loop %d - waiting for item...\n", thrn, i);
+			MySQL_Monitor_State_Data* mmsd = (MySQL_Monitor_State_Data*)m_queue.remove();
+			printf("thread %d, loop %d - got one item\n", thrn, i);
+			routine((void *)mmsd);
+		}
+		return NULL;
+	}
+};
 
 
 static int wait_for_mysql(MYSQL *mysql, int status) {
@@ -1198,6 +1224,12 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long t2;
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
+	wqueue<MySQL_Monitor_State_Data*>  queue;
+	ConsumerThreadPing **threads= (ConsumerThreadPing **)malloc(sizeof(ConsumerThreadPing *)*MONTHREADS);
+	for (int i=0;i<MONTHREADS; i++) {
+		threads[i] = new ConsumerThreadPing(queue,monitor_ping_thread, i);
+		threads[i]->start();
+	}
 
 	while (shutdown==false) {
 
@@ -1236,10 +1268,11 @@ void * MySQL_Monitor::monitor_ping() {
 				SQLite3_row *r=*it;
 				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
 				mmsd->mondb=monitordb;
-				pthread_t thr_;
-				if ( pthread_create(&thr_, &attr, monitor_ping_thread, (void *)mmsd) != 0 ) {
-					perror("Thread creation monitor_ping_thread");
-				}
+//				pthread_t thr_;
+//				if ( pthread_create(&thr_, &attr, monitor_ping_thread, (void *)mmsd) != 0 ) {
+//					perror("Thread creation monitor_ping_thread");
+//				}
+				queue.add(mmsd);
 			}
 		}
 
@@ -1386,6 +1419,10 @@ __sleep_monitor_ping_loop:
 		delete mysql_thr;
 		mysql_thr=NULL;
 	}
+	for (int i=0;i<MONTHREADS; i++) {
+		threads[i]->join();
+	}
+	free(threads);
 	return NULL;
 }
 
