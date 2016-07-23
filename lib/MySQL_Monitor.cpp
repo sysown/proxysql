@@ -60,6 +60,7 @@ class ConsumerThread : public Thread {
 //			printf("thread %d, loop %d - got one item\n", thrn, i);
 			item->routine((void *)item->mmsd);
 			//routine((void *)mmsd);
+			delete item->mmsd;
 			delete item;
 		}
 		return NULL;
@@ -397,6 +398,7 @@ void * monitor_connect_thread(void *arg) {
 	sqlite3_finalize(statement);
 
 	mysql_close(mmsd->mysql);
+	mmsd->mysql=NULL;
 	delete mysql_thr;
 	return NULL;
 }
@@ -465,6 +467,7 @@ __exit_monitor_ping_thread:
 __fast_exit_monitor_ping_thread:
 	if (mmsd->mysql) {
 		mysql_close(mmsd->mysql); // if we reached here we didn't put the connection back
+		mmsd->mysql=NULL;
 	}
 	delete mysql_thr;
 	return NULL;
@@ -583,7 +586,7 @@ __exit_monitor_read_only_thread:
 			fields = mysql_fetch_fields(mmsd->result);
 			for(k = 0; k < num_fields; k++) {
 				//if (strcmp("VARIABLE_NAME", fields[k].name)==0) {
-				if (strcmp("Value", fields[k].name)==0) {
+				if (strcmp((char *)"Value", (char *)fields[k].name)==0) {
 					j=k;
 				}
 			}
@@ -623,6 +626,7 @@ __exit_monitor_read_only_thread:
 __fast_exit_monitor_read_only_thread:
 	if (mmsd->mysql) {
 		mysql_close(mmsd->mysql); // if we reached here we didn't put the connection back
+		mmsd->mysql=NULL;
 	}
 	delete mysql_thr;
 	return NULL;
@@ -750,6 +754,7 @@ __exit_monitor_replication_lag_thread:
 __fast_exit_monitor_replication_lag_thread:
 	if (mmsd->mysql) {
 		mysql_close(mmsd->mysql); // if we reached here we didn't put the connection back
+		mmsd->mysql=NULL;
 	}
 	delete mysql_thr;
 	return NULL;
