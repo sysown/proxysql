@@ -1284,7 +1284,7 @@ void * MySQL_Monitor::run() {
 	mysql_thr->refresh_variables();
 	//wqueue<WorkItem*>  queue;
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
-	for (int i=0;i<num_threads; i++) {
+	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, i);
 		threads[i]->start();
 	}
@@ -1302,10 +1302,10 @@ void * MySQL_Monitor::run() {
 		}
 		usleep(500000);
 	}
-	for (int i=0;i<num_threads; i++) {
+	for (unsigned int i=0;i<num_threads; i++) {
 		GloMyMon->queue.add(NULL);
 	}
-	for (int i=0;i<num_threads; i++) {
+	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i]->join();
 	}
 	free(threads);
