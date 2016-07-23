@@ -54,6 +54,7 @@ class MySQL_Monitor_State_Data {
 	void next_event(int new_st, int status);
 	void unregister();
 	SQLite3DB *mondb;
+	bool create_new_connection();
 	// we are copying these from MySQL_Connection
 //	short wait_events;
 //	unsigned long long timeout;
