@@ -17,9 +17,6 @@ LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
 #INJECTION_PATH=$(DEPS_PATH)/libinjection
 #INJECTION_IDIR=$(INJECTION_PATH)
 
-LIBEVENT_PATH=$(DEPS_PATH)/libevent/libevent
-LIBEVENT_IDIR=$(LIBEVENT_PATH)/include
-
 RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
 
@@ -27,7 +24,7 @@ SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
 
 IDIR=../include
 
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(LIBEVENT_IDIR) -I$(SQLITE3_DIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR)
 
 LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
 
@@ -62,8 +59,8 @@ $(ODIR)/%.o: %.c
 $(ODIR)/%.oo: %.cpp
 	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o 
-	ar rcs $@ $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(LIBEVENT_PATH)/.libs/libevent.a $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o 
+	ar rcs $@ $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o
 
 $(ODIR):
 	mkdir $(ODIR)

@@ -1,6 +1,6 @@
 
 
-default: libevent libconfig libdaemon jemalloc mariadb_client re2 sqlite3
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3
 .PHONY: default
 
 
@@ -11,14 +11,6 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE}
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
-
-libevent/libevent/.libs/libevent.a:
-	cd libevent && rm -rf libevent-2.0.22-stable
-	cd libevent && tar -zxf libevent-2.0.22-stable.tar.gz
-	cd libevent/libevent && ./configure
-	cd libevent/libevent && CC=${CC} CXX=${CXX} ${MAKE}
-
-libevent: libevent/libevent/.libs/libevent.a
 
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-4.2.1
@@ -73,7 +65,6 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
-	cd libevent && rm -rf libevent-2.0.22-stable
 	cd sqlite3/sqlite3 && rm -rf *.o
 .PHONY: cleanall
 

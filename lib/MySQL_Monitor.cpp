@@ -14,10 +14,6 @@
 #endif /* DEBUG */
 #define MYSQL_MONITOR_VERSION "0.2.0902" DEB
 
-
-
-#include <event2/event.h>
-
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 
