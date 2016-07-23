@@ -85,7 +85,7 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	timeout = 10;
 	res = poll(&pfd, 1, timeout);
 	if (res == 0)
-		return MYSQL_WAIT_TIMEOUT;
+		return MYSQL_WAIT_TIMEOUT | status;
 	else if (res < 0)
 		return MYSQL_WAIT_TIMEOUT;
 	else {
