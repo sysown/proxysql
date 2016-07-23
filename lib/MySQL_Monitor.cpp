@@ -41,7 +41,7 @@ static MySQL_Monitor *GloMyMon;
 	} while (rc!=SQLITE_DONE);\
 } while (0)
 
-static void state_machine_handler(int fd, short event, void *arg);
+//static void state_machine_handler(int fd, short event, void *arg);
 
 /*
 class WorkItem {
@@ -71,7 +71,6 @@ class ConsumerThread : public Thread {
 		// available to process.
 		for (int i = 0;; i++) {
 //			printf("thread %d, loop %d - waiting for item...\n", thrn, i);
-			//MySQL_Monitor_State_Data* mmsd = (MySQL_Monitor_State_Data*)m_queue.remove();
 			WorkItem* item = (WorkItem*)m_queue.remove();
 			if (item==NULL) {
 				// this is intentional to EXIT immediately
@@ -130,12 +129,12 @@ static void close_mysql(MYSQL *my) {
 
 
 
-
+/*
 static int connect__num_active_connections;
 static int ping__num_active_connections;
 static int replication_lag__num_active_connections;
 static int read_only__num_active_connections;
-
+*/
 
 struct cmp_str {
 	bool operator()(char const *a, char const *b) const
@@ -296,10 +295,10 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 		mysql_error_msg=NULL;
 		hostname=strdup(h);
 		port=p;
-		base=b;
+		//base=b;
 		use_ssl=_use_ssl;
 		ST=0;
-		ev_mysql=NULL;
+		//ev_mysql=NULL;
 	};
 
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
@@ -315,13 +314,15 @@ MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 			free(mysql_error_msg);
 		}
 	}
+/*
 void MySQL_Monitor_State_Data::unregister() {
 		if (ev_mysql) {
 			event_del(ev_mysql);
 			event_free(ev_mysql);
 		}
 	}
-
+*/
+/*
 int MySQL_Monitor_State_Data::handler(int fd, short event) {
 		int status;
 again:
@@ -346,7 +347,7 @@ again:
 					status= mysql_real_connect_start(&ret, mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
 				}
         if (status)
-					/* Wait for connect to complete. */
+					// Wait for connect to complete.
 					next_event(1, status);
 				else
 					NEXT_IMMEDIATE(3);
@@ -628,7 +629,7 @@ again:
 				break;
 
 			case 50:
-				/* We are done! */
+				// We are done!
 				if (mysql) {
 					mysql_close(mysql);
 					mysql=NULL;
@@ -643,6 +644,8 @@ again:
 		}
 		return 0;
 	}
+*/
+/*
 void MySQL_Monitor_State_Data::next_event(int new_st, int status) {
 		short wait_event= 0;
 		struct timeval tv, *ptv;
@@ -673,8 +676,8 @@ void MySQL_Monitor_State_Data::next_event(int new_st, int status) {
 		event_add(ev_mysql, ptv);
 		ST= new_st;
 	}
-
-
+*/
+/*
 static void
 state_machine_handler(int fd __attribute__((unused)), short event, void *arg) {
 	MySQL_Monitor_State_Data *msd=(MySQL_Monitor_State_Data *)arg;
@@ -710,7 +713,7 @@ state_machine_handler(int fd __attribute__((unused)), short event, void *arg) {
 		}
 	}
 }
-
+*/
 MySQL_Monitor::MySQL_Monitor() {
 
 	GloMyMon = this;

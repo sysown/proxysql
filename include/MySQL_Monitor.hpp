@@ -42,9 +42,9 @@ class MySQL_Monitor_State_Data {
   char *hostname;
   int port;
   bool use_ssl;
-  struct event *ev_mysql;
+//  struct event *ev_mysql;
   MYSQL *mysql;
-  struct event_base *base;
+//  struct event_base *base;
   MYSQL_RES *result;
   MYSQL *ret;
   int interr;
@@ -54,9 +54,9 @@ class MySQL_Monitor_State_Data {
   unsigned int hostgroup_id;
 	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0);
 	~MySQL_Monitor_State_Data();
-	int handler(int fd, short event);
-	void next_event(int new_st, int status);
-	void unregister();
+//	int handler(int fd, short event);
+//	void next_event(int new_st, int status);
+//	void unregister();
 	SQLite3DB *mondb;
 	bool create_new_connection();
 	// we are copying these from MySQL_Connection
