@@ -380,7 +380,7 @@ void * monitor_connect_thread(void *arg) {
 	mmsd->t1=start_time;
 	mmsd->t2=monotonic_time();
 
-	sqlite3_stmt *statement;
+	sqlite3_stmt *statement=NULL;
 	sqlite3 *mondb=mmsd->mondb->get_db();
 	int rc;
 	char *query=NULL;
@@ -447,7 +447,7 @@ void * monitor_ping_thread(void *arg) {
 __exit_monitor_ping_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement;
+		sqlite3_stmt *statement=NULL;
 		sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 		char *query=NULL;
@@ -565,7 +565,7 @@ void * monitor_read_only_thread(void *arg) {
 __exit_monitor_read_only_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement;
+		sqlite3_stmt *statement=NULL;
 		sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 		char *query=NULL;
@@ -688,7 +688,7 @@ void * monitor_replication_lag_thread(void *arg) {
 __exit_monitor_replication_lag_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement;
+		sqlite3_stmt *statement=NULL;
 		sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 		char *query=NULL;
@@ -823,7 +823,7 @@ void * MySQL_Monitor::monitor_connect() {
 
 __end_monitor_connect_loop:
 		/* if (sds) */ {
-			sqlite3_stmt *statement;
+			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
@@ -921,7 +921,7 @@ void * MySQL_Monitor::monitor_ping() {
 
 __end_monitor_ping_loop:
 		{
-			sqlite3_stmt *statement;
+			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
@@ -1231,7 +1231,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 
 __end_monitor_replication_lag_loop:
 		{
-			sqlite3_stmt *statement;
+			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
