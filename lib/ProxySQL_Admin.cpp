@@ -131,13 +131,13 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
 #endif /* DEBUG */
 
-
+/*
 #define CMD1	1
 #define CMD2	2
 #define CMD3	3
 #define CMD4	4
 #define CMD5	5
-
+*/
 
 static char * admin_variables_names[]= {
   (char *)"admin_credentials",
@@ -154,13 +154,12 @@ static char * admin_variables_names[]= {
   NULL
 };
 
-
+/*
 static t_symstruct lookuptable[] = {
     { SpookyHash::Hash32("SHOW",4,0), CMD1 },
     { SpookyHash::Hash32("SET",3,0), CMD2 },
     { SpookyHash::Hash32("FLUSH",5,0), CMD3 },
 };
-
 #define NKEYS (sizeof(lookuptable)/sizeof(t_symstruct))
 
 static uint32_t keyfromhash(uint32_t hash) {
@@ -174,6 +173,7 @@ static uint32_t keyfromhash(uint32_t hash) {
 	}
 	return -1;
 }
+*/
 
 
 static ProxySQL_Admin *SPA=NULL;
@@ -2165,7 +2165,7 @@ void* child_telnet(void* arg)
 			 }
 		  char *eow = strchr(line, '\n');
 			if (eow) *eow=0;
-			SPA->is_command(line);
+			//SPA->is_command(line);
 			if (strncmp(line,"shutdown",8)==0) glovars.shutdown=1;
 		  if (send(client, line, strlen(line), MSG_NOSIGNAL)==-1) break;
 		  if (send(client, "\nOK\n", 4, MSG_NOSIGNAL)==-1) break;
@@ -2624,7 +2624,7 @@ ProxySQL_Admin::~ProxySQL_Admin() {
 	delete (re2::RE2::Options *)match_regexes.opt;
 };
 
-
+/*
 bool ProxySQL_Admin::is_command(std::string s) {
 	std::string cps;
 	std::size_t found = s.find_first_of("\n\r\t ");
@@ -2633,7 +2633,7 @@ bool ProxySQL_Admin::is_command(std::string s) {
 	} else {
 		cps=s;
 	}
-	transform(cps.begin(), cps.end(), cps.begin(), toupper);
+	std::transform(cps.begin(), cps.end(), cps.begin(), std::toupper);
 	uint32 cmd_hash=SpookyHash::Hash32(cps.c_str(),cps.length(),0);
 	std::cout<<cps<<"  "<<cmd_hash<<"  "<<std::endl;
 	switch (keyfromhash(cmd_hash)) {
@@ -2652,7 +2652,7 @@ bool ProxySQL_Admin::is_command(std::string s) {
 	}
 	return true;
 };
-
+*/
 
 void ProxySQL_Admin::dump_mysql_collations() {
 	const CHARSET_INFO * c = compiled_charsets;

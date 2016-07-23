@@ -43,23 +43,44 @@ static MySQL_Monitor *GloMyMon;
 
 static void state_machine_handler(int fd, short event, void *arg);
 
-class ConsumerThreadPing : public Thread {
-	wqueue<MySQL_Monitor_State_Data*>& m_queue;
-	void *(*routine) (void *);
+/*
+class WorkItem {
+	public:
+		MySQL_Monitor_State_Data *mmsd;
+		void *(*routine) (void *);
+		WorkItem(MySQL_Monitor_State_Data *_mmsd, void *(*start_routine) (void *)) {
+			mmsd=_mmsd;
+			routine=start_routine;
+		}
+		~WorkItem() {}
+};
+*/
+class ConsumerThread : public Thread {
+	//wqueue<MySQL_Monitor_State_Data*>& m_queue;
+	wqueue<WorkItem*>& m_queue;
+	//void *(*routine) (void *);
 	int thrn;
 	public:
-	ConsumerThreadPing(wqueue<MySQL_Monitor_State_Data*>& queue, void *(*start_routine) (void *), int _n) : m_queue(queue) {
-		routine=start_routine;
+	//ConsumerThreadPing(wqueue<MySQL_Monitor_State_Data*>& queue, void *(*start_routine) (void *), int _n) : m_queue(queue) {
+	ConsumerThread(wqueue<WorkItem*>& queue, int _n) : m_queue(queue) {
+		//routine=start_routine;
 		thrn=_n;
 	}
 	void* run() {
 		// Remove 1 item at a time and process it. Blocks if no items are 
 		// available to process.
 		for (int i = 0;; i++) {
-			printf("thread %d, loop %d - waiting for item...\n", thrn, i);
-			MySQL_Monitor_State_Data* mmsd = (MySQL_Monitor_State_Data*)m_queue.remove();
-			printf("thread %d, loop %d - got one item\n", thrn, i);
-			routine((void *)mmsd);
+//			printf("thread %d, loop %d - waiting for item...\n", thrn, i);
+			//MySQL_Monitor_State_Data* mmsd = (MySQL_Monitor_State_Data*)m_queue.remove();
+			WorkItem* item = (WorkItem*)m_queue.remove();
+			if (item==NULL) {
+				// this is intentional to EXIT immediately
+				return NULL;
+			}
+//			printf("thread %d, loop %d - got one item\n", thrn, i);
+			item->routine((void *)item->mmsd);
+			//routine((void *)mmsd);
+			delete item;
 		}
 		return NULL;
 	}
@@ -1157,10 +1178,13 @@ void * MySQL_Monitor::monitor_connect() {
 				SQLite3_row *r=*it;
 				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
 				mmsd->mondb=monitordb;
-				pthread_t thr_;
-				if ( pthread_create(&thr_, &attr, monitor_connect_thread, (void *)mmsd) != 0 ) {
-					perror("Thread creation monitor_connect_thread");
-				}
+				//pthread_t thr_;
+				//if ( pthread_create(&thr_, &attr, monitor_connect_thread, (void *)mmsd) != 0 ) {
+				//	perror("Thread creation monitor_connect_thread");
+				//}
+				WorkItem* item;
+				item=new WorkItem(mmsd,monitor_connect_thread);
+				GloMyMon->queue.add(item);
 			}
 		}
 
@@ -1224,13 +1248,20 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long t2;
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
-	wqueue<MySQL_Monitor_State_Data*>  queue;
-	ConsumerThreadPing **threads= (ConsumerThreadPing **)malloc(sizeof(ConsumerThreadPing *)*MONTHREADS);
+//	wqueue<MySQL_Monitor_State_Data*>  queue;
+//	ConsumerThreadPing **threads= (ConsumerThreadPing **)malloc(sizeof(ConsumerThreadPing *)*MONTHREADS);
+//	for (int i=0;i<MONTHREADS; i++) {
+//		threads[i] = new ConsumerThreadPing(queue,monitor_ping_thread, i);
+//		threads[i]->start();
+//	}
+/*
+	wqueue<WorkItem*>  queue;
+	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*MONTHREADS);
 	for (int i=0;i<MONTHREADS; i++) {
-		threads[i] = new ConsumerThreadPing(queue,monitor_ping_thread, i);
+		threads[i] = new ConsumerThread(queue, i);
 		threads[i]->start();
 	}
-
+*/
 	while (shutdown==false) {
 
 		unsigned int glover;
@@ -1272,7 +1303,9 @@ void * MySQL_Monitor::monitor_ping() {
 //				if ( pthread_create(&thr_, &attr, monitor_ping_thread, (void *)mmsd) != 0 ) {
 //					perror("Thread creation monitor_ping_thread");
 //				}
-				queue.add(mmsd);
+				WorkItem* item;
+				item=new WorkItem(mmsd,monitor_ping_thread);
+				GloMyMon->queue.add(item);
 			}
 		}
 
@@ -1419,10 +1452,12 @@ __sleep_monitor_ping_loop:
 		delete mysql_thr;
 		mysql_thr=NULL;
 	}
+/*
 	for (int i=0;i<MONTHREADS; i++) {
 		threads[i]->join();
 	}
 	free(threads);
+*/
 	return NULL;
 }
 
@@ -1482,10 +1517,13 @@ void * MySQL_Monitor::monitor_read_only() {
 				SQLite3_row *r=*it;
 				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
 				mmsd->mondb=monitordb;
-				pthread_t thr_;
-				if ( pthread_create(&thr_, &attr, monitor_read_only_thread, (void *)mmsd) != 0 ) {
-					perror("Thread creation monitor_read_only_thread");
-				}
+				//pthread_t thr_;
+				//if ( pthread_create(&thr_, &attr, monitor_read_only_thread, (void *)mmsd) != 0 ) {
+				//	perror("Thread creation monitor_read_only_thread");
+				//}
+				WorkItem* item;
+				item=new WorkItem(mmsd,monitor_read_only_thread);
+				GloMyMon->queue.add(item);
 			}
 		}
 
@@ -1725,6 +1763,12 @@ void * MySQL_Monitor::run() {
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
+	//wqueue<WorkItem*>  queue;
+	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*MONTHREADS);
+	for (int i=0;i<MONTHREADS; i++) {
+		threads[i] = new ConsumerThread(queue, i);
+		threads[i]->start();
+	}
 	std::thread * monitor_connect_thread = new std::thread(&MySQL_Monitor::monitor_connect,this);
 	std::thread * monitor_ping_thread = new std::thread(&MySQL_Monitor::monitor_ping,this);
 	std::thread * monitor_read_only_thread = new std::thread(&MySQL_Monitor::monitor_read_only,this);
@@ -1739,6 +1783,13 @@ void * MySQL_Monitor::run() {
 		}
 		usleep(500000);
 	}
+	for (int i=0;i<MONTHREADS; i++) {
+		GloMyMon->queue.add(NULL);
+	}
+	for (int i=0;i<MONTHREADS; i++) {
+		threads[i]->join();
+	}
+	free(threads);
 	monitor_connect_thread->join();
 	monitor_ping_thread->join();
 	monitor_read_only_thread->join();

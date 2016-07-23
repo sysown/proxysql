@@ -5,6 +5,9 @@
 //#include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "thread.h"
+#include "wqueue.h"
+
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT "CREATE TABLE mysql_server_connect (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_since INT NOT NULL DEFAULT 0 , time_until INT NOT NULL DEFAULT 0 , connect_success_count INT NOT NULL DEFAULT 0 , connect_success_first INT NOT NULL DEFAULT 0 , connect_success_last INT NOT NULL DEFAULT 0 , connect_success_time_min INT NOT NULL DEFAULT 0 , connect_success_time_max INT NOT NULL DEFAULT 0 , connect_success_time_total INT NOT NULL DEFAULT 0 , connect_failure_count INT NOT NULL DEFAULT 0 , connect_failure_first INT NOT NULL DEFAULT 0 , connect_failure_last INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port))"
 
@@ -17,6 +20,7 @@
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_READ_ONLY_LOG "CREATE TABLE mysql_server_read_only_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start INT NOT NULL DEFAULT 0 , success_time INT DEFAULT 0 , read_only INT DEFAULT 1 , error VARCHAR , PRIMARY KEY (hostname, port, time_start))"
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_REPLICATION_LAG_LOG "CREATE TABLE mysql_server_replication_lag_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start INT NOT NULL DEFAULT 0 , success_time INT DEFAULT 0 , repl_lag INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start))"
+
 
 
 class MySQL_Monitor_Connection_Pool;
@@ -67,6 +71,16 @@ class MySQL_Monitor_State_Data {
 //	void next_event(MDB_ASYNC_ST new_st);
 };
 
+class WorkItem {
+	public:
+	MySQL_Monitor_State_Data *mmsd;
+	void *(*routine) (void *);
+	WorkItem(MySQL_Monitor_State_Data *_mmsd, void *(*start_routine) (void *)) {
+		mmsd=_mmsd;
+		routine=start_routine;
+		}
+	~WorkItem() {}
+};
 
 class MySQL_Monitor {
 	private:
@@ -77,6 +91,7 @@ class MySQL_Monitor {
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	public:
+	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
 	bool shutdown;
 	SQLite3DB *admindb;	// internal database
