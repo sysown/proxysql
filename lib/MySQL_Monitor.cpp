@@ -55,14 +55,12 @@ class ConsumerThread : public Thread {
 	void* run() {
 		// Remove 1 item at a time and process it. Blocks if no items are 
 		// available to process.
-		for (int i = 0;; i++) {
-//			printf("thread %d, loop %d - waiting for item...\n", thrn, i);
+		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
 			WorkItem* item = (WorkItem*)m_queue.remove();
 			if (item==NULL) {
 				// this is intentional to EXIT immediately
 				return NULL;
 			}
-//			printf("thread %d, loop %d - got one item\n", thrn, i);
 			item->routine((void *)item->mmsd);
 			//routine((void *)mmsd);
 			delete item->mmsd;
@@ -1301,7 +1299,7 @@ void * MySQL_Monitor::run() {
 	//wqueue<WorkItem*>  queue;
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
-		threads[i] = new ConsumerThread(queue, i);
+		threads[i] = new ConsumerThread(queue, 0);
 		threads[i]->start();
 	}
 	std::thread * monitor_connect_thread = new std::thread(&MySQL_Monitor::monitor_connect,this);
@@ -1317,6 +1315,21 @@ void * MySQL_Monitor::run() {
 			My_Conn_Pool->purge_missing_servers(NULL);
 		}
 		usleep(500000);
+		int qsize=queue.size();
+		if (qsize>1000) {
+			proxy_error("Monitor queue too big, try to reduce frequency of checks: %d\n", qsize);
+			qsize=qsize/500;
+			proxy_error("Monitor is starting %d helper threads\n", qsize);
+			ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
+			for (int i=0; i<qsize; i++) {
+				threads_aux[i] = new ConsumerThread(queue, 1000);
+				threads_aux[i]->start();
+			}
+			for (int i=0; i<qsize; i++) {
+				threads_aux[i]->join();
+			}
+			free(threads_aux);
+		}
 	}
 	for (unsigned int i=0;i<num_threads; i++) {
 		GloMyMon->queue.add(NULL);
