@@ -886,6 +886,10 @@ __sleep_monitor_connect_loop:
 		delete mysql_thr;
 		mysql_thr=NULL;
 	}
+	for (unsigned int i=0;i<num_threads; i++) {
+		WorkItem *item=NULL;
+		GloMyMon->queue.add(item);
+	}
 	return NULL;
 }
 
@@ -1092,6 +1096,10 @@ __sleep_monitor_ping_loop:
 		delete mysql_thr;
 		mysql_thr=NULL;
 	}
+	for (unsigned int i=0;i<num_threads; i++) {
+		WorkItem *item=NULL;
+		GloMyMon->queue.add(item);
+	}
 	return NULL;
 }
 
@@ -1199,6 +1207,10 @@ __sleep_monitor_read_only:
 		delete mysql_thr;
 		mysql_thr=NULL;
 	}
+	for (unsigned int i=0;i<num_threads; i++) {
+		WorkItem *item=NULL;
+		GloMyMon->queue.add(item);
+	}
 	return NULL;
 }
 
@@ -1300,6 +1312,10 @@ __sleep_monitor_replication_lag:
 	if (mysql_thr) {
 		delete mysql_thr;
 		mysql_thr=NULL;
+	}
+	for (unsigned int i=0;i<num_threads; i++) {
+		WorkItem *item=NULL;
+		GloMyMon->queue.add(item);
 	}
 	return NULL;
 }
