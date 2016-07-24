@@ -761,11 +761,8 @@ __thread int mysql_thread___monitor_replication_lag_interval;
 __thread int mysql_thread___monitor_replication_lag_timeout;
 __thread int mysql_thread___monitor_query_interval;
 __thread int mysql_thread___monitor_query_timeout;
-__thread char * mysql_thread___monitor_query_variables;
-__thread char * mysql_thread___monitor_query_status;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
-__thread bool mysql_thread___monitor_timer_cached;
 
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
@@ -838,11 +835,8 @@ extern __thread int mysql_thread___monitor_replication_lag_interval;
 extern __thread int mysql_thread___monitor_replication_lag_timeout;
 extern __thread int mysql_thread___monitor_query_interval;
 extern __thread int mysql_thread___monitor_query_timeout;
-extern __thread char * mysql_thread___monitor_query_variables;
-extern __thread char * mysql_thread___monitor_query_status;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
-extern __thread bool mysql_thread___monitor_timer_cached;
 
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;
