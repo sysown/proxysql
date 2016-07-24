@@ -1,7 +1,7 @@
 Monitor Module
 ==============
 
-This section focus on Monitor v1.3, as it introduces multiple improved compared to v1.2
+This section focus on Monitor v1.2.1, as it introduces multiple improved compared to v1.2.0
 
 
 Variables removed as unused or deprecated:
@@ -101,12 +101,12 @@ The Monitor Module has several internal threads. There are currently 5 main thre
 * monitor_ping_thread: main thread and scheduler for the ping checks
 * monitor_read_only_thread: main thread and scheduler for the read only checks
 * monitor_replication_lag_thread: main thread and scheduler for the replication lag checks
-Up to version v1.2 the above threads but *Monitor* were also responsible to perform the checks
+Up to version v1.2.0 the above threads but *Monitor* were also responsible to perform the checks
 
 Thread Pool
 ===========
-The implementation in v1.2 has a limitation with SSL implementation: with SSL, `connect()` is a blocking call, causing the threads to stall while performing the connect phase.
-Version v1.3 tries to overcome this limitation with a new implementation. Now:
+The implementation in v1.2.0 has a limitation with SSL implementation: with SSL, `connect()` is a blocking call, causing the threads to stall while performing the connect phase.
+Version v1.2.1 tries to overcome this limitation with a new implementation. Now:
 * *Monitor* initializes a Thread Pool of workers and creates a queue;
 * *monitor_connect_thread*, *monitor_ping_thread*, *monitor_read_only_thread* and *monitor_replication_lag_thread* are producers that generate tasks and sent them to the workers using the queue;
 * the workers process the tasks and perform the requires actions;
