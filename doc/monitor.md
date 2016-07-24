@@ -115,3 +115,8 @@ Version v1.2.1 tries to overcome this limitation with a new implementation. Now:
 Connection purging
 ==================
 Monitor implements its own connection pool. Connections that are alive for more than 3 * `mysql_thread___monitor_ping_interval` milliseconds are automatically purged
+
+wait_timeout
+------------
+
+To prevent that backends terminated connections, Monitor module automatically configures `wait_timeout` = `mysql_thread___monitor_ping_interval` * 10
