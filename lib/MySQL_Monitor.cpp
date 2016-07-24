@@ -389,10 +389,11 @@ void * monitor_ping_thread(void *arg) {
 	unsigned long long start_time=mysql_thr->curtime;
 
 	mmsd->t1=start_time;
-
+	bool crc=false;
 	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
 		bool rc;
 		rc=mmsd->create_new_connection();
+		crc=true;
 		if (rc==false) {
 			goto __exit_monitor_ping_thread;
 		}
@@ -418,8 +419,10 @@ void * monitor_ping_thread(void *arg) {
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 	} else {
-		GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-		mmsd->mysql=NULL;
+		if (crc==false) {
+			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	}
 
 __exit_monitor_ping_thread:
@@ -444,11 +447,60 @@ __exit_monitor_ping_thread:
 	}
 __fast_exit_monitor_ping_thread:
 	if (mmsd->mysql) {
-		mysql_close(mmsd->mysql); // if we reached here we didn't put the connection back
-		mmsd->mysql=NULL;
+		// if we reached here we didn't put the connection back
+		if (mmsd->mysql_error_msg) {
+			mysql_close(mmsd->mysql); // if we reached here we should destroy it
+			mmsd->mysql=NULL;
+		} else {
+			if (crc) {
+				bool rc=mmsd->set_wait_timeout();
+				if (rc) {
+					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+				} else {
+					mysql_close(mmsd->mysql); // set_wait_timeout failed
+				}
+				mmsd->mysql=NULL;
+			} else { // really not sure how we reached here, drop it
+				mysql_close(mmsd->mysql);
+				mmsd->mysql=NULL;
+			}
+		}
 	}
 	delete mysql_thr;
 	return NULL;
+}
+
+bool MySQL_Monitor_State_Data::set_wait_timeout() {
+	bool ret=false;
+	char *query=NULL;
+	char *qt=(char *)"SET wait_timeout=%d";
+	int wait_timeout=mysql_thread___monitor_ping_interval*10/1000;	// convert to second and multiply by 10
+	query=(char *)malloc(strlen(qt)+32);
+	sprintf(query,qt,wait_timeout);
+	t1=monotonic_time();
+	async_exit_status=mysql_query_start(&interr,mysql,query);
+	while (async_exit_status) {
+		async_exit_status=wait_for_mysql(mysql, async_exit_status);
+		unsigned long long now=monotonic_time();
+		if (now > t1 + mysql_thread___monitor_ping_timeout * 1000) {
+			mysql_error_msg=strdup("timeout");
+			goto __exit_set_wait_timeout;
+		}
+		if (GloMyMon->shutdown==true) {
+			goto __exit_set_wait_timeout;	// exit immediately
+		}
+		if ((async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			async_exit_status=mysql_query_cont(&interr, mysql, async_exit_status);
+		}
+	}
+	if (interr) { // SET failed
+		ret=false;
+	} else {
+		ret=true;
+	}
+__exit_set_wait_timeout:
+	free(query);
+	return ret;
 }
 
 bool MySQL_Monitor_State_Data::create_new_connection() {
@@ -498,9 +550,11 @@ void * monitor_read_only_thread(void *arg) {
 
 	mmsd->t1=start_time;
 
+	bool crc=false;
 	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
 		bool rc;
 		rc=mmsd->create_new_connection();
+		crc=true;
 		if (rc==false) {
 			goto __exit_monitor_read_only_thread;
 		}
@@ -541,9 +595,11 @@ void * monitor_read_only_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
-//	} else {
-//		GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-//		mmsd->mysql=NULL;
+	} else {
+		if (crc==false) {
+			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	}
 
 __exit_monitor_read_only_thread:
@@ -604,13 +660,31 @@ __exit_monitor_read_only_thread:
 	}
 	if (mmsd->interr) { // check failed
 	} else {
-		GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-		mmsd->mysql=NULL;
+		if (crc==false) {
+			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	}
 __fast_exit_monitor_read_only_thread:
 	if (mmsd->mysql) {
-		mysql_close(mmsd->mysql); // if we reached here we didn't put the connection back
-		mmsd->mysql=NULL;
+		// if we reached here we didn't put the connection back
+		if (mmsd->mysql_error_msg) {
+			mysql_close(mmsd->mysql); // if we reached here we should destroy it
+			mmsd->mysql=NULL;
+		} else {
+			if (crc) {
+				bool rc=mmsd->set_wait_timeout();
+				if (rc) {
+					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+				} else {
+					mysql_close(mmsd->mysql); // set_wait_timeout failed
+				}
+				mmsd->mysql=NULL;
+			} else { // really not sure how we reached here, drop it
+				mysql_close(mmsd->mysql);
+				mmsd->mysql=NULL;
+			}
+		}
 	}
 	delete mysql_thr;
 	return NULL;
@@ -629,9 +703,11 @@ void * monitor_replication_lag_thread(void *arg) {
 
 	mmsd->t1=start_time;
 
+	bool crc=false;
 	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
 		bool rc;
 		rc=mmsd->create_new_connection();
+		crc=true;
 		if (rc==false) {
 			goto __exit_monitor_replication_lag_thread;
 		}
@@ -672,6 +748,11 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+	} else {
+		if (crc==false) {
+			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	}
 
 __exit_monitor_replication_lag_thread:
@@ -742,8 +823,24 @@ __exit_monitor_replication_lag_thread:
 	}
 __fast_exit_monitor_replication_lag_thread:
 	if (mmsd->mysql) {
-		mysql_close(mmsd->mysql); // if we reached here we didn't put the connection back
-		mmsd->mysql=NULL;
+		// if we reached here we didn't put the connection back
+		if (mmsd->mysql_error_msg) {
+			mysql_close(mmsd->mysql); // if we reached here we should destroy it
+			mmsd->mysql=NULL;
+		} else {
+			if (crc) {
+				bool rc=mmsd->set_wait_timeout();
+				if (rc) {
+					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+				} else {
+					mysql_close(mmsd->mysql); // set_wait_timeout failed
+				}
+				mmsd->mysql=NULL;
+			} else { // really not sure how we reached here, drop it
+				mysql_close(mmsd->mysql);
+				mmsd->mysql=NULL;
+			}
+		}
 	}
 	delete mysql_thr;
 	return NULL;
