@@ -172,6 +172,9 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 				MYSQL *my=*it3;
 				unsigned long long then=0;
 				memcpy(&then,my->net.buff,sizeof(unsigned long long));
+				if (rand()%10==0) {
+					fprintf(stderr,"now: %llu, then: %llu, monitor_ping_interval: %llu\n", now, then, mysql_thread___monitor_ping_interval);
+				}
 				if (now > (then + mysql_thread___monitor_ping_interval*1000 * 3)) {
 					MySQL_Monitor_State_Data *mmsd= new MySQL_Monitor_State_Data((char *)"",0,NULL,false);
 					mmsd->mysql=my;
