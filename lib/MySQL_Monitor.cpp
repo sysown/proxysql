@@ -894,7 +894,7 @@ void * MySQL_Monitor::monitor_connect() {
 			}
 			int us=100;
 			if (resultset->rows_count) {
-				us=1000000/resultset->rows_count;
+				us=mysql_thread___monitor_connect_interval/2/resultset->rows_count;
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
@@ -904,6 +904,7 @@ void * MySQL_Monitor::monitor_connect() {
 				item=new WorkItem(mmsd,monitor_connect_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
+				if (shutdown) return NULL;
 			}
 		}
 
@@ -1004,7 +1005,7 @@ void * MySQL_Monitor::monitor_ping() {
 			}
 			int us=100;
 			if (resultset->rows_count) {
-				us=1000000/resultset->rows_count;
+				us=mysql_thread___monitor_ping_interval/2/resultset->rows_count;
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
@@ -1014,6 +1015,7 @@ void * MySQL_Monitor::monitor_ping() {
 				item=new WorkItem(mmsd,monitor_ping_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
+				if (shutdown) return NULL;
 			}
 		}
 
@@ -1218,7 +1220,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			}
 			int us=100;
 			if (resultset->rows_count) {
-				us=1000000/resultset->rows_count;
+				us=mysql_thread___monitor_read_only_interval/2/resultset->rows_count;
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
@@ -1232,6 +1234,7 @@ void * MySQL_Monitor::monitor_read_only() {
 				item=new WorkItem(mmsd,monitor_read_only_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
+				if (shutdown) return NULL;
 			}
 		}
 
@@ -1336,7 +1339,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 //			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			int us=100;
 			if (resultset->rows_count) {
-				us=1000000/resultset->rows_count;
+				us=mysql_thread___monitor_replication_lag_interval/2/resultset->rows_count;
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
@@ -1346,6 +1349,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 				item=new WorkItem(mmsd,monitor_replication_lag_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
+				if (shutdown) return NULL;
 			}
 		}
 
