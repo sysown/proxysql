@@ -595,11 +595,6 @@ void * monitor_read_only_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
-	} else {
-		if (crc==false) {
-			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-			mmsd->mysql=NULL;
-		}
 	}
 
 __exit_monitor_read_only_thread:
