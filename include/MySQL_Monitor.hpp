@@ -56,6 +56,7 @@ class MySQL_Monitor_State_Data {
 	bool create_new_connection();
 	MDB_ASYNC_ST async_state_machine;
 	int async_exit_status;
+	bool set_wait_timeout();
 };
 
 class WorkItem {
