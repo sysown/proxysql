@@ -155,7 +155,14 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 	unsigned long long now=monotonic_time();
 	pthread_mutex_lock(&mutex);
 	std::map<char *, std::list<MYSQL *>*>::iterator it;
-	fprintf(stderr,"conn pool size: %d\n",my_connections.size());
+	fprintf(stderr,"conn pool size: %d\n",my_connections.size());	
+	unsigned int totconn;
+	totconn=0;
+	for(it = my_connections.begin(); it != my_connections.end(); it++) {
+		std::list<MYSQL *> *lst=it->second;
+		totconn+=lst->size();
+	}
+	fprintf(stderr,"tot conn in pool: %d\n",totconn);	
 	for(it = my_connections.begin(); it != my_connections.end(); it++) {
 		std::list<MYSQL *> *lst=it->second;
 		if (!lst->empty()) {
@@ -195,6 +202,12 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 			my_connections.erase(it);
 		}
 	}
+	totconn=0;
+	for(it = my_connections.begin(); it != my_connections.end(); it++) {
+		std::list<MYSQL *> *lst=it->second;
+		totconn+=lst->size();
+	}
+	fprintf(stderr,"tot conn in pool: %d\n",totconn);	
 	pthread_mutex_unlock(&mutex);
 }
 
@@ -1405,18 +1418,18 @@ void * MySQL_Monitor::run() {
 			//proxy_error("%s\n","MySQL_Monitor refreshing variables");
 			//My_Conn_Pool->purge_missing_servers(NULL);
 		}
-		if ( rand()%4 == 0) { // purge once in a while
+		if ( rand()%2 == 0) { // purge once in a while
 			My_Conn_Pool->purge_idle_connections();
 		}
 		usleep(500000);
 		int qsize=queue.size();
-		if (qsize>200) {
+		if (qsize>500) {
 			proxy_error("Monitor queue too big, try to reduce frequency of checks: %d\n", qsize);
-			qsize=qsize/100;
+			qsize=qsize/250;
 			proxy_error("Monitor is starting %d helper threads\n", qsize);
 			ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
 			for (int i=0; i<qsize; i++) {
-				threads_aux[i] = new ConsumerThread(queue, 90);
+				threads_aux[i] = new ConsumerThread(queue, 245);
 				threads_aux[i]->start();
 			}
 			for (int i=0; i<qsize; i++) {
