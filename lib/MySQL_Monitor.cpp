@@ -385,23 +385,24 @@ void * monitor_ping_thread(void *arg) {
 	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
-	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
-
-	mmsd->t1=start_time;
 	bool crc=false;
-	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
-		bool rc;
-		rc=mmsd->create_new_connection();
-		crc=true;
-		if (rc==false) {
-			goto __exit_monitor_ping_thread;
-		}
-	}
+	if (mmsd->mysql==NULL) {
+		mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 
-	mmsd->t1=monotonic_time();
-	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
-	mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
+		mmsd->t1=start_time;
+		if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
+			bool rc;
+			rc=mmsd->create_new_connection();
+			crc=true;
+			if (rc==false) {
+				goto __exit_monitor_ping_thread;
+			}
+		}
+		mmsd->t1=monotonic_time();
+		mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
+	}
+	start_time=mmsd->t1;
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
@@ -1002,6 +1003,13 @@ void * MySQL_Monitor::monitor_ping() {
 				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
 				mmsd->mondb=monitordb;
 				WorkItem* item;
+				{	// try to initialize it here
+					mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
+					if (mmsd->mysql) {
+						mmsd->t1=monotonic_time();
+						mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
+					}
+				}
 				item=new WorkItem(mmsd,monitor_ping_thread);
 				GloMyMon->queue.add(item);
 			}
