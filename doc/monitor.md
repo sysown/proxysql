@@ -110,4 +110,8 @@ Version v1.2.1 tries to overcome this limitation with a new implementation. Now:
 * *Monitor* initializes a Thread Pool of workers and creates a queue;
 * *monitor_connect_thread*, *monitor_ping_thread*, *monitor_read_only_thread* and *monitor_replication_lag_thread* are producers that generate tasks and sent them to the workers using the queue;
 * the workers process the tasks and perform the requires actions;
-* if *Monitor* detects that the queue is growing too fast, it creates new temporary worker threads 
+* if *Monitor* detects that the queue is growing too fast, it creates new temporary worker threads
+
+Connection purging
+==================
+Monitor implements its own connection pool. Connections that are alive for more than 3 * `mysql_thread___monitor_ping_interval` milliseconds are automatically purged
