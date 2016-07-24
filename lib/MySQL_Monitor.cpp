@@ -1,6 +1,6 @@
 /*
 	RECENT CHANGELOG
-	1.3.0723
+	1.2.0723
 		* almost completely rewritten
 		* use of blocking call for new connections
     * use of Thread Pool instead of a thread per check type
@@ -22,7 +22,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define MYSQL_MONITOR_VERSION "1.3.0723" DEB
+#define MYSQL_MONITOR_VERSION "1.2.0723" DEB
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
@@ -131,14 +131,12 @@ class MySQL_Monitor_Connection_Pool {
 	private:
 	pthread_mutex_t mutex;
 	int size;
-	//std::map<std::pair<char *, std::list<MYSQL *>* > my_connections;
 	std::map<char *, std::list<MYSQL *>* , cmp_str> my_connections;
 	public:
 	MySQL_Monitor_Connection_Pool();
 	~MySQL_Monitor_Connection_Pool();
 	MYSQL * get_connection(char *hostname, int port);
 	void put_connection(char *hostname, int port, MYSQL *my);
-	//void purge_missing_servers(SQLite3_result *resultset);
 	void purge_idle_connections();
 };
 
@@ -148,21 +146,20 @@ MySQL_Monitor_Connection_Pool::MySQL_Monitor_Connection_Pool() {
 }
 
 MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
-//	purge_missing_servers(NULL);
 }
 
 void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 	unsigned long long now=monotonic_time();
 	pthread_mutex_lock(&mutex);
 	std::map<char *, std::list<MYSQL *>*>::iterator it;
-	fprintf(stderr,"conn pool size: %d\n",my_connections.size());	
+	//fprintf(stderr,"conn pool size: %d\n",my_connections.size());
 	unsigned int totconn;
 	totconn=0;
 	for(it = my_connections.begin(); it != my_connections.end(); it++) {
 		std::list<MYSQL *> *lst=it->second;
 		totconn+=lst->size();
 	}
-	fprintf(stderr,"tot conn in pool: %d\n",totconn);	
+	//fprintf(stderr,"tot conn in pool: %d\n",totconn);
 	for(it = my_connections.begin(); it != my_connections.end(); it++) {
 		std::list<MYSQL *> *lst=it->second;
 		if (!lst->empty()) {
@@ -172,9 +169,6 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 				MYSQL *my=*it3;
 				unsigned long long then=0;
 				memcpy(&then,my->net.buff,sizeof(unsigned long long));
-				if (rand()%10==0) {
-					fprintf(stderr,"now: %llu, then: %llu, monitor_ping_interval: %llu\n", now, then, mysql_thread___monitor_ping_interval);
-				}
 				if (now > (then + mysql_thread___monitor_ping_interval*1000 * 3)) {
 					MySQL_Monitor_State_Data *mmsd= new MySQL_Monitor_State_Data((char *)"",0,NULL,false);
 					mmsd->mysql=my;
@@ -183,116 +177,14 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 					GloMyMon->queue.add(item);
 					lst->remove(*it3);
 				}
-/*
-			if (memcmp(my->net.buff,pollute_buf,8)) {
-				// the buffer is not polluted, it means it didn't match previously
-				while(!lst->empty()) {
-					my=lst->front();
-					lst->pop_front();
-					purge_lst->push_back(my);
-				}
-			} else {
-				// try to keep maximum 2 free connections
-				// dropping all the others
-				while(lst->size() > 2) {
-					my=lst->front();
-					lst->pop_front();
-					purge_lst->push_back(my);
-				}
-*/
 			}
 		} else {
 			my_connections.erase(it);
 		}
 	}
-	totconn=0;
-	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		std::list<MYSQL *> *lst=it->second;
-		totconn+=lst->size();
-	}
-	fprintf(stderr,"tot conn in pool: %d\n",totconn);	
 	pthread_mutex_unlock(&mutex);
 }
 
-/*
-void MySQL_Monitor_Connection_Pool::purge_missing_servers(SQLite3_result *resultset) {
-#define POLLUTE_LENGTH 8
-	char pollute_buf[POLLUTE_LENGTH];
-	srand(monotonic_time());
-	for (int i=0; i<POLLUTE_LENGTH; i++) {
-		pollute_buf[i]=(char)rand();
-	}
-	std::list<MYSQL *> *purge_lst=NULL;
-	purge_lst=new std::list<MYSQL *>;
-	pthread_mutex_lock(&mutex);
-	if (resultset==NULL) {
-		goto __purge_all;
-	}
-	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-		// for each host configured ...
-		SQLite3_row *r=*it;
-		char *buf=(char *)malloc(16+strlen(r->fields[0]));
-		sprintf(buf,"%s:%s",r->fields[0],r->fields[1]);
-		std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it2;
-		it2 = my_connections.find(buf); // find the host
-		free(buf);
-		if (it2 != my_connections.end()) { // if the host exists
-			std::list<MYSQL *> *lst=it2->second;
-			std::list<MYSQL *>::const_iterator it3;
-			for (it3 = lst->begin(); it3 != lst->end(); ++it3) {
-				MYSQL *my=*it3;
-				memcpy(my->net.buff,pollute_buf,8); // pollute this buffer
-				//
-			}
-		}
-	}
-__purge_all:
-	std::map<char *, std::list<MYSQL *>*>::iterator it;
-	//std::map<std::string, std::map<std::string, std::string>>::iterator it_type;
-	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		std::list<MYSQL *> *lst=it->second;
-		if (!lst->empty()) {
-			std::list<MYSQL *>::const_iterator it3;
-			it3=lst->begin();
-			MYSQL *my=*it3;
-			if (memcmp(my->net.buff,pollute_buf,8)) {
-				// the buffer is not polluted, it means it didn't match previously
-				while(!lst->empty()) {
-					my=lst->front();
-					lst->pop_front();
-					purge_lst->push_back(my);
-				}
-			} else {
-				// try to keep maximum 2 free connections
-				// dropping all the others
-				while(lst->size() > 2) {
-					my=lst->front();
-					lst->pop_front();
-					purge_lst->push_back(my);
-				}
-			}
-		}
-	}
-	pthread_mutex_unlock(&mutex);
-	char quit_buff[5];
-	memset(quit_buff,0,5);
-	quit_buff[0]=1;
-	quit_buff[4]=1;
-
-	// close all idle connections
-	while (!purge_lst->empty()) {
-		MYSQL *my=purge_lst->front();
-		purge_lst->pop_front();
-		int fd=my->net.fd;
-		int wb=write(fd,quit_buff,5);
-		fd+=wb; // dummy, to make compiler happy
-		fd-=wb; // dummy, to make compiler happy
-		mysql_close_no_command(my);
-		shutdown(fd, SHUT_RDWR);
-	}
-	delete purge_lst;
-}
-*/
 
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) {
 	std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
@@ -905,7 +797,6 @@ void * MySQL_Monitor::monitor_connect() {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_connect_loop;
 		} else {
-			//GloMyMon->My_Conn_Pool->purge_missing_servers(resultset);
 			if (resultset->rows_count==0) {
 				goto __end_monitor_connect_loop;
 			}
@@ -1418,10 +1309,8 @@ void * MySQL_Monitor::run() {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			if (GloMTH)
 				mysql_thr->refresh_variables();
-			//proxy_error("%s\n","MySQL_Monitor refreshing variables");
-			//My_Conn_Pool->purge_missing_servers(NULL);
 		}
-		if ( rand()%2 == 0) { // purge once in a while
+		if ( rand()%5 == 0) { // purge once in a while
 			My_Conn_Pool->purge_idle_connections();
 		}
 		usleep(500000);
