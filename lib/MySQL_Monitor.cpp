@@ -1404,6 +1404,7 @@ void * MySQL_Monitor::run() {
 			//proxy_error("%s\n","MySQL_Monitor refreshing variables");
 			//My_Conn_Pool->purge_missing_servers(NULL);
 		}
+		My_Conn_Pool->purge_idle_connections();
 		usleep(500000);
 		int qsize=queue.size();
 		if (qsize>1000) {
