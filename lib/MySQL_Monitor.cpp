@@ -496,6 +496,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 			mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
+		if (timeout==0) timeout=1;
 		mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 //		mysql_options(mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
 //		mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
