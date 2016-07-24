@@ -2001,6 +2001,9 @@ void MySQL_Thread::process_all_sessions() {
 }
 
 void MySQL_Thread::refresh_variables() {
+	if (GloMTH==NULL) {
+		return;
+	}
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
 	mysql_thread___max_allowed_packet=GloMTH->get_variable_int((char *)"max_allowed_packet");

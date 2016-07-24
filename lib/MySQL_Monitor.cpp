@@ -60,7 +60,8 @@ class ConsumerThread : public Thread {
 			if (item==NULL) {
 				if (thrn) {
 					// we took a NULL item that wasn't meant to reach here! Add it again
-					GloMyMon->queue.add(NULL);
+					WorkItem *item=NULL;
+					GloMyMon->queue.add(item);
 				}
 				// this is intentional to EXIT immediately
 				return NULL;
@@ -384,7 +385,7 @@ void * monitor_connect_thread(void *arg) {
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->create_new_connection();
 
@@ -420,6 +421,7 @@ void * monitor_ping_thread(void *arg) {
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -525,6 +527,7 @@ void * monitor_read_only_thread(void *arg) {
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -655,6 +658,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -791,6 +795,7 @@ void * MySQL_Monitor::monitor_connect() {
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 
 	unsigned long long t1;
@@ -808,6 +813,7 @@ void * MySQL_Monitor::monitor_connect() {
 		unsigned int glover;
 		t1=monotonic_time();
 
+		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
@@ -892,6 +898,7 @@ void * MySQL_Monitor::monitor_ping() {
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -908,6 +915,7 @@ void * MySQL_Monitor::monitor_ping() {
 		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status!='OFFLINE_HARD' GROUP BY hostname, port";
 		t1=monotonic_time();
 
+		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
@@ -1095,6 +1103,7 @@ void * MySQL_Monitor::monitor_read_only() {
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -1111,6 +1120,7 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD' GROUP BY hostname, port";
 		t1=monotonic_time();
 
+		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
@@ -1200,6 +1210,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -1216,6 +1227,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag, use_ssl FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
 		t1=monotonic_time();
 
+		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
@@ -1300,6 +1312,7 @@ void * MySQL_Monitor::run() {
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	//wqueue<WorkItem*>  queue;
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
@@ -1311,10 +1324,13 @@ void * MySQL_Monitor::run() {
 	std::thread * monitor_read_only_thread = new std::thread(&MySQL_Monitor::monitor_read_only,this);
 	std::thread * monitor_replication_lag_thread = new std::thread(&MySQL_Monitor::monitor_replication_lag,this);
 	while (shutdown==false) {
-		unsigned int glover=GloMTH->get_global_version();
+		unsigned int glover;
+		if (GloMTH)
+			glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			mysql_thr->refresh_variables();
+			if (GloMTH)
+				mysql_thr->refresh_variables();
 			//proxy_error("%s\n","MySQL_Monitor refreshing variables");
 			My_Conn_Pool->purge_missing_servers(NULL);
 		}
@@ -1336,7 +1352,8 @@ void * MySQL_Monitor::run() {
 		}
 	}
 	for (unsigned int i=0;i<num_threads; i++) {
-		GloMyMon->queue.add(NULL);
+		WorkItem *item=NULL;
+		GloMyMon->queue.add(item);
 	}
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i]->join();
