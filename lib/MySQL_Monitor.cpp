@@ -899,6 +899,7 @@ void * MySQL_Monitor::monitor_connect() {
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_connect_thread);
 				GloMyMon->queue.add(item);
+				usleep(10000);
 			}
 		}
 
@@ -1004,6 +1005,7 @@ void * MySQL_Monitor::monitor_ping() {
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_ping_thread);
 				GloMyMon->queue.add(item);
+				usleep(10000);
 			}
 		}
 
@@ -1217,6 +1219,7 @@ void * MySQL_Monitor::monitor_read_only() {
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_read_only_thread);
 				GloMyMon->queue.add(item);
+				usleep(10000);
 			}
 		}
 
@@ -1326,6 +1329,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_replication_lag_thread);
 				GloMyMon->queue.add(item);
+				usleep(10000);
 			}
 		}
 
