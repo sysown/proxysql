@@ -2052,10 +2052,10 @@ void MySQL_Thread::refresh_variables() {
 
 MySQL_Thread::MySQL_Thread() {
 	spinlock_rwlock_init(&thread_mutex);
-	mypolls.len=0;
-	mypolls.size=0;
-	mypolls.fds=NULL;
-	mypolls.myds=NULL;
+//	mypolls.len=0;
+//	mypolls.size=0;
+//	mypolls.fds=NULL;
+//	mypolls.myds=NULL;
 	my_idle_conns=NULL;
 	//my_idle_myds=NULL;
 	mysql_sessions=NULL;
