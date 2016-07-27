@@ -556,7 +556,7 @@ void * monitor_read_only_thread(void *arg) {
 		rc=mmsd->create_new_connection();
 		crc=true;
 		if (rc==false) {
-			goto __exit_monitor_read_only_thread;
+			goto __fast_exit_monitor_read_only_thread;
 		}
 	}
 
@@ -656,8 +656,10 @@ __exit_monitor_read_only_thread:
 	if (mmsd->interr) { // check failed
 	} else {
 		if (crc==false) {
-			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-			mmsd->mysql=NULL;
+			if (mmsd->mysql) {
+				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+				mmsd->mysql=NULL;
+			}
 		}
 	}
 __fast_exit_monitor_read_only_thread:
@@ -704,7 +706,7 @@ void * monitor_replication_lag_thread(void *arg) {
 		rc=mmsd->create_new_connection();
 		crc=true;
 		if (rc==false) {
-			goto __exit_monitor_replication_lag_thread;
+			goto __fast_exit_monitor_replication_lag_thread;
 		}
 	}
 
@@ -813,8 +815,10 @@ __exit_monitor_replication_lag_thread:
 	}
 	if (mmsd->interr) { // check failed
 	} else {
-		GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-		mmsd->mysql=NULL;
+		if (mmsd->mysql) {
+			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	}
 __fast_exit_monitor_replication_lag_thread:
 	if (mmsd->mysql) {
