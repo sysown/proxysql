@@ -308,7 +308,7 @@ Query OK, 54 rows affected (0.00 sec)
 ## MySQL Users
 
 After we configure the servers in `mysql_servers`, we also need to configure mysql users.
-This is performed using table `mysql_servers`:
+This is performed using table `mysql_users`:
 
 ``` sql
 Admin> SELECT * FROM mysql_users;
