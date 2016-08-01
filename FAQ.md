@@ -15,7 +15,7 @@ $ mysql -u admin -padmin -h 127.0.0.1 -P6032
 Warning: Using a password on the command line interface can be insecure.
 Welcome to the MySQL monitor.  Commands end with ; or \g.
 Your MySQL connection id is 2
-Server version: 5.1.30 (ProxySQL Admin Module)
+Server version: 5.5.30 (ProxySQL Admin Module)
 
 Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
 
@@ -80,7 +80,7 @@ $ mysql -u test -ptest -h 127.0.0.1 -P6034
 Warning: Using a password on the command line interface can be insecure.
 Welcome to the MySQL monitor.  Commands end with ; or \g.
 Your MySQL connection id is 5
-Server version: 5.1.30 (ProxySQL Admin Module)
+Server version: 5.5.30 (ProxySQL Admin Module)
 
 Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
 
@@ -106,7 +106,7 @@ $ mysql -u admin -padmin -h 127.0.0.1 -P6032
 Warning: Using a password on the command line interface can be insecure.
 Welcome to the MySQL monitor.  Commands end with ; or \g.
 Your MySQL connection id is 5
-Server version: 5.1.30 (ProxySQL Admin Module)
+Server version: 5.5.30 (ProxySQL Admin Module)
 
 Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
 
@@ -131,7 +131,7 @@ $ mysql -u user1 -p123456 -h 127.0.0.1 -P6033
 Warning: Using a password on the command line interface can be insecure.
 Welcome to the MySQL monitor.  Commands end with ; or \g.
 Your MySQL connection id is 6
-Server version: 5.1.30 (ProxySQL)
+Server version: 5.5.30 (ProxySQL)
 
 Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
 
