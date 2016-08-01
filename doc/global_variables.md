@@ -216,9 +216,15 @@ Default value: `120000` (miliseconds - the equivalent of 2 minutes)
 
 ### `mysql-monitor_connect_timeout`
 
-Currently unused.
+Connection timeout in milliseconds. The current implementation rounds this value to an integer number of seconds less or equal to the original interval, with 1 second as minimum. This lazy rouding is done because SSL connections are blocking calls.
 
 Default value: `200` (miliseconds)
+
+### `mysql-monitor_enabled`
+
+It enables or disables MySQL Monitor.
+
+Defaut value: `true`
 
 ### `mysql-monitor_history`
 

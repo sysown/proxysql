@@ -34,6 +34,10 @@ General variables:
 
   Password for user *mysql-monitor_username*
   
+* *mysql-monitor_enabled*
+
+  It enables or disables MySQL Monitor. Since MySQL Monitor can interfere with changed applied directly on the Admin interface, this variable allows to temporary disable it.
+
 Connect variables:
 * *mysql-monitor_connect_interval*
 
