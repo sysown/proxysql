@@ -67,7 +67,9 @@ class ConsumerThread : public Thread {
 				return NULL;
 			}
 			if (item->routine) { // NULL is allowed, do nothing for it
-				item->routine((void *)item->mmsd);
+				if (mysql_thread___monitor_enabled==true) {
+					item->routine((void *)item->mmsd);
+				}
 			}
 			//routine((void *)mmsd);
 			delete item->mmsd;
@@ -861,7 +863,7 @@ void * MySQL_Monitor::monitor_connect() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	unsigned long long start_time;
-	while (shutdown==false) {
+	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		char *error=NULL;
 		int cols=0;
@@ -908,13 +910,13 @@ void * MySQL_Monitor::monitor_connect() {
 				item=new WorkItem(mmsd,monitor_connect_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
-				if (shutdown) return NULL;
+				if (GloMyMon->shutdown) return NULL;
 			}
 		}
 
 
 __end_monitor_connect_loop:
-		/* if (sds) */ {
+		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
@@ -973,7 +975,7 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
-	while (shutdown==false) {
+	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		unsigned int glover;
 		char *error=NULL;
@@ -1019,12 +1021,12 @@ void * MySQL_Monitor::monitor_ping() {
 				item=new WorkItem(mmsd,monitor_ping_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
-				if (shutdown) return NULL;
+				if (GloMyMon->shutdown) return NULL;
 			}
 		}
 
 __end_monitor_ping_loop:
-		{
+		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
@@ -1188,7 +1190,7 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
-	while (shutdown==false) {
+	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		unsigned int glover;
 		char *error=NULL;
@@ -1238,12 +1240,12 @@ void * MySQL_Monitor::monitor_read_only() {
 				item=new WorkItem(mmsd,monitor_read_only_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
-				if (shutdown) return NULL;
+				if (GloMyMon->shutdown) return NULL;
 			}
 		}
 
 __end_monitor_read_only_loop:
-			/* if (sds) */ {
+		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
@@ -1305,7 +1307,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
-	while (shutdown==false) {
+	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		unsigned int glover;
 		char *error=NULL;
@@ -1353,12 +1355,12 @@ void * MySQL_Monitor::monitor_replication_lag() {
 				item=new WorkItem(mmsd,monitor_replication_lag_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
-				if (shutdown) return NULL;
+				if (GloMyMon->shutdown) return NULL;
 			}
 		}
 
 __end_monitor_replication_lag_loop:
-		{
+		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
@@ -1412,6 +1414,16 @@ void * MySQL_Monitor::run() {
 	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	//wqueue<WorkItem*>  queue;
+__monitor_run:
+	while (queue.size()) { // this is a clean up in case Monitor was restarted
+		WorkItem* item = (WorkItem*)queue.remove();
+		if (item) {
+			if (item->mmsd) {
+				delete item->mmsd;
+			}
+			delete item;
+		}
+	}
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, 0);
@@ -1421,7 +1433,7 @@ void * MySQL_Monitor::run() {
 	std::thread * monitor_ping_thread = new std::thread(&MySQL_Monitor::monitor_ping,this);
 	std::thread * monitor_read_only_thread = new std::thread(&MySQL_Monitor::monitor_read_only,this);
 	std::thread * monitor_replication_lag_thread = new std::thread(&MySQL_Monitor::monitor_replication_lag,this);
-	while (shutdown==false) {
+	while (shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
 		if (GloMTH)
 			glover=GloMTH->get_global_version();
@@ -1462,6 +1474,20 @@ void * MySQL_Monitor::run() {
 	monitor_ping_thread->join();
 	monitor_read_only_thread->join();
 	monitor_replication_lag_thread->join();
+	while (shutdown==false) {
+		unsigned int glover;
+		if (GloMTH)
+			glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			if (GloMTH)
+				mysql_thr->refresh_variables();
+		}
+		if (mysql_thread___monitor_enabled==true) {
+			goto __monitor_run;
+		}
+		usleep(200000);
+	}
 	if (mysql_thr) {
 		delete mysql_thr;
 		mysql_thr=NULL;

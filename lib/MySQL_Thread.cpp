@@ -162,6 +162,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
+	(char *)"monitor_enabled",
 	(char *)"monitor_history",
 	(char *)"monitor_connect_interval",
 	(char *)"monitor_connect_timeout",
@@ -238,6 +239,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connect_timeout_server_max=10000;
 	variables.free_connections_pct=10;
 	variables.connect_retries_delay=1;
+	variables.monitor_enabled=true;
 	variables.monitor_history=600000;
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=200;
@@ -434,6 +436,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
 	if (!strncasecmp(name,"monitor_",8)) {
+		if (!strcasecmp(name,"monitor_enabled")) return (int)variables.monitor_enabled;
 		if (!strcasecmp(name,"monitor_history")) return (int)variables.monitor_history;
 		if (!strcasecmp(name,"monitor_connect_interval")) return (int)variables.monitor_connect_interval;
 		if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
@@ -540,6 +543,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strncasecmp(name,"monitor_",8)) {
 		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
 		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
+		if (!strcasecmp(name,"monitor_enabled")) {
+			return strdup((variables.monitor_enabled ? "true" : "false"));
+		}
 		if (!strcasecmp(name,"monitor_history")) {
 			sprintf(intbuf,"%d",variables.monitor_history);
 			return strdup(intbuf);
@@ -772,6 +778,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 //			} else {
 //				return false;
 //			}
+		}
+		if (!strcasecmp(name,"monitor_enabled")) {
+			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+				variables.monitor_enabled=true;
+				return true;
+			}
+			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+				variables.monitor_enabled=false;
+				return true;
+			}
+			return false;
 		}
 		if (!strcasecmp(name,"monitor_history")) {
 			int intv=atoi(value);
@@ -2008,6 +2025,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ssl_p2s_cipher=GloMTH->get_variable_string((char *)"ssl_p2s_cipher");
 
 	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");
+	mysql_thread___monitor_enabled=(bool)GloMTH->get_variable_int((char *)"monitor_enabled");
 	mysql_thread___monitor_history=GloMTH->get_variable_int((char *)"monitor_history");
 	mysql_thread___monitor_connect_interval=GloMTH->get_variable_int((char *)"monitor_connect_interval");
 	mysql_thread___monitor_connect_timeout=GloMTH->get_variable_int((char *)"monitor_connect_timeout");

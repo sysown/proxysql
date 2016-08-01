@@ -748,6 +748,7 @@ __thread char * mysql_thread___eventslog_filename;
 __thread int mysql_thread___eventslog_filesize;
 
 /* variables used by the monitoring module */
+__thread int mysql_thread___monitor_enabled;
 __thread int mysql_thread___monitor_history;
 __thread int mysql_thread___monitor_connect_interval;
 __thread int mysql_thread___monitor_connect_timeout;
@@ -822,6 +823,7 @@ extern __thread char * mysql_thread___eventslog_filename;
 extern __thread int mysql_thread___eventslog_filesize;
 
 /* variables used by the monitoring module */
+extern __thread int mysql_thread___monitor_enabled;
 extern __thread int mysql_thread___monitor_history;
 extern __thread int mysql_thread___monitor_connect_interval;
 extern __thread int mysql_thread___monitor_connect_timeout;
