@@ -271,7 +271,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.default_charset=33;
 	variables.interfaces=strdup((char *)"");
-	variables.server_version=strdup((char *)"5.1.30");
+	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
 //	variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_SSL;
@@ -1133,7 +1133,11 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	if (!strcasecmp(name,"server_version")) {
 		if (vallen) {
 			free(variables.server_version);
-			variables.server_version=strdup(value);
+			if (strcmp(value,(const char *)"5.1.30")==0) { // per issue #632 , the default 5.1.30 is replaced with 5.5.30
+				variables.server_version=strdup((char *)"5.5.30");
+			} else {
+				variables.server_version=strdup(value);
+			}
 			return true;
 		} else {
 			return false;
