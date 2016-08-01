@@ -83,6 +83,7 @@ class MySQL_Monitor {
 	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
 	bool shutdown;
+	bool monitor_enabled;
 	SQLite3DB *admindb;	// internal database
 	SQLite3DB *monitordb;	// internal database
 	MySQL_Monitor();

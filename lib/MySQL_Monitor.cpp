@@ -67,7 +67,7 @@ class ConsumerThread : public Thread {
 				return NULL;
 			}
 			if (item->routine) { // NULL is allowed, do nothing for it
-				if (mysql_thread___monitor_enabled==true) {
+				if (GloMyMon->monitor_enabled==true) {
 					item->routine((void *)item->mmsd);
 				}
 			}
@@ -268,6 +268,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	My_Conn_Pool=new MySQL_Monitor_Connection_Pool();
 
 	shutdown=false;
+	monitor_enabled=true;	// default
 	// create new SQLite datatabase
 	monitordb = new SQLite3DB();
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -982,7 +983,7 @@ void * MySQL_Monitor::monitor_ping() {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status!=3 GROUP BY hostname, port";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -1051,7 +1052,7 @@ __end_monitor_ping_loop:
 		}
 
 		// now it is time to shun all problematic hosts
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status!=3 AND b.ping_error IS NOT NULL";
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NOT NULL";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (error) {
@@ -1106,7 +1107,7 @@ __end_monitor_ping_loop:
 
 
 		// now it is time to update current_lantency_ms
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status!=3 AND b.ping_error IS NULL";
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NULL";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (error) {
@@ -1197,7 +1198,7 @@ void * MySQL_Monitor::monitor_read_only() {
 		SQLite3_result *resultset=NULL;
 		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD'";
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!=3 GROUP BY hostname, port";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -1442,6 +1443,7 @@ __monitor_run:
 			if (GloMTH)
 				mysql_thr->refresh_variables();
 		}
+		monitor_enabled=mysql_thread___monitor_enabled;
 		if ( rand()%5 == 0) { // purge once in a while
 			My_Conn_Pool->purge_idle_connections();
 		}
@@ -1483,6 +1485,7 @@ __monitor_run:
 			if (GloMTH)
 				mysql_thr->refresh_variables();
 		}
+		monitor_enabled=mysql_thread___monitor_enabled;
 		if (mysql_thread___monitor_enabled==true) {
 			goto __monitor_run;
 		}
