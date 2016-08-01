@@ -3117,6 +3117,17 @@ void ProxySQL_Admin::stats___mysql_global() {
 		statsdb->execute(query);
 		free(query);
 	}
+	int highwater;
+	int current;
+	sqlite3_status(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
+	char *vn=(char *)"SQLite3_memory";
+	char *query=(char *)malloc(strlen(a)+strlen(vn)+32);
+	char bu[16];
+	sprintf(bu,"%d",current);
+	sprintf(query,a,vn,bu);
+	statsdb->execute(query);
+	free(query);
+
 	statsdb->execute("COMMIT");
 	delete resultset;
 }

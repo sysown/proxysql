@@ -9,6 +9,7 @@
 extern Query_Processor *GloQPro;
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
+extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
 const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
@@ -2277,11 +2278,25 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
-	{	// Slow queries
+	{	// Servers_table_version
 		pta[0]=(char *)"Servers_table_version";
 		sprintf(buf,"%u",MyHGM->get_servers_table_version());
 		pta[1]=buf;
 		result->add_row(pta);
+	}
+	{	// MySQL Threads workers
+		pta[0]=(char *)"MySQL_Thread_Workers";
+		sprintf(buf,"%d",num_threads);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	if (GloMyMon) {
+		{	// MySQL Monitor workers
+			pta[0]=(char *)"MySQL_Monitor_Workers";
+			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->num_threads : 0));
+			pta[1]=buf;
+			result->add_row(pta);
+		}
 	}
 	free(pta);
 	return result;
