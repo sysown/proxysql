@@ -1438,7 +1438,7 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	if (myprot) { // if myprot = NULL , this is a mirror
 		myds=myprot->get_myds();
 		sid=myds->pkt_sid+1;
-		PSarrayOUT = new PtrSizeArray();
+		PSarrayOUT = new PtrSizeArray(8);
 	}
 	result=_res;
 	resultset_size=0;
