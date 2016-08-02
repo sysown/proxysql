@@ -19,7 +19,7 @@ ERR_FILE="${4:-/dev/null}"
 TIMEOUT=10
 
 PROXYSQL_CMDLINE="mysql -u$PROXYSQL_USERNAME -p$PROXYSQL_PASSWORD -h $PROXYSQL_HOSTNAME -P $PROXYSQL_PORT -Ne"
-MYSQL_CREDENTIALS=$($PROXYSQL_CMDLINE "SELECT variable_value FROM global_variables WHERE variable_name IN ('mysql-monitor_username','mysql-monitor_password') ORDER BY variable_name")
+MYSQL_CREDENTIALS=$($PROXYSQL_CMDLINE "SELECT variable_value FROM global_variables WHERE variable_name IN ('mysql-monitor_username','mysql-monitor_password') ORDER BY variable_name DESC")
 MYSQL_USERNAME=$(echo $MYSQL_CREDENTIALS | awk '{print $1}')
 MYSQL_PASSWORD=$(echo $MYSQL_CREDENTIALS | awk '{print $2}')
 #echo $MYSQL_CREDENTIALS
