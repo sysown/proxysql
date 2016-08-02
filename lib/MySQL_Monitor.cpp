@@ -1436,12 +1436,12 @@ __monitor_run:
 	std::thread * monitor_replication_lag_thread = new std::thread(&MySQL_Monitor::monitor_replication_lag,this);
 	while (shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
-		if (GloMTH)
+		if (GloMTH) {
 			glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			if (GloMTH)
+			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 				mysql_thr->refresh_variables();
+			}
 		}
 		monitor_enabled=mysql_thread___monitor_enabled;
 		if ( rand()%5 == 0) { // purge once in a while
@@ -1478,12 +1478,12 @@ __monitor_run:
 	monitor_replication_lag_thread->join();
 	while (shutdown==false) {
 		unsigned int glover;
-		if (GloMTH)
+		if (GloMTH) {
 			glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			if (GloMTH)
+			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 				mysql_thr->refresh_variables();
+			}
 		}
 		monitor_enabled=mysql_thread___monitor_enabled;
 		if (mysql_thread___monitor_enabled==true) {
