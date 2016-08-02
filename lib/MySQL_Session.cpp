@@ -740,8 +740,16 @@ __get_pkts_from_client:
 										RequestEnd(NULL);
 										break;
 									}
-
-									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									{
+										timespec begint;
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
+										qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+										timespec endt;
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+										thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
+											(endt.tv_sec*1000000000+endt.tv_nsec) -
+											(begint.tv_sec*1000000000+begint.tv_nsec);
+									}
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
 									if (rc_break==true) {
@@ -1076,7 +1084,14 @@ handler_again:
 						}
 					}
 				}
+				timespec begint;
+				clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 				int rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize);
+				timespec endt;
+				clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+				thread->status_variables.backend_query_time=thread->status_variables.backend_query_time +
+					(endt.tv_sec*1000000000+endt.tv_nsec) -
+					(begint.tv_sec*1000000000+begint.tv_nsec);
 
 //				if (myconn->async_state_machine==ASYNC_QUERY_END) {
 				if (rc==0) {
@@ -1970,6 +1985,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		// the query was rewritten
 		l_free(pkt->size,pkt->ptr);	// free old pkt
 		// allocate new pkt
+		timespec begint;
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		pkt->size=sizeof(mysql_hdr)+1+qpo->new_query->length();
 		pkt->ptr=l_alloc(pkt->size);
 		mysql_hdr hdr;
@@ -1982,6 +1999,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin((unsigned char *)pkt->ptr,pkt->size,true);
 		delete qpo->new_query;
+		timespec endt;
+		clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+		thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
+			(endt.tv_sec*1000000000+endt.tv_nsec) -
+			(begint.tv_sec*1000000000+begint.tv_nsec);
 	}
 
 	if (pkt->size > (unsigned int) mysql_thread___max_allowed_packet) {

@@ -2102,6 +2102,8 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.queries_slow=0;
 	status_variables.queries_backends_bytes_sent=0;
 	status_variables.queries_backends_bytes_recv=0;
+	status_variables.query_processor_time=0;
+	status_variables.backend_query_time=0;
 	status_variables.active_transactions=0;
 }
 
@@ -2227,6 +2229,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	{	// Queries bytes recv
 		pta[0]=(char *)"Queries_backends_bytes_sent";
 		sprintf(buf,"%llu",get_queries_backends_bytes_sent());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Query Processor Time
+		pta[0]=(char *)"Query_Processor_time_nsec";
+		sprintf(buf,"%llu",get_query_processor_time());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Backend query time
+		pta[0]=(char *)"Backend_query_time_nsec";
+		sprintf(buf,"%llu",get_backend_query_time());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -2560,6 +2574,32 @@ unsigned int MySQL_Threads_Handler::get_active_transations() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.active_transactions,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_query_processor_time() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.query_processor_time,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_backend_query_time() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.backend_query_time,0);
 		}
 	}
 	return q;
