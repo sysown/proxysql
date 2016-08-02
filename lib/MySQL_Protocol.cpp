@@ -8,7 +8,7 @@ extern MySQL_Threads_Handler *GloMTH;
 #undef max_allowed_packet
 #endif
 
-#define RESULTSET_BUFLEN 16300
+//#define RESULTSET_BUFLEN 16300
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -1541,4 +1541,22 @@ void MySQL_ResultSet::buffer_to_PSarrayOut() {
 	PSarrayOUT->add(buffer,buffer_used);
 	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
 	buffer_used=0;
+}
+
+unsigned long long MySQL_ResultSet::current_size() {
+	unsigned long long intsize=0;
+	intsize+=sizeof(MySQL_ResultSet);
+	intsize+=RESULTSET_BUFLEN; // size of buffer
+	intsize+=sizeof(PtrSizeArray);
+	intsize+=(PSarrayOUT->size*sizeof(PtrSize_t *));
+	unsigned int i;
+	for (i=0; i<PSarrayOUT->len; i++) {
+		PtrSize_t *pkt=PSarrayOUT->index(i);
+		if (pkt->size>RESULTSET_BUFLEN) {
+			intsize+=pkt->size;
+		} else {
+			intsize+=RESULTSET_BUFLEN;
+		}
+	}
+	return intsize;
 }

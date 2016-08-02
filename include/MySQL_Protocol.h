@@ -4,6 +4,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#define RESULTSET_BUFLEN 16300
+
 class MySQL_ResultSet {
 	private:
 	public:
@@ -26,6 +28,7 @@ class MySQL_ResultSet {
 	unsigned char *buffer;
 	unsigned int buffer_used;
 	void buffer_to_PSarrayOut();
+	unsigned long long current_size();
 };
 
 

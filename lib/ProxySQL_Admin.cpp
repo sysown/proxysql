@@ -3120,10 +3120,20 @@ void ProxySQL_Admin::stats___mysql_global() {
 	int highwater;
 	int current;
 	sqlite3_status(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
-	char *vn=(char *)"SQLite3_memory_bytes";
-	char *query=(char *)malloc(strlen(a)+strlen(vn)+32);
-	char bu[16];
+	char bu[32];
+	char *vn=NULL;
+	char *query=NULL;
+	vn=(char *)"SQLite3_memory_bytes";
 	sprintf(bu,"%d",current);
+	query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+	sprintf(query,a,vn,bu);
+	statsdb->execute(query);
+	free(query);
+
+	unsigned long long connpool_mem=MyHGM->Get_Memory_Stats();
+	vn=(char *)"ConnPool_memory_bytes";
+	sprintf(bu,"%llu",connpool_mem);
+	query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 	sprintf(query,a,vn,bu);
 	statsdb->execute(query);
 	free(query);

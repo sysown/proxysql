@@ -24,7 +24,6 @@ struct _PtrSize_t {
 
 class PtrArray {
 	private:
-	volatile unsigned int size;
 	void expand(unsigned int);
 	void shrink();
 //	bool use_l_alloc;
@@ -35,6 +34,7 @@ class PtrArray {
 //	void operator delete(void *, bool);
 	void **pdata;
 	unsigned int len;
+	unsigned int size;
 	//PtrArray(unsigned int __size=0, bool _use_l_alloc=false);
 	PtrArray(unsigned int __size=0);
 	~PtrArray();
@@ -57,7 +57,6 @@ class PtrArray {
 
 class PtrSizeArray {
 	private:
-	unsigned int size;
 	void expand(unsigned int);
 	void shrink();
 	public:
@@ -65,6 +64,7 @@ class PtrSizeArray {
 	void operator delete(void *);
 	PtrSize_t *pdata;
 	unsigned int len;
+	unsigned int size;
 	PtrSizeArray(unsigned int __size=0);
 	~PtrSizeArray();
 	//PtrSize_t *index(unsigned int);

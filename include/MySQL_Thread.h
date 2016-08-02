@@ -167,6 +167,9 @@ class MySQL_Thread
 		unsigned long long queries_backends_bytes_recv;
 		unsigned long long query_processor_time;
 		unsigned long long backend_query_time;
+		unsigned long long mysql_backend_buffers_bytes;
+		unsigned long long mysql_frontend_buffers_bytes;
+		unsigned long long mysql_session_internal_bytes;
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -191,6 +194,7 @@ class MySQL_Thread
   //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
   //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
+	void Get_Memory_Stats();
 };
 
 
@@ -354,9 +358,13 @@ class MySQL_Threads_Handler
 	unsigned int get_active_transations();
 	unsigned long long get_query_processor_time();
 	unsigned long long get_backend_query_time();
+	unsigned long long get_mysql_backend_buffers_bytes();
+	unsigned long long get_mysql_frontend_buffers_bytes();
+	unsigned long long get_mysql_session_internal_bytes();
 	iface_info *MLM_find_iface_from_fd(int fd) {
 		return MLM->find_iface_from_fd(fd);
 	}
+	void Get_Memory_Stats();
 };
 
 

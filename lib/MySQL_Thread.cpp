@@ -2104,6 +2104,9 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.queries_backends_bytes_recv=0;
 	status_variables.query_processor_time=0;
 	status_variables.backend_query_time=0;
+	status_variables.mysql_backend_buffers_bytes=0;
+	status_variables.mysql_frontend_buffers_bytes=0;
+	status_variables.mysql_session_internal_bytes=0;
 	status_variables.active_transactions=0;
 }
 
@@ -2170,6 +2173,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	const int colnum=2;
 	char buf[256];
 	char **pta=(char **)malloc(sizeof(char *)*colnum);
+	Get_Memory_Stats();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
   SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
@@ -2244,6 +2248,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// MySQL Backend buffers bytes
+		pta[0]=(char *)"mysql_backend_buffers_bytes";
+		sprintf(buf,"%llu",get_mysql_backend_buffers_bytes());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// MySQL Frontend buffers bytes
+		pta[0]=(char *)"mysql_frontend_buffers_bytes";
+		sprintf(buf,"%llu",get_mysql_frontend_buffers_bytes());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// MySQL Frontend buffers bytes
+		pta[0]=(char *)"mysql_session_internal_bytes";
+		sprintf(buf,"%llu",get_mysql_session_internal_bytes());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Queries autocommit
 		pta[0]=(char *)"Com_autocommit";
 		sprintf(buf,"%llu",MyHGM->status.autocommit_cnt);
@@ -2314,6 +2336,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	}
 	free(pta);
 	return result;
+}
+
+
+void MySQL_Threads_Handler::Get_Memory_Stats() {
+	unsigned int i;
+	signal_all_threads(1);
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		spin_wrlock(&thr->thread_mutex);
+	}
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		thr->Get_Memory_Stats();
+	}
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		spin_wrunlock(&thr->thread_mutex);
+	}
 }
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
@@ -2603,4 +2643,57 @@ unsigned long long MySQL_Threads_Handler::get_backend_query_time() {
 		}
 	}
 	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.mysql_backend_buffers_bytes,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.mysql_frontend_buffers_bytes,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_mysql_session_internal_bytes() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.mysql_session_internal_bytes,0);
+		}
+	}
+	return q;
+}
+
+void MySQL_Thread::Get_Memory_Stats() {
+	unsigned int i;
+	status_variables.mysql_backend_buffers_bytes=0;
+	status_variables.mysql_frontend_buffers_bytes=0;
+	status_variables.mysql_session_internal_bytes=sizeof(MySQL_Thread);
+	if (mysql_sessions) {
+		status_variables.mysql_session_internal_bytes+=(mysql_sessions->size)*sizeof(MySQL_Session *);
+		for (i=0; i<mysql_sessions->len; i++) {
+			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(i);
+			sess->Memory_Stats();
+		}
+  }
 }

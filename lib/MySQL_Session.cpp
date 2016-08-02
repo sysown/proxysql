@@ -2343,3 +2343,53 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	CurrentQuery.end();
 	started_sending_data_to_client=false;
 }
+
+
+// this function tries to report all the memory statistics related to the sessions
+void MySQL_Session::Memory_Stats() {
+	if (thread==NULL)
+		return;
+	unsigned int i;
+	unsigned long long backend=0;
+	unsigned long long frontend=0;
+	unsigned long long internal=0;
+	internal+=sizeof(MySQL_Session);
+	if (qpo)
+		internal+=sizeof(Query_Processor_Output);
+	if (client_myds) {
+		internal+=sizeof(MySQL_Data_Stream);
+		if (client_myds->queueIN.buffer)
+			frontend+=QUEUE_T_DEFAULT_SIZE;
+		if (client_myds->queueOUT.buffer)
+			frontend+=QUEUE_T_DEFAULT_SIZE;
+		if (client_myds->myconn) {
+			internal+=sizeof(MySQL_Connection);
+		}
+	}
+	for (i=0; i < mybes->len; i++) {
+		MySQL_Backend *_mybe=(MySQL_Backend *)mybes->index(i);
+			internal+=sizeof(MySQL_Backend);
+		if (_mybe->server_myds) {
+			internal+=sizeof(MySQL_Data_Stream);
+			if (_mybe->server_myds->queueIN.buffer)
+				backend+=QUEUE_T_DEFAULT_SIZE;
+			if (_mybe->server_myds->queueOUT.buffer)
+				backend+=QUEUE_T_DEFAULT_SIZE;
+			if (_mybe->server_myds->myconn) {
+				MySQL_Connection *myconn=_mybe->server_myds->myconn;
+				internal+=sizeof(MySQL_Connection);
+				if (myconn->mysql) {
+					backend+=sizeof(MYSQL);
+					backend+=myconn->mysql->net.max_packet;
+					backend+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
+				}
+				if (myconn->MyRS) {
+					backend+=myconn->MyRS->current_size();
+				}
+			}
+		}
+  }
+	thread->status_variables.mysql_backend_buffers_bytes+=backend;
+	thread->status_variables.mysql_frontend_buffers_bytes+=frontend;
+	thread->status_variables.mysql_session_internal_bytes+=internal;
+}

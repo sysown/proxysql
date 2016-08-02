@@ -155,7 +155,7 @@ class MySQL_Session
 
 	void reset_all_backends();
 	void writeout();
-
+	void Memory_Stats();
 };
 
 #endif /* __CLASS_MYSQL_SESSION_ H */

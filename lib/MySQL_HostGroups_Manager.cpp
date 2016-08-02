@@ -1185,3 +1185,34 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 	}
 	wrunlock();
 }
+
+unsigned long long MySQL_HostGroups_Manager::Get_Memory_Stats() {
+	unsigned long long intsize=0;
+	wrlock();
+	MySrvC *mysrvc=NULL;
+  for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		intsize+=sizeof(MyHGC);
+    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		unsigned int j,k;
+		unsigned int l=myhgc->mysrvs->cnt();
+		if (l) {
+			for (j=0; j<l; j++) {
+				intsize+=sizeof(MySrvC);
+				mysrvc=myhgc->mysrvs->idx(j);
+				intsize+=((mysrvc->ConnectionsUsed->conns->size)*sizeof(MySQL_Connection *));
+				for (k=0; k<mysrvc->ConnectionsFree->conns->len; k++) {
+					MySQL_Connection *myconn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->index(k);
+					intsize+=sizeof(MySQL_Connection)+sizeof(MYSQL);
+					intsize+=myconn->mysql->net.max_packet;
+					intsize+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
+					if (myconn->MyRS) {
+						intsize+=myconn->MyRS->current_size();
+					}
+				}
+				intsize+=((mysrvc->ConnectionsUsed->conns->size)*sizeof(MySQL_Connection *));
+			}
+		}
+	}
+	wrunlock();
+	return intsize;
+}
