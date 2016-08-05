@@ -1052,12 +1052,17 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 
 void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
 	// define queries
-	const char *Q1=(char *)"SELECT hostgroup_id FROM mysql_servers join mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup WHERE hostname='%s' AND port=%d AND status=0"; // this query run against myhgm DB . status is an INTEGER
+	//const char *Q1=(char *)"SELECT hostgroup_id FROM mysql_servers join mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup WHERE hostname='%s' AND port=%d AND status=0"; // this query run against myhgm DB . status is an INTEGER
+	const char *Q1=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
 	const char *Q2=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
 	const char *Q3B=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q4=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q5=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
+	if (GloAdmin==NULL) {
+		return;
+	}
+
 	// define a buffer that will be used for all queries
 	char *query=(char *)malloc(strlen(hostname)+strlen(Q3A)+32);
 	sprintf(query,Q1,hostname,port);
@@ -1070,16 +1075,13 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	int num_rows=0;
-	if (resultset) {
-		num_rows=resultset->rows_count;
-		delete resultset;
+	if (resultset==NULL) {
+		goto __exit_read_only_action;
 	}
-
-	if (GloAdmin==NULL) {
-		// quick exit
-		free(query);
-		return;
-	}
+	num_rows=resultset->rows_count;
+//	if (resultset) {
+//		num_rows=resultset->rows_count;
+//	}
 
 	if (admindb==NULL) { // we initialize admindb only if needed
 		admindb=new SQLite3DB();
@@ -1102,6 +1104,39 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				admindb->execute(query);
 				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 				GloAdmin->mysql_servers_wrunlock();
+			} else {
+				// there is a server in writer hostgroup, let check the status of present and not present hosts
+				// this is the same query as Q1, but with a LEFT JOIN
+				const char *Q1B=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";	
+				sprintf(query,Q1B,hostname,port);
+				wrlock();
+				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+				wrunlock();
+				bool act=false;
+				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+					SQLite3_row *r=*it;
+					int status=MYSQL_SERVER_STATUS_OFFLINE_HARD; // default status, even for missing
+					if (r->fields[1]) { // has status
+						status=atoi(r->fields[1]);
+					}
+					if (status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+						act=true;
+					}
+				}
+				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
+					GloAdmin->mysql_servers_wrlock();
+					GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
+					sprintf(query,Q2,hostname,port);
+					admindb->execute(query);
+					if (mysql_thread___monitor_writer_is_also_reader) {
+						sprintf(query,Q3A,hostname,port);
+					} else {
+						sprintf(query,Q3B,hostname,port);
+					}
+					admindb->execute(query);
+					GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+					GloAdmin->mysql_servers_wrunlock();
+				}
 			}
 			break;
 		case 1:
@@ -1122,6 +1157,10 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			break;
 	}
 
+__exit_read_only_action:
+	if (resultset) {
+		delete resultset;
+	}
 	free(query);
 }
 
