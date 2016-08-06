@@ -71,6 +71,9 @@ client5: client5.cpp
 client6: client6.cpp
 	$(CXX) -o $@ $@.cpp $(LIBPROXYSQLAR) $(MYCPPFLAGS) $(CPPFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 
+client7: client7.cpp
+	$(CXX) -o $@ $@.cpp $(LIBPROXYSQLAR) $(MYCPPFLAGS) $(CPPFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
+
 
 default: $(EXECUTABLE)
 
