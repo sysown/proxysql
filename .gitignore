@@ -69,6 +69,7 @@ architecture.txt
 #jemalloc source
 deps/jemalloc/jemalloc-3.6.0/
 deps/jemalloc/jemalloc-4.1.0/
+deps/jemalloc/jemalloc-4.2.1/
 
 #libdaemon
 deps/libdaemon/libdaemon-0.14/
@@ -100,3 +101,6 @@ deps/protobuf/protobuf-2.6.1/
 test/.vagrant
 .DS_Store
 proxysql-tests.ini
+
+#heaptrack
+heaptrack.*

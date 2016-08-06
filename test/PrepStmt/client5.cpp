@@ -118,7 +118,9 @@ void * mysql_thread(int tid) {
 				fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt));
 				exit(EXIT_FAILURE);
 			}
-			uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt);
+			MySQL_STMT_Global_info *stmt_info=NULL;
+			stmt_info=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt);
+			uint32_t stmid=stmt_info->statement_id;
 			if (NUMPRO < 32)
 				fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt->stmt_id, stmid);
 			local_stmts->insert(stmid,stmt);
@@ -208,7 +210,9 @@ void * mysql_thread(int tid) {
 					fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt));
 					exit(EXIT_FAILURE);
 				}
-				uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt);
+				MySQL_STMT_Global_info *stmt_info=NULL;
+				stmt_info=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt);
+				uint32_t stmid=stmt_info->statement_id;
 				if (NUMPRO < 32)
 					fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt->stmt_id, stmid);
 				local_stmts->insert(stmid,stmt);
