@@ -59,6 +59,11 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_STMT_PREPARE_END,
 	ASYNC_STMT_PREPARE_SUCCESSFUL,
 	ASYNC_STMT_PREPARE_FAILED,
+	ASYNC_STMT_EXECUTE_START,
+	ASYNC_STMT_EXECUTE_CONT,
+	ASYNC_STMT_EXECUTE_STORE_RESULT_START,
+	ASYNC_STMT_EXECUTE_STORE_RESULT_CONT,
+	ASYNC_STMT_EXECUTE_END,
 
 	ASYNC_IDLE
 };
@@ -251,7 +256,7 @@ typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 typedef struct __SQP_query_parser_t SQP_par_t;
 //typedef struct _mysql_server_t mysql_server_t;
-typedef struct _stmt_execute_metadata_t stmt_execute_metadata_t;
+//typedef struct _stmt_execute_metadata_t stmt_execute_metadata_t;
 #endif /* PROXYSQL_TYPEDEFS */
 
 //#ifdef __cplusplus
@@ -281,6 +286,7 @@ class ProxySQL_ConfigFile;
 class Query_Info;
 //class MySQL_Server;
 class SQLite3_result;
+class stmt_execute_metadata_t;
 //class MySQL_Servers;
 //class MySQL_Hostgroup_Entry;
 //class MySQL_Hostgroup;
@@ -545,6 +551,7 @@ struct _mysql_session_t {
 };
 
 
+/*
 struct _stmt_execute_metadata_t {
 	uint32_t stmt_id;
 	uint8_t flags;
@@ -554,7 +561,7 @@ struct _stmt_execute_metadata_t {
 	unsigned long *lengths;
 	void *pkt;
 };
-
+*/
 
 
 #endif /* PROXYSQL_STRUCTS */
@@ -735,7 +742,7 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___client_found_rows;
 __thread bool mysql_thread___multiplexing;
-__thread bool mysql_thread___stmt_multiplexing;
+// __thread bool mysql_thread___stmt_multiplexing;
 __thread bool mysql_thread___enforce_autocommit_on_reads;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
@@ -809,7 +816,7 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___client_found_rows;
 extern __thread bool mysql_thread___multiplexing;
-extern __thread bool mysql_thread___stmt_multiplexing;
+// extern __thread bool mysql_thread___stmt_multiplexing;
 extern __thread bool mysql_thread___enforce_autocommit_on_reads;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;

@@ -24,6 +24,8 @@ class Query_Info {
 	unsigned long long end_time;
 
 	MYSQL_STMT *mysql_stmt;
+	stmt_execute_metadata_t *stmt_meta;
+	uint32_t stmt_global_id;
 
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
@@ -73,7 +75,7 @@ class MySQL_Session
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
-	MySQL_STMT_Manager *Session_STMT_Manager;
+//	MySQL_STMT_Manager *Session_STMT_Manager;
 
 	public:
 	void * operator new(size_t);
@@ -153,6 +155,7 @@ class MySQL_Session
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS);
+	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt);
 	unsigned int NumActiveTransactions();
 	int FindOneActiveTransaction();
 	unsigned long long IdleTime();

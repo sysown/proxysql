@@ -285,7 +285,7 @@ class MySQL_Threads_Handler
 		bool have_compress;
 		bool client_found_rows;
 		bool multiplexing;
-		bool stmt_multiplexing;
+//		bool stmt_multiplexing;
 		bool enforce_autocommit_on_reads;
 		int max_transaction_time;
 		int threshold_query_length;

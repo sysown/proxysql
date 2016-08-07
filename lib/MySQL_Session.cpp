@@ -94,6 +94,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	QueryPointer=NULL;
 	QueryLength=0;
 	mysql_stmt=NULL;
+	stmt_meta=NULL;
 	//QueryParserArgs=NULL;
 	QueryParserArgs.digest_text=NULL;
 	QueryParserArgs.first_comment=NULL;
@@ -192,7 +193,7 @@ MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	pause_until=0;
 	qpo=NULL;
-	Session_STMT_Manager=NULL;
+//	Session_STMT_Manager=NULL;
 	start_time=0;
 	command_counters=new StatCounters(15,10,false);
 	healthy=1;
@@ -253,9 +254,9 @@ MySQL_Session::~MySQL_Session() {
 	if (admin==false && connections_handler==false && mirror==false) {
 		__sync_fetch_and_sub(&MyHGM->status.client_connections,1);
 	}
-	if (Session_STMT_Manager) {
-		delete Session_STMT_Manager;
-	}
+//	if (Session_STMT_Manager) {
+//		delete Session_STMT_Manager;
+//	}
 }
 
 
@@ -813,19 +814,19 @@ __get_pkts_from_client:
 									if (rc_break==true) {
 										break;
 									}
-									if (Session_STMT_Manager==NULL) {
-										Session_STMT_Manager = new MySQL_STMT_Manager();
-									}
+//									if (Session_STMT_Manager==NULL) {
+//										Session_STMT_Manager = new MySQL_STMT_Manager();
+//									}
 									if (client_myds->myconn->local_stmts==NULL) {
 										client_myds->myconn->local_stmts=new MySQL_STMTs_local();
 									}
 									uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 									MySQL_STMT_Global_info *stmt_info=NULL;
-									if (mysql_thread___stmt_multiplexing) {
+//									if (mysql_thread___stmt_multiplexing) {
 										stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash);
-									} else {
-										stmt_info=Session_STMT_Manager->find_prepared_statement_by_hash(hash);
-									}
+//									} else {
+//										stmt_info=Session_STMT_Manager->find_prepared_statement_by_hash(hash);
+//									}
 									if (stmt_info) {
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -840,7 +841,7 @@ __get_pkts_from_client:
 										mybe->server_myds->wait_until=0;
 										pause_until=0;
 										mybe->server_myds->killed_at=0;
-										mybe->server_myds->mysql_real_query.init(&pkt);
+										//mybe->server_myds->mysql_real_query.init(&pkt);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 									}
 								}
@@ -861,13 +862,14 @@ __get_pkts_from_client:
 
 									uint32_t stmt_global_id=0;
 									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+									CurrentQuery.stmt_global_id=stmt_global_id;
 									// now we get the statement information
 									MySQL_STMT_Global_info *stmt_info=NULL;
-									if (mysql_thread___stmt_multiplexing) {
+//									if (mysql_thread___stmt_multiplexing) {
 										stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(stmt_global_id);
-									} else {
-										stmt_info=Session_STMT_Manager->find_prepared_statement_by_stmt_id(stmt_global_id);
-									}
+//									} else {
+//										stmt_info=Session_STMT_Manager->find_prepared_statement_by_stmt_id(stmt_global_id);
+//									}
 									if (stmt_info==NULL) {
 										// we couldn't find it
 										l_free(pkt.size,pkt.ptr);
@@ -877,7 +879,6 @@ __get_pkts_from_client:
 										status=WAITING_CLIENT_DATA;
 										break;
 									}
-
 									stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info->num_params);
 									if (stmt_meta==NULL) {
 										l_free(pkt.size,pkt.ptr);
@@ -889,10 +890,10 @@ __get_pkts_from_client:
 									}
 									// else
 
-									CurrentQuery.begin((unsigned char *)stmt_info->query, stmt_info->query_length,false);
-
-									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
-									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
+//									CurrentQuery.begin((unsigned char *)stmt_info->query, stmt_info->query_length,false);
+									CurrentQuery.stmt_meta=stmt_meta;
+//									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery); // FIXME: not sure we need to call this
+//									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									// NOTE: we do not call YET the follow function for STMT_EXECUTE
 									//rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
 									current_hostgroup=stmt_info->hostgroup_id;
@@ -901,7 +902,7 @@ __get_pkts_from_client:
 									mybe->server_myds->connect_retries_on_failure=0;
 									mybe->server_myds->wait_until=0;
 									mybe->server_myds->killed_at=0;
-									mybe->server_myds->mysql_real_query.init(&pkt);
+									//mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								}
 								break;
@@ -1032,6 +1033,7 @@ handler_again:
 			break;
 
 		case PROCESSING_STMT_PREPARE:
+		case PROCESSING_STMT_EXECUTE:
 		case PROCESSING_QUERY:
 			//fprintf(stderr,"PROCESSING_QUERY\n");
 			if (pause_until > thread->curtime) {
@@ -1075,6 +1077,9 @@ handler_again:
 					case PROCESSING_STMT_PREPARE:
 						previous_status.push(PROCESSING_STMT_PREPARE);
 						break;
+					case PROCESSING_STMT_EXECUTE:
+						previous_status.push(PROCESSING_STMT_EXECUTE);
+						break;
 					default:
 						assert(0);
 						break;
@@ -1095,6 +1100,9 @@ handler_again:
 								case PROCESSING_STMT_PREPARE:
 									previous_status.push(PROCESSING_STMT_PREPARE);
 									break;
+								case PROCESSING_STMT_EXECUTE:
+									previous_status.push(PROCESSING_STMT_EXECUTE);
+									break;
 								default:
 									assert(0);
 									break;
@@ -1109,6 +1117,9 @@ handler_again:
 									break;
 								case PROCESSING_STMT_PREPARE:
 									previous_status.push(PROCESSING_STMT_PREPARE);
+									break;
+								case PROCESSING_STMT_EXECUTE:
+									previous_status.push(PROCESSING_STMT_EXECUTE);
 									break;
 								default:
 									assert(0);
@@ -1126,6 +1137,9 @@ handler_again:
 								break;
 							case PROCESSING_STMT_PREPARE:
 								previous_status.push(PROCESSING_STMT_PREPARE);
+								break;
+							case PROCESSING_STMT_EXECUTE:
+								previous_status.push(PROCESSING_STMT_EXECUTE);
 								break;
 							default:
 								assert(0);
@@ -1147,6 +1161,9 @@ handler_again:
 									case PROCESSING_STMT_PREPARE:
 										previous_status.push(PROCESSING_STMT_PREPARE);
 										break;
+									case PROCESSING_STMT_EXECUTE:
+										previous_status.push(PROCESSING_STMT_EXECUTE);
+										break;
 									default:
 										assert(0);
 										break;
@@ -1163,11 +1180,27 @@ handler_again:
 								case PROCESSING_STMT_PREPARE:
 									previous_status.push(PROCESSING_STMT_PREPARE);
 									break;
+								case PROCESSING_STMT_EXECUTE:
+									previous_status.push(PROCESSING_STMT_EXECUTE);
+									break;
 								default:
 									assert(0);
 									break;
 							}
 							NEXT_IMMEDIATE(CHANGING_AUTOCOMMIT);
+						}
+					}
+					if (status==PROCESSING_STMT_EXECUTE) {
+						CurrentQuery.mysql_stmt=myconn->local_stmts->find(CurrentQuery.stmt_global_id);
+						if (CurrentQuery.mysql_stmt==NULL) {
+							// the conection we too doesn't have the prepared statements prepared
+							// we try to create it now
+							MySQL_STMT_Global_info *stmt_info=NULL;
+							stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
+							CurrentQuery.QueryLength=stmt_info->query_length;
+							CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
+							previous_status.push(PROCESSING_STMT_EXECUTE);
+							NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
 						}
 					}
 					}
@@ -1200,7 +1233,36 @@ handler_again:
 						rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize);
 						break;
 					case PROCESSING_STMT_PREPARE:
-						rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize,&CurrentQuery.mysql_stmt);
+						//rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize,&CurrentQuery.mysql_stmt);
+						rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt);
+						break;
+					case PROCESSING_STMT_EXECUTE:
+						// PROCESSING_STMT_EXECUTE FIXME
+						{
+							//MySQL_STMT_Global_info *stmt_info=NULL;
+/*
+							if (mysql_thread___stmt_multiplexing) {
+								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(stmt_global_id);
+							} else {
+								stmt_info=Session_STMT_Manager->find_prepared_statement_by_stmt_id(stmt_global_id);
+							}
+*/
+/*
+							CurrentQuery.mysql_stmt=myconn->local_stmts->find(CurrentQuery.stmt_global_id);
+							if (CurrentQuery.mysql_stmt==NULL) {
+								// the conection we too doesn't have the prepared statements prepared
+								// we try to create it now
+								MySQL_STMT_Global_info *stmt_info=NULL;
+								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
+								CurrentQuery.QueryLength=stmt_info->query_length;
+								CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
+								previous_status.push(PROCESSING_STMT_EXECUTE);
+								NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
+							}
+*/
+							//rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize,&CurrentQuery.mysql_stmt, CurrentQuery.stmt_meta);
+							rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt, CurrentQuery.stmt_meta);
+						}
 						break;
 					default:
 						assert(0);
@@ -1230,7 +1292,7 @@ handler_again:
 							{
 								uint32_t stmid;
 								MySQL_STMT_Global_info *stmt_info=NULL;
-								if (mysql_thread___stmt_multiplexing) {
+//								if (mysql_thread___stmt_multiplexing) {
 									stmt_info=GloMyStmt->add_prepared_statement(current_hostgroup,
 										(char *)client_myds->myconn->userinfo->username,
 										(char *)client_myds->myconn->userinfo->schemaname,
@@ -1243,6 +1305,7 @@ handler_again:
 										true);
 									stmid=stmt_info->statement_id;
 									//uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+/*
 								} else {
 									//stmt_info=Session_STMT_Manager->find_prepared_statement_by_hash(hash);
 									stmt_info=Session_STMT_Manager->add_prepared_statement(current_hostgroup,
@@ -1256,9 +1319,16 @@ handler_again:
 										qpo->delay,
 										false);
 									stmid=stmt_info->statement_id;
-								}
-								client_myds->myconn->local_stmts->insert(stmid,CurrentQuery.mysql_stmt);
+*/
+//								}
+								myds->myconn->local_stmts->insert(stmid,CurrentQuery.mysql_stmt);
 								client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
+							}
+							CurrentQuery.mysql_stmt=NULL;
+							break;
+						case PROCESSING_STMT_EXECUTE:
+							{
+								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt);
 							}
 							CurrentQuery.mysql_stmt=NULL;
 							break;
@@ -2285,6 +2355,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			status=FAST_FORWARD;
 			mybe->server_myds->myconn->reusable=false; // the connection cannot be usable anymore
 		}
+	}
+}
+
+void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt) {
+	MYSQL_RES *stmt_result=mysql_stmt_result_metadata(stmt);
+	if (stmt_result) {
+		MySQL_ResultSet *MyRS=new MySQL_ResultSet(&client_myds->myprot, stmt_result, stmt->mysql, stmt);
+		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 	}
 }
 

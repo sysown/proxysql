@@ -4,6 +4,31 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+class stmt_execute_metadata_t {
+	public:
+	uint32_t stmt_id;
+	uint8_t flags;
+	uint16_t num_params;
+	MYSQL_BIND *binds;
+	my_bool *is_nulls;
+	unsigned long *lengths;
+	void *pkt;
+	stmt_execute_metadata_t() {
+		binds=NULL;
+		is_nulls=NULL;
+		lengths=NULL;
+		pkt=NULL;
+	}
+	~stmt_execute_metadata_t() {
+		if (binds)
+			free(binds);
+		if (is_nulls)
+			free(is_nulls);
+		if (lengths)
+			free(lengths);
+	}
+};
+
 class MySQL_ResultSet {
 	private:
 	public:
@@ -18,9 +43,10 @@ class MySQL_ResultSet {
 	unsigned int num_rows;
 	unsigned long long resultset_size;
 	PtrSizeArray *PSarrayOUT;
-	MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my);
+	MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROW row);
+	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	unsigned char *buffer;

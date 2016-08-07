@@ -47,6 +47,7 @@ class MySQL_Connection {
 		unsigned long length;
 		char *ptr;
 		MYSQL_STMT *stmt;
+		stmt_execute_metadata_t *stmt_meta;
 	} query;
 	char scramble_buff[40];
 	unsigned long long creation_time;
@@ -124,11 +125,15 @@ class MySQL_Connection {
 	int async_select_db(short event);
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, uint8_t nr);
-	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL);
+	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);
 
 	void stmt_prepare_start();
 	void stmt_prepare_cont(short event);
+	void stmt_execute_start();
+	void stmt_execute_cont(short event);
+	void stmt_execute_store_result_start();
+	void stmt_execute_store_result_cont(short event);
 
 
 	void async_free_result();

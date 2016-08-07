@@ -1328,27 +1328,30 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		// some error!
 		return ret;
 	}
-	ret=(stmt_execute_metadata_t *)malloc(sizeof(stmt_execute_metadata_t));
+	//ret=(stmt_execute_metadata_t *)malloc(sizeof(stmt_execute_metadata_t));
+	ret= new stmt_execute_metadata_t();
 	char *p=(char *)ptr+5;
 	memcpy(&ret->stmt_id,p,4); p+=4; // stmt-id
 	memcpy(&ret->flags,p,1); p+=1; // flags
 	p+=4; // iteration-count
 	ret->num_params=num_params;
-	ret->binds=NULL;
+//	ret->binds=NULL;
+//	ret->is_nulls=NULL;
+//	ret->lengths=NULL;
 	ret->pkt=ptr;
 	if (num_params) {
 		uint16_t i;
 		size_t null_bitmap_length=(num_params+7)/8;
 		if (size < (14+1+null_bitmap_length)) {
 			// some data missing?
-			free(ret);
+			delete ret;
 			return NULL;
 		}
 		uint8_t new_params_bound_flag;
 		memcpy(&new_params_bound_flag,p+null_bitmap_length,1);
 		if (new_params_bound_flag!=1) {
 			// something wrong
-			free(ret);
+			delete ret;
 			return NULL;
 		}
 		uint8_t *null_bitmap=(uint8_t *)malloc(null_bitmap_length);
@@ -1358,6 +1361,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		MYSQL_BIND *binds=(MYSQL_BIND *)malloc(sizeof(MYSQL_BIND)*num_params);
 		my_bool *is_nulls=(my_bool *)malloc(sizeof(my_bool)*num_params);
 		unsigned long *lengths=(unsigned long *)malloc(sizeof(unsigned long)*num_params);
+		ret->binds=binds;
+		ret->is_nulls=is_nulls;
+		ret->lengths=lengths;
 		for (i=0;i<num_params;i++) {
 			// set null
 			uint8_t null_byte=null_bitmap[i/8];
@@ -1454,7 +1460,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	return ret;
 }
 
-MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my) {
+MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	transfer_started=false;
 	resultset_completed=false;
 	myprot=_myprot;
@@ -1499,6 +1505,57 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	sid++;
 	PSarrayOUT->add(pkt.ptr,pkt.size);
 	resultset_size+=pkt.size;
+	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
+		//MYSQL_RES * prepare_meta_result = mysql_stmt_result_metadata(_stmt);
+//		int column_count=mysql_num_fields(prepare_meta_result);
+//		MYSQL_BIND *binds=(MYSQL_BIND *)malloc(sizeof(MYSQL_BIND)*column_count);
+//		mysql_stmt_bind_result(_stmt, binds);
+		fprintf(stdout, "Fetching results ...\n");
+//		int row_count=0;
+//		while (!mysql_stmt_fetch(_stmt)) {
+//			row_count++;
+//			fprintf(stdout, "  row %d\n", row_count);
+//		}
+//		free (binds);
+		unsigned long long total_size=0;
+		MYSQL_ROWS *r=_stmt->result.data;
+		total_size+=r->length;
+		if (r->length > 0xFFFFFF) {
+			total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+		}
+		total_size+=sizeof(mysql_hdr);
+		while(r->next) {
+			r=r->next;
+			total_size+=r->length;
+			if (r->length > 0xFFFFFF) {
+				total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+			}
+			total_size+=sizeof(mysql_hdr);
+		}
+		PtrSize_t pkt;
+		pkt.size=total_size;
+		pkt.ptr=malloc(pkt.size);
+		total_size=0;
+		r=_stmt->result.data;
+		add_row2(r,(unsigned char *)pkt.ptr);
+		total_size+=r->length;
+		if (r->length > 0xFFFFFF) {
+			total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+		}
+		total_size+=sizeof(mysql_hdr);
+		while(r->next) {
+			r=r->next;
+			add_row2(r,(unsigned char *)pkt.ptr+total_size);
+			total_size+=r->length;
+			if (r->length > 0xFFFFFF) {
+				total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+			}
+			total_size+=sizeof(mysql_hdr);
+		}
+		PSarrayOUT->add(pkt.ptr,pkt.size);
+		resultset_size+=pkt.size;
+		add_eof();
+	}
 }
 
 
@@ -1534,6 +1591,50 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 	resultset_size+=pkt_length;
 	num_rows++;
 	return pkt_length;
+}
+
+// add_row2 is perhaps a faster implementation of add_row()
+// still experimentatl
+// so far, used only for prepared statements
+// it assumes that the MYSQL_ROW is an format ready to be sent to the client
+unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
+	unsigned long length=row->length;
+
+	uint8_t pkt_sid=sid;
+	if (length < (0xFFFFFF+sizeof(mysql_hdr))) {
+		mysql_hdr myhdr;
+		myhdr.pkt_length=length;
+		myhdr.pkt_id=pkt_sid;
+		memcpy(offset, &myhdr, sizeof(mysql_hdr));
+		memcpy(offset+sizeof(mysql_hdr), row->data, row->length);
+		pkt_sid++;
+	} else {
+		unsigned int left=length;
+		unsigned int copied=0;
+		while (left>=0xFFFFFF) {
+			mysql_hdr myhdr;
+			myhdr.pkt_length=0xFFFFFF;
+			myhdr.pkt_id=pkt_sid;
+			pkt_sid++;
+			memcpy(offset, &myhdr, sizeof(mysql_hdr));
+			offset+=sizeof(mysql_hdr);
+			memcpy(offset, row->data+copied, myhdr.pkt_length);
+			offset+=0xFFFFFF;
+			// we are writing a large packet (over 16MB), we assume we are always outside the buffer
+			copied+=0xFFFFFF;
+			left-=0xFFFFFF;
+		}
+		mysql_hdr myhdr;
+		myhdr.pkt_length=left;
+		myhdr.pkt_id=pkt_sid;
+		pkt_sid++;
+		memcpy(offset, &myhdr, sizeof(mysql_hdr));
+		offset+=sizeof(mysql_hdr);
+		memcpy(offset, row->data+copied, myhdr.pkt_length);
+		// we are writing a large packet (over 16MB), we assume we are always outside the buffer
+	}
+	sid=pkt_sid;
+	return length;
 }
 
 void MySQL_ResultSet::add_eof() {
