@@ -171,11 +171,14 @@ MySQL_Connection::MySQL_Connection() {
 	mysql_result=NULL;
 	query.ptr=NULL;
 	query.length=0;
+	query.stmt=NULL;
+	query.stmt_meta=NULL;
 	largest_query_length=0;
 	MyRS=NULL;
 	creation_time=0;
 	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
+	local_stmts=new MySQL_STMTs_local();
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -205,6 +208,13 @@ MySQL_Connection::~MySQL_Connection() {
 //	}
 	if (MyRS) {
 		delete MyRS;
+	}
+	if (local_stmts) {
+		delete local_stmts;
+	}
+	if (query.stmt) {
+		mysql_stmt_close(query.stmt);
+		query.stmt=NULL;
 	}
 };
 
@@ -430,6 +440,10 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 	if (length > largest_query_length) {
 		largest_query_length=length;
 	}
+	if (query.stmt) {
+		mysql_stmt_close(query.stmt);
+		query.stmt=NULL;
+	}
 	//query.ptr=(char *)malloc(length);
 	//memcpy(query.ptr,stmt,length);
 }
@@ -442,6 +456,40 @@ void MySQL_Connection::real_query_start() {
 void MySQL_Connection::real_query_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_query_cont(&interr ,mysql , mysql_status(event, true));
+}
+
+void MySQL_Connection::stmt_prepare_start() {
+	PROXY_TRACE();
+	query.stmt=mysql_stmt_init(mysql);
+	my_bool my_arg=true;
+	mysql_stmt_attr_set(query.stmt, STMT_ATTR_UPDATE_MAX_LENGTH, &my_arg);
+	async_exit_status = mysql_stmt_prepare_start(&interr , query.stmt, query.ptr, query.length);
+}
+
+void MySQL_Connection::stmt_prepare_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
+	async_exit_status = mysql_stmt_prepare_cont(&interr , query.stmt , mysql_status(event, true));
+}
+
+void MySQL_Connection::stmt_execute_start() {
+	PROXY_TRACE();
+	mysql_stmt_bind_param(query.stmt, query.stmt_meta->binds); // FIXME : add error handling
+	async_exit_status = mysql_stmt_execute_start(&interr , query.stmt);
+}
+
+void MySQL_Connection::stmt_execute_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
+	async_exit_status = mysql_stmt_execute_cont(&interr , query.stmt , mysql_status(event, true));
+}
+
+void MySQL_Connection::stmt_execute_store_result_start() {
+	PROXY_TRACE();
+	async_exit_status = mysql_stmt_store_result_start(&interr, query.stmt);
+}
+
+void MySQL_Connection::stmt_execute_store_result_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
+	async_exit_status = mysql_stmt_store_result_cont(&interr , query.stmt , mysql_status(event, true));
 }
 
 void MySQL_Connection::store_result_start() {
@@ -621,6 +669,108 @@ handler_again:
 #endif
 			}
 			break;
+
+		case ASYNC_STMT_PREPARE_START:
+			stmt_prepare_start();
+			__sync_fetch_and_add(&parent->queries_sent,1);
+			__sync_fetch_and_add(&parent->bytes_sent,query.length);
+			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
+			if (async_exit_status) {
+				next_event(ASYNC_STMT_PREPARE_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_PREPARE_END);
+			}
+			break;
+		case ASYNC_STMT_PREPARE_CONT:
+			stmt_prepare_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_STMT_PREPARE_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_PREPARE_END);
+			}
+			break;
+
+		case ASYNC_STMT_PREPARE_END:
+			if (interr) {
+				NEXT_IMMEDIATE(ASYNC_STMT_PREPARE_FAILED);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_PREPARE_SUCCESSFUL);
+			}
+			break;
+		case ASYNC_STMT_PREPARE_SUCCESSFUL:
+			break;
+		case ASYNC_STMT_PREPARE_FAILED:
+			break;
+
+		case ASYNC_STMT_EXECUTE_START:
+			stmt_execute_start();
+			__sync_fetch_and_add(&parent->queries_sent,1);
+//			__sync_fetch_and_add(&parent->bytes_sent,query.length);
+//			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
+			if (async_exit_status) {
+				next_event(ASYNC_STMT_EXECUTE_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_STORE_RESULT_START);
+			}
+			break;
+		case ASYNC_STMT_EXECUTE_CONT:
+			stmt_execute_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_STMT_EXECUTE_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_STORE_RESULT_START);
+			}
+			break;
+
+		case ASYNC_STMT_EXECUTE_STORE_RESULT_START:
+			if (mysql_stmt_errno(query.stmt)) {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+			}
+			{
+				MYSQL_RES *stmt_result=mysql_stmt_result_metadata(query.stmt);
+				if (stmt_result==NULL) {
+					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+				}
+			}
+			stmt_execute_store_result_start();
+			if (async_exit_status) {
+				next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+			}
+			break;
+		case ASYNC_STMT_EXECUTE_STORE_RESULT_CONT:
+			stmt_execute_store_result_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+			}
+			break;
+		case ASYNC_STMT_EXECUTE_END:
+			{
+/*
+				int row_count= 0;
+				fprintf(stdout, "Fetching results ...\n");
+				while (!mysql_stmt_fetch(query.stmt))
+				{
+					row_count++;
+					fprintf(stdout, "  row %d\n", row_count);
+				}
+*/
+			}
+/*
+			if (interr) {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_FAILED);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_SUCCESSFUL);
+			}
+*/
+			break;
+//		case ASYNC_STMT_EXECUTE_SUCCESSFUL:
+//			break;
+//		case ASYNC_STMT_EXECUTE_FAILED:
+//			break;
 
 		case ASYNC_NEXT_RESULT_START:
 			async_exit_status = mysql_next_result_start(&interr, mysql);
@@ -897,7 +1047,7 @@ int MySQL_Connection::async_connect(short event) {
 // 0 when the query is completed
 // 1 when the query is not completed
 // the calling function should check mysql error in mysql struct
-int MySQL_Connection::async_query(short event, char *stmt, unsigned long length) {
+int MySQL_Connection::async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt, stmt_execute_metadata_t *stmt_meta) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
@@ -914,8 +1064,20 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 			return 0;
 			break;
 		case ASYNC_IDLE:
-			set_query(stmt,length);
+			if (stmt_meta==NULL)
+				set_query(stmt,length);
 			async_state_machine=ASYNC_QUERY_START;
+			if (_stmt) {
+				query.stmt=*_stmt;
+				if (stmt_meta==NULL) {
+					async_state_machine=ASYNC_STMT_PREPARE_START;
+				} else {
+					if (query.stmt_meta==NULL) {
+						query.stmt_meta=stmt_meta;
+					}
+					async_state_machine=ASYNC_STMT_EXECUTE_START;
+				}
+			}
 		default:
 			handler(event);
 			break;
@@ -925,6 +1087,24 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length)
 		if (mysql_errno(mysql)) {
 			return -1;
 		} else {
+			return 0;
+		}
+	}
+	if (async_state_machine==ASYNC_STMT_EXECUTE_END) {
+		async_state_machine=ASYNC_QUERY_END;
+		if (mysql_stmt_errno(query.stmt)) {
+			return -1;
+		} else {
+			return 0;
+		}
+	}
+	if (async_state_machine==ASYNC_STMT_PREPARE_SUCCESSFUL || async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
+		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
+			//mysql_stmt_close(query.stmt);
+			//query.stmt=NULL;
+			return -1;
+		} else {
+			*_stmt=query.stmt;
 			return 0;
 		}
 	}

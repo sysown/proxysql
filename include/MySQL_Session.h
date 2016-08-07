@@ -23,6 +23,10 @@ class Query_Info {
 	unsigned long long start_time;
 	unsigned long long end_time;
 
+	MYSQL_STMT *mysql_stmt;
+	stmt_execute_metadata_t *stmt_meta;
+	uint32_t stmt_global_id;
+
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
 
@@ -60,7 +64,7 @@ class MySQL_Session
 	void handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool ps=false);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
@@ -70,6 +74,8 @@ class MySQL_Session
 	void RequestEnd(MySQL_Data_Stream *);
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
+
+//	MySQL_STMT_Manager *Session_STMT_Manager;
 
 	public:
 	void * operator new(size_t);
@@ -149,6 +155,7 @@ class MySQL_Session
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS);
+	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt);
 	unsigned int NumActiveTransactions();
 	int FindOneActiveTransaction();
 	unsigned long long IdleTime();
