@@ -72,11 +72,18 @@ class MySQL_Session
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
 	void RequestEnd(MySQL_Data_Stream *);
+
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
+	int handler_again___status_PINGING_SERVER();
+	void handler_again___new_thread_to_kill_connection();
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
 //	MySQL_STMT_Manager *Session_STMT_Manager;
 
+	//this pointer is always initialized inside handler().
+	// it is an attempt to start simplifying the complexing of handler()
+	PtrSize_t *pktH;
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
