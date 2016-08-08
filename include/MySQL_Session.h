@@ -76,6 +76,15 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	void handler_again___new_thread_to_kill_connection();
+
+	bool handler_again___verify_backend_charset();
+	bool handler_again___verify_init_connect();
+	bool handler_again___verify_backend_autocommit();
+	bool handler_again___verify_backend_user_schema();
+	bool handler_again___status_SETTING_INIT_CONNECT(int *);
+	bool handler_again___status_CHANGING_SCHEMA(int *);
+	bool handler_again___status_CONNECTING_SERVER(int *);
+
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
