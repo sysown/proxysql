@@ -1131,6 +1131,118 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	return false;
 }
 
+bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	myds->DSS=STATE_MARIADB_QUERY;
+	enum session_status st=status;
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
+	if (rc==0) {
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		if (rc==-1) {
+			// the command failed
+			int myerr=mysql_errno(myconn->mysql);
+			if (myerr > 2000) {
+				bool retry_conn=false;
+				// client error, serious
+				proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					retry_conn=true;
+				}
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				if (retry_conn) {
+					myds->DSS=STATE_NOT_INITIALIZED;
+					//previous_status.push(PROCESSING_QUERY);
+					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+				}
+				*_rc=-1;
+				return false;
+			} else {
+				proxy_warning("Error during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
+					// we won't go back to PROCESSING_QUERY
+				st=previous_status.top();
+				previous_status.pop();
+				char sqlstate[10];
+				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->fd=0;
+				status=WAITING_CLIENT_DATA;
+				client_myds->DSS=STATE_SLEEP;
+			}
+		} else {
+			// rc==1 , nothing to do for now
+		}
+	}
+	return false;
+}
+
+
+bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
+	//fprintf(stderr,"CHANGING_AUTOCOMMIT\n");
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	myds->DSS=STATE_MARIADB_QUERY;
+	enum session_status st=status;
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	int rc=myconn->async_set_autocommit(myds->revents, autocommit);
+	if (rc==0) {
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		if (rc==-1) {
+			// the command failed
+			int myerr=mysql_errno(myconn->mysql);
+			if (myerr > 2000) {
+				bool retry_conn=false;
+				// client error, serious
+				proxy_error("Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					retry_conn=true;
+				}
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				if (retry_conn) {
+					myds->DSS=STATE_NOT_INITIALIZED;
+					//previous_status.push(PROCESSING_QUERY);
+					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+				}
+				*_rc=-1;
+				return false;
+			} else {
+				proxy_warning("Error during SET AUTOCOMMIT: %d, %s\n", myerr, mysql_error(myconn->mysql));
+					// we won't go back to PROCESSING_QUERY
+				st=previous_status.top();
+				previous_status.pop();
+				char sqlstate[10];
+				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+					myds->destroy_MySQL_Connection_From_Pool(true);
+					myds->fd=0;
+				status=WAITING_CLIENT_DATA;
+				client_myds->DSS=STATE_SLEEP;
+			}
+		} else {
+			// rc==1 , nothing to do for now
+		}
+	}
+	return false;
+}
+
 int MySQL_Session::handler() {
 	bool wrong_pass=false;
 	if (to_process==0) return 0; // this should be redundant if the called does the same check
@@ -2010,112 +2122,26 @@ handler_again:
 			break;
 
 		case CHANGING_AUTOCOMMIT:
-			//fprintf(stderr,"CHANGING_AUTOCOMMIT\n");
-			assert(mybe->server_myds->myconn);
 			{
-				MySQL_Data_Stream *myds=mybe->server_myds;
-				MySQL_Connection *myconn=myds->myconn;
-				myds->DSS=STATE_MARIADB_QUERY;
-				enum session_status st=status;
-				if (myds->mypolls==NULL) {
-					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
-				}
-				int rc=myconn->async_set_autocommit(myds->revents, autocommit);
-				if (rc==0) {
-					st=previous_status.top();
-					previous_status.pop();
-					NEXT_IMMEDIATE(st);
+				int rc=0;
+				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc)) {
+					goto handler_again;	// we changed status
 				} else {
-					if (rc==-1) {
-						// the command failed
-						int myerr=mysql_errno(myconn->mysql);
-						if (myerr > 2000) {
-							bool retry_conn=false;
-							// client error, serious
-							proxy_error("Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								retry_conn=true;
-							}
-							myds->destroy_MySQL_Connection_From_Pool(false);
-							myds->fd=0;
-							if (retry_conn) {
-								myds->DSS=STATE_NOT_INITIALIZED;
-								//previous_status.push(PROCESSING_QUERY);
-								NEXT_IMMEDIATE(CONNECTING_SERVER);
-							}
-							return -1;
-						} else {
-							proxy_warning("Error during SET AUTOCOMMIT: %d, %s\n", myerr, mysql_error(myconn->mysql));
-								// we won't go back to PROCESSING_QUERY
-							st=previous_status.top();
-							previous_status.pop();
-							char sqlstate[10];
-							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
-							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-								myds->destroy_MySQL_Connection_From_Pool(true);
-								myds->fd=0;
-							status=WAITING_CLIENT_DATA;
-							client_myds->DSS=STATE_SLEEP;
-						}
-					} else {
-						// rc==1 , nothing to do for now
+					if (rc==-1) {	// we have an error we can't handle
+						return -1;
 					}
 				}
 			}
 			break;
 
 		case CHANGING_CHARSET:
-			//fprintf(stderr,"CHANGING_SCHEMA\n");
-			assert(mybe->server_myds->myconn);
 			{
-				MySQL_Data_Stream *myds=mybe->server_myds;
-				MySQL_Connection *myconn=myds->myconn;
-				myds->DSS=STATE_MARIADB_QUERY;
-				enum session_status st=status;
-				if (myds->mypolls==NULL) {
-					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
-				}
-				int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
-				if (rc==0) {
-					st=previous_status.top();
-					previous_status.pop();
-					NEXT_IMMEDIATE(st);
+				int rc=0;
+				if (handler_again___status_CHANGING_CHARSET(&rc)) {
+					goto handler_again;	// we changed status
 				} else {
-					if (rc==-1) {
-						// the command failed
-						int myerr=mysql_errno(myconn->mysql);
-						if (myerr > 2000) {
-							bool retry_conn=false;
-							// client error, serious
-							proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								retry_conn=true;
-							}
-							myds->destroy_MySQL_Connection_From_Pool(false);
-							myds->fd=0;
-							if (retry_conn) {
-								myds->DSS=STATE_NOT_INITIALIZED;
-								//previous_status.push(PROCESSING_QUERY);
-								NEXT_IMMEDIATE(CONNECTING_SERVER);
-							}
-							return -1;
-						} else {
-							proxy_warning("Error during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
-								// we won't go back to PROCESSING_QUERY
-							st=previous_status.top();
-							previous_status.pop();
-							char sqlstate[10];
-							sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
-							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-								myds->destroy_MySQL_Connection_From_Pool(true);
-								myds->fd=0;
-							status=WAITING_CLIENT_DATA;
-							client_myds->DSS=STATE_SLEEP;
-						}
-					} else {
-						// rc==1 , nothing to do for now
+					if (rc==-1) {	// we have an error we can't handle
+						return -1;
 					}
 				}
 			}

@@ -85,6 +85,9 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
+	bool handler_again___status_CHANGING_CHARSET(int *);
+	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
+
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
