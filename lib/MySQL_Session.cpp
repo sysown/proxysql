@@ -2111,78 +2111,60 @@ handler_again:
 		case CHANGING_USER_SERVER:
 			{
 				int rc=0;
-				if (handler_again___status_CHANGING_USER_SERVER(&rc)) {
+				if (handler_again___status_CHANGING_USER_SERVER(&rc))
 					goto handler_again;	// we changed status
-				} else {
-					if (rc==-1) {	// we have an error we can't handle
-						return -1;
-					}
-				}
+				if (rc==-1) // we have an error we can't handle
+					return -1;
 			}
 			break;
 
 		case CHANGING_AUTOCOMMIT:
 			{
 				int rc=0;
-				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc)) {
+				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc))
 					goto handler_again;	// we changed status
-				} else {
-					if (rc==-1) {	// we have an error we can't handle
-						return -1;
-					}
-				}
+				if (rc==-1) // we have an error we can't handle
+					return -1;
 			}
 			break;
 
 		case CHANGING_CHARSET:
 			{
 				int rc=0;
-				if (handler_again___status_CHANGING_CHARSET(&rc)) {
+				if (handler_again___status_CHANGING_CHARSET(&rc))
 					goto handler_again;	// we changed status
-				} else {
-					if (rc==-1) {	// we have an error we can't handle
-						return -1;
-					}
-				}
+				if (rc==-1) // we have an error we can't handle
+					return -1;
 			}
 			break;
 
 		case SETTING_INIT_CONNECT:
 			{
 				int rc=0;
-				if (handler_again___status_SETTING_INIT_CONNECT(&rc)) {
+				if (handler_again___status_SETTING_INIT_CONNECT(&rc))
 					goto handler_again;	// we changed status
-				} else {
-					if (rc==-1) {	// we have an error we can't handle
-						return -1;
-					}
-				}
+				if (rc==-1) // we have an error we can't handle
+					return -1;
 			}
 			break;
 
 		case CHANGING_SCHEMA:
 			{
 				int rc=0;
-				if (handler_again___status_CHANGING_SCHEMA(&rc)) {
+				if (handler_again___status_CHANGING_SCHEMA(&rc))
 					goto handler_again;	// we changed status
-				} else {
-					if (rc==-1) {	// we have an error we can't handle
-						return -1;
-					}
-				}
+				if (rc==-1) // we have an error we can't handle
+					return -1;
 			}
 			break;
 
 		case CONNECTING_SERVER:
 			{
 				int rc=0;
-				if (handler_again___status_CONNECTING_SERVER(&rc)) {
+				if (handler_again___status_CONNECTING_SERVER(&rc))
 					goto handler_again;	// we changed status
-				} else {
-					if (rc==1) { //handler_again___status_CONNECTING_SERVER returns 1
-						goto __exit_DSS__STATE_NOT_INITIALIZED;
-					}
-				}
+				if (rc==1) //handler_again___status_CONNECTING_SERVER returns 1
+					goto __exit_DSS__STATE_NOT_INITIALIZED;
 			}
 			break;
 		case NONE:
