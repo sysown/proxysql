@@ -21,9 +21,6 @@ LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig-1.4.9
 LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
 LIBCONFIG_LDIR=-L$(LIBCONFIG_PATH)/lib/.libs
 
-LIBEVENT_PATH=$(DEPS_PATH)/libevent/libevent
-LIBEVENT_IDIR=$(LIBEVENT_PATH)/include
-LIBEVENT_LDIR=$(LIBEVENT_PATH)/.libs
 
 RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
@@ -33,12 +30,12 @@ SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
 IDIR=../../include
 LDIR=../../lib
 IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(LIBEVENT_LDIR) -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR)
 
 DEBUG=-DDEBUG
 MYCPPFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) -ggdb
 LDFLAGS+=
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)

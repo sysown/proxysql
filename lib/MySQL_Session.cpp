@@ -1711,7 +1711,7 @@ handler_again:
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				// these checks need to be performed only if we connect to a real mysql_server
-				status=PROCESSING_QUERY;
+				//status=PROCESSING_QUERY;
 				mybe->server_myds->max_connect_time=0;
 				// we insert it in mypolls only if not already there
 				if (myds->mypolls==NULL) {
@@ -1734,14 +1734,17 @@ handler_again:
 					if (status==PROCESSING_STMT_EXECUTE) {
 						CurrentQuery.mysql_stmt=myconn->local_stmts->find(CurrentQuery.stmt_global_id);
 						if (CurrentQuery.mysql_stmt==NULL) {
+							MySQL_STMT_Global_info *stmt_info=NULL;
 							// the conection we too doesn't have the prepared statements prepared
 							// we try to create it now
-							MySQL_STMT_Global_info *stmt_info=NULL;
 							stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
 							CurrentQuery.QueryLength=stmt_info->query_length;
 							CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
 							previous_status.push(PROCESSING_STMT_EXECUTE);
 							NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
+							if (CurrentQuery.stmt_global_id!=stmt_info->statement_id) {
+								PROXY_TRACE();
+							}
 						}
 					}
 					}
@@ -1910,6 +1913,7 @@ handler_again:
 					}
 				} else {
 					if (rc==-1) {
+						CurrentQuery.mysql_stmt=NULL; // immediately reset mysql_stmt
 						// the query failed
 						if (
 							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard

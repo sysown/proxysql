@@ -791,8 +791,8 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	if (stmt_info->num_params) {
 		for (i=0; i<stmt_info->num_params; i++) {
 			generate_pkt_field(true,NULL,NULL,sid,
-				(char *)"", (char *)"", (char *)"", (char *)"", (char *)"",
-				0,0,0,0,0,false,0,NULL);
+				(char *)"", (char *)"", (char *)"", (char *)"?", (char *)"",
+				63,0,0,0,0,false,0,NULL); // NOTE: charset is 63 = binary !
 			sid++;
 		}
 		generate_pkt_EOF(true,NULL,NULL,sid,0,SERVER_STATUS_AUTOCOMMIT); // FIXME : for now we pass a very broken flag

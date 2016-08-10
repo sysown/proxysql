@@ -441,7 +441,7 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 		largest_query_length=length;
 	}
 	if (query.stmt) {
-		mysql_stmt_close(query.stmt);
+		//mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
 	}
 	//query.ptr=(char *)malloc(length);
