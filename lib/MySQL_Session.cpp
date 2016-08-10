@@ -192,7 +192,7 @@ void MySQL_Session::operator delete(void *ptr) {
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	pause_until=0;
-	qpo=NULL;
+	qpo=new Query_Processor_Output();
 //	Session_STMT_Manager=NULL;
 	start_time=0;
 	command_counters=new StatCounters(15,10,false);
@@ -255,6 +255,8 @@ MySQL_Session::~MySQL_Session() {
 	if (admin==false && connections_handler==false && mirror==false) {
 		__sync_fetch_and_sub(&MyHGM->status.client_connections,1);
 	}
+	assert(qpo);
+	delete qpo;
 //	if (Session_STMT_Manager) {
 //		delete Session_STMT_Manager;
 //	}
@@ -2826,10 +2828,11 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	}
 
 	// clean qpo
-	if (qpo) {
-		GloQPro->delete_QP_out(qpo);
-		qpo=NULL;
-	}
+	//if (qpo) {
+	//	GloQPro->delete_QP_out(qpo);
+	//	qpo=NULL;
+	//}
+	GloQPro->delete_QP_out(qpo);
 	// if there is an associated myds, clean its status
 	if (myds) {
 		// if there is a mysql connection, clean its status

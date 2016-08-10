@@ -125,6 +125,12 @@ class Query_Processor_Output {
 		l_free(sizeof(Query_Processor_Output),ptr);
 	}
 	Query_Processor_Output() {
+		init();
+	}
+	~Query_Processor_Output() {
+		destroy();
+	}
+	void init() {
 		ptr=NULL;
 		size=0;
 		destination_hostgroup=-1;
@@ -139,9 +145,10 @@ class Query_Processor_Output {
 		new_query=NULL;
 		error_msg=NULL;
 	}
-	~Query_Processor_Output() {
+	void destroy() {
 		if (error_msg) {
 			free(error_msg);
+			error_msg=NULL;
 		}
 	}
 };

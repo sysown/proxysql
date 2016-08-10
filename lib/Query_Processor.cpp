@@ -602,8 +602,11 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 
 
 Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
-	Query_Processor_Output *ret=NULL;
-	ret=new Query_Processor_Output();
+	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
+	//Query_Processor_Output *ret=NULL;
+	//ret=new Query_Processor_Output();
+	Query_Processor_Output *ret=sess->qpo;
+	ret->init();
 	SQP_par_t *qp=NULL;
 	if (qi) {
 		qp=(SQP_par_t *)&qi->QueryParserArgs;
@@ -829,7 +832,8 @@ __exit_process_mysql_query:
 void Query_Processor::delete_QP_out(Query_Processor_Output *o) {
 	//l_free(sizeof(QP_out_t),o);
 	if (o) {
-		delete o;
+		//delete o; // do not deallocate, but "destroy" it
+		o->destroy();
 	}
 };
 
