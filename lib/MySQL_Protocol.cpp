@@ -1471,8 +1471,16 @@ void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsig
 	return pkt;
 }
 
+
+
+// get_binds_from_pkt() process an STMT_EXECUTE packet, and extract binds value
+// and optionally metadata
+// if stmt_meta is NULL, it means it is the first time that the client run
+// STMT_EXECUTE and therefore stmt_meta needs to be build
+//
+// returns stmt_meta, or a new one
 // See https://dev.mysql.com/doc/internals/en/com-stmt-execute.html for reference
-stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info) {
+stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta) {
 	stmt_execute_metadata_t *ret=NULL; //return NULL in case of failure
 	if (size<14) {
 		// some error!
@@ -1482,16 +1490,27 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	if (num_params==2) {
 		PROXY_TRACE();
 	}
-	//ret=(stmt_execute_metadata_t *)malloc(sizeof(stmt_execute_metadata_t));
-	ret= new stmt_execute_metadata_t();
 	char *p=(char *)ptr+5;
-	memcpy(&ret->stmt_id,p,4); p+=4; // stmt-id
+	if (*stmt_meta) { // this PS was executed at least once, and we already have metadata
+		ret=*stmt_meta;
+	} else { // this is the first time that this PS is executed
+		ret= new stmt_execute_metadata_t();
+	}
+	if (*stmt_meta==NULL) {
+		memcpy(&ret->stmt_id,p,4); // stmt-id
+	}
+	p+=4; // stmt-id
 	memcpy(&ret->flags,p,1); p+=1; // flags
 	p+=4; // iteration-count
 	ret->num_params=num_params;
 //	ret->binds=NULL;
 //	ret->is_nulls=NULL;
 //	ret->lengths=NULL;
+	// we keep a pointer to the packet
+	// this is extremely important because:
+  // * binds[X].buffer does NOT point to a new allocated buffer
+  // * binds[X].buffer points to offset inside the original packet
+	// FIXME: there is still no free for pkt, so that will be a memory leak that needs to be fixed
 	ret->pkt=ptr;
 	uint8_t new_params_bound_flag;
 	if (num_params) {
@@ -1510,56 +1529,79 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 			// the client is sending us the params type. We ignore it
 			//p+=(2*num_params);
 		}
-		uint8_t *null_bitmap=(uint8_t *)malloc(null_bitmap_length);
+		uint8_t *null_bitmap=NULL;
+		null_bitmap=(uint8_t *)malloc(null_bitmap_length);
 		memcpy(null_bitmap,p,null_bitmap_length);
 		p+=null_bitmap_length;
 		p+=1; // new_params_bound_flag
-		MYSQL_BIND *binds=(MYSQL_BIND *)malloc(sizeof(MYSQL_BIND)*num_params);
-		ret->binds=binds;
-		my_bool *is_nulls=(my_bool *)malloc(sizeof(my_bool)*num_params);
-		ret->is_nulls=is_nulls;
-		unsigned long *lengths=(unsigned long *)malloc(sizeof(unsigned long)*num_params);
-		ret->lengths=lengths;
+
+		MYSQL_BIND *binds=NULL;
+		my_bool *is_nulls=NULL;
+		unsigned long *lengths=NULL;
+		// now we create bind structures only if needed
+		if (*stmt_meta==NULL) {
+			binds=(MYSQL_BIND *)malloc(sizeof(MYSQL_BIND)*num_params);
+			ret->binds=binds;
+			is_nulls=(my_bool *)malloc(sizeof(my_bool)*num_params);
+			ret->is_nulls=is_nulls;
+			lengths=(unsigned long *)malloc(sizeof(unsigned long)*num_params);
+			ret->lengths=lengths;
+		} else { // if STMT_EXECUTE was already executed once
+			binds=ret->binds;
+			is_nulls=ret->is_nulls;
+			lengths=ret->lengths;
+		}
+
+		// process packet and set NULLs
 		for (i=0;i<num_params;i++) {
-			// set null
 			uint8_t null_byte=null_bitmap[i/8];
 			uint8_t idx=i%8;
 			my_bool is_null = (null_byte & ( 1 << idx )) >> idx;
 			is_nulls[i]=is_null;
 			binds[i].is_null=&is_nulls[i];
 		}
-		if (new_params_bound_flag) {
-		for (i=0;i<num_params;i++) {
-			// set buffer_type and is_unsigned
-			//enum enum_field_types buffer_type=MYSQL_TYPE_DECIMAL; // set a random default
-			uint16_t buffer_type=0;
-			memcpy(&buffer_type,p,2);
-			binds[i].is_unsigned=0;
-			if (buffer_type >= 32768) { // is_unsigned bit
-				buffer_type-=32768;
-				binds[i].is_unsigned=1;
-			}
-			binds[i].buffer_type=(enum enum_field_types)buffer_type;
-			p+=2;
+		free(null_bitmap); // we are done with it
 
-			// set length
-			lengths[i]=0;
+		if (new_params_bound_flag) {
+			// the client is rebinding the parameters
+			// the client is sending again the type of each parameter
+			for (i=0;i<num_params;i++) {
+				// set buffer_type and is_unsigned
+				//enum enum_field_types buffer_type=MYSQL_TYPE_DECIMAL; // set a random default
+				uint16_t buffer_type=0;
+				memcpy(&buffer_type,p,2);
+				binds[i].is_unsigned=0;
+				if (buffer_type >= 32768) { // is_unsigned bit
+					buffer_type-=32768;
+					binds[i].is_unsigned=1;
+				}
+				binds[i].buffer_type=(enum enum_field_types)buffer_type;
+				p+=2;
+
+				// set length, defaults to 0
+				// for parameters with not fixed length, that will be assigned later
+				lengths[i]=0;
 //			unsigned long l=0;
 //			uint8_t ll=mysql_decode_length((unsigned char *)p,&l);
 //			lengths[i]=l;
 //			p+=ll;
-			binds[i].length=&lengths[i];
-			stmt_info->params[i]->buffer_type=binds[i].buffer_type;
-		}
-		} else {
-			for (i=0;i<num_params;i++) {
-				binds[i].buffer_type=stmt_info->params[i]->buffer_type;
-				lengths[i]=0;
 				binds[i].length=&lengths[i];
+				//stmt_info->params[i]->buffer_type=binds[i].buffer_type;
 			}
+		} else { //new_params_bound_flag==0
+			// the client is NOT rebinding the parameters
+			// the client is NOT sending again the type of each parameter
+			// we should ALREADY know the type of each parameter
+			// nothing should be done here
+//			for (i=0;i<num_params;i++) {
+//				binds[i].buffer_type=stmt_info->params[i]->buffer_type;
+//				lengths[i]=0;
+//				binds[i].length=&lengths[i];
+//			}
 		}
 		for (i=0;i<num_params;i++) {
 			if (is_nulls[i]==true) {
+				// the parameter is NULL, no need to read any data from the packet
 				continue;
 			}
 			enum enum_field_types buffer_type=binds[i].buffer_type;
@@ -1643,7 +1685,10 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
-	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	buffer=NULL;
+	if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
+		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	}
 	buffer_used=0;
 	myds=NULL;
 	sid=0;

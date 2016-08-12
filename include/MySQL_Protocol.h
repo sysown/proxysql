@@ -6,6 +6,7 @@
 
 #define RESULTSET_BUFLEN 16300
 
+/*
 class stmt_execute_metadata_t {
 	public:
 	uint32_t stmt_id;
@@ -30,6 +31,7 @@ class stmt_execute_metadata_t {
 			free(lengths);
 	}
 };
+*/
 
 class MySQL_ResultSet {
 	private:
@@ -131,6 +133,6 @@ class MySQL_Protocol {
 	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info);
 
 	//stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, uint16_t num_params);
-	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info);
+	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */

@@ -35,6 +35,65 @@ To summarie the most important classes:
 */
 
 
+// stmt_execute_metadata_t represent metadata required to run STMT_EXECUTE
+class stmt_execute_metadata_t {
+	public:
+	uint32_t stmt_id;
+	uint8_t flags;
+	uint16_t num_params;
+	MYSQL_BIND *binds;
+	my_bool *is_nulls;
+	unsigned long *lengths;
+	void *pkt;
+	stmt_execute_metadata_t() {
+		binds=NULL;
+		is_nulls=NULL;
+		lengths=NULL;
+		pkt=NULL;
+	}
+	~stmt_execute_metadata_t() {
+		if (binds)
+			free(binds);
+		if (is_nulls)
+			free(is_nulls);
+		if (lengths)
+			free(lengths);
+	}
+};
+
+// server side, metadata related to STMT_EXECUTE are stored in MYSQL_STMT itself
+// client side, they are stored in stmt_execute_metadata_t
+// MySQL_STMTs_meta maps stmt_execute_metadata_t with stmt_id
+class MySQL_STMTs_meta {
+	private:
+	unsigned int num_entries;
+	std::map<uint32_t, stmt_execute_metadata_t *> m;
+	public:
+	MySQL_STMTs_meta() {
+		num_entries=0;
+	}
+	~MySQL_STMTs_meta() {
+		// FIXME: destructor not there yet
+	}
+	// we declare it here to be inline
+	void insert(uint32_t global_statement_id, stmt_execute_metadata_t *stmt_meta) {
+		std::pair<std::map<uint32_t, stmt_execute_metadata_t *>::iterator,bool> ret;
+		ret=m.insert(std::make_pair(global_statement_id, stmt_meta));
+		if (ret.second==true) {
+			num_entries++;
+		}
+	}
+	// we declare it here to be inline
+	stmt_execute_metadata_t * find(uint32_t global_statement_id) {
+		auto s=m.find(global_statement_id);
+		if (s!=m.end()) {	// found
+			return s->second;
+		}
+		return NULL;	// not found
+	}
+	//bool erase(uint32_t global_statement_id);
+};
+
 // class MySQL_STMTs_local associates a global statement ID with a local statement ID for a specific connection
 class MySQL_STMTs_local {
 	private:

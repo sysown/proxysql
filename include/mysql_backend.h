@@ -83,6 +83,7 @@ MySQL_Hostgroup_Entry * MSHGE_find(unsigned int, char *, uint16_t)
 #define __CLASS_MYSQL_BACKEND_H
 #include "proxysql.h"
 #include "cpp.h"
+
 /*
 class MySQL_Server {
 	public:

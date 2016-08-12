@@ -295,6 +295,7 @@ class Query_Info;
 //class MySQL_Server;
 class SQLite3_result;
 class stmt_execute_metadata_t;
+class MySQL_STMTs_meta;
 //class MySQL_Servers;
 //class MySQL_Hostgroup_Entry;
 //class MySQL_Hostgroup;

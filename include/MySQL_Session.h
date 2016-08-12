@@ -88,6 +88,8 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_CHARSET(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 
+
+	MySQL_STMTs_meta *sess_STMTs_meta;
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
@@ -174,7 +176,7 @@ class MySQL_Session
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS);
-	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt);
+	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions();
 	int FindOneActiveTransaction();
 	unsigned long long IdleTime();

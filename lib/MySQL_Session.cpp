@@ -231,9 +231,13 @@ MySQL_Session::MySQL_Session() {
 	transaction_persistent_hostgroup=-1;
 	transaction_persistent=false;
 	active_transactions=0;
+	sess_STMTs_meta=new MySQL_STMTs_meta();
 }
 
 MySQL_Session::~MySQL_Session() {
+	if (sess_STMTs_meta) {
+		delete sess_STMTs_meta;
+	}
 	if (client_myds) {
 		if (client_authenticated) {
 			GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
@@ -1553,7 +1557,14 @@ __get_pkts_from_client:
 										break;
 									}
 									//stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info->num_params);
-									stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info);
+
+									// we now take the metadata associated with STMT_EXECUTE from MySQL_STMTs_meta
+									bool stmt_meta_found=true; // let's be optimistic and we assume we will found it
+									stmt_execute_metadata_t *stmt_meta=sess_STMTs_meta->find(stmt_global_id);
+									if (stmt_meta==NULL) { // we couldn't find any metadata
+										stmt_meta_found=false;
+									}
+									stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info, &stmt_meta);
 									if (stmt_meta==NULL) {
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -1561,6 +1572,11 @@ __get_pkts_from_client:
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
 										break;
+									}
+									if (stmt_meta_found==false) {
+										// previously we didn't find any metadata
+										// but as we reached here, stmt_meta is not null and we save the metadata
+										sess_STMTs_meta->insert(stmt_global_id,stmt_meta);
 									}
 									// else
 
@@ -1890,7 +1906,7 @@ handler_again:
 							break;
 						case PROCESSING_STMT_EXECUTE:
 							{
-								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt);
+								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 							}
 							CurrentQuery.mysql_stmt=NULL;
 							break;
@@ -2684,8 +2700,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 	}
 }
 
-void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt) {
-	MYSQL_RES *stmt_result=mysql_stmt_result_metadata(stmt);
+void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn) {
+	//MYSQL_RES *stmt_result=mysql_stmt_result_metadata(stmt);
+	MYSQL_RES *stmt_result=myconn->query.stmt_result;
 	if (stmt_result) {
 		MySQL_ResultSet *MyRS=new MySQL_ResultSet(&client_myds->myprot, stmt_result, stmt->mysql, stmt);
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
