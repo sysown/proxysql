@@ -1,6 +1,7 @@
 #include "proxysql.h"
-
 #include "cpp.h"
+
+#include <iostream>
 
 #include <sys/types.h>
 #include <sys/stat.h>

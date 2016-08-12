@@ -1,6 +1,7 @@
 #include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "query_cache.hpp"
 #include "proxysql_atomic.h"
 #include "SpookyV2.h"
 
@@ -27,6 +28,30 @@
 #define DEB ""
 #endif /* DEBUG */
 #define QUERY_CACHE_VERSION "0.2.0902" DEB
+
+
+typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
+
+class KV_BtreeArray {
+	private:
+	rwlock_t lock;
+	BtMap_cache bt_map;
+	PtrArray *ptrArray;
+	uint64_t purgeChunkSize;
+	uint64_t purgeIdx;
+	bool __insert(uint64_t, void *);
+	uint64_t freeable_memory;
+	public:
+	uint64_t tottopurge;
+	KV_BtreeArray();
+	~KV_BtreeArray();
+	uint64_t get_data_size();
+	void purge_some(unsigned long long);
+	int cnt();
+	bool replace(uint64_t key, QC_entry_t *entry);
+	QC_entry_t *lookup(uint64_t key);
+	void empty();
+};
 
 __thread uint64_t __thr_cntSet=0;
 __thread uint64_t __thr_cntGet=0;
@@ -210,7 +235,7 @@ uint64_t Query_Cache::get_data_size_total() {
 	int r=0;
 	int i;
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-		r+=KVs[i].get_data_size();
+		r+=KVs[i]->get_data_size();
 	}
 	return r;
 };
@@ -236,6 +261,9 @@ Query_Cache::Query_Cache() {
 		perror("Incompatible debagging version");
 		exit(EXIT_FAILURE);
 	}
+	for (int i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
+		KVs[i]=new KV_BtreeArray();
+	}
 	QCnow_ms=monotonic_time()/1000;
 	size=SHARED_QUERY_CACHE_HASH_TABLES;
 	shutdown=0;
@@ -253,7 +281,7 @@ void Query_Cache::print_version() {
 Query_Cache::~Query_Cache() {
 	unsigned int i;
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-		// FIXME: what here? I think KV_BtreeArray are automatically destroyed
+		delete KVs[i];
 	}
 };
 
@@ -265,7 +293,7 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 	uint64_t hk=SpookyHash::Hash64(kp, kl, user_hash);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 
-	QC_entry_t *entry=KVs[i].lookup(hk);
+	QC_entry_t *entry=KVs[i]->lookup(hk);
 
 	if (entry!=NULL) {
 		unsigned long long t=curtime_ms;
@@ -294,7 +322,7 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 	uint64_t hk=SpookyHash::Hash64(kp, kl, user_hash);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 	entry->key=hk;
-	KVs[i].replace(hk, entry);
+	KVs[i]->replace(hk, entry);
 
 	return true;
 }
@@ -303,8 +331,8 @@ uint64_t Query_Cache::flush() {
 	int i;
 	uint64_t total_count=0;
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-		total_count+=KVs[i].cnt();
-		KVs[i].empty();
+		total_count+=KVs[i]->cnt();
+		KVs[i]->empty();
 	}
 	return total_count;
 };
@@ -319,7 +347,7 @@ void * Query_Cache::purgeHash_thread(void *) {
 
 		if (current_used_memory_pct() < purge_threshold_pct_min ) continue;
 		for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-			KVs[i].purge_some(QCnow_ms);
+			KVs[i]->purge_some(QCnow_ms);
 		}
 	}
 	return NULL;

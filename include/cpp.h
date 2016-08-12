@@ -21,17 +21,17 @@
 #undef swap
 #undef min
 #undef max
-#include <memory>
+//#include <memory>
 #include <stdio.h>
-#include <algorithm>
-#include <functional>
-#include <type_traits>
-#include <iosfwd>
+//#include <algorithm>
+//#include <functional>
+//#include <type_traits>
+//#include <iosfwd>
 #include <map>
 #include <unordered_map>
-#include <set>
-#include <sstream>
-#include <string>
-#include <utility>
-#include <vector>
+//#include <set>
+//#include <sstream>
+//#include <string>
+//#include <utility>
+//#include <vector>
 //#endif /* __cplusplus */

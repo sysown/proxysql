@@ -28,7 +28,7 @@ struct __QC_entry_t {
 	unsigned long long access_ms; // when the entry was read last , monotonic , millisecond granularity
 	uint32_t ref_count; // reference counter
 };
-
+/*
 typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
 
 
@@ -52,10 +52,12 @@ class KV_BtreeArray {
 	QC_entry_t *lookup(uint64_t key);
 	void empty();
 };
-
+*/
+class KV_BtreeArray;
 class Query_Cache {
 	private:
-	KV_BtreeArray KVs[SHARED_QUERY_CACHE_HASH_TABLES];
+	//KV_BtreeArray KVs[SHARED_QUERY_CACHE_HASH_TABLES];
+	KV_BtreeArray * KVs[SHARED_QUERY_CACHE_HASH_TABLES];
 	uint64_t get_data_size_total();
 	unsigned int current_used_memory_pct();
 	public:
