@@ -1896,6 +1896,8 @@ handler_again:
 								enum session_status st=status;
 								size_t sts=previous_status.size();
 								if (sts) {
+									myconn->async_state_machine=ASYNC_IDLE;
+									myds->DSS=STATE_MARIADB_GENERIC;
 									st=previous_status.top();
 									previous_status.pop();
 									NEXT_IMMEDIATE(st);
@@ -1907,6 +1909,11 @@ handler_again:
 						case PROCESSING_STMT_EXECUTE:
 							{
 								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
+								if (CurrentQuery.stmt_meta)
+									if (CurrentQuery.stmt_meta->pkt) {
+										free(CurrentQuery.stmt_meta->pkt);
+										CurrentQuery.stmt_meta->pkt=NULL;
+									}
 							}
 							CurrentQuery.mysql_stmt=NULL;
 							break;
