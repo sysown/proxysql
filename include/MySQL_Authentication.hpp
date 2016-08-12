@@ -1,7 +1,7 @@
 #ifndef __CLASS_MYSQL_AUTHENTICATION_H
 #define __CLASS_MYSQL_AUTHENTICATION_H
 
-#include "btree_map.h"
+//#include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -36,13 +36,15 @@ typedef struct _account_details_t {
 */
 
 
-typedef btree::btree_map<uint64_t, account_details_t *> BtMap_auth;
+//typedef btree::btree_map<uint64_t, account_details_t *> BtMap_auth;
+typedef std::unordered_map<uint64_t, account_details_t *> umap_auth;
 
 class PtrArray;
 
 typedef struct _creds_group_t {
 	rwlock_t lock;
-	BtMap_auth bt_map;
+	//BtMap_auth bt_map;
+	umap_auth bt_map;
 	PtrArray *cred_array;
 } creds_group_t;
 
