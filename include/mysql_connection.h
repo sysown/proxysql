@@ -50,6 +50,7 @@ class MySQL_Connection {
 		unsigned long length;
 		char *ptr;
 		MYSQL_STMT *stmt;
+		MYSQL_RES *stmt_result;
 		stmt_execute_metadata_t *stmt_meta;
 	} query;
 	char scramble_buff[40];

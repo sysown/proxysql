@@ -91,7 +91,7 @@ class MySQL_STMT_Global_info {
 		int timeout;
 		int delay;
 	} properties;
-	//MYSQL_BIND **params; // seems unused
+	MYSQL_BIND **params; // seems unused (?)
 	MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
 	~MySQL_STMT_Global_info();
 };

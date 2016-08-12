@@ -232,20 +232,24 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char
 			fd->def = ( fs->def ? strdup(fs->def) : NULL );
 		}
 	}
-/*
+
 	params=NULL;
+	if (num_params==2) {
+    PROXY_TRACE();
+  }
 	if(num_params) {
-		params=(MYSQL_BIND **)malloc(num_columns*sizeof(MYSQL_BIND *));
+		params=(MYSQL_BIND **)malloc(num_params*sizeof(MYSQL_BIND *));
 		uint16_t i;
 		for (i=0;i<num_params;i++) {
 			params[i]=(MYSQL_BIND *)malloc(sizeof(MYSQL_BIND));
-			MYSQL_BIND *ps=&(stmt->params[i]);
-			MYSQL_BIND *pd=params[i];
+			//MYSQL_BIND *ps=&(stmt->params[i]);
+			//MYSQL_BIND *pd=params[i];
 			// copy all params
-			memcpy(pd,ps,sizeof(MYSQL_BIND));
+			//memcpy(pd,ps,sizeof(MYSQL_BIND));
+			memset(params[i],0,sizeof(MYSQL_BIND));
 		}
 	}
-*/
+
 }
 
 MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
@@ -268,7 +272,7 @@ MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
 		free(fields);
 		fields=NULL;
 	}
-/*
+
 	if (num_params) {
 		uint16_t i;
 		for (i=0;i<num_params;i++) {
@@ -277,5 +281,5 @@ MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
 		free(params);
 		params=NULL;
 	}
-*/
+
 }

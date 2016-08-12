@@ -1455,8 +1455,9 @@ __get_pkts_from_client:
 								break;
 							case _MYSQL_COM_STMT_CLOSE:
 								l_free(pkt.size,pkt.ptr);
-								client_myds->setDSS_STATE_QUERY_SENT_NET();
-								client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+								// FIXME: this is not complete. Counters should be decreased
+//							client_myds->setDSS_STATE_QUERY_SENT_NET();
+//							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
 								client_myds->DSS=STATE_SLEEP;
 								status=WAITING_CLIENT_DATA;
 								break;
@@ -1551,7 +1552,8 @@ __get_pkts_from_client:
 										status=WAITING_CLIENT_DATA;
 										break;
 									}
-									stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info->num_params);
+									//stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info->num_params);
+									stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info);
 									if (stmt_meta==NULL) {
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -1874,9 +1876,17 @@ handler_again:
 */
 //								}
 								myds->myconn->local_stmts->insert(stmid,CurrentQuery.mysql_stmt);
-								client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
+								CurrentQuery.mysql_stmt=NULL;
+								enum session_status st=status;
+								size_t sts=previous_status.size();
+								if (sts) {
+									st=previous_status.top();
+									previous_status.pop();
+									NEXT_IMMEDIATE(st);
+								} else {
+									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
+								}
 							}
-							CurrentQuery.mysql_stmt=NULL;
 							break;
 						case PROCESSING_STMT_EXECUTE:
 							{
@@ -2046,6 +2056,15 @@ handler_again:
 									MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 									break;
 								case PROCESSING_STMT_PREPARE:
+									//MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, true);
+									{
+										char sqlstate[10];
+										sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+										client_myds->pkt_sid++;
+									}
+									break;
+								case PROCESSING_STMT_EXECUTE:
 									//MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, true);
 									{
 										char sqlstate[10];
@@ -2670,6 +2689,26 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt) {
 	if (stmt_result) {
 		MySQL_ResultSet *MyRS=new MySQL_ResultSet(&client_myds->myprot, stmt_result, stmt->mysql, stmt);
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
+	} else {
+		MYSQL *mysql=stmt->mysql;
+		// no result set
+		int myerrno=mysql_stmt_errno(stmt);
+		if (myerrno==0) {
+			unsigned int num_rows = mysql_affected_rows(stmt->mysql);
+			unsigned int nTrx=NumActiveTransactions();
+			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
+				setStatus += SERVER_MORE_RESULTS_EXIST;
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status|setStatus,mysql->warning_count,mysql->info);
+			client_myds->pkt_sid++;
+		} else {
+			// error
+			char sqlstate[10];
+			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
+			client_myds->pkt_sid++;
+		}
 	}
 }
 

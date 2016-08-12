@@ -173,6 +173,7 @@ MySQL_Connection::MySQL_Connection() {
 	query.length=0;
 	query.stmt=NULL;
 	query.stmt_meta=NULL;
+	query.stmt_result=NULL;
 	largest_query_length=0;
 	MyRS=NULL;
 	creation_time=0;
@@ -727,8 +728,8 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 			}
 			{
-				MYSQL_RES *stmt_result=mysql_stmt_result_metadata(query.stmt);
-				if (stmt_result==NULL) {
+				query.stmt_result=mysql_stmt_result_metadata(query.stmt);
+				if (query.stmt_result==NULL) {
 					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 				}
 			}
@@ -1091,6 +1092,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		}
 	}
 	if (async_state_machine==ASYNC_STMT_EXECUTE_END) {
+		query.stmt_meta=NULL;
 		async_state_machine=ASYNC_QUERY_END;
 		if (mysql_stmt_errno(query.stmt)) {
 			return -1;
@@ -1099,6 +1101,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		}
 	}
 	if (async_state_machine==ASYNC_STMT_PREPARE_SUCCESSFUL || async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
+		query.stmt_meta=NULL;
 		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
 			//mysql_stmt_close(query.stmt);
 			//query.stmt=NULL;
@@ -1319,6 +1322,10 @@ void MySQL_Connection::async_free_result() {
 		//free(query.ptr);
 		query.ptr=NULL;
 		query.length=0;
+	}
+	if (query.stmt_result) {
+		mysql_free_result(query.stmt_result);
+		query.stmt_result=NULL;
 	}
 	if (mysql_result) {
 		mysql_free_result(mysql_result);
