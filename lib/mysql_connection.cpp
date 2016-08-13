@@ -474,13 +474,22 @@ void MySQL_Connection::stmt_prepare_cont(short event) {
 
 void MySQL_Connection::stmt_execute_start() {
 	PROXY_TRACE();
-	mysql_stmt_bind_param(query.stmt, query.stmt_meta->binds); // FIXME : add error handling
+	int _rc=0;
+	_rc=mysql_stmt_bind_param(query.stmt, query.stmt_meta->binds); // FIXME : add error handling
+	if (_rc) {
+	  fprintf(stderr, " mysql_stmt_bind_param() failed: %s\n", mysql_stmt_error(query.stmt));
+	}
+	proxy_info("Calling mysql_stmt_execute_start, current state: %d\n", query.stmt->state);
 	async_exit_status = mysql_stmt_execute_start(&interr , query.stmt);
+	fprintf(stderr,"Current state: %d\n", query.stmt->state);
 }
 
 void MySQL_Connection::stmt_execute_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
+	proxy_info("Calling mysql_stmt_execute_cont, current state: %d\n", query.stmt->state);
 	async_exit_status = mysql_stmt_execute_cont(&interr , query.stmt , mysql_status(event, true));
+	//proxy_info("mysql_stmt_execute_cont , ret=%d\n", async_exit_status);
+	fprintf(stderr,"Current state: %d\n", query.stmt->state);
 }
 
 void MySQL_Connection::stmt_execute_store_result_start() {
@@ -1327,9 +1336,12 @@ void MySQL_Connection::async_free_result() {
 		mysql_free_result(query.stmt_result);
 		query.stmt_result=NULL;
 	}
+	if (query.stmt) {
+	}
 	if (mysql_result) {
 		mysql_free_result(mysql_result);
 		mysql_result=NULL;
+		mysql_stmt_free_result(query.stmt);
 	}
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {

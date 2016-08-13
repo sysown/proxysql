@@ -1541,6 +1541,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		// now we create bind structures only if needed
 		if (*stmt_meta==NULL) {
 			binds=(MYSQL_BIND *)malloc(sizeof(MYSQL_BIND)*num_params);
+			memset(binds,0,sizeof(MYSQL_BIND)*num_params);
 			ret->binds=binds;
 			is_nulls=(my_bool *)malloc(sizeof(my_bool)*num_params);
 			ret->is_nulls=is_nulls;
@@ -1653,6 +1654,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						uint8_t l=0;
 						uint64_t len;
 						l=mysql_decode_length((unsigned char *)p, &len);
+						if (l>1) {
+							PROXY_TRACE();
+						}
 						p+=l;
 						binds[i].buffer=p;
 						p+=len;

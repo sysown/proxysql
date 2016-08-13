@@ -22,10 +22,10 @@
 
 
 // copy 1 byte
-#define CPY1(x)	*((uint8_t *)x)
+#define CPY1(x)	*((uint8_t *)(x))
 
 // copy 2 bytes
-#define CPY2(x)	*((uint16_t *)x)
+#define CPY2(x)	*((uint16_t *)(x))
 
 
 
