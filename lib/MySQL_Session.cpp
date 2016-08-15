@@ -2713,6 +2713,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	if (stmt_result) {
 		MySQL_ResultSet *MyRS=new MySQL_ResultSet(&client_myds->myprot, stmt_result, stmt->mysql, stmt);
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
+		delete MyRS;
 	} else {
 		MYSQL *mysql=stmt->mysql;
 		// no result set
