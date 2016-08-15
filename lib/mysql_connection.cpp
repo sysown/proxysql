@@ -479,17 +479,17 @@ void MySQL_Connection::stmt_execute_start() {
 	if (_rc) {
 	  fprintf(stderr, " mysql_stmt_bind_param() failed: %s\n", mysql_stmt_error(query.stmt));
 	}
-	proxy_info("Calling mysql_stmt_execute_start, current state: %d\n", query.stmt->state);
+	//proxy_info("Calling mysql_stmt_execute_start, current state: %d\n", query.stmt->state);
 	async_exit_status = mysql_stmt_execute_start(&interr , query.stmt);
-	fprintf(stderr,"Current state: %d\n", query.stmt->state);
+	//fprintf(stderr,"Current state: %d\n", query.stmt->state);
 }
 
 void MySQL_Connection::stmt_execute_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	proxy_info("Calling mysql_stmt_execute_cont, current state: %d\n", query.stmt->state);
+	//proxy_info("Calling mysql_stmt_execute_cont, current state: %d\n", query.stmt->state);
 	async_exit_status = mysql_stmt_execute_cont(&interr , query.stmt , mysql_status(event, true));
 	//proxy_info("mysql_stmt_execute_cont , ret=%d\n", async_exit_status);
-	fprintf(stderr,"Current state: %d\n", query.stmt->state);
+	//fprintf(stderr,"Current state: %d\n", query.stmt->state);
 }
 
 void MySQL_Connection::stmt_execute_store_result_start() {
