@@ -158,6 +158,7 @@ inline unsigned long long realtime_time() {
 bool Proxy_file_exists(const char *);
 bool Proxy_file_regular(const char *);
 
+char *escape_string_single_quotes(char *input, bool free_it);
 int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
 char *trim_spaces_and_quotes_in_place(char *str);

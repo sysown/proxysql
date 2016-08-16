@@ -37,7 +37,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=26;
+		num_fields=27;
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -73,7 +73,8 @@ class QP_rule_text {
 		pta[22]=strdup_null(QPr->error_msg);
 		itostr(pta[23], (long long)QPr->log);
 		itostr(pta[24], (long long)QPr->apply);
-		itostr(pta[25], (long long)QPr->hits);
+		pta[25]=strdup_null(QPr->comment); // issue #643
+		itostr(pta[26], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -378,7 +379,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int log, bool apply) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int log, bool apply, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -400,6 +401,7 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->mirror_hostgroup=mirror_hostgroup;
 	newQR->error_msg=(error_msg ? strdup(error_msg) : NULL);
 	newQR->apply=apply;
+	newQR->comment=(comment ? strdup(comment) : NULL); // see issue #643
 	newQR->regex_engine1=NULL;
 	newQR->regex_engine2=NULL;
 	newQR->hits=0;
@@ -505,7 +507,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(26);
+	SQLite3_result *result=new SQLite3_result(27);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -533,6 +535,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"error_msg");
 	result->add_column_definition(SQLITE_TEXT,"log");
 	result->add_column_definition(SQLITE_TEXT,"apply");
+	result->add_column_definition(SQLITE_TEXT,"comment"); // issue #643
 	result->add_column_definition(SQLITE_TEXT,"hits");
 	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
 		qr1=*it;
@@ -637,7 +640,8 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern,
 					qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup,
 					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
-					qr1->error_msg, qr1->log, qr1->apply);
+					qr1->error_msg, qr1->log, qr1->apply,
+					qr1->comment);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: \n", qr2->rule_id, qr2->match_digest);
