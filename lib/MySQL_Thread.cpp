@@ -192,6 +192,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
 	(char *)"long_query_time",
+	(char *)"query_cache_size_MB",
 	(char *)"ping_interval_server_msec",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -267,6 +268,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.long_query_time=1000;
+	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
@@ -473,6 +475,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
 	if (!strcasecmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
+	if (!strcasecmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
 	if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
@@ -688,6 +691,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"long_query_time")) {
 		sprintf(intbuf,"%d",variables.long_query_time);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"query_cache_size_MB")) {
+		sprintf(intbuf,"%d",variables.query_cache_size_MB);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"ping_interval_server_msec")) {
@@ -1011,6 +1018,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 20*24*3600*1000) {
 			variables.long_query_time=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"query_cache_size_MB")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1024*10240) {
+			variables.query_cache_size_MB=intv;
 			return true;
 		} else {
 			return false;
@@ -2016,6 +2032,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
 	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
+	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");
 	mysql_thread___ping_interval_server_msec=GloMTH->get_variable_int((char *)"ping_interval_server_msec");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");
