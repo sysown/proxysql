@@ -27,8 +27,9 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_CACHE_VERSION "0.2.0902" DEB
+#define QUERY_CACHE_VERSION "1.2.0817" DEB
 
+extern MySQL_Threads_Handler *GloMTH;
 
 typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
 
@@ -340,16 +341,25 @@ uint64_t Query_Cache::flush() {
 
 void * Query_Cache::purgeHash_thread(void *) {
 	unsigned int i;
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	while (shutdown==0) {
 		usleep(purge_loop_time);
 		unsigned long long t=monotonic_time()/1000;
 		QCnow_ms=t;
-
+		unsigned int glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			max_memory_size=mysql_thread___query_cache_size_MB*1024*1024;
+    }
 		if (current_used_memory_pct() < purge_threshold_pct_min ) continue;
 		for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
 			KVs[i]->purge_some(QCnow_ms);
 		}
 	}
+	delete mysql_thr;
 	return NULL;
 };
 
