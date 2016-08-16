@@ -116,7 +116,11 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
-#define ADMIN_SQLITE_TABLE_SCHEDULER "CREATE TABLE scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , PRIMARY KEY(id))" 
+#define ADMIN_SQLITE_TABLE_SCHEDULER "CREATE TABLE scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY(id))" 
+
+#define ADMIN_SQLITE_TABLE_SCHEDULER_V1_2_0 "CREATE TABLE scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , PRIMARY KEY(id))" 
+
+#define ADMIN_SQLITE_TABLE_SCHEDULER_V1_2_2 "CREATE TABLE scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY(id))" 
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
@@ -124,7 +128,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER "CREATE TABLE runtime_scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , PRIMARY KEY(id))" 
+#define ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER "CREATE TABLE runtime_scheduler (id INTEGER NOT NULL , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY(id))" 
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
@@ -2504,6 +2508,9 @@ bool ProxySQL_Admin::init() {
 	// upgrade mysql_query_rules if needed (upgrade from previous version)
 	disk_upgrade_mysql_query_rules();
 
+	// upgrade scheduler if needed (upgrade from previous version)
+	disk_upgrade_scheduler();
+
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);
 	check_and_build_standard_tables(statsdb, tables_defs_stats);
@@ -3808,9 +3815,9 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	spin_rdlock(&scheduler->rwlock);
 	char *q=NULL;
 	if (_runtime) {
-		q=(char *)"INSERT INTO runtime_scheduler VALUES(%lu,%lu,\"%s\" ,%s,%s,%s,%s,%s)";
+		q=(char *)"INSERT INTO runtime_scheduler VALUES(%lu,%lu,\"%s\" ,%s,%s,%s,%s,%s,'%s')";
 	} else {
-		q=(char *)"INSERT INTO scheduler VALUES(%lu,%lu,\"%s\" ,%s,%s,%s,%s,%s)";
+		q=(char *)"INSERT INTO scheduler VALUES(%lu,%lu,\"%s\" ,%s,%s,%s,%s,%s,'%s')";
 	}
 	for (std::vector<Scheduler_Row *>::iterator it = scheduler->Scheduler_Rows.begin() ; it != scheduler->Scheduler_Rows.end(); ++it) {
 		Scheduler_Row *sr=*it;
@@ -3828,7 +3835,8 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 			}
 			l+=strlen(args[i]);
 		}
-
+		char *o=escape_string_single_quotes(sr->comment,false); // issue #643
+		l+=strlen(o);
 		l+=32; //padding
 
 		char *query=(char *)malloc(l);
@@ -3837,8 +3845,12 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 			sr->id, sr->interval_ms,
 			sr->filename, args[0],
 			args[1], args[2],
-			args[3], args[4]
+			args[3], args[4],
+			o
 		);
+		if (o!=sr->comment) {
+			free(o);
+		}
 
 		for (i=0; i<5; i++) {
 			if (sr->args[i]) {
@@ -4502,6 +4514,27 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
 
+void ProxySQL_Admin::disk_upgrade_scheduler() {
+	// this function is called only for configdb table
+	// it is responsible to upgrade table scheduler if its structure is from a previous version
+	int rci;
+	configdb->execute("PRAGMA foreign_keys = OFF");
+	rci=configdb->check_table_structure((char *)"scheduler",(char *)ADMIN_SQLITE_TABLE_SCHEDULER_V1_2_0);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version v1.2.0 of table scheduler\n");
+		proxy_warning("ONLINE UPGRADE of table scheduler in progress\n");
+		// drop any existing table with suffix _v120
+		configdb->execute("DROP TABLE IF EXISTS scheduler_v120");
+		// rename current table to add suffix _v120
+		configdb->execute("ALTER TABLE scheduler RENAME TO scheduler_v120");
+		// create new table
+		configdb->build_table((char *)"scheduler",(char *)ADMIN_SQLITE_TABLE_SCHEDULER,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO scheduler (id,interval_ms,filename,arg1,arg2,arg3,arg4,arg5) SELECT id,interval_ms,filename,arg1,arg2,arg3,arg4,arg5 FROM scheduler_v120");
+	}
+}
+
 void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 	// this function is called only for configdb table
 	// it is responsible to upgrade table mysql_servers if its structure is from a previous version
@@ -4526,9 +4559,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// upgrade is required
 		proxy_warning("Detected version v1.2.0 of table mysql_servers\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
-		// drop any existing table with suffix _v110
+		// drop any existing table with suffix _v120
 		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v120");
-		// rename current table to add suffix _v110
+		// rename current table to add suffix _v120
 		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v120");
 		// create new table
 		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
@@ -4540,9 +4573,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// upgrade is required
 		proxy_warning("Detected version v1.0 of table mysql_replication_hostgroups\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_replication_hostgroups in progress\n");
-		// drop any existing table with suffix _v110
+		// drop any existing table with suffix _v100
 		configdb->execute("DROP TABLE IF EXISTS mysql_replication_hostgroups_v100");
-		// rename current table to add suffix _v110
+		// rename current table to add suffix _v100
 		configdb->execute("ALTER TABLE mysql_replication_hostgroups RENAME TO mysql_replication_hostgroups_v100");
 		// create new table
 		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_2_2,false);
@@ -4556,7 +4589,7 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 
 
 
-Scheduler_Row::Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5) {
+Scheduler_Row::Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5, char *_comment) {
 	int i;
 	id=_id;
 	interval_ms=_in;
@@ -4581,6 +4614,7 @@ Scheduler_Row::Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char 
 			}
 		}
 	}
+	comment=strdup(_comment);
 }
 
 
@@ -4593,6 +4627,7 @@ Scheduler_Row::~Scheduler_Row() {
 		args[i]=NULL;
 	}
 	free(args);
+	free(comment);
 	args=NULL;
 }
 
@@ -4624,7 +4659,8 @@ void ProxySQL_External_Scheduler::update_table(SQLite3_result *resultset) {
 		Scheduler_Row *sr=new Scheduler_Row(id, interval_ms,
 			r->fields[2], r->fields[3],
 			r->fields[4], r->fields[5],
-			r->fields[6], r->fields[7]
+			r->fields[6], r->fields[7],
+			r->fields[8] // comment, issue #643
 		);
 		Scheduler_Rows.push_back(sr);
 	}

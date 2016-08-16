@@ -21,7 +21,8 @@ class Scheduler_Row {
 //	char *arg4;
 //	char *arg5;
 	char **args;
-	Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5);
+	char *comment;
+	Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5, char *_comment);
 	~Scheduler_Row();
 };
 
@@ -113,6 +114,7 @@ class ProxySQL_Admin {
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
+	void disk_upgrade_scheduler();
 
 #ifdef DEBUG
 	void add_credentials(char *type, char *credentials, int hostgroup_id);
