@@ -6,7 +6,7 @@
 #include "query_cache.hpp"
 #include "mysql_connection.h"
 #include "sqlite3db.h"
-#include "simple_kv.h"
+//#include "simple_kv.h"
 #include "gen_utils.h"
 #include "StatCounters.h"
 #include "MySQL_Monitor.hpp"

@@ -507,7 +507,7 @@ struct _global_variables_t {
 
 	unsigned int mysql_query_cache_default_timeout;
 	unsigned long long mysql_wait_timeout;
-	unsigned long long mysql_query_cache_size;
+	//unsigned long long mysql_query_cache_size;
 	unsigned long long mysql_max_resultset_size;
 	int mysql_max_query_size;
 
@@ -737,6 +737,9 @@ __thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
 
+/* variables used for Query Cache */
+__thread int mysql_thread___query_cache_size_MB;
+
 /* variables used for SSL , from proxy to server (p2s) */
 __thread char * mysql_thread___ssl_p2s_ca;
 __thread char * mysql_thread___ssl_p2s_cert;
@@ -811,6 +814,9 @@ extern __thread bool mysql_thread___commands_stats;
 extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
+
+/* variables used for Query Cache */
+extern __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 extern __thread char * mysql_thread___ssl_p2s_ca;
