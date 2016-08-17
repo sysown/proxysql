@@ -178,9 +178,12 @@ int KV_BtreeArray::cnt() {
 
 bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
   spin_wrlock(&lock);
-	THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,100);
-	THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,100);
-	THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,100);
+	//THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,100);
+	//THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,100);
+	//THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,100);
+	THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,1);
+	THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,1);
+	THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,1);
 	THR_UPDATE_CNT(__thr_num_entries,Glo_num_entries,1,1);
 
 	entry->ref_count=1;
@@ -200,14 +203,15 @@ bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
 QC_entry_t * KV_BtreeArray::lookup(uint64_t key) {
 	QC_entry_t *entry=NULL;
 	spin_rdlock(&lock);
-	THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,100);
+	//THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,100);
+	THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,1);
   btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
   lookup = bt_map.find(key);
   if (lookup != bt_map.end()) {
 		entry=lookup->second;
 		__sync_fetch_and_add(&entry->ref_count,1);
-		THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,100);
-		THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,10000);
+		//THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,100);
+		//THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,10000);
  	}	
 	spin_rdunlock(&lock);
 	return entry;
@@ -299,6 +303,8 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 	if (entry!=NULL) {
 		unsigned long long t=curtime_ms;
 		if (entry->expire_ms > t) {
+			THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
+			THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,1);
 			result=(unsigned char *)malloc(entry->length);
 			memcpy(result,entry->value,entry->length);
 			*lv=entry->length;
@@ -344,16 +350,20 @@ void * Query_Cache::purgeHash_thread(void *) {
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	mysql_thr->refresh_variables();
+	max_memory_size=mysql_thread___query_cache_size_MB*1024*1024;
 	while (shutdown==0) {
 		usleep(purge_loop_time);
 		unsigned long long t=monotonic_time()/1000;
 		QCnow_ms=t;
 		unsigned int glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
-			mysql_thr->refresh_variables();
-			max_memory_size=mysql_thread___query_cache_size_MB*1024*1024;
-    }
+		if (GloMTH) {
+			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+				mysql_thr->refresh_variables();
+				max_memory_size=mysql_thread___query_cache_size_MB*1024*1024;
+			}
+		}
 		if (current_used_memory_pct() < purge_threshold_pct_min ) continue;
 		for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
 			KVs[i]->purge_some(QCnow_ms);
@@ -373,8 +383,38 @@ SQLite3_result * Query_Cache::SQL3_getStats() {
 	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
 	{ // Used Memoery
-		pta[0]=(char *)"Query_Cache_Memory_MB";
+		pta[0]=(char *)"Query_Cache_Memory_bytes";
 		sprintf(buf,"%lu", get_data_size_total());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_cntGet
+		pta[0]=(char *)"Query_Cache_count_GET";
+		sprintf(buf,"%lu", Glo_cntGet);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_cntGetOK
+		pta[0]=(char *)"Query_Cache_count_GET_OK";
+		sprintf(buf,"%lu", Glo_cntGetOK);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_cntSet
+		pta[0]=(char *)"Query_Cache_count_SET";
+		sprintf(buf,"%lu", Glo_cntSet);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_dataIN
+		pta[0]=(char *)"Query_Cache_bytes_IN";
+		sprintf(buf,"%lu", Glo_dataIN);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_dataOUT
+		pta[0]=(char *)"Query_Cache_bytes_OUT";
+		sprintf(buf,"%lu", Glo_dataOUT);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
