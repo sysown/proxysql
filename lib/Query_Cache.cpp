@@ -418,6 +418,18 @@ SQLite3_result * Query_Cache::SQL3_getStats() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{ // Glo_cntPurge
+		pta[0]=(char *)"Query_Cache_Purged";
+		sprintf(buf,"%lu", Glo_cntPurge);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_num_entries
+		pta[0]=(char *)"Query_Cache_Entries";
+		sprintf(buf,"%lu", Glo_num_entries);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	free(pta);
 	return result;
 }
