@@ -2457,6 +2457,10 @@ bool ProxySQL_Admin::init() {
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	statsdb=new SQLite3DB();
 	statsdb->open((char *)"file:mem_statsdb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+	// check if file exists , see #617
+	bool admindb_file_exists=Proxy_file_exists(GloVars.admindb);
+
 	configdb=new SQLite3DB();
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
@@ -2548,7 +2552,7 @@ bool ProxySQL_Admin::init() {
 	}
 #endif /* DEBUG */
 
-	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial) {
+	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial || admindb_file_exists==false) { // see #617
 		if (GloVars.configfile_open) {
 			if (GloVars.confFile->cfg) {
  				Read_MySQL_Servers_from_configfile();
