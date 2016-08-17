@@ -325,4 +325,21 @@ void * Query_Cache::purgeHash_thread(void *) {
 	return NULL;
 };
 
-
+SQLite3_result * Query_Cache::SQL3_getStats() {
+	const int colnum=2;
+	char buf[256];
+	char **pta=(char **)malloc(sizeof(char *)*colnum);
+	//Get_Memory_Stats();
+	SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
+	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
+	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
+	{ // Used Memoery
+		pta[0]=(char *)"Query_Cache_Memory_MB";
+		sprintf(buf,"%lu", get_data_size_total());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	free(pta);
+	return result;
+}
