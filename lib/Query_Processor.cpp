@@ -1063,8 +1063,13 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 			break;
 		case 'r':
 		case 'R':
+			if (!strcasecmp("REPLACE",token)) { // ROLLBACK
+				ret=MYSQL_COM_QUERY_REPLACE;
+				break;
+			}
 			if (!strcasecmp("ROLLBACK",token)) { // ROLLBACK
 				ret=MYSQL_COM_QUERY_ROLLBACK;
+				break;
 			}
 			break;
 		case 's':
