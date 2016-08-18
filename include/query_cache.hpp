@@ -77,6 +77,7 @@ class Query_Cache {
 	bool set(uint64_t , const unsigned char *, uint32_t, unsigned char *, uint32_t, unsigned long long, unsigned long long);
 	unsigned char * get(uint64_t , const unsigned char *, const uint32_t, uint32_t *, unsigned long long);
 	uint64_t flush();
+	SQLite3_result * SQL3_getStats();
 };
 #endif /* __CLASS_QUERY_CACHE_H */
 

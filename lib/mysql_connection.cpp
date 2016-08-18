@@ -1404,6 +1404,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			set_status_lock_tables(true);
 		}
 	}
+	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
+		if (!strncasecmp(query_digest_text,"FLUSH TABLES WITH READ LOCK", strlen("FLUSH TABLES WITH READ LOCK"))) { // issue 613
+			set_status_lock_tables(true);
+		}
+	}
 	if (get_status_lock_tables()==true) {
 		if (!strncasecmp(query_digest_text,"UNLOCK TABLES", strlen("UNLOCK TABLES"))) {
 			set_status_lock_tables(false);
