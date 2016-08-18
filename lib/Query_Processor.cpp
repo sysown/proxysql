@@ -759,7 +759,8 @@ __internal_loop:
 		if (qr->flagOUT >= 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
 			flagIN=qr->flagOUT;
-			set_flagOUT=true;
+			if (qr->flagOUT)
+				set_flagOUT=true;
 			//sess->query_info.flagOUT=flagIN;
     }
     if (qr->reconnect >= 0) {
