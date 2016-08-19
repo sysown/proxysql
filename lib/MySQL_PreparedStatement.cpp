@@ -164,6 +164,7 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::find_prepared_statement_by_stmt_id(
 	auto s=m.find(id);
 	if (s!=m.end()) {
 		ret=s->second;
+		__sync_fetch_and_add(&ret->ref_count,1); // increase reference count
 	}
 
 	if (lock) {
@@ -181,6 +182,7 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::find_prepared_statement_by_hash(uin
 	auto s=h.find(hash);
 	if (s!=h.end()) {
 		ret=s->second;
+		__sync_fetch_and_add(&ret->ref_count,1); // increase reference count
 	}
 
 	if (lock) {
@@ -193,10 +195,12 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char
 	statement_id=id;
 	hostgroup_id=h;
 	ref_count=0;
+	digest_text=NULL;
 	username=strdup(u);
 	schemaname=strdup(s);
-	query=(char *)malloc(ql);
+	query=(char *)malloc(ql+1);
 	memcpy(query,q,ql);
+	query[ql]='\0'; // add NULL byte
 	query_length=ql;
 	num_params=stmt->param_count;
 	num_columns=stmt->field_count;
@@ -281,5 +285,8 @@ MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
 		free(params);
 		params=NULL;
 	}
-
+	if (digest_text) {
+		free(digest_text);
+		digest_text=NULL;
+	}
 }

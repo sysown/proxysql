@@ -26,6 +26,7 @@ class Query_Info {
 	MYSQL_STMT *mysql_stmt;
 	stmt_execute_metadata_t *stmt_meta;
 	uint32_t stmt_global_id;
+	MySQL_STMT_Global_info *stmt_info;
 
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;

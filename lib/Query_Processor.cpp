@@ -913,7 +913,7 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
 
-	if (qp->digest_text) {
+	if (sess->CurrentQuery.stmt_info==NULL && qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
 		uint64_t hash2;
 		SpookyHash myhash;
@@ -930,13 +930,32 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		myhash.Update(ui->schemaname,strlen(ui->schemaname));
 		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
 		myhash.Final(&qp->digest_total,&hash2);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, NULL);
+	}
+	if (sess->CurrentQuery.stmt_info && sess->CurrentQuery.stmt_info->digest_text) {
+		uint64_t hash2;
+		SpookyHash myhash;
+		myhash.Init(19,3);
+		assert(sess);
+		assert(sess->client_myds);
+		assert(sess->client_myds->myconn);
+		assert(sess->client_myds->myconn->userinfo);
+		MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+		assert(ui->username);
+		assert(ui->schemaname);
+		MySQL_STMT_Global_info *stmt_info=sess->CurrentQuery.stmt_info;
+		myhash.Update(ui->username,strlen(ui->username));
+		myhash.Update(&stmt_info->digest,sizeof(qp->digest));
+		myhash.Update(ui->schemaname,strlen(ui->schemaname));
+		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
+		myhash.Final(&qp->digest_total,&hash2);
 		//delete myhash;
-		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, stmt_info);
 	}
 	return ret;
 }
 
-void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info) {
 	spin_wrlock(&digest_rwlock);
 
 	QP_query_digest_stats *qds;	
@@ -948,7 +967,11 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 		qds=(QP_query_digest_stats *)it->second;
 		qds->add_time(t,n);
 	} else {
-		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
+		if (_stmt_info==NULL) {
+			qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
+		} else {
+			qds=new QP_query_digest_stats(ui->username, ui->schemaname, _stmt_info->digest, _stmt_info->digest_text, hid);
+		}
 		qds->add_time(t,n);
 		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
 	}

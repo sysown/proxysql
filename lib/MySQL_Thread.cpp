@@ -2504,12 +2504,23 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					pta[9]=strdup(buf);
 					sprintf(buf,"%d", mc->parent->port);
 					pta[10]=strdup(buf);
-					if (mc->query.length) {
-						pta[13]=(char *)malloc(mc->query.length+1);
-						strncpy(pta[13],mc->query.ptr,mc->query.length);
-						pta[13][mc->query.length]='\0';
-					} else {
-						pta[13]=NULL;
+					if (sess->CurrentQuery.stmt_info==NULL) { // text protocol
+						if (mc->query.length) {
+							pta[13]=(char *)malloc(mc->query.length+1);
+							strncpy(pta[13],mc->query.ptr,mc->query.length);
+							pta[13][mc->query.length]='\0';
+						} else {
+							pta[13]=NULL;
+						}
+					} else { // prepared statement
+						MySQL_STMT_Global_info *si=sess->CurrentQuery.stmt_info;
+						if (si->query_length) {
+							pta[13]=(char *)malloc(si->query_length+1);
+							strncpy(pta[13],si->query,si->query_length);
+							pta[13][si->query_length]='\0';
+						} else {
+							pta[13]=NULL;
+						}
 					}
 				} else {
 					pta[7]=NULL;
@@ -2537,6 +2548,9 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						break;
 					case CHANGING_SCHEMA:
 						pta[11]=strdup("InitDB");
+						break;
+					case PROCESSING_STMT_EXECUTE:
+						pta[11]=strdup("Execute");
 						break;
 					default:
 						sprintf(buf,"%d", sess->status);

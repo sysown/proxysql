@@ -133,6 +133,8 @@ class MySQL_STMT_Global_info {
 	private:
 	void compute_hash();
   public:
+	uint64_t digest;
+	char * digest_text;
   uint64_t hash;
   char *username;
   char *schemaname;

@@ -78,6 +78,7 @@ Query_Info::Query_Info() {
 	QueryLength=0;
 	QueryParserArgs.digest_text=NULL;
 	QueryParserArgs.first_comment=NULL;
+	stmt_info=NULL;
 }
 
 Query_Info::~Query_Info() {
@@ -86,6 +87,10 @@ Query_Info::~Query_Info() {
 	//}
 	if (QueryPointer) {
 		//l_free(QueryLength+1,QueryPointer);
+	}
+	if (stmt_info) {
+		__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+		stmt_info=NULL;
 	}
 }
 
@@ -114,6 +119,10 @@ void Query_Info::end() {
 		__sync_add_and_fetch(&sess->thread->status_variables.queries_slow,1);
 	}
 	assert(mysql_stmt==NULL);
+	if (stmt_info) {
+		__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+		stmt_info=NULL;
+	}
 }
 
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
@@ -1508,6 +1517,7 @@ __get_pkts_from_client:
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 										client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
+										__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
 										break;
@@ -1556,6 +1566,7 @@ __get_pkts_from_client:
 										status=WAITING_CLIENT_DATA;
 										break;
 									}
+									CurrentQuery.stmt_info=stmt_info;
 									//stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info->num_params);
 
 									// we now take the metadata associated with STMT_EXECUTE from MySQL_STMTs_meta
@@ -1571,6 +1582,8 @@ __get_pkts_from_client:
 										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Error in prepared statement execution");
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
+										__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+										stmt_info=NULL;
 										break;
 									}
 									if (stmt_meta_found==false) {
@@ -1873,6 +1886,10 @@ handler_again:
 										qpo->timeout,
 										qpo->delay,
 										true);
+									stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
+									if (CurrentQuery.QueryParserArgs.digest_text) {
+										stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
+									}
 									stmid=stmt_info->statement_id;
 									//uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 /*
