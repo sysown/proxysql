@@ -153,8 +153,16 @@ void Query_Info::query_parser_free() {
 }
 
 unsigned long long Query_Info::query_parser_update_counters() {
+	if (stmt_info) {
+		MyComQueryCmd=stmt_info->MyComQueryCmd;
+	}
+//	if (stmt_info==NULL) {
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	if (MyComQueryCmd==MYSQL_COM_QUERY_UNKNOWN) return 0; // this means that it was never initialized
+//	} else {
+//		if (stmt_info->MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
+//		if (stmt_info->MyComQueryCmd==MYSQL_COM_QUERY_UNKNOWN) return 0; // this means that it was never initialized
+//	}
 	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	//l_free(QueryLength+1,QueryPointer);
@@ -1520,6 +1528,7 @@ __get_pkts_from_client:
 										__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
+										CurrentQuery.end();
 										break;
 									} else {
 										mybe=find_or_create_backend(current_hostgroup);
@@ -1886,9 +1895,16 @@ handler_again:
 										qpo->timeout,
 										qpo->delay,
 										true);
-									stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
 									if (CurrentQuery.QueryParserArgs.digest_text) {
-										stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
+										if (stmt_info->digest_text==NULL) {
+											stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
+											stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
+											stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
+										} else {
+											//int rc=0;
+											//rc=strcmp(stmt_info->digest_text,CurrentQuery.QueryParserArgs.digest_text);
+											//assert(rc==0);
+										}
 									}
 									stmid=stmt_info->statement_id;
 									//uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);

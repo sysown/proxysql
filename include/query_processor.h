@@ -7,6 +7,7 @@
 //typedef btree::btree_map<uint64_t, void *> BtMap_query_digest;
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 
+/*
 enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_ALTER_TABLE,
 	MYSQL_COM_QUERY_ANALYZE_TABLE,
@@ -55,6 +56,8 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_UNKNOWN,
 	MYSQL_COM_QUERY___NONE // Special marker.
 };
+
+*/
 
 struct _Query_Processor_rule_t {
 	int rule_id;

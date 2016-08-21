@@ -34,6 +34,7 @@ To summarie the most important classes:
   global_stmt_id
 */
 
+class MySQL_STMT_Global_info;
 
 // stmt_execute_metadata_t represent metadata required to run STMT_EXECUTE
 class stmt_execute_metadata_t {
@@ -43,6 +44,7 @@ class stmt_execute_metadata_t {
 	uint16_t num_params;
 	MYSQL_BIND *binds;
 	my_bool *is_nulls;
+	MySQL_STMT_Global_info *stmt_info;
 	unsigned long *lengths;
 	void *pkt;
 	stmt_execute_metadata_t() {
@@ -74,6 +76,10 @@ class MySQL_STMTs_meta {
 	}
 	~MySQL_STMTs_meta() {
 		// FIXME: destructor not there yet
+		for (std::map<uint32_t, stmt_execute_metadata_t *>::iterator it=m.begin(); it!=m.end(); ++it) {
+			stmt_execute_metadata_t *sem=it->second;
+			delete sem;
+		}
 	}
 	// we declare it here to be inline
 	void insert(uint32_t global_statement_id, stmt_execute_metadata_t *stmt_meta) {
@@ -134,6 +140,7 @@ class MySQL_STMT_Global_info {
 	void compute_hash();
   public:
 	uint64_t digest;
+	MYSQL_COM_QUERY_command MyComQueryCmd;
 	char * digest_text;
   uint64_t hash;
   char *username;
