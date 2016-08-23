@@ -232,7 +232,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 	pthread_mutex_unlock(&mutex);
 }
 
-MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl) {
+MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl, int g) {
 		task_id=MON_CONNECT;
 		mysql=NULL;
 		result=NULL;
@@ -245,6 +245,7 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 		use_ssl=_use_ssl;
 		ST=0;
 		//ev_mysql=NULL;
+		hostgroup_id=g;
 	};
 
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
@@ -1352,7 +1353,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[4]));
+				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1], atoi(r->fields[2]), NULL, atoi(r->fields[4]), atoi(r->fields[0]));
 				mmsd->mondb=monitordb;
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_replication_lag_thread);
