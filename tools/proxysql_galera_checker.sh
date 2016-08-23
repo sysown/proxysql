@@ -8,6 +8,12 @@ PROXYSQL_HOSTNAME="localhost"
 PROXYSQL_PORT="6032"
 #
 
+function usage()
+{
+  echo "Usage: $0 <hostgroup_id write> [hostgroup_id read] [number writers] [writers are readers 0|1} [log_file]"
+  exit 0
+}
+
 if [ "$1" = '-h' -o "$1" = '--help'  -o -z "$1" ]
 then
   usage
@@ -18,12 +24,6 @@ then
   echo "Invalid number of arguments"
   usage
 fi
-
-function usage()
-{
-  echo "Usage: $0 <hostgroup_id write> [hostgroup_id read] [number writers] [writers are readers 0|1} [log_file]"
-  exit 0
-}
 
 HOSTGROUP_WRITER_ID="${1}"
 HOSTGROUP_READER_ID="${2:--1}"
