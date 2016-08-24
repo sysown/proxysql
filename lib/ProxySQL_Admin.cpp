@@ -1649,7 +1649,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
-			char *query2=(char *)malloc(strlen(query)+strlen(sess->client_myds->myconn->userinfo->username)+10);
+			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
 			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
 			query=l_strdup(query2);
 			query_length=strlen(query2)+1;
