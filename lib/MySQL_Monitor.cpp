@@ -368,7 +368,9 @@ void * monitor_connect_thread(void *arg) {
 	assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+	unsigned long long time_now=realtime_time();
+	time_now=time_now-(mmsd->t2 - start_time);
+	rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 	SAFE_SQLITE3_STEP(statement);
@@ -441,7 +443,9 @@ __exit_monitor_ping_thread:
 		assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+		unsigned long long time_now=realtime_time();
+		time_now=time_now-(mmsd->t2 - start_time);
+		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		SAFE_SQLITE3_STEP(statement);
@@ -616,7 +620,9 @@ __exit_monitor_read_only_thread:
 		int read_only=1; // as a safety mechanism , read_only=1 is the default
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+		unsigned long long time_now=realtime_time();
+		time_now=time_now-(mmsd->t2 - start_time);
+		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 		if (mmsd->result) {
 			int num_fields=0;
@@ -775,7 +781,9 @@ __exit_monitor_replication_lag_thread:
 				//MySQL_Monitor_State_Data *mmsd=sds[i];
 				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+				unsigned long long time_now=realtime_time();
+				time_now=time_now-(mmsd->t2 - start_time);
+				rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				if (mmsd->result) {
 					int num_fields=0;
