@@ -563,7 +563,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			mysql_hdr Hdr;
 			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
 			Hdr.pkt_length=pkt_2.size-5;
-			memcpy((char *)pkt_2.ptr+5,(char *)pkt->ptr+5,1);
+			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
 			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
 			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
 			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
