@@ -1681,6 +1681,8 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	}
 #endif
 */
+	if (ret)
+		ret->size=size;
 	return ret;
 }
 

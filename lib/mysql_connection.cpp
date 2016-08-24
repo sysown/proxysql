@@ -715,6 +715,8 @@ handler_again:
 		case ASYNC_STMT_EXECUTE_START:
 			stmt_execute_start();
 			__sync_fetch_and_add(&parent->queries_sent,1);
+			__sync_fetch_and_add(&parent->bytes_sent,query.stmt_meta->size);
+			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.stmt_meta->size;
 //			__sync_fetch_and_add(&parent->bytes_sent,query.length);
 //			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
 			if (async_exit_status) {
@@ -759,6 +761,27 @@ handler_again:
 			break;
 		case ASYNC_STMT_EXECUTE_END:
 			{
+				if (query.stmt_result) {
+					unsigned long long total_size=0;
+					MYSQL_ROWS *r=query.stmt->result.data;
+					if (r) {
+						total_size+=r->length;
+						if (r->length > 0xFFFFFF) {
+							total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+						}
+						total_size+=sizeof(mysql_hdr);
+						while(r->next) {
+							r=r->next;
+							total_size+=r->length;
+							if (r->length > 0xFFFFFF) {
+								total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+							}
+							total_size+=sizeof(mysql_hdr);
+						}
+					}
+					__sync_fetch_and_add(&parent->bytes_recv,total_size);
+					myds->sess->thread->status_variables.queries_backends_bytes_recv+=total_size;
+				}
 /*
 				int row_count= 0;
 				fprintf(stdout, "Fetching results ...\n");

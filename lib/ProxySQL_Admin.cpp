@@ -68,6 +68,7 @@ extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
+extern MySQL_STMT_Manager *GloMyStmt;
 //#define PANIC(msg)  { perror(msg); return -1; }
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -1649,7 +1650,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
-			char *query2=(char *)malloc(strlen(query)+strlen(sess->client_myds->myconn->userinfo->username)+10);
+			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
 			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
 			query=l_strdup(query2);
 			query_length=strlen(query2)+1;
@@ -3162,6 +3163,24 @@ void ProxySQL_Admin::stats___mysql_global() {
 	statsdb->execute(query);
 	free(query);
 
+	if (GloMyStmt) {
+		uint32_t stmt_active_unique=0;
+		uint32_t stmt_active_total=0;
+		GloMyStmt->active_prepared_statements(&stmt_active_unique,&stmt_active_total);
+		vn=(char *)"Stmt_Active_Total";
+		sprintf(bu,"%u",stmt_active_total);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"Stmt_Active_Unique";
+		sprintf(bu,"%u",stmt_active_unique);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+	}
+
 	resultset=GloQC->SQL3_getStats();
 	if (resultset) {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -3178,6 +3197,7 @@ void ProxySQL_Admin::stats___mysql_global() {
 		delete resultset;
 		resultset=NULL;
 	}
+
 	statsdb->execute("COMMIT");
 }
 

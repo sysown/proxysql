@@ -89,7 +89,7 @@ Query_Info::~Query_Info() {
 		//l_free(QueryLength+1,QueryPointer);
 	}
 	if (stmt_info) {
-		__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+		//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 		stmt_info=NULL;
 	}
 }
@@ -120,7 +120,7 @@ void Query_Info::end() {
 	}
 	assert(mysql_stmt==NULL);
 	if (stmt_info) {
-		__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+		//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 		stmt_info=NULL;
 	}
 }
@@ -1475,10 +1475,19 @@ __get_pkts_from_client:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
 							case _MYSQL_COM_STMT_CLOSE:
+								{
+									uint32_t stmt_global_id=0;
+									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+									// FIXME: no input validation
+									//sess_STMTs_meta->erase(stmt_global_id);
+									client_myds->myconn->local_stmts->erase(stmt_global_id, true);
+								}
 								l_free(pkt.size,pkt.ptr);
 								// FIXME: this is not complete. Counters should be decreased
 //							client_myds->setDSS_STATE_QUERY_SENT_NET();
 //							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+								thread->status_variables.stmt_close++;
+								thread->status_variables.queries++;
 								client_myds->DSS=STATE_SLEEP;
 								status=WAITING_CLIENT_DATA;
 								break;
@@ -1522,10 +1531,20 @@ __get_pkts_from_client:
 //										stmt_info=Session_STMT_Manager->find_prepared_statement_by_hash(hash);
 //									}
 									if (stmt_info) {
+										// FIXME: there is a very interesting race condition here
+										// FIXME: it is possible that multiple statement have the same hash
+										// FIXME: we should check local_stmts to verify is this stmt_id was already sent
+										if (client_myds->myconn->local_stmts->exists(stmt_info->statement_id)) {
+											// the client is asking to prepare another identical prepared statements
+											stmt_info=NULL;
+										}
+									}
+									if (stmt_info) {
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 										client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
-										__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+										//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+										client_myds->myconn->local_stmts->insert(stmt_info->statement_id,NULL);
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
 										CurrentQuery.end();
@@ -1591,7 +1610,7 @@ __get_pkts_from_client:
 										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Error in prepared statement execution");
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
-										__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
+										//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 										stmt_info=NULL;
 										break;
 									}
@@ -1929,6 +1948,7 @@ handler_again:
 								enum session_status st=status;
 								size_t sts=previous_status.size();
 								if (sts) {
+									//__sync_fetch_and_sub(&stmt_info->ref_count_client,1);
 									myconn->async_state_machine=ASYNC_IDLE;
 									myds->DSS=STATE_MARIADB_GENERIC;
 									st=previous_status.top();
@@ -1936,6 +1956,7 @@ handler_again:
 									NEXT_IMMEDIATE(st);
 								} else {
 									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
+									client_myds->myconn->local_stmts->insert(stmt_info->statement_id,NULL);
 								}
 							}
 							break;

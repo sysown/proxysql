@@ -5,6 +5,8 @@
 
 extern MySQL_STMT_Manager *GloMyStmt;
 
+static uint32_t add_prepared_statement_calls=0;
+static uint32_t find_prepared_statement_by_hash_calls=0;
 
 
 
@@ -66,14 +68,25 @@ MySQL_STMTs_local::~MySQL_STMTs_local() {
 	// if we call this destructor the connection is being destroyed anyway
 	for (std::map<uint32_t, MYSQL_STMT *>::iterator it=m.begin(); it!=m.end(); ++it) {
 		uint32_t stmt_id=it->first;
-		GloMyStmt->ref_count(stmt_id,-1);
+		MYSQL_STMT *stmt=it->second;
+		if (stmt) { // is a server
+			GloMyStmt->ref_count(stmt_id,-1,true, false);
+		} else { // is a client
+			GloMyStmt->ref_count(stmt_id,-1,true, true);
+		}
 	}
 	m.erase(m.begin(),m.end());
 }
 
-bool MySQL_STMTs_local::erase(uint32_t global_statement_id) {
+bool MySQL_STMTs_local::erase(uint32_t global_statement_id, bool client) {
 	auto s=m.find(global_statement_id);
 	if (s!=m.end()) { // found
+		if (client) {
+			// we are removing it from a client, not backend
+			GloMyStmt->ref_count(global_statement_id,-1,true, true);
+			m.erase(s);
+			return true;
+		}
 		if (num_entries>1000) {
 			MYSQL_STMT *stmt=s->second;
 			mysql_stmt_close(stmt);
@@ -84,6 +97,18 @@ bool MySQL_STMTs_local::erase(uint32_t global_statement_id) {
 	}
 	return false; // we don't really remove the prepared statement
 }
+
+void MySQL_STMTs_local::insert(uint32_t global_statement_id, MYSQL_STMT *stmt) {
+	std::pair<std::map<uint32_t, MYSQL_STMT *>::iterator,bool> ret;
+	ret=m.insert(std::make_pair(global_statement_id, stmt));
+	if (ret.second==true) {
+		num_entries++;
+	}
+	if (stmt==NULL) { // only for clients
+		GloMyStmt->ref_count(global_statement_id,1,true, true);
+	}
+}
+
 
 MySQL_STMT_Manager::MySQL_STMT_Manager() {
 	spinlock_rwlock_init(&rwlock);
@@ -100,7 +125,26 @@ MySQL_STMT_Manager::~MySQL_STMT_Manager() {
 	h.erase(h.begin(),h.end());
 }
 
-int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock) {
+
+void MySQL_STMT_Manager::active_prepared_statements(uint32_t *unique, uint32_t *total) {
+	uint32_t u=0;
+	uint32_t t=0;
+	spin_wrlock(&rwlock);
+	fprintf(stderr,"%u , %u\n", find_prepared_statement_by_hash_calls, add_prepared_statement_calls);
+	for (std::map<uint32_t, MySQL_STMT_Global_info *>::iterator it=m.begin(); it!=m.end(); ++it) {
+		MySQL_STMT_Global_info *a=it->second;
+		if (a->ref_count_client) {
+			u++;
+			t+=a->ref_count_client;
+			fprintf(stderr,"stmt %d , count %d\n", a->statement_id, a->ref_count_client);
+		}
+	}
+	spin_wrunlock(&rwlock);
+	*unique=u;
+	*total=t;
+}
+
+int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, bool is_client) {
 	int ret=-1;
 	if (lock) {
 		spin_wrlock(&rwlock);
@@ -108,8 +152,13 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock) {
 	auto s = m.find(statement_id);
 	if (s!=m.end()) {
 		MySQL_STMT_Global_info *a=s->second;
-		a->ref_count+=cnt;
-		ret=a->ref_count;
+		if (is_client) {
+			__sync_fetch_and_add(&a->ref_count_client,cnt);
+			ret=a->ref_count_client;
+		} else {
+			__sync_fetch_and_add(&a->ref_count_server,cnt);
+			ret=a->ref_count_server;
+		}
 	}
 	if (lock) {
 		spin_wrunlock(&rwlock);
@@ -146,8 +195,10 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int
 		//ret=a->statement_id;
 		ret=a;
 		next_statement_id++;	// increment it
+		//__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference count
 	}
-
+	__sync_fetch_and_add(&add_prepared_statement_calls,1);
+	__sync_fetch_and_add(&ret->ref_count_server,1); // increase reference count
 	if (lock) {
 		spin_wrunlock(&rwlock);
 	}
@@ -164,7 +215,7 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::find_prepared_statement_by_stmt_id(
 	auto s=m.find(id);
 	if (s!=m.end()) {
 		ret=s->second;
-		__sync_fetch_and_add(&ret->ref_count,1); // increase reference count
+		//__sync_fetch_and_add(&ret->ref_count,1); // increase reference count
 	}
 
 	if (lock) {
@@ -182,7 +233,8 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::find_prepared_statement_by_hash(uin
 	auto s=h.find(hash);
 	if (s!=h.end()) {
 		ret=s->second;
-		__sync_fetch_and_add(&ret->ref_count,1); // increase reference count
+		//__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference count
+		__sync_fetch_and_add(&find_prepared_statement_by_hash_calls,1);
 	}
 
 	if (lock) {
@@ -194,7 +246,8 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::find_prepared_statement_by_hash(uin
 MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h) {
 	statement_id=id;
 	hostgroup_id=h;
-	ref_count=0;
+	ref_count_client=0;
+	ref_count_server=0;
 	digest_text=NULL;
 	username=strdup(u);
 	schemaname=strdup(s);
