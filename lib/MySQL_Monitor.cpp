@@ -287,10 +287,10 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_replication_lag_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_REPLICATION_LAG_LOG);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start)");
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON mysql_server_ping_log (time_start)");
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_read_only_log_time_start ON mysql_server_read_only_log (time_start)");
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_replication_lag_log_time_start ON mysql_server_replication_lag_log (time_start)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start_us)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON mysql_server_ping_log (time_start_us)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_read_only_log_time_start ON mysql_server_read_only_log (time_start_us)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_replication_lag_log_time_start ON mysql_server_replication_lag_log (time_start_us)");
 
 	num_threads=8;
 	if (GloMTH) {
@@ -933,7 +933,7 @@ __end_monitor_connect_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_connect_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_connect_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -1043,7 +1043,7 @@ __end_monitor_ping_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -1085,7 +1085,7 @@ __end_monitor_ping_loop:
 				resultset=NULL;
 			}
 			char *new_query=NULL;
-			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
@@ -1141,7 +1141,7 @@ __end_monitor_ping_loop:
 			}
 			char *new_query=NULL;
 
-			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
+			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time_us) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time_us,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				sprintf(buff,new_query,addresses[j],ports[j]);
@@ -1262,7 +1262,7 @@ __end_monitor_read_only_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -1377,7 +1377,7 @@ __end_monitor_replication_lag_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
