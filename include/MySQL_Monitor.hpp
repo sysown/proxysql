@@ -50,7 +50,7 @@ class MySQL_Monitor_State_Data {
   MYSQL_ROW *row;
   unsigned int repl_lag;
   unsigned int hostgroup_id;
-	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0);
+	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0, int g=0);
 	~MySQL_Monitor_State_Data();
 	SQLite3DB *mondb;
 	bool create_new_connection();

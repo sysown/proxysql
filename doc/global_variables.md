@@ -344,7 +344,7 @@ Default value: `47626`
 
 The server version with which the proxy will respond to the clients. Note that regardless of the versions of the backend servers, the proxy will respond with this.
 
-Default value: `5.1.30`
+Default value: `5.5.30`
 
 ### `mysql-servers_stats`
 
