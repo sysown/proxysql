@@ -61,6 +61,30 @@ do
   fi
 done
 
+NUMBER_WRITERS_ONLINE=$(${PROXYSQL_CMDLINE} "SELECT COUNT(*) FROM mysql_servers WHERE status LIKE 'ONLINE' AND hostgroup_id=${HOSTGROUP_WRITER_ID};")
+echo "`date` Number of writers online: ${NUMBER_WRITERS_ONLINE} : hostgroup: ${HOSTGROUP_WRITER_ID}" >> ${ERR_FILE}
+
+cnt=0
+if [ ${NUMBER_WRITERS_ONLINE} -eq 0 ]
+then
+  echo "`date` Trying to enable last available node of the cluster (in Donor/Desync state)" >> ${ERR_FILE}
+  $PROXYSQL_CMDLINE "SELECT hostgroup_id, hostname, port, status FROM mysql_servers WHERE hostgroup_id IN ($HOSTGROUP_WRITER_ID) AND status <> 'OFFLINE_HARD'" | while read hostgroup server port stat
+  do
+    safety_cnt=0
+      while [ ${cnt} -eq 0 -a ${safety_cnt} -lt 5 ]
+      do
+        WSREP_STATUS=$($MYSQL_CMDLINE -h $server -P $port -e "SHOW STATUS LIKE 'wsrep_local_state'" 2>>${ERR_FILE} | tail -1 2>>${ERR_FILE})
+        echo "`date` Check server $hostgroup:$server:$port for only available node in DONOR state, status $stat , wsrep_local_state $WSREP_STATUS" >> ${ERR_FILE}
+        if [ "${WSREP_STATUS}" = "2" -a "$stat" != "ONLINE" ]
+        then
+          $PROXYSQL_CMDLINE "UPDATE mysql_servers SET status='ONLINE' WHERE hostgroup_id IN ($HOSTGROUP_WRITER_ID, $HOSTGROUP_READER_ID) AND hostname='$server' AND port='$port';" 2>> ${ERR_FILE}
+          cnt=$(( $cnt + 1 ))
+        fi
+        safety_cnt=$(( $safety_cnt + 1 ))
+    done
+  done
+fi
+
 if [ $NUMBER_WRITERS -gt 0 ]
 then
   CONT=0
