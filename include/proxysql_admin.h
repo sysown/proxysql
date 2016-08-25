@@ -11,6 +11,7 @@ typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class Scheduler_Row {
 	public:
 	unsigned int id;
+	bool is_active;
 	unsigned int interval_ms;
 	unsigned long long last;
 	unsigned long long next;
@@ -22,7 +23,7 @@ class Scheduler_Row {
 //	char *arg5;
 	char **args;
 	char *comment;
-	Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5, char *_comment);
+	Scheduler_Row(unsigned int _id, bool _is_active, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5, char *_comment);
 	~Scheduler_Row();
 };
 
