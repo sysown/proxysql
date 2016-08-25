@@ -2,10 +2,10 @@ Admin tables
 ============
 
 ProxySQL admin interface is an interface that uses the MySQL protocol, making it very easy to be configured by any client able to send commands through such interface.
-ProxySQL parses the queries sent through this interface for any command specific to ProxySQL, and if not send them to an embedded SQLite3 engine to run the queries.
+ProxySQL parses the queries sent through this interface for any command specific to ProxySQL, and if appropiate sends them to the embedded SQLite3 engine to run the queries.
 
 Please note that SQL syntax used by SQLite3 and MySQL differs, therefore not all commands working on MySQL will work on SQLite3 .
-For example, although the USE command is accepted by the admin interface, it doesn't change the default schema as this feature is no available in SQLite3.
+For example, although the USE command is accepted by the admin interface, it doesn't change the default schema as this feature is not available in SQLite3.
 
 Connecting to the ProxySQL admin interface, we see that there are a few databases available.
 ProxySQL converts SHOW DATABASES command in the equivalent for SQLite3.
