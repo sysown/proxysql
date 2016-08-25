@@ -689,7 +689,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-/* FIXME: not implemented yet!!
 		if (
 			(query_no_space_length==strlen("LOAD SCHEDULER FROM CONFIG") && !strncasecmp("LOAD SCHEDULER FROM CONFIG",query_no_space, query_no_space_length))
 		) {
@@ -717,7 +716,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			}
 			return false;
 		}
-*/
+
 		if (
 			(query_no_space_length==strlen("SAVE SCHEDULER TO MEMORY") && !strncasecmp("SAVE SCHEDULER TO MEMORY",query_no_space, query_no_space_length))
 			||
@@ -2562,6 +2561,7 @@ bool ProxySQL_Admin::init() {
 				Read_Global_Variables_from_configfile("mysql");
 				Read_MySQL_Users_from_configfile();
 				Read_MySQL_Query_Rules_from_configfile();
+				Read_Scheduler_from_configfile();
 				__insert_or_replace_disktable_select_maintable();
 			} else {
 				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {
@@ -2570,6 +2570,7 @@ bool ProxySQL_Admin::init() {
 					Read_MySQL_Query_Rules_from_configfile();
 					Read_Global_Variables_from_configfile("admin");
 					Read_Global_Variables_from_configfile("mysql");
+					Read_Scheduler_from_configfile();
 					__insert_or_replace_disktable_select_maintable();
 				}
 			}
@@ -4210,6 +4211,107 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections);
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
+		free(query);
+		rows++;
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Admin::Read_Scheduler_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg->getRoot();
+	if (root.exists("scheduler")==false) return 0;
+	const Setting &schedulers = root["scheduler"];
+	int count = schedulers.getLength();
+	//fprintf(stderr, "Found %d users\n",count);
+	int i;
+	int rows=0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO scheduler (id, active, interval_ms, filename, arg1, arg2, arg3, arg4, arg5, comment) VALUES (%d, %d, %d, '%s', %s, %s, %s, %s, %s, '%s')";
+	for (i=0; i< count; i++) {
+		const Setting &sched = schedulers[i];
+		int id;
+		int active=1;
+
+		std::string filename;
+
+		bool arg1_exists=false;
+		std::string arg1;
+		bool arg2_exists=false;
+		std::string arg2;
+		bool arg3_exists=false;
+		std::string arg3;
+		bool arg4_exists=false;
+		std::string arg4;
+		bool arg5_exists=false;
+		std::string arg5;
+
+		// variable for parsing interval_ms
+		int interval_ms=0;
+
+
+		std::string comment="";
+
+		// validate arguments
+		if (sched.lookupValue("id", id)==false) continue;
+		sched.lookupValue("active", active);
+		sched.lookupValue("interval_ms", interval_ms);
+		if (sched.lookupValue("filename", filename)==false) continue;
+		if (sched.lookupValue("arg1", arg1)) arg1_exists=true;
+		if (sched.lookupValue("arg2", arg2)) arg2_exists=true;
+		if (sched.lookupValue("arg3", arg3)) arg3_exists=true;
+		if (sched.lookupValue("arg4", arg4)) arg4_exists=true;
+		if (sched.lookupValue("arg5", arg5)) arg5_exists=true;
+		sched.lookupValue("comment", comment);
+
+
+		int query_len=0;
+		query_len+=strlen(q) +
+			strlen(std::to_string(id).c_str()) +
+			strlen(std::to_string(active).c_str()) +
+			strlen(std::to_string(interval_ms).c_str()) +
+			strlen(filename.c_str()) +
+			( arg1_exists ? strlen(arg1.c_str()) : 0 ) + 4 +
+			( arg2_exists ? strlen(arg2.c_str()) : 0 ) + 4 +
+			( arg3_exists ? strlen(arg3.c_str()) : 0 ) + 4 +
+			( arg4_exists ? strlen(arg4.c_str()) : 0 ) + 4 +
+			( arg5_exists ? strlen(arg5.c_str()) : 0 ) + 4 +
+			strlen(comment.c_str()) +
+			40;
+		char *query=(char *)malloc(query_len);
+		if (arg1_exists)
+			arg1="\'" + arg1 + "\'";
+		else
+			arg1 = "NULL";
+		if (arg2_exists)
+			arg2="\'" + arg2 + "\'";
+		else
+			arg2 = "NULL";
+		if (arg3_exists)
+			arg3="\'" + arg3 + "\'";
+		else
+			arg3 = "NULL";
+		if (arg4_exists)
+			arg4="\'" + arg4 + "\'";
+		else
+			arg4 = "NULL";
+		if (arg5_exists)
+			arg5="\'" + arg5 + "\'";
+		else
+			arg5 = "NULL";
+
+		sprintf(query, q,
+			id, active,
+			interval_ms,
+			filename.c_str(),
+			arg1.c_str(),
+			arg2.c_str(),
+			arg3.c_str(),
+			arg4.c_str(),
+			arg5.c_str(),
+			comment.c_str()
+		);
+		admindb->execute(query);
 		free(query);
 		rows++;
 	}

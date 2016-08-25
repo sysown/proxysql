@@ -193,6 +193,7 @@ class ProxySQL_Admin {
 	int Read_MySQL_Users_from_configfile();
 	int Read_MySQL_Query_Rules_from_configfile();
 	int Read_MySQL_Servers_from_configfile();
+	int Read_Scheduler_from_configfile();
 
 	void flush_error_log();
 	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
