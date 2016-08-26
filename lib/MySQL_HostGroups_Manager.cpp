@@ -163,7 +163,7 @@ void MySrvC::connect_error(int err_num) {
 			}
 			MyHGM->wrunlock();
 			if (_shu) {
-			proxy_info("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
+			proxy_error("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			}
 		}
 	}
@@ -878,7 +878,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 //						||
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
 					) {
-						proxy_info("Shunning server %s:%d with replication lag of %d second\n", address, port, current_replication_lag);
+						proxy_warning("Shunning server %s:%d with replication lag of %d second\n", address, port, current_replication_lag);
 						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
 					}
 				} else {
