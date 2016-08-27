@@ -2123,7 +2123,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			// Get a MySQL Connection
 	
 //	if (rand()%3==0) {
-		MySQL_Connection *mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+		MySQL_Connection *mc=NULL;
+		mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+		if (mc==NULL) {
+			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+		}
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
 		}

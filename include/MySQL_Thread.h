@@ -143,6 +143,7 @@ class MySQL_Thread
   bool processing_idles;
 	bool maintenance_loop;
 
+	PtrArray *cached_connections;
 
 	protected:
 	int nfds;
@@ -195,6 +196,9 @@ class MySQL_Thread
   //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
 	void Get_Memory_Stats();
+	MySQL_Connection * get_MyConn_local(unsigned int);
+	void push_MyConn_local(MySQL_Connection *);
+	void return_local_connections();
 };
 
 

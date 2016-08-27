@@ -1521,6 +1521,15 @@ MySQL_Thread::~MySQL_Thread() {
 			}
 		delete mysql_sessions;
 	}
+
+	if (cached_connections) {
+		while(cached_connections->len) {
+			MySQL_Connection *c=(MySQL_Connection *)cached_connections->remove_index_fast(0);
+				delete c;
+			}
+		delete cached_connections;
+	}
+
 	unsigned int i;
 	for (i=0;i<mypolls.len;i++) {
 		if (
@@ -1585,6 +1594,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 bool MySQL_Thread::init() {
 	int i;
 	mysql_sessions = new PtrArray();
+	cached_connections = new PtrArray();
 	assert(mysql_sessions);
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
@@ -1874,7 +1884,7 @@ void MySQL_Thread::run() {
 		// iterate through all sessions and process the session logic
 		process_all_sessions();
 
-
+		return_local_connections();
 
 	}
 }
@@ -2730,4 +2740,45 @@ void MySQL_Thread::Get_Memory_Stats() {
 			sess->Memory_Stats();
 		}
   }
+}
+
+
+MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid) {
+	unsigned int i;
+	MySQL_Connection *c=NULL;
+	for (i=0; i<cached_connections->len; i++) {
+		c=(MySQL_Connection *)cached_connections->index(i);
+		if (c->parent->myhgc->hid==_hid) {
+			c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+			return c;
+		}
+	}
+	return NULL;
+}
+
+void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
+	MySrvC *mysrvc=NULL;
+	mysrvc=(MySrvC *)c->parent;
+	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+		if (c->async_state_machine==ASYNC_IDLE) {
+			cached_connections->add(c);
+			return; // all went well
+		}
+	}
+	MyHGM->push_MyConn_to_pool(c);
+}
+
+void MySQL_Thread::return_local_connections() {
+	if (cached_connections->len==0) {
+		return;
+	}
+	MySQL_Connection **ca=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*(cached_connections->len+1));
+	unsigned int i=0;
+	while (cached_connections->len) {
+		ca[i]=(MySQL_Connection *)cached_connections->remove_index_fast(0);
+		i++;
+	}
+	ca[i]=NULL;
+	MyHGM->push_MyConn_to_pool_array(ca);
+	free(ca);
 }
