@@ -1083,6 +1083,8 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	// define queries
 	//const char *Q1=(char *)"SELECT hostgroup_id FROM mysql_servers join mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup WHERE hostname='%s' AND port=%d AND status=0"; // this query run against myhgm DB . status is an INTEGER
 	const char *Q1=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
+	//const char *Q1B=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
+	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=writer_hostgroup OR reader_hostgroup=hostgroup_id) AND hostname='%s' AND port=%d ) LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
 	const char *Q2=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
 	const char *Q3B=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
@@ -1093,7 +1095,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	}
 
 	// define a buffer that will be used for all queries
-	char *query=(char *)malloc(strlen(hostname)+strlen(Q3A)+32);
+	char *query=(char *)malloc(strlen(hostname)*2+strlen(Q3A)+64);
 	sprintf(query,Q1,hostname,port);
 
 	int cols=0;
@@ -1136,8 +1138,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			} else {
 				// there is a server in writer hostgroup, let check the status of present and not present hosts
 				// this is the same query as Q1, but with a LEFT JOIN
-				const char *Q1B=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";	
-				sprintf(query,Q1B,hostname,port);
+				sprintf(query,Q1B,hostname,port,hostname,port);
 				wrlock();
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 				wrunlock();
