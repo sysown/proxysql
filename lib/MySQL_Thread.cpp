@@ -236,7 +236,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
-	variables.connect_retries_on_failure=5;
+	variables.connect_retries_on_failure=10;
 	variables.connection_max_age_ms=0;
 	variables.connect_timeout_server=1000;
 	variables.connect_timeout_server_max=10000;
