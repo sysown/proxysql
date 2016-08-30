@@ -41,6 +41,7 @@ static void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
 	mysql=mysql_init(NULL);
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	if (!mysql) {
 		goto __exit_kill_query_thread;
 	}

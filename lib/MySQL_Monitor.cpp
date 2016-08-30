@@ -518,6 +518,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 //		mysql_options(mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
 //		mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_monitor");
 		MYSQL *myrc=NULL;
 		if (port) {
 			myrc=mysql_real_connect(mysql, hostname, mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
