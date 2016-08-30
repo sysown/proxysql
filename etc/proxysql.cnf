@@ -116,6 +116,38 @@ mysql_query_rules:
 #	}
 )
 
+scheduler=
+(
+#  {
+#    id=1
+#    active=0
+#    interval_ms=10000
+#    filename="/var/lib/proxysql/proxysql_galera_checker.sh"
+#    arg1="0"
+#    arg2="0"
+#    arg3="0"
+#    arg4="1"
+#    arg5="/var/lib/proxysql/proxysql_galera_checker.log"
+#  }
+)
+
+
+mysql_replication_hostgroups=
+(
+#        {
+#                writer_hostgroup=30
+#                reader_hostgroup=40
+#                comment="test repl 1"
+#       },
+#       {
+#                writer_hostgroup=50
+#                reader_hostgroup=60
+#                comment="test repl 2"
+#        }
+)
+
+
+
 
 # http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar
 #
