@@ -4,7 +4,7 @@ Homepage: http://www.proxysql.com
 Standards-Version: 3.9.2
 
 Package: proxysql
-Version: 1.2.1
+Version: 1.2.2
 Maintainer: Rene Cannao <rene.cannao@gmail.com>
 Architecture: amd64
 # Changelog: CHANGELOG.md
@@ -12,6 +12,8 @@ Architecture: amd64
 Files: proxysql /usr/bin/
  etc/proxysql.cnf /
  etc/init.d/proxysql /
+ tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
+ tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/
 Description: High performance MySQL proxy
  ProxySQL is a fast, reliable MySQL proxy with advanced runtime configuration management (virtually no configuration change requires a restart). 
  .
