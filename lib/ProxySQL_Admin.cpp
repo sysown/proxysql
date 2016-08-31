@@ -424,7 +424,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received PROXYSQL PAUSE command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (nostart_) {
-			if (__sync_fetch_and_add(&GloVars.global.nostart,0)) {
+			if (__sync_fetch_and_add((uint8_t *)(&GloVars.global.nostart),0)) {
 				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module not running, impossible to pause");
 				return false;
 			}
@@ -449,7 +449,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received PROXYSQL RESUME command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (nostart_) {
-			if (__sync_fetch_and_add(&GloVars.global.nostart,0)) {
+			if (__sync_fetch_and_add((uint8_t *)(&GloVars.global.nostart),0)) {
 				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module not running, impossible to resume");
 				return false;
 			}
