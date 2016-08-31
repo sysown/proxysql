@@ -11,6 +11,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 CURVER=1.2.2
+DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 
 .PHONY: default
 default: build_deps build_lib build_src
@@ -312,13 +313,31 @@ install: src/proxysql
 	install -m 0600 etc/proxysql.cnf /etc
 	install -m 0755 etc/init.d/proxysql /etc/init.d
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
-	update-rc.d proxysql defaults
+ifeq ($(DISTRO),"CentOS Linux")
+		chkconfig --level 0123456 proxysql on
+else
+ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
+		chkconfig --level 0123456 proxysql on
+else
+		update-rc.d proxysql defaults
+endif
+endif
 .PHONY: install
 
 uninstall:
-	rm /etc/init.d/proxysql
 	rm /etc/proxysql.cnf
 	rm /usr/local/bin/proxysql
 	rmdir /var/lib/proxysql 2>/dev/null || true
-	update-rc.d proxysql remove
+ifeq ($(DISTRO),"CentOS Linux")
+		chkconfig --level 0123456 proxysql off
+		rm /etc/init.d/proxysql
+else
+ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
+		chkconfig --level 0123456 proxysql off
+		rm /etc/init.d/proxysql
+else
+		rm /etc/init.d/proxysql
+		update-rc.d proxysql remove
+endif
+endif
 .PHONY: uninstall
