@@ -766,6 +766,7 @@ __thread int mysql_thread___monitor_replication_lag_interval;
 __thread int mysql_thread___monitor_replication_lag_timeout;
 __thread int mysql_thread___monitor_query_interval;
 __thread int mysql_thread___monitor_query_timeout;
+__thread int mysql_thread___monitor_slave_lag_when_null;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 
@@ -845,6 +846,7 @@ extern __thread int mysql_thread___monitor_replication_lag_interval;
 extern __thread int mysql_thread___monitor_replication_lag_timeout;
 extern __thread int mysql_thread___monitor_query_interval;
 extern __thread int mysql_thread___monitor_query_timeout;
+extern __thread int mysql_thread___monitor_slave_lag_when_null;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 
