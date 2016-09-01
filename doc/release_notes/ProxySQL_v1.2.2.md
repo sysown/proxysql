@@ -51,5 +51,17 @@ Release date: 2016-09-02
 * Compile: enable backtrace only with glibc : [#654](../../../../issues/654)
 * Misc: few minor bug fixes
 * Admin: scheduler did not load at start time : [#665](../../../../issues/665)
-* compile: failed to compile on Fedora 24 : [#671](../../../../issues/671)
+* Compile: failed to compile on Fedora 24 : [#671](../../../../issues/671)
 * Monitor: if more than one replication hostgroups exist, monitor will constantly try to reconfigure : [#667](../../../../issues/667)
+
+## Contributors
+
+Thanks to contributors, in alphabetical order:
+* @amnk
+* @aydancoskun
+* @dveeden
+* @fmbiete
+* @krzysztof-ksiazek
+* @ryanschwartz
+* @Tusamarco
+* @VoroOnestic
