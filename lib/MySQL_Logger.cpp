@@ -170,6 +170,7 @@ void MySQL_Logger::wrunlock() {
 };
 
 void MySQL_Logger::flush_log() {
+	if (enabled==false) return;
 	wrlock();
 	flush_log_unlocked();
 	wrunlock();

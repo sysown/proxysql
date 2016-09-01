@@ -613,7 +613,7 @@ MySrvC * MyHGC::MySrvC_lookup_with_coordinates(MySQL_Connection *c) {
 */
 
 //MyHGC * MySQL_HostGroups_Manager::MyConn_add_to_pool(MySQL_Connection *c, int _hid) {
-void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
+void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lock) {
 	assert(c->parent);
 	MySrvC *mysrvc=NULL;
 //	if (c->parent) {
@@ -622,7 +622,8 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 //		MyHGC=MyHGC_lookup(_hid);
 //		MySrvC=MyHGC->MySrvC_lookup_with_coordinates(c);
 //	}
-	wrlock();
+	if (_lock)
+		wrlock();
 	status.myconnpoll_push++;
 	mysrvc=(MySrvC *)c->parent;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
@@ -645,10 +646,22 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 		delete c;
 	}
 __exit_push_MyConn_to_pool:
-	wrunlock();
+	if (_lock)
+		wrunlock();
 }
 
-
+void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca) {
+	unsigned int i=0;
+	MySQL_Connection *c=NULL;
+	c=ca[i];
+	wrlock();
+	while (c) {
+		push_MyConn_to_pool(c,false);
+		i++;
+		c=ca[i];
+	}
+	wrunlock();
+}
 
 MySrvC *MyHGC::get_random_MySrvC() {
 	MySrvC *mysrvc=NULL;
