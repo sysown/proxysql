@@ -4,7 +4,7 @@ Release date: 2016-09-02
 
 ## Performance improvement
 
-* Connection Pool: reduced connection pool contention adding a per-thread connection cache. This improve performance for thousands of connections and a very high value of `mysql-threads` : #644
+* Connection Pool: reduced connection pool contention adding a per-thread connection cache. This improve performance for thousands of connections and a very high value of `mysql-threads` : [#644](../../../../issues/#644)
 * Logger: minor performance improvement if the Logger is disabled : #644
 
 ## Usability improvement
