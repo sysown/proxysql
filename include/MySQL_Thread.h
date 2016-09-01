@@ -268,6 +268,7 @@ class MySQL_Threads_Handler
 		int monitor_replication_lag_timeout;
 		int monitor_query_interval;
 		int monitor_query_timeout;
+		int monitor_slave_lag_when_null;
 		char *monitor_username;
 		char *monitor_password;
 		int ping_interval_server_msec;

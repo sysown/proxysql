@@ -178,6 +178,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_password",
 	(char *)"monitor_query_interval",
 	(char *)"monitor_query_timeout",
+	(char *)"monitor_slave_lag_when_null",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
 	(char *)"max_transaction_time",
@@ -255,6 +256,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_replication_lag_timeout=1000;
 	variables.monitor_query_interval=60000;
 	variables.monitor_query_timeout=100;
+	variables.monitor_slave_lag_when_null=60;
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
 	variables.monitor_writer_is_also_reader=true;
@@ -454,6 +456,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 		if (!strcasecmp(name,"monitor_replication_lag_timeout")) return (int)variables.monitor_replication_lag_timeout;
 		if (!strcasecmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
 		if (!strcasecmp(name,"monitor_query_timeout")) return (int)variables.monitor_query_timeout;
+		if (!strcasecmp(name,"monitor_slave_lag_when_null")) return (int)variables.monitor_slave_lag_when_null;
 		if (!strcasecmp(name,"monitor_writer_is_also_reader")) return (int)variables.monitor_writer_is_also_reader;
 	}
 	if (!strcasecmp(name,"shun_on_failures")) return (int)variables.shun_on_failures;
@@ -599,6 +602,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_query_timeout")) {
 			sprintf(intbuf,"%d",variables.monitor_query_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_slave_lag_when_null")) {
+			sprintf(intbuf,"%d",variables.monitor_slave_lag_when_null);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
@@ -908,6 +915,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 600*1000) {
 				variables.monitor_query_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_slave_lag_when_null")) {
+			int intv=atoi(value);
+			if (intv >= 100 && intv <= 600*1000) {
+				variables.monitor_slave_lag_when_null=intv;
 				return true;
 			} else {
 				return false;
@@ -2087,6 +2103,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
 	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
+	mysql_thread___monitor_slave_lag_when_null=GloMTH->get_variable_int((char *)"monitor_slave_lag_when_null");
 
 	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
 	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");

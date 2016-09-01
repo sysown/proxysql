@@ -801,7 +801,8 @@ __exit_monitor_replication_lag_thread:
 					if (j>-1) {
 						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 						if (row) {
-							repl_lag=-1;
+							repl_lag=-1; // this is old behavior
+							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
 							if (row[j]) { // if Seconds_Behind_Master is not NULL
 								repl_lag=atoi(row[j]);
 							}
