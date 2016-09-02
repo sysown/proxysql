@@ -1331,8 +1331,7 @@ handler_again:
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 							myds->destroy_MySQL_Connection_From_Pool(true);
 							myds->fd=0;
-							status=WAITING_CLIENT_DATA;
-							client_myds->DSS=STATE_SLEEP;
+							RequestEnd(myds); //fix bug #682
 						}
 					} else {
 						// rc==1 , nothing to do for now
