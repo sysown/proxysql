@@ -1,7 +1,15 @@
 #ifdef __cplusplus
 #include <string>
 #include <stack>
-#include "btree_map.h"
+
+#include <algorithm>
+//#include <functional>
+//#include <memory>
+//#include <string>
+//#include <utility>
+
+
+//#include "btree_map.h"
 #ifndef EZOPTION
 //#include "ezOptionParser.hpp"
 #define EZOPTION
@@ -70,8 +78,14 @@
 
 #include "jemalloc.h"
 
-
+#ifdef DEBUG
+//#define VALGRIND_ENABLE_ERROR_REPORTING
+//#define VALGRIND_DISABLE_ERROR_REPORTING
 #include "valgrind.h"
+#else
+#define VALGRIND_ENABLE_ERROR_REPORTING
+#define VALGRIND_DISABLE_ERROR_REPORTING
+#endif /* DEBUG */
 
 #include "sqlite3.h"
 
@@ -85,7 +99,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_VERSION	"1.2.1" DEB
+#define PROXYSQL_VERSION	"1.2.2" DEB
 #define PROXYSQL_CODENAME	"Truls"
 
 #ifndef PROXYSQL_FUNC_DEFS

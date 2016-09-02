@@ -316,6 +316,7 @@ void MySQL_Connection::connect_start() {
 	mysql=mysql_init(NULL);
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql");
 	if (parent->use_ssl) {
 		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
 	}
@@ -1202,6 +1203,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	}
 	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
 		if (!strncasecmp(query_digest_text,"LOCK TABLE", strlen("LOCK TABLE"))) {
+			set_status_lock_tables(true);
+		}
+	}
+	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
+		if (!strncasecmp(query_digest_text,"FLUSH TABLES WITH READ LOCK", strlen("FLUSH TABLES WITH READ LOCK"))) { // issue 613
 			set_status_lock_tables(true);
 		}
 	}

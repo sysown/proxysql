@@ -232,7 +232,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 	pthread_mutex_unlock(&mutex);
 }
 
-MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl) {
+MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl, int g) {
 		task_id=MON_CONNECT;
 		mysql=NULL;
 		result=NULL;
@@ -245,6 +245,7 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 		use_ssl=_use_ssl;
 		ST=0;
 		//ev_mysql=NULL;
+		hostgroup_id=g;
 	};
 
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
@@ -286,10 +287,10 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_replication_lag_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_REPLICATION_LAG_LOG);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start)");
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON mysql_server_ping_log (time_start)");
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_read_only_log_time_start ON mysql_server_read_only_log (time_start)");
-	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_replication_lag_log_time_start ON mysql_server_replication_lag_log (time_start)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start_us)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON mysql_server_ping_log (time_start_us)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_read_only_log_time_start ON mysql_server_read_only_log (time_start_us)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_replication_lag_log_time_start ON mysql_server_replication_lag_log (time_start_us)");
 
 	num_threads=8;
 	if (GloMTH) {
@@ -367,7 +368,9 @@ void * monitor_connect_thread(void *arg) {
 	assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+	unsigned long long time_now=realtime_time();
+	time_now=time_now-(mmsd->t2 - start_time);
+	rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 	SAFE_SQLITE3_STEP(statement);
@@ -440,7 +443,9 @@ __exit_monitor_ping_thread:
 		assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+		unsigned long long time_now=realtime_time();
+		time_now=time_now-(mmsd->t2 - start_time);
+		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		SAFE_SQLITE3_STEP(statement);
@@ -517,6 +522,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 //		mysql_options(mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
 //		mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_monitor");
 		MYSQL *myrc=NULL;
 		if (port) {
 			myrc=mysql_real_connect(mysql, hostname, mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
@@ -572,6 +578,7 @@ void * monitor_read_only_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
+			proxy_error("Timeout on read_only check for %s:%d. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port);
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -587,6 +594,7 @@ void * monitor_read_only_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
+			proxy_error("Timeout on read_only check for %s:%d. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port);
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -613,7 +621,9 @@ __exit_monitor_read_only_thread:
 		int read_only=1; // as a safety mechanism , read_only=1 is the default
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+		unsigned long long time_now=realtime_time();
+		time_now=time_now-(mmsd->t2 - start_time);
+		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 		if (mmsd->result) {
 			int num_fields=0;
@@ -772,7 +782,9 @@ __exit_monitor_replication_lag_thread:
 				//MySQL_Monitor_State_Data *mmsd=sds[i];
 				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement, 3, start_time); assert(rc==SQLITE_OK);
+				unsigned long long time_now=realtime_time();
+				time_now=time_now-(mmsd->t2 - start_time);
+				rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 				if (mmsd->result) {
 					int num_fields=0;
@@ -789,7 +801,8 @@ __exit_monitor_replication_lag_thread:
 					if (j>-1) {
 						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 						if (row) {
-							repl_lag=-1;
+							repl_lag=-1; // this is old behavior
+							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
 							if (row[j]) { // if Seconds_Behind_Master is not NULL
 								repl_lag=atoi(row[j]);
 							}
@@ -922,7 +935,7 @@ __end_monitor_connect_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_connect_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_connect_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -1032,7 +1045,7 @@ __end_monitor_ping_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -1074,7 +1087,7 @@ __end_monitor_ping_loop:
 				resultset=NULL;
 			}
 			char *new_query=NULL;
-			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
@@ -1130,7 +1143,7 @@ __end_monitor_ping_loop:
 			}
 			char *new_query=NULL;
 
-			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
+			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time_us) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time_us,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				sprintf(buff,new_query,addresses[j],ports[j]);
@@ -1251,7 +1264,7 @@ __end_monitor_read_only_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -1350,7 +1363,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[4]));
+				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1], atoi(r->fields[2]), NULL, atoi(r->fields[4]), atoi(r->fields[0]));
 				mmsd->mondb=monitordb;
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_replication_lag_thread);
@@ -1366,7 +1379,7 @@ __end_monitor_replication_lag_loop:
 			sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start < ?1";
+			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626

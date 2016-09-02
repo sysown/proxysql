@@ -270,8 +270,8 @@ class SQLite3DB;
 class SimpleKV;
 class AdvancedKV;
 class ProxySQL_Poll;
-//class Query_Cache; 
-class Shared_Query_Cache;
+class Query_Cache;
+//class Shared_Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
 class MySQL_Protocol;
@@ -507,7 +507,7 @@ struct _global_variables_t {
 
 	unsigned int mysql_query_cache_default_timeout;
 	unsigned long long mysql_wait_timeout;
-	unsigned long long mysql_query_cache_size;
+	//unsigned long long mysql_query_cache_size;
 	unsigned long long mysql_max_resultset_size;
 	int mysql_max_query_size;
 
@@ -723,6 +723,7 @@ __thread int mysql_thread___connect_retries_delay;
 __thread int mysql_thread___connection_max_age_ms;
 __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
+__thread int mysql_thread___query_processor_iterations;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
 __thread int mysql_thread___poll_timeout;
@@ -736,6 +737,9 @@ __thread bool mysql_thread___commands_stats;
 __thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
+
+/* variables used for Query Cache */
+__thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 __thread char * mysql_thread___ssl_p2s_ca;
@@ -762,6 +766,7 @@ __thread int mysql_thread___monitor_replication_lag_interval;
 __thread int mysql_thread___monitor_replication_lag_timeout;
 __thread int mysql_thread___monitor_query_interval;
 __thread int mysql_thread___monitor_query_timeout;
+__thread int mysql_thread___monitor_slave_lag_when_null;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 
@@ -798,6 +803,7 @@ extern __thread int mysql_thread___connect_retries_delay;
 extern __thread int mysql_thread___connection_max_age_ms;
 extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
+extern __thread int mysql_thread___query_processor_iterations;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
 extern __thread int mysql_thread___poll_timeout;
@@ -811,6 +817,9 @@ extern __thread bool mysql_thread___commands_stats;
 extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
+
+/* variables used for Query Cache */
+extern __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 extern __thread char * mysql_thread___ssl_p2s_ca;
@@ -837,6 +846,7 @@ extern __thread int mysql_thread___monitor_replication_lag_interval;
 extern __thread int mysql_thread___monitor_replication_lag_timeout;
 extern __thread int mysql_thread___monitor_query_interval;
 extern __thread int mysql_thread___monitor_query_timeout;
+extern __thread int mysql_thread___monitor_slave_lag_when_null;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 

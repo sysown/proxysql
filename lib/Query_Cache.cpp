@@ -1,6 +1,7 @@
 #include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "query_cache.hpp"
 #include "proxysql_atomic.h"
 #include "SpookyV2.h"
 
@@ -26,7 +27,32 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_CACHE_VERSION "0.2.0902" DEB
+#define QUERY_CACHE_VERSION "1.2.0817" DEB
+
+extern MySQL_Threads_Handler *GloMTH;
+
+typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
+
+class KV_BtreeArray {
+	private:
+	rwlock_t lock;
+	BtMap_cache bt_map;
+	PtrArray *ptrArray;
+	uint64_t purgeChunkSize;
+	uint64_t purgeIdx;
+	bool __insert(uint64_t, void *);
+	uint64_t freeable_memory;
+	public:
+	uint64_t tottopurge;
+	KV_BtreeArray();
+	~KV_BtreeArray();
+	uint64_t get_data_size();
+	void purge_some(unsigned long long);
+	int cnt();
+	bool replace(uint64_t key, QC_entry_t *entry);
+	QC_entry_t *lookup(uint64_t key);
+	void empty();
+};
 
 __thread uint64_t __thr_cntSet=0;
 __thread uint64_t __thr_cntGet=0;
@@ -152,9 +178,12 @@ int KV_BtreeArray::cnt() {
 
 bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
   spin_wrlock(&lock);
-	THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,100);
-	THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,100);
-	THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,100);
+	//THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,100);
+	//THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,100);
+	//THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,100);
+	THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,1);
+	THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,1);
+	THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,1);
 	THR_UPDATE_CNT(__thr_num_entries,Glo_num_entries,1,1);
 
 	entry->ref_count=1;
@@ -174,14 +203,15 @@ bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
 QC_entry_t * KV_BtreeArray::lookup(uint64_t key) {
 	QC_entry_t *entry=NULL;
 	spin_rdlock(&lock);
-	THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,100);
+	//THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,100);
+	THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,1);
   btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
   lookup = bt_map.find(key);
   if (lookup != bt_map.end()) {
 		entry=lookup->second;
 		__sync_fetch_and_add(&entry->ref_count,1);
-		THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,100);
-		THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,10000);
+		//THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,100);
+		//THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,10000);
  	}	
 	spin_rdunlock(&lock);
 	return entry;
@@ -210,7 +240,7 @@ uint64_t Query_Cache::get_data_size_total() {
 	int r=0;
 	int i;
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-		r+=KVs[i].get_data_size();
+		r+=KVs[i]->get_data_size();
 	}
 	return r;
 };
@@ -236,6 +266,9 @@ Query_Cache::Query_Cache() {
 		perror("Incompatible debagging version");
 		exit(EXIT_FAILURE);
 	}
+	for (int i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
+		KVs[i]=new KV_BtreeArray();
+	}
 	QCnow_ms=monotonic_time()/1000;
 	size=SHARED_QUERY_CACHE_HASH_TABLES;
 	shutdown=0;
@@ -253,7 +286,7 @@ void Query_Cache::print_version() {
 Query_Cache::~Query_Cache() {
 	unsigned int i;
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-		// FIXME: what here? I think KV_BtreeArray are automatically destroyed
+		delete KVs[i];
 	}
 };
 
@@ -265,11 +298,13 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 	uint64_t hk=SpookyHash::Hash64(kp, kl, user_hash);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 
-	QC_entry_t *entry=KVs[i].lookup(hk);
+	QC_entry_t *entry=KVs[i]->lookup(hk);
 
 	if (entry!=NULL) {
 		unsigned long long t=curtime_ms;
 		if (entry->expire_ms > t) {
+			THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
+			THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,1);
 			result=(unsigned char *)malloc(entry->length);
 			memcpy(result,entry->value,entry->length);
 			*lv=entry->length;
@@ -294,7 +329,7 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 	uint64_t hk=SpookyHash::Hash64(kp, kl, user_hash);
 	unsigned char i=hk%SHARED_QUERY_CACHE_HASH_TABLES;
 	entry->key=hk;
-	KVs[i].replace(hk, entry);
+	KVs[i]->replace(hk, entry);
 
 	return true;
 }
@@ -303,8 +338,8 @@ uint64_t Query_Cache::flush() {
 	int i;
 	uint64_t total_count=0;
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-		total_count+=KVs[i].cnt();
-		KVs[i].empty();
+		total_count+=KVs[i]->cnt();
+		KVs[i]->empty();
 	}
 	return total_count;
 };
@@ -312,17 +347,89 @@ uint64_t Query_Cache::flush() {
 
 void * Query_Cache::purgeHash_thread(void *) {
 	unsigned int i;
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	mysql_thr->refresh_variables();
+	max_memory_size=mysql_thread___query_cache_size_MB*1024*1024;
 	while (shutdown==0) {
 		usleep(purge_loop_time);
 		unsigned long long t=monotonic_time()/1000;
 		QCnow_ms=t;
-
+		unsigned int glover=GloMTH->get_global_version();
+		if (GloMTH) {
+			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+				mysql_thr->refresh_variables();
+				max_memory_size=mysql_thread___query_cache_size_MB*1024*1024;
+			}
+		}
 		if (current_used_memory_pct() < purge_threshold_pct_min ) continue;
 		for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-			KVs[i].purge_some(QCnow_ms);
+			KVs[i]->purge_some(QCnow_ms);
 		}
 	}
+	delete mysql_thr;
 	return NULL;
 };
 
-
+SQLite3_result * Query_Cache::SQL3_getStats() {
+	const int colnum=2;
+	char buf[256];
+	char **pta=(char **)malloc(sizeof(char *)*colnum);
+	//Get_Memory_Stats();
+	SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
+	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
+	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
+	{ // Used Memoery
+		pta[0]=(char *)"Query_Cache_Memory_bytes";
+		sprintf(buf,"%lu", get_data_size_total());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_cntGet
+		pta[0]=(char *)"Query_Cache_count_GET";
+		sprintf(buf,"%lu", Glo_cntGet);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_cntGetOK
+		pta[0]=(char *)"Query_Cache_count_GET_OK";
+		sprintf(buf,"%lu", Glo_cntGetOK);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_cntSet
+		pta[0]=(char *)"Query_Cache_count_SET";
+		sprintf(buf,"%lu", Glo_cntSet);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_dataIN
+		pta[0]=(char *)"Query_Cache_bytes_IN";
+		sprintf(buf,"%lu", Glo_dataIN);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_dataOUT
+		pta[0]=(char *)"Query_Cache_bytes_OUT";
+		sprintf(buf,"%lu", Glo_dataOUT);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_cntPurge
+		pta[0]=(char *)"Query_Cache_Purged";
+		sprintf(buf,"%lu", Glo_cntPurge);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{ // Glo_num_entries
+		pta[0]=(char *)"Query_Cache_Entries";
+		sprintf(buf,"%lu", Glo_num_entries);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	free(pta);
+	return result;
+}

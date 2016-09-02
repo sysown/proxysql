@@ -136,7 +136,8 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	void *sha1_pass=NULL;
 	char *oldpass=NULL;
 	spin_wrlock(&cg.lock);
-	btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
@@ -264,7 +265,8 @@ int MySQL_Authentication::increase_frontend_user_connections(char *username) {
 	creds_group_t &cg=creds_frontends;
 	int ret=0;
 	spin_wrlock(&cg.lock);
-	btree::btree_map<uint64_t, account_details_t *>::iterator it;
+	//btree::btree_map<uint64_t, account_details_t *>::iterator it;
+	std::unordered_map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
 		account_details_t *ad=it->second;
@@ -284,7 +286,8 @@ void MySQL_Authentication::decrease_frontend_user_connections(char *username) {
 	delete myhash;
 	creds_group_t &cg=creds_frontends;
 	spin_wrlock(&cg.lock);
-	btree::btree_map<uint64_t, account_details_t *>::iterator it;
+	//btree::btree_map<uint64_t, account_details_t *>::iterator it;
+	std::unordered_map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
 		account_details_t *ad=it->second;
@@ -308,7 +311,8 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 
 	if (set_lock)
 		spin_wrlock(&cg.lock);
-	btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
@@ -339,7 +343,8 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	spin_wrlock(&cg.lock);
-	btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
@@ -368,7 +373,8 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	spin_rdlock(&cg.lock);
-	btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
@@ -396,7 +402,8 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	spin_wrlock(&cg.lock);
-	btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
+	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 
 	while (cg.bt_map.size()) {
 		lookup = cg.bt_map.begin();

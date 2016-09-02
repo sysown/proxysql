@@ -2,6 +2,7 @@
 #define __CLASS_PROXYSQL_ADMIN_H
 #include "proxysql.h"
 #include "cpp.h"
+#include <vector>
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 
@@ -11,6 +12,7 @@ typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class Scheduler_Row {
 	public:
 	unsigned int id;
+	bool is_active;
 	unsigned int interval_ms;
 	unsigned long long last;
 	unsigned long long next;
@@ -21,7 +23,8 @@ class Scheduler_Row {
 //	char *arg4;
 //	char *arg5;
 	char **args;
-	Scheduler_Row(unsigned int _id, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5);
+	char *comment;
+	Scheduler_Row(unsigned int _id, bool _is_active, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5, char *_comment);
 	~Scheduler_Row();
 };
 
@@ -113,6 +116,7 @@ class ProxySQL_Admin {
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
+	void disk_upgrade_scheduler();
 
 #ifdef DEBUG
 	void add_credentials(char *type, char *credentials, int hostgroup_id);
@@ -190,6 +194,7 @@ class ProxySQL_Admin {
 	int Read_MySQL_Users_from_configfile();
 	int Read_MySQL_Query_Rules_from_configfile();
 	int Read_MySQL_Servers_from_configfile();
+	int Read_Scheduler_from_configfile();
 
 	void flush_error_log();
 	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);

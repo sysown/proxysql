@@ -143,6 +143,7 @@ class MySQL_Thread
   bool processing_idles;
 	bool maintenance_loop;
 
+	PtrArray *cached_connections;
 
 	protected:
 	int nfds;
@@ -195,6 +196,9 @@ class MySQL_Thread
   //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
 	void Get_Memory_Stats();
+	MySQL_Connection * get_MyConn_local(unsigned int);
+	void push_MyConn_local(MySQL_Connection *);
+	void return_local_connections();
 };
 
 
@@ -264,6 +268,7 @@ class MySQL_Threads_Handler
 		int monitor_replication_lag_timeout;
 		int monitor_query_interval;
 		int monitor_query_timeout;
+		int monitor_slave_lag_when_null;
 		char *monitor_username;
 		char *monitor_password;
 		int ping_interval_server_msec;
@@ -299,6 +304,7 @@ class MySQL_Threads_Handler
 		int default_max_latency_ms;
 		int default_query_delay;
 		int default_query_timeout;
+		int query_processor_iterations;
 		int long_query_time;
 		char *init_connect;
 #ifdef DEBUG
@@ -314,6 +320,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_cert;
 		char * ssl_p2s_key;
 		char * ssl_p2s_cipher;
+		int query_cache_size_MB;
 	} variables;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;

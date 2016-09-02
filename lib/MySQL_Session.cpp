@@ -41,6 +41,7 @@ static void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
 	mysql=mysql_init(NULL);
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	if (!mysql) {
 		goto __exit_kill_query_thread;
 	}
@@ -563,7 +564,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			mysql_hdr Hdr;
 			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
 			Hdr.pkt_length=pkt_2.size-5;
-			memcpy((char *)pkt_2.ptr+5,(char *)pkt->ptr+5,1);
+			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
 			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
 			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
 			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
@@ -2123,7 +2124,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			// Get a MySQL Connection
 	
 //	if (rand()%3==0) {
-		MySQL_Connection *mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+		MySQL_Connection *mc=NULL;
+		mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+		if (mc==NULL) {
+			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+		}
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
 		}

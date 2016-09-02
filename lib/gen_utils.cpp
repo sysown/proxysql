@@ -2,6 +2,37 @@
 #include "cpp.h"
 
 
+char *escape_string_single_quotes(char *input, bool free_it) {
+	int i,j,l;
+	char *o=NULL;	// output string, if any
+	l=strlen(input);
+	j=0;
+	for (i=0;i<l;i++) {
+		if (input[i]=='\'') {
+			j++;
+		}
+	}
+	if (j==0) {	// no double quotes found, exit now
+		return input;
+	}
+	// double quotes found
+	o=(char *)malloc(l+j+1);
+	o[l+j]='\0';
+	j=0;
+	for (i=0;i<l;i++) {
+		if (input[i]=='\'') {
+			o[j]='\'';
+			j++;
+		}
+		o[j]=input[i];
+		j++;
+	}
+	if (free_it) {
+		free(input);
+	}
+	return o;
+}
+
 int remove_spaces(const char *s) {
 	char *inp = (char *)s, *outp = (char *)s;
 	bool prev_space = false;
