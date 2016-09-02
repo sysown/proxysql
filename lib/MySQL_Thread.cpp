@@ -2141,6 +2141,7 @@ MySQL_Thread::MySQL_Thread() {
 //	mypolls.fds=NULL;
 //	mypolls.myds=NULL;
 	my_idle_conns=NULL;
+	cached_connections=NULL;
 	//my_idle_myds=NULL;
 	mysql_sessions=NULL;
 	processing_idles=false;
