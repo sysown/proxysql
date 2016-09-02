@@ -48,6 +48,8 @@ chkconfig --del %{name}
 %config(noreplace) %{_sysconfdir}/%{name}.cnf
 %{_bindir}/*
 %{_sysconfdir}/init.d/%{name}
+/usr/share/proxysql/tools/proxysql_galera_checker.sh
+/usr/share/proxysql/tools/proxysql_galera_writer.pl
 
 %changelog
 * Fri Sep 2 2016  Rene Cannao <rene.cannao@gmail.com> 1.2.2
