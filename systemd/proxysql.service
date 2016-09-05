@@ -1,0 +1,12 @@
+[Unit]
+Description=High Performance Advanced Proxy for MySQL
+After=network.target
+
+[Service]
+LimitNOFILE=102400
+LimitCORE=1073741824
+ExecStart=/usr/local/bin/proxysql -f
+Restart=always
+
+[Install]
+WantedBy=default.target
