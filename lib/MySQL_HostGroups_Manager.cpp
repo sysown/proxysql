@@ -163,7 +163,7 @@ void MySrvC::connect_error(int err_num) {
 			}
 			MyHGM->wrunlock();
 			if (_shu) {
-			proxy_info("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
+			proxy_error("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			}
 		}
 	}
@@ -613,7 +613,7 @@ MySrvC * MyHGC::MySrvC_lookup_with_coordinates(MySQL_Connection *c) {
 */
 
 //MyHGC * MySQL_HostGroups_Manager::MyConn_add_to_pool(MySQL_Connection *c, int _hid) {
-void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
+void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lock) {
 	assert(c->parent);
 	MySrvC *mysrvc=NULL;
 //	if (c->parent) {
@@ -622,7 +622,8 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 //		MyHGC=MyHGC_lookup(_hid);
 //		MySrvC=MyHGC->MySrvC_lookup_with_coordinates(c);
 //	}
-	wrlock();
+	if (_lock)
+		wrlock();
 	status.myconnpoll_push++;
 	mysrvc=(MySrvC *)c->parent;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
@@ -645,10 +646,22 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c) {
 		delete c;
 	}
 __exit_push_MyConn_to_pool:
-	wrunlock();
+	if (_lock)
+		wrunlock();
 }
 
-
+void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca) {
+	unsigned int i=0;
+	MySQL_Connection *c=NULL;
+	c=ca[i];
+	wrlock();
+	while (c) {
+		push_MyConn_to_pool(c,false);
+		i++;
+		c=ca[i];
+	}
+	wrunlock();
+}
 
 MySrvC *MyHGC::get_random_MySrvC() {
 	MySrvC *mysrvc=NULL;
@@ -878,7 +891,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 //						||
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
 					) {
-						proxy_info("Shunning server %s:%d with replication lag of %d second\n", address, port, current_replication_lag);
+						proxy_warning("Shunning server %s:%d with replication lag of %d second\n", address, port, current_replication_lag);
 						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
 					}
 				} else {
@@ -1083,8 +1096,10 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	// define queries
 	//const char *Q1=(char *)"SELECT hostgroup_id FROM mysql_servers join mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup WHERE hostname='%s' AND port=%d AND status=0"; // this query run against myhgm DB . status is an INTEGER
 	const char *Q1=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
+	//const char *Q1B=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
+	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=writer_hostgroup OR reader_hostgroup=hostgroup_id) AND hostname='%s' AND port=%d ) LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
 	const char *Q2=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
-	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
+	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
 	const char *Q3B=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q4=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q5=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
@@ -1093,7 +1108,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	}
 
 	// define a buffer that will be used for all queries
-	char *query=(char *)malloc(strlen(hostname)+strlen(Q3A)+32);
+	char *query=(char *)malloc(strlen(hostname)*2+strlen(Q3A)+64);
 	sprintf(query,Q1,hostname,port);
 
 	int cols=0;
@@ -1136,8 +1151,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			} else {
 				// there is a server in writer hostgroup, let check the status of present and not present hosts
 				// this is the same query as Q1, but with a LEFT JOIN
-				const char *Q1B=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";	
-				sprintf(query,Q1B,hostname,port);
+				sprintf(query,Q1B,hostname,port,hostname,port);
 				wrlock();
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 				wrunlock();

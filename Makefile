@@ -10,7 +10,8 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
-CURVER=1.2.1
+CURVER=1.2.2
+DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 
 .PHONY: default
 default: build_deps build_lib build_src
@@ -27,7 +28,7 @@ build_lib: build_deps
 	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src
-build_src: build_deps
+build_src: build_deps build_lib
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_debug
@@ -35,11 +36,11 @@ build_deps_debug:
 	cd deps && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug
-build_lib_debug:
+build_lib_debug: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug
-build_src_debug:
+build_src_debug: build_deps build_lib_debug
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: clean
@@ -101,7 +102,7 @@ binaries/proxysql-${CURVER}-1-centos67.x86_64.rpm:
 	docker start centos67_build
 	docker exec centos67_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec centos67_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE}"
-	docker exec -it centos67_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	docker exec -it centos67_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
 	docker exec -it centos67_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
 	docker cp docker/images/proxysql/centos67-build/rpmmacros centos67_build:/root/.rpmmacros
 	docker cp docker/images/proxysql/centos67-build/proxysql.spec centos67_build:/root/rpmbuild/SPECS/proxysql.spec
@@ -119,7 +120,7 @@ binaries/proxysql-${CURVER}-1-dbg-centos67.x86_64.rpm:
 	docker start centos67_build
 	docker exec centos67_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec centos67_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} debug"
-	docker exec -it centos67_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	docker exec -it centos67_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
 	docker exec -it centos67_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
 	docker cp docker/images/proxysql/centos67-build/rpmmacros centos67_build:/root/.rpmmacros
 	docker cp docker/images/proxysql/centos67-build/proxysql.spec centos67_build:/root/rpmbuild/SPECS/proxysql.spec
@@ -137,7 +138,7 @@ binaries/proxysql-${CURVER}-1-centos7.x86_64.rpm:
 	docker start centos7_build
 	docker exec centos7_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec centos7_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE}"
-	docker exec -it centos7_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	docker exec -it centos7_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
 	docker exec -it centos7_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
 	docker cp docker/images/proxysql/centos7-build/rpmmacros centos7_build:/root/.rpmmacros
 	docker cp docker/images/proxysql/centos7-build/proxysql.spec centos7_build:/root/rpmbuild/SPECS/proxysql.spec
@@ -155,7 +156,7 @@ binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm:
 	docker start centos7_build
 	docker exec centos7_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec centos7_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} debug"
-	docker exec -it centos7_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	docker exec -it centos7_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
 	docker exec -it centos7_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
 	docker cp docker/images/proxysql/centos7-build/rpmmacros centos7_build:/root/.rpmmacros
 	docker cp docker/images/proxysql/centos7-build/proxysql.spec centos7_build:/root/rpmbuild/SPECS/proxysql.spec
@@ -312,13 +313,31 @@ install: src/proxysql
 	install -m 0600 etc/proxysql.cnf /etc
 	install -m 0755 etc/init.d/proxysql /etc/init.d
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
-	update-rc.d proxysql defaults
+ifeq ($(DISTRO),"CentOS Linux")
+		chkconfig --level 0123456 proxysql on
+else
+ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
+		chkconfig --level 0123456 proxysql on
+else
+		update-rc.d proxysql defaults
+endif
+endif
 .PHONY: install
 
 uninstall:
-	rm /etc/init.d/proxysql
 	rm /etc/proxysql.cnf
 	rm /usr/local/bin/proxysql
 	rmdir /var/lib/proxysql 2>/dev/null || true
-	update-rc.d proxysql remove
+ifeq ($(DISTRO),"CentOS Linux")
+		chkconfig --level 0123456 proxysql off
+		rm /etc/init.d/proxysql
+else
+ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
+		chkconfig --level 0123456 proxysql off
+		rm /etc/init.d/proxysql
+else
+		rm /etc/init.d/proxysql
+		update-rc.d proxysql remove
+endif
+endif
 .PHONY: uninstall

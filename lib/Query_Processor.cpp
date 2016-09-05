@@ -662,6 +662,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	QP_rule_t *qr;
 	re2_t *re2p;
 	int flagIN=0;
+	int reiterate=mysql_thread___query_processor_iterations;
 	if (sess->mirror==true) {
 		// we are into a mirror session
 		// we immediately set a destination_hostgroup
@@ -676,6 +677,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			goto __exit_process_mysql_query;
 		}
 	}
+__internal_loop:
 	for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
 		qr=*it;
 		if (qr->flagIN != flagIN) {
@@ -756,10 +758,11 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 
 		// if we arrived here, we have a match
 		qr->hits++; // this is done without atomic function because it updates only the local variables
-
+		bool set_flagOUT=false;
 		if (qr->flagOUT >= 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
 			flagIN=qr->flagOUT;
+			set_flagOUT=true;
 			//sess->query_info.flagOUT=flagIN;
     }
     if (qr->reconnect >= 0) {
@@ -817,6 +820,12 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		if (qr->apply==true) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d is the last one to apply: exit!\n", qr->rule_id);
 			goto __exit_process_mysql_query;
+		}
+		if (set_flagOUT==true) {
+			if (reiterate) {
+				reiterate--;
+				goto __internal_loop;
+			}
 		}
 	}
 	
@@ -1090,8 +1099,13 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 			break;
 		case 'r':
 		case 'R':
+			if (!strcasecmp("REPLACE",token)) { // ROLLBACK
+				ret=MYSQL_COM_QUERY_REPLACE;
+				break;
+			}
 			if (!strcasecmp("ROLLBACK",token)) { // ROLLBACK
 				ret=MYSQL_COM_QUERY_ROLLBACK;
+				break;
 			}
 			break;
 		case 's':

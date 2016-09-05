@@ -1,6 +1,6 @@
 # SSL configuration
 
-ProxySQL supports SSL connections to the backends since version v1.2.0e . Attempts to configure an older version will fails.
+ProxySQL supports SSL connections to the backends since version v1.2.0e . Attempts to configure an older version will fail.
 
 
 To enabled SSL connections you need to:

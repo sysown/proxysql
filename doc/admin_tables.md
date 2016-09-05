@@ -2,10 +2,10 @@ Admin tables
 ============
 
 ProxySQL admin interface is an interface that uses the MySQL protocol, making it very easy to be configured by any client able to send commands through such interface.
-ProxySQL parses the queries sent through this interface for any command specific to ProxySQL, and if not send them to an embedded SQLite3 engine to run the queries.
+ProxySQL parses the queries sent through this interface for any command specific to ProxySQL, and if appropiate sends them to the embedded SQLite3 engine to run the queries.
 
 Please note that SQL syntax used by SQLite3 and MySQL differs, therefore not all commands working on MySQL will work on SQLite3 .
-For example, although the USE command is accepted by the admin interface, it doesn't change the default schema as this feature is no available in SQLite3.
+For example, although the USE command is accepted by the admin interface, it doesn't change the default schema as this feature is not available in SQLite3.
 
 Connecting to the ProxySQL admin interface, we see that there are a few databases available.
 ProxySQL converts SHOW DATABASES command in the equivalent for SQLite3.
@@ -36,26 +36,34 @@ Also, the access to the admin database is done using two types of users, with th
 * user: admin/password: admin -- with read-write access to all the tables
 * user: stats/password: stats -- with read-only access to statistics tables. This is used for pulling metrics out of ProxySQL, without exposing too much of the database
 
+The above credentials are configurable through the variables `admin-admin_credentials` and `admin-stats_credentials`.
+
 # main database
 
-Here are the tables from the "main" database (ProxySQL converts SHOW TABLES FROM command in the equivalent for SQLite3):
+Here are the tables from the "main" database (ProxySQL converts `SHOW TABLES FROM` command in the equivalent for SQLite3):
 
 ```bash
-mysql> show tables from main;
-+-------------------+
-| tables            |
-+-------------------+
-| mysql_servers     |
-| mysql_users       |
-| mysql_query_rules |
-| global_variables  |
-| mysql_collations  |
-| debug_levels      |
-+-------------------+
-6 rows in set (0.01 sec)
+Admin> show tables from main;
++--------------------------------------+
+| tables                               |
++--------------------------------------+
+| mysql_servers                        |
+| runtime_mysql_servers                |
+| mysql_users                          |
+| runtime_mysql_replication_hostgroups |
+| mysql_replication_hostgroups         |
+| mysql_query_rules                    |
+| runtime_mysql_query_rules            |
+| global_variables                     |
+| runtime_global_variables             |
+| mysql_collations                     |
+| scheduler                            |
+| runtime_scheduler                    |
++--------------------------------------+
+12 rows in set (0.00 sec)
 ```
 
-## `mysql_servers`
+## mysql_servers
 
 Here is the statement used to create the `mysql_servers` table:
 
@@ -69,24 +77,30 @@ CREATE TABLE mysql_servers (
     compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0,
     max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000,
     max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0,
+    use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0,
+    max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0,
+    comment VARCHAR NOT NULL DEFAULT '',
     PRIMARY KEY (hostgroup_id, hostname, port) )
 ```
 
 The fields have the following semantics:
-* hostgroup_id: the hostgroup in which this mysqld instance is included. Notice that the same instance can be part as more than one hostgroup
-* hostname, port: the TCP endpoint at which the mysqld instance can be contacted
-* status: 
-  * ONLINE - backend server is fully operational
-  * SHUNNED - backend sever is temporarily taken out of use because of either too many connection errors in a time that was too short, or replication lag exceeded the allowed threshold
-  * OFFLINE_SOFT - when a server is put into OFFLINE_SOFT mode, new incoming connections aren't accepted anymore, while the existing connections are kept until they became inactive. In other words, connections are kept in use until the current transaction is completed. This allows to gracefully detach a backend 
-  * OFFLINE_HARD - when a server is put into OFFLINE_HARD mode, the existing connections are dropped, while new incoming connections aren't accepted either. This is equivalent to deleting the server from a hostgroup, or temporarily taking it out of the hostgroup for maintenance work
-* weight - the bigger the weight of a server relative to other weights, the higher the probability of the server to be chosen from a hostgroup
-* compression - not supported yet, feature being rededigned
-* max_connections - the maximum number of connections ProxySQL will open to this backend server. Even though this server will have the highest weight, no new connections will be opened to it once this limit is hit. Please ensure that the backend is configured with a correct value of max_connections to avoid that ProxySQL will try to go beyond that limit
-* max_replication_lag - if greater and 0, ProxySQL will reguarly monitor replication lag and if it goes beyond such threshold it will temporary shun the host until replication catch ups
+* `hostgroup_id`: the hostgroup in which this mysqld instance is included. Notice that the same instance can be part as more than one hostgroup
+* `hostname`, `port`: the TCP endpoint at which the mysqld instance can be contacted
+* `status`: 
+  * *ONLINE* - backend server is fully operational
+  * *SHUNNED* - backend sever is temporarily taken out of use because of either too many connection errors in a time that was too short, or replication lag exceeded the allowed threshold
+  * *OFFLINE_SOFT* - when a server is put into OFFLINE_SOFT mode, new incoming connections aren't accepted anymore, while the existing connections are kept until they became inactive. In other words, connections are kept in use until the current transaction is completed. This allows to gracefully detach a backend 
+  * *OFFLINE_HARD* - when a server is put into OFFLINE_HARD mode, the existing connections are dropped, while new incoming connections aren't accepted either. This is equivalent to deleting the server from a hostgroup, or temporarily taking it out of the hostgroup for maintenance work
+* `weight` - the bigger the weight of a server relative to other weights, the higher the probability of the server to be chosen from a hostgroup
+* `compression` - if the value is greater than 0, new connections to that server will use compression
+* `max_connections` - the maximum number of connections ProxySQL will open to this backend server. Even though this server will have the highest weight, no new connections will be opened to it once this limit is hit. Please ensure that the backend is configured with a correct value of max_connections to avoid that ProxySQL will try to go beyond that limit
+* `max_replication_lag` - if greater and 0, ProxySQL will reguarly monitor replication lag and if it goes beyond such threshold it will temporary shun the host until replication catch ups
+* `use_ssl` - if set to 1, connections to the backend will use SSL
+* `max_latency_ms` - ping time is regularly monitored. If a host has a ping time greater than `max_latency_ms` it is excluded from the connection pool (although the server stays *ONLINE*)
+* `comment` - text field that can be used for any purposed defined by the user. Could be a description of what the host stores, a reminder of when the host was added or disabled, or a JSON processed by some checker script.
 
 
-## `mysql_users`
+## mysql_users
 
 Here is the statement used to create the `mysql_users` table:
 
@@ -110,15 +124,15 @@ CREATE TABLE mysql_users (
 ```
 
 The fields have the following semantics:
-* username, password - credentials for connecting to the mysqld or ProxySQL instance
-* active - the users with active = 0 will be tracked in the database, but will be never loaded in the in-memory data structures
-* default_hostgroup - if there is no matching rule for the queries send by this users, the traffic is generates is sent to the specified hostgroup
-* default_schema - the schema to which the connection should change by default
-* schema_locked - not supported yet (TODO: check)
-* transaction_persistent - if this is set for the user with which the MySQL client is connecting to ProxySQL (thus a "frontend" user - see below), transactions started within a hostgroup will remain within that hostgroup regardless of any other rules
-* fast_forward - if set it bypass the query processing layer (rewriting, caching) and pass through the query directly as is to the backend server.
-* frontend - if set to 1, this (username, password) pair is used for authenticating to the ProxySQL instance
-* backend - if set to 1, this (username, password) pair is used for authenticating to the mysqld servers against any hostgroup
+* `username`, `password` - credentials for connecting to the mysqld or ProxySQL instance
+* `active` - the users with active = 0 will be tracked in the database, but will be never loaded in the in-memory data structures
+* `default_hostgroup` - if there is no matching rule for the queries send by this users, the traffic is generates is sent to the specified hostgroup
+* `default_schema` - the schema to which the connection should change by default
+* `schema_locked` - not supported yet (TODO: check)
+* `transaction_persistent` - if this is set for the user with which the MySQL client is connecting to ProxySQL (thus a "frontend" user - see below), transactions started within a hostgroup will remain within that hostgroup regardless of any other rules
+* `fast_forward` - if set it bypass the query processing layer (rewriting, caching) and pass through the query directly as is to the backend server.
+* `frontend` - if set to 1, this (username, password) pair is used for authenticating to the ProxySQL instance
+* `backend` - if set to 1, this (username, password) pair is used for authenticating to the mysqld servers against any hostgroup
 
 Note, currently all users need both "frontend" and "backend" set to 1 . Future versions of ProxySQL will separate the crendentials between frontend and backend. In this way frontend will never know the credential to connect directly to the backend, forcing all the connection through ProxySQL and increasing the security of the system.
 
@@ -127,7 +141,25 @@ Fast forward notes:
 * fast forward is implemented on a per-user basis : depending from the user that connects to ProxySQL , fast forward is enabled or disabled
 * fast forward algorithm is enabled after authentication : the client still authenticates to ProxySQL, and ProxySQL will create a connection when the client will start sending traffic. This means that connections' errors are still handled during connect phase.
 
-## `mysql_query_rules`
+
+## mysql_replication_hostgroups
+
+Here is the statement used to create the `mysql_replication_hostgroups` table:
+
+```sql
+CREATE TABLE mysql_replication_hostgroups (
+    writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY,
+    reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0),
+    comment VARCHAR,
+    UNIQUE (reader_hostgroup))
+```
+
+Each row in `mysql_replication_hostgroups` represent a pair of *writer_hostgroup* and *reader_hostgroup* .  
+ProxySQL will monitor the value of read_only for all the servers in specified hostgroups, and based on the value of read_only will assign the server to the writer or reader hostgroups.  
+The field `comment` can be used to store any arbitrary data.
+
+
+## mysql_query_rules
 
 Here is the statement used to create the `mysql_users` table:
 
@@ -138,6 +170,11 @@ CREATE TABLE mysql_query_rules (
     username VARCHAR,
     schemaname VARCHAR,
     flagIN INT NOT NULL DEFAULT 0,
+    client_addr VARCHAR,
+    proxy_addr VARCHAR,
+    proxy_port INT,
+    digest VARCHAR,
+    match_digest VARCHAR,
     match_pattern VARCHAR,
     negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0,
     flagOUT INT,
@@ -146,27 +183,42 @@ CREATE TABLE mysql_query_rules (
     cache_ttl INT CHECK(cache_ttl > 0),
     reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL,
     timeout INT UNSIGNED,
+    retries INT CHECK (retries>=0 AND retries <=1000),
     delay INT UNSIGNED,
-    apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0
-)
+    mirror_flagOUT INT UNSIGNED,
+    mirror_hostgroup INT UNSIGNED,
+    error_msg VARCHAR,
+    log INT CHECK (log IN (0,1)),
+    apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0,
+    comment VARCHAR)
 ```
 
 The fields have the following semantics:
-* rule_id - the unique id of the rule. Rules are processed in rule_id order
-* active - only rules with active=1 will be considered by the query processing module
-* username, schemaname - filtering criteria for the rules. If these are non-NULL, a query will match only if the connection is made with the correct username and/or schemaname.
-* flagIN, flagOUT, apply - these allow us to create "chains of rules" that get applied one after the other. An input flag value is set to 0, and only rules with flagIN=0 are considered at the beginning. When a matching rule is found for a specific query, flagOUT is evaluated and if NOT NULL the query will be flagged with the specified flag in flagOUT. If flagOUT differs from flagIN , the query will exit the current chain and enters a new chain of rules having flagIN as the new input flag. This happens until there are no more matching rules, or apply is set to 1 (which means this is the last rule to be applied)
-* match_pattern - regular expression that matches the query text. The dialect of regular expressions used is that of re2 - https://github.com/google/re2
-* negate_match_pattern - if this is set to 1, only queries not matching the query text will be considered as a match. This acts as a NOT operator in front of the regular expression matching against match_pattern.
-* replace_pattern - this is the pattern with which to replace the matched pattern. It's done using RE2::Replace, so it's worth taking a look at the online documentation for that: https://github.com/google/re2/blob/master/re2/re2.h#L378. Note that this is optional, and when this is missing, the query processor will only cache/route this query without rewriting.
-* destination_hostgroup - route matched queries to this hostgroup. This happens unless there is a started transaction, and the logged in user has the transaction_persistent flag set to 1 (see `mysql_users` table).
-* cache_ttl - the number of seconds for which to cache the result of the query 
-* reconnect - feature not used
-* timeout - the maximum timeout in milliseconds with which the matched or rewritten query should be executed. If a query run for longer than the specific threshold, the query is automatically killed. If timeout is not specified, global variable mysql-default_query_timeout applies 
-* delay - number of milliseconds to delay the execution of the query. This is essentially a throttling mechanism and QoS, allowing to give priority to some queries instead of others. This value is added to the `mysql-default_query_delay` global variable that applies to all queries. Future version of ProxySQL will provide a more advanced throttling mechanism.
+* `rule_id` - the unique id of the rule. Rules are processed in rule_id order
+* `active` - only rules with active=1 will be considered by the query processing module
+* `username` - filtering criteria matching username. If is non-NULL, a query will match only if the connection is made with the correct username
+* `schemaname` - filtering criteria matching schemaname. If is non-NULL, a query will match only if the connection uses `schemaname` as default schema
+* `flagIN`, `flagOUT`, `apply` - these allow us to create "chains of rules" that get applied one after the other. An input flag value is set to 0, and only rules with flagIN=0 are considered at the beginning. When a matching rule is found for a specific query, flagOUT is evaluated and if NOT NULL the query will be flagged with the specified flag in flagOUT. If flagOUT differs from flagIN , the query will exit the current chain and enters a new chain of rules having flagIN as the new input flag. If flagOUT matches flagIN, the query will be re-evaluate again against the first rule with said flagIN. This happens until there are no more matching rules, or apply is set to 1 (which means this is the last rule to be applied)
+* `client_addr` - match traffic from a specific source
+* `proxy_addr` - match incoming traffic on a specific local IP
+* `proxy_port` - match incoming traffic on a specific local port
+* `digest` - match queries with a specific digest, as returned by `stats_mysql_query_digest`.`digest`
+* `match_digest` - regular expression that matches the query digest. The dialect of regular expressions used is that of re2 - https://github.com/google/re2
+* `match_pattern` - regular expression that matches the query text. The dialect of regular expressions used is that of re2 - https://github.com/google/re2
+* `negate_match_pattern` - if this is set to 1, only queries not matching the query text will be considered as a match. This acts as a NOT operator in front of the regular expression matching against match_pattern.
+* `replace_pattern` - this is the pattern with which to replace the matched pattern. It's done using RE2::Replace, so it's worth taking a look at the online documentation for that: https://github.com/google/re2/blob/master/re2/re2.h#L378. Note that this is optional, and when this is missing, the query processor will only cache, route, or set other parameters without rewriting.
+* `destination_hostgroup` - route matched queries to this hostgroup. This happens unless there is a started transaction and the logged in user has the transaction_persistent flag set to 1 (see `mysql_users` table).
+* `cache_ttl` - the number of milliseconds for which to cache the result of the query. Note: in ProxySQL 1.1 cache_ttl was in seconds
+* `reconnect` - feature not used
+* `timeout` - the maximum timeout in milliseconds with which the matched or rewritten query should be executed. If a query run for longer than the specific threshold, the query is automatically killed. If timeout is not specified, global variable `mysql-default_query_timeout` applies
+* `retries` - the maximum number of times a query needs to be re-executed in case of detected failure during the execution of the query. If retries is not specified, global variable `mysql-query_retries_on_failure` applies 
+* `delay` - number of milliseconds to delay the execution of the query. This is essentially a throttling mechanism and QoS, allowing to give priority to some queries instead of others. This value is added to the `mysql-default_query_delay` global variable that applies to all queries. Future version of ProxySQL will provide a more advanced throttling mechanism.
+* `mirror_flagOUT` and `mirror_hostgroup` - setting related to [mirroring](./mirroring.md) .
+* `error_msg` - query will be blocked, and the specified `error_msg` will be returned to the client.
+* `log` - query will be logged
+* `comment` - free form text field, usable for a descriptive comment of the query rule
 
-
-## `global_variables`
+## global_variables
 
 Here is the statement used to create the `global_variables` table:
 
@@ -190,22 +242,43 @@ Currently there are 2 classes of global variables, although more classes are in 
 
 For more information about particular variables, please see the dedicated section on [global variables](global_variables.md)
 
-# `mysql_collations`
+## mysql_collations
 
-```CREATE TABLE mysql_collations (
+Here is the statement used to create the `mysql_collations` table:
+
+```sql
+CREATE TABLE mysql_collations (
     Id INTEGER NOT NULL PRIMARY KEY,
     Collation VARCHAR NOT NULL,
     Charset VARCHAR NOT NULL,
     `Default` VARCHAR NOT NULL
-)```
+)
+```
 
-The available (charset, collation) pairs supported by ProxySQL. In principle, ProxySQL will validate that incoming connections have a supported charset, and will make sure that the pooled backend connections are switched to the correct charset before using them.
+The available `(charset, collation)` pairs supported by ProxySQL. In principle, ProxySQL will validate that incoming connections have a supported charset, and will make sure that the pooled backend connections are switched to the correct charset before using them.
+
+## scheduler
+
+Please refer to the [scheduler](scheduler.md) documentation.
+
+### Runtime tables
+
+Because the content of some of the tables in `main` schema may be different from what is currently loaded in *runtime* , the Admin interface exports some virtual tables that allows the access to internal representation of the runtime configuration. These tables can be joined with the *memory* configuration for various purpose, for example to find mismatches.  
+The tables currently available are:
+* runtime_global_variables
+* runtime_mysql_query_rules
+* runtime_mysql_replication_hostgroups
+* runtime_mysql_servers
+* runtime_scheduler
+
+
+#### Note on `main` schema
 
 Note that all the content of the in-memory tables (main database) are *lost* when ProxySQL is restarted if their content wasn't saved on disk database.
 
 # disk database
 
-The "disk" database has exactly the same tables as the "main" database, with the same semantics. The only major difference is that these tables are stored on disk, instead of being stored in-memory. Whenever ProxySQL is restarted, the in-memory "main" database will be populated starting from this database.
+The "disk" database has exactly the same tables as the "main" database (minus the `runtime_` tables), with the same semantics. The only major difference is that these tables are stored on disk, instead of being stored in-memory. Whenever ProxySQL is restarted, the in-memory "main" database will be populated starting from this database.
 
 Note that all the content of the in-memory tables (main database) are *lost* when ProxySQL is restarted if their content wasn't saved on disk database.
 
@@ -213,12 +286,14 @@ Note that all the content of the in-memory tables (main database) are *lost* whe
 
 This database contains metrics gathered by ProxySQL with respect to its internal functioning. Here you will find information on how often certain counters get triggered and the execution times of the queries that pass through ProxySQL.
 
-Generally, the tables from this database are populated on the fly when the SQL query against them is ran, by examining in-memory data structures.
+A user that connects to Admin with `admin-stats_credentials` credentials can only access to this schema.
+
+Generally, the tables from this database are populated on the fly when the SQL query against them is execute, by examining in-memory data structures.
 
 Here are the tables from the "stats" database:
 
-```bash
-mysql> mysql> show tables from stats;
+```sql
+Admin> show tables from stats;
 +--------------------------------+
 | tables                         |
 +--------------------------------+
@@ -235,14 +310,14 @@ mysql> mysql> show tables from stats;
 
 The purposes of the tables are as follows:
 * `stats_mysql_query_rules` - counts how many times each query rule was matched by queries
-* `stats_mysql_commands_counters` - counts how many times each type of SQL command was executed (e.g. UPDATE, DELETE, TRUNCATE, etc.) and how much time those executions took
+* `stats_mysql_commands_counters` - counts how many times each type of SQL command was executed (e.g. `UPDATE`, `DELETE`, `TRUNCATE`, etc.) and how much time those executions took
 * `stats_mysql_processlist` - a table that simulates the results of the "SHOW PROCESSLIST" mysqld command. This table will contain similar information aggregated across all backends
 * `stats_mysql_connection_pool` - a table that contains the statistics related to the usage of the connection pool for each backend server in each hostgroup
 * `stats_mysql_query_digest` - a table that contains statistics related to the queries routed through the ProxySQL server. How many times each query was executed, and the total execution time are just several provided stats. Here the queries are stripped from their numerical and literal parameters, which are replaced with a question mark, in order to be able to group all queries of the same type under the same row.
 * `stats_mysql_query_digest_reset` - identical to `stats_mysql_query_digest`, but querying it also atomically resets the internal statistics to zero. This can be used, for example, before making a change, to be able to compare the statistics before and after the change. This table can also be queried at regular interval to understand how workload change over time. Since ProxySQL has an internal database, it is also possible to save the result into an internal table.
 * `stats_mysql_global` - global statistics such as total number of queries, total number of successful connections, etc. The list of variables is expected to grow in future release.
 
-## `stats_mysql_query_rules`
+## stats_mysql_query_rules
 
 Here is the statement used to create the `stats_mysql_query_rules` table:
 
@@ -254,10 +329,10 @@ CREATE TABLE stats_mysql_query_rules (
 ```
 
 The fields have the following semantics:
-* rule_id - the id of the rule, can be joined with the `main.mysql_query_rules` table on the `rule_id` field.
-* hits - the total number of hits for this rule. One hit is registered if the current incoming query matches the rule. Each time a new query that matches the rule is processed, the number of hits is increased.
+* `rule_id` - the id of the rule, can be joined with the `main.mysql_query_rules` table on the `rule_id` field.
+* `hits` - the total number of hits for this rule. One hit is registered if the current incoming query matches the rule. Each time a new query that matches the rule is processed, the number of hits is increased.
 
-## `stats_mysql_commands_counters`
+## stats_mysql_commands_counters
 
 Here is the statement used to create the `stats_mysql_commands_counters` table:
 
@@ -282,14 +357,14 @@ CREATE TABLE stats_mysql_commands_counters (
 ```
 
 The fields have the following semantics:
-* command - the type of SQL command that has been executed. Examples: FLUSH, INSERT, KILL, SELECT FOR UPDATE, etc.
-* total_time - the total time spent executing commands of that time
+* `command` - the type of SQL command that has been executed. Examples: `FLUSH`, `INSERT`, `KILL`, `SELECT FOR UPDATE`, etc.
+* `Total_Time_us` - the total time spent executing commands of that type, in microseconds
 * total_cnt - the total number of commands of that type executed
 * cnt_100us, cnt_500us, ..., cnt_10s, cnt_INFs - the total number of commands of the given type which executed within the specified time limit and the previous one. For example, cnt_500us is the number of commands which executed within 500 microseconds, but more than 100 microseconds (because there's also a cnt_100us field). cnt_INFs is the number of commands whose execution exceeded 10 seconds.
 
-Note: statistics for table `stats_mysql_commands_counters` are processed only if global variable `mysql-commands_stats` is set to TRUE .
+Note: statistics for table `stats_mysql_commands_counters` are processed only if global variable `mysql-commands_stats` is set to `true` . This is the default, and used for other queries processing. It is recommended to **NOT** disable it.
 
-## `stats_mysql_processlist`
+## stats_mysql_processlist
 
 Here is the statement used to create the `stats_mysql_processlist` table:
 
@@ -313,17 +388,17 @@ CREATE TABLE stats_mysql_processlist (
 ```
 
 The fields have the following semantics:
-* ThreadID - the internal ID of the thread within ProxySQL. This is a 0-based numbering of the threads
-* SessionID - the internal global numbering of the ProxySQL sessions, or clients' connections (frontend). It's useful to be able to uniquely identify such a session, for example in order to be able to kill it, or monitor a specific session only.
-* user - the user with which the MySQL client connected to ProxySQL in order to execute this query
-* db - the schema currently selected
-* cli_host, cli_port - the (host, port) pair of the TCP connection between the MySQL client and ProxySQL
-* hostgroup - the currenct hostgroup. If a query being processed, this is the hostgroup towards which the query was or will be routed, or the default hostgroup. The routing is done by default in terms of the default destination hostgroup for the username with which the MySQL client connected to ProxySQL (based on `mysql_users` table, but it can be modified on a per-query basis by using the query rules in `mysql_query_rules`
-* l_srv_host, l_srv_port - the local (host, part) pair of the TCP connection between ProxySQL and the backend MySQL server from the current hostgroup
-* srv_host, srv_port - the (host, port) pair on which the backend MySQL server is listening for TCP connections
-* command - the type of MySQL query being executed (the MySQL command verb)
-* time_ms - the time in millisecond for which the query has been in the specified command state so far
-* info - the actual query being executed
+* `ThreadID` - the internal ID of the thread within ProxySQL. This is a 0-based numbering of the threads
+* `SessionID` - the internal global numbering of the ProxySQL sessions, or clients' connections (frontend). It's useful to be able to uniquely identify such a session, for example in order to be able to kill it, or monitor a specific session only.
+* `user` - the user with which the MySQL client connected to ProxySQL in order to execute this query
+* `db` - the schema currently selected
+* `cli_host`, `cli_port` - the (host, port) pair of the TCP connection between the MySQL client and ProxySQL
+* `hostgroup` - the currenct hostgroup. If a query being processed, this is the hostgroup towards which the query was or will be routed, or the default hostgroup. The routing is done by default in terms of the default destination hostgroup for the username with which the MySQL client connected to ProxySQL (based on `mysql_users` table, but it can be modified on a per-query basis by using the query rules in `mysql_query_rules`
+* `l_srv_host`, `l_srv_port` - the local (host, part) pair of the TCP connection between ProxySQL and the backend MySQL server from the current hostgroup
+* `srv_host`, `srv_port` - the (host, port) pair on which the backend MySQL server is listening for TCP connections
+* `command` - the type of MySQL query being executed (the MySQL command verb)
+* `time_ms` - the time in millisecond for which the query has been in the specified command state so far
+* `info` - the actual query being executed
 
 Please note that this is just a snapshot in time of the actual MySQL queries being ran. There is no guarantee that the same queries will be running a fraction of a second later.
 Here is how the results look like:
@@ -344,7 +419,7 @@ mysql> select * from stats_mysql_processlist;
 **Note:** ProxySQL also support the commands **SHOW PROCESSLIST** and **SHOW FULL PROCESSLIST** to return information related to current sessions.
 
 
-## `stats_mysql_connection_pool`
+## stats_mysql_connection_pool
 
 Here is the statement used to create the `stats_mysql_connection_pool` table:
 ```sql
@@ -359,8 +434,8 @@ CREATE TABLE stats_mysql_connection_pool (
     ConnERR INT,
     Queries INT,
     Bytes_data_sent INT,
-    Bytes_data_recv INT
-)
+    Bytes_data_recv INT,
+    Latency_ms INT)
 ```
 
 Each row represents a backend server within a hostgroup. The fields have the following semantics:
@@ -374,14 +449,16 @@ Each row represents a backend server within a hostgroup. The fields have the fol
 * Queries - the number of queries routed towards this particular backend server
 * Bytes_data_sent - the amount of data sent to the backend. This does not include metadata (packets' headers)
 * Bytes_data_recv - the amount of data received from the backend. This does not include metadata (packets' headers, OK/ERR packets, fields' description, etc)
+* Latency_ms - the currently ping time in milliseconds, as reported from Monitor
 
 
-## `stats_mysql_query_digest` and `stats_mysql_query_digest_reset`
+## stats_mysql_query_digest and stats_mysql_query_digest_reset
 
 Here is the statement used to create the `stats_mysql_query_digest` table:
 
 ```sql
 CREATE TABLE stats_mysql_query_digest (
+    hostgroup INT,
     schemaname VARCHAR NOT NULL,
     username VARCHAR NOT NULL,
     digest VARCHAR NOT NULL,
@@ -410,6 +487,7 @@ mysql> select * from stats_mysql_query_digest order by count_star desc limit 2;
 ```
 
 The fields have the following semantics:
+* hostgroup - the hostgroup where the query was sent. A value of `-1` represent a query hitting the Query Cache
 * schemaname - the schema that is currently being queried
 * username - the username with which the MySQL client connected to ProxySQL
 * digest - a hexadecimal hash that uniquely represents a query with its parameters stripped
@@ -422,13 +500,13 @@ The fields have the following semantics:
 
 Note that the times in this table refers to the time elapsed between the time in which ProxySQL receives the query from the client, and the time in which ProxySQL is ready to send the query to the client. Therefore these timers represent the elapsted time as close as possible as seen from the client. To be more precise, it is possible that before executing a query, ProxySQL needs to change charset or schema, find a new backend if the current one is not available anymore, run the query on a different backend if the current one fails, or wait a connection to become free because currently all the connection are in use.
 
-**Note:** statistics for table `stats_mysql_query_digest` are processed only if global variable `mysql-query_digests` is set to TRUE .
+**Note:** statistics for table `stats_mysql_query_digest` are processed only if global variable `mysql-query_digests` is set to `true` . This is the default, and used for other queries processing. It is recommended to **NOT** disable it.
 
 
 The `stats_mysql_query_digest_reset` table is identical in content and structure, but querying it also atomically resets the internal statistics to zero.
 
 
-## `stats_mysql_global`
+## stats_mysql_global
 
 Here is the statement used to create the `stats_mysql_query_global` table:
 
@@ -449,8 +527,8 @@ Each row represents a global statistic at the proxy level related to MySQL. Curr
 The same output is available using the **SHOW MYSQL STATUS** command.
 
 Example:
-```bash
-mysql> select * from stats.stats_mysql_global;
+```sql
+Admin> select * from stats.stats_mysql_global;
 +------------------------------+----------------+
 | Variable_Name                | Variable_Value |
 +------------------------------+----------------+

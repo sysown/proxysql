@@ -27,15 +27,18 @@ mysql_variables=
 	interfaces="0.0.0.0:6033;/tmp/proxysql.sock"
 	default_schema="information_schema"
 	stacksize=1048576
-	server_version="5.1.30"
-	connect_timeout_server=10000
+	server_version="5.5.30"
+	connect_timeout_server=3000
 	monitor_history=600000
 	monitor_connect_interval=60000
-	monitor_ping_interval=30000
-	ping_interval_server=10000
-	ping_timeout_server=200
+	monitor_ping_interval=10000
+	monitor_read_only_interval=1500
+	monitor_read_only_timeout=500
+	ping_interval_server=120000
+	ping_timeout_server=500
 	commands_stats=true
 	sessions_sort=true
+	connect_retries_on_failure=10
 }
 
 
@@ -112,6 +115,38 @@ mysql_query_rules:
 #		apply=1
 #	}
 )
+
+scheduler=
+(
+#  {
+#    id=1
+#    active=0
+#    interval_ms=10000
+#    filename="/var/lib/proxysql/proxysql_galera_checker.sh"
+#    arg1="0"
+#    arg2="0"
+#    arg3="0"
+#    arg4="1"
+#    arg5="/var/lib/proxysql/proxysql_galera_checker.log"
+#  }
+)
+
+
+mysql_replication_hostgroups=
+(
+#        {
+#                writer_hostgroup=30
+#                reader_hostgroup=40
+#                comment="test repl 1"
+#       },
+#       {
+#                writer_hostgroup=50
+#                reader_hostgroup=60
+#                comment="test repl 2"
+#        }
+)
+
+
 
 
 # http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar
