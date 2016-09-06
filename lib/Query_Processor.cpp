@@ -308,6 +308,7 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_TEMPORARY]=(char *)"CREATE_TEMPORARY";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_TRIGGER]=(char *)"CREATE_TRIGGER";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_USER]=(char *)"CREATE_USER";
+  commands_counters_desc[MYSQL_COM_QUERY_DEALLOCATE]=(char *)"DEALLOCATE";
   commands_counters_desc[MYSQL_COM_QUERY_DELETE]=(char *)"DELETE";
   commands_counters_desc[MYSQL_COM_QUERY_DESCRIBE]=(char *)"DESCRIBE";
   commands_counters_desc[MYSQL_COM_QUERY_DROP_DATABASE]=(char *)"DROP_DATABASE";
@@ -316,6 +317,7 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_DROP_TRIGGER]=(char *)"DROP_TRIGGER";
   commands_counters_desc[MYSQL_COM_QUERY_DROP_USER]=(char *)"DROP_USER";
   commands_counters_desc[MYSQL_COM_QUERY_GRANT]=(char *)"GRANT";
+  commands_counters_desc[MYSQL_COM_QUERY_EXECUTE]=(char *)"EXECUTE";
   commands_counters_desc[MYSQL_COM_QUERY_EXPLAIN]=(char *)"EXPLAIN";
   commands_counters_desc[MYSQL_COM_QUERY_FLUSH]=(char *)"FLUSH";
   commands_counters_desc[MYSQL_COM_QUERY_INSERT]=(char *)"INSERT";
@@ -1060,14 +1062,36 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 			break;
 		case 'd':
 		case 'D':
+			if (!strcasecmp("DEALLOCATE",token)) { // DEALLOCATE PREPARE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("PREPARE",token)) {
+					ret=MYSQL_COM_QUERY_DEALLOCATE;
+					break;
+				}
+			}
 			if (!strcasecmp("DELETE",token)) { // DELETE
 				ret=MYSQL_COM_QUERY_DELETE;
+				break;
+			}
+			break;
+		case 'e':
+		case 'E':
+			if (!strcasecmp("EXECUTE",token)) { // INSERT
+				ret=MYSQL_COM_QUERY_EXECUTE;
 			}
 			break;
 		case 'i':
 		case 'I':
 			if (!strcasecmp("INSERT",token)) { // INSERT
 				ret=MYSQL_COM_QUERY_INSERT;
+			}
+			break;
+		case 'p':
+		case 'P':
+			if (!strcasecmp("PREPARE",token)) { // ROLLBACK
+				ret=MYSQL_COM_QUERY_PREPARE;
+				break;
 			}
 			break;
 		case 'r':

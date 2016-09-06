@@ -1196,6 +1196,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				set_status_user_variable(true);
 		}
 	}
+	if (get_status_prepared_statement()==false) { // we search if prepared was already executed
+		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {
+			set_status_prepared_statement(true);
+		}
+	}
 	if (get_status_temporary_table()==false) { // we search for temporary if not already set
 		if (!strncasecmp(query_digest_text,"CREATE TEMPORARY TABLE ", strlen("CREATE TEMPORARY TABLE "))) {
 			set_status_temporary_table(true);
