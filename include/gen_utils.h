@@ -22,6 +22,15 @@ struct _PtrSize_t {
 }; 
 */
 
+#ifndef def_fastrand
+inline int fastrand() {
+	g_seed = (214013*g_seed+2531011);
+	//return (g_seed>>16)&0x7FFF;
+	return (g_seed>>16);
+}
+#define def_fastrand
+#endif
+
 class PtrArray {
 	private:
 	void expand(unsigned int);

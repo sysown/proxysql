@@ -16,9 +16,9 @@ struct _rwlock_t {
 
 /* Pause instruction to prevent excess processor bus usage */
 #define cpu_relax_pa() asm volatile("pause\n": : :"memory")
-#define cpu_relax_us() usleep(10)
+#define cpu_relax_us() usleep(1)
 
-#define RELAX_TRIES	1
+#define RELAX_TRIES	100
 
 static inline unsigned xchg_32(void *ptr, unsigned x) {
     __asm__ __volatile__("xchgl %0,%1"

@@ -773,6 +773,9 @@ __thread char * mysql_thread___monitor_password;
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
+
+__thread unsigned int g_seed;
+
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
 extern ProxySQL_GlobalVariables GloVars;
@@ -853,6 +856,7 @@ extern __thread char * mysql_thread___monitor_password;
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
+extern __thread unsigned int g_seed;
 #endif /* PROXYSQL_EXTERN */
 
 
