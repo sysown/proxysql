@@ -24,16 +24,19 @@ enum MySerStatus {
 
 class MySrvConnList {
 	private:
+	PtrArray *conns;
 	MySrvC *mysrvc;
 	int find_idx(MySQL_Connection *);
 	public:
-	PtrArray *conns;
 	MySrvConnList(MySrvC *);
 	~MySrvConnList();
 	void add(MySQL_Connection *);
 	void remove(MySQL_Connection *);
+	MySQL_Connection *remove(int);
 	MySQL_Connection * get_random_MyConn();
+	unsigned int conns_length();
 	void drop_all_connections();
+	MySQL_Connection *index(unsigned int);
 };
 
 class MySrvC {	// MySQL Server Container
