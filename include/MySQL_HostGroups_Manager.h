@@ -26,12 +26,25 @@ class MySrvConnList {
 	private:
 	PtrArray *conns;
 	MySrvC *mysrvc;
-	int find_idx(MySQL_Connection *);
+	int find_idx(MySQL_Connection *c) {
+		//for (unsigned int i=0; i<conns_length(); i++) {
+		for (unsigned int i=0; i<conns->len; i++) {
+			MySQL_Connection *conn=(MySQL_Connection *)conns->index(i);
+			if (conn==c) {
+				return (unsigned int)i;
+			}
+		}
+		return -1;
+	}
 	public:
 	MySrvConnList(MySrvC *);
 	~MySrvConnList();
 	void add(MySQL_Connection *);
-	void remove(MySQL_Connection *);
+	void remove(MySQL_Connection *c) {
+		int i=find_idx(c);
+		assert(i>=0);
+		conns->remove_index_fast((unsigned int)i);
+	}
 	MySQL_Connection *remove(int);
 	MySQL_Connection * get_random_MyConn();
 	unsigned int conns_length();

@@ -1,7 +1,7 @@
 #ifndef __CLASS_PTR_ARRAY_H
 #define __CLASS_PTR_ARRAY_H
 #include "proxysql.h"
-#include "cpp.h"
+///#include "cpp.h"
 
 /*
 #ifdef __cplusplus
@@ -22,6 +22,16 @@ struct _PtrSize_t {
 }; 
 */
 
+#define MIN_ARRAY_LEN 8
+#define MIN_ARRAY_DELETE_RATIO  8
+
+static unsigned int l_near_pow_2 (unsigned int n) {
+	unsigned int i = 1;
+	while (i < n) i <<= 1;
+	return i ? i : n;
+}
+
+
 #ifndef def_fastrand
 inline int fastrand() {
 	g_seed = (214013*g_seed+2531011);
@@ -33,8 +43,24 @@ inline int fastrand() {
 
 class PtrArray {
 	private:
-	void expand(unsigned int);
-	void shrink();
+	void expand(unsigned int more) {
+		if ( (len+more) > size ) {
+			unsigned int new_size=l_near_pow_2(len+more);
+			void *new_pdata=malloc(new_size*sizeof(void *));
+			memset(new_pdata,0,new_size*sizeof(void *));
+			if (pdata) {
+				memcpy(new_pdata,pdata,size*sizeof(void *));
+				free(pdata);
+			}
+			size=new_size;
+			pdata=(void **)new_pdata;
+		}
+	}
+	void shrink() {
+		unsigned int new_size=l_near_pow_2(len+1);
+		pdata=(void **)realloc(pdata,new_size*sizeof(void *));
+		size=new_size;
+	}
 //	bool use_l_alloc;
 	public:
 //	void * operator new(size_t);
@@ -45,22 +71,73 @@ class PtrArray {
 	unsigned int len;
 	unsigned int size;
 	//PtrArray(unsigned int __size=0, bool _use_l_alloc=false);
-	PtrArray(unsigned int __size=0);
-	~PtrArray();
+	PtrArray(unsigned int __size=0) {
+		len=0;
+		pdata=NULL;
+		size=0;
+		if (__size) {
+			expand(__size);
+		}
+		size=__size;
+	}
+	~PtrArray() {
+		if (pdata) ( free(pdata) );
+		pdata=NULL;
+	}
 
-	void *index(unsigned int i) { return pdata[i];} ;
+	void *index(unsigned int i) { return pdata[i];}
 
 	void add(void *p) {
 		if (len==size) {
 			expand(1);
 		}
 		pdata[len++]=p;
-	};
+	}
 
-	bool remove(void *);
-	void * remove_index(unsigned int);
-	bool remove_fast(void *);
-	void * remove_index_fast(unsigned int);
+	bool remove(void *p) {
+		unsigned int i;
+		for (i=0; i<len; i++) {
+			if (pdata[i]==p) {
+				remove_index(i);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void * remove_index(unsigned int i) {
+		void *r=pdata[i];
+		if (i != (len-1)) {
+			memmove(pdata+(i)*sizeof(void *),pdata+(i+1)*sizeof(void *),(len-i-1)*sizeof(void *));
+		}
+		len--;
+		if ( ( len>MIN_ARRAY_LEN ) && ( size > len*MIN_ARRAY_DELETE_RATIO ) ) {
+			shrink();
+		}
+		return r;
+	}
+
+	bool remove_fast(void *p) {
+		unsigned int i;
+		for (i=0; i<len; i++) {
+			if (pdata[i]==p) {
+				remove_index_fast(i);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void * remove_index_fast(unsigned int i) {
+		void *r=pdata[i];
+		if (i != (len-1))
+			pdata[i]=pdata[len-1];
+		len--;
+		if ( ( len>MIN_ARRAY_LEN ) && ( size > len*MIN_ARRAY_DELETE_RATIO ) ) {
+			//shrink(); // FIXME: when shrink is called, is r invalid ??
+		}
+		return r;
+	}
 };
 
 

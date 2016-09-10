@@ -90,6 +90,7 @@ void MySrvList::remove(MySrvC *s) {
 	servers->remove_index_fast((unsigned int)i);
 }
 
+/*
 int MySrvConnList::find_idx(MySQL_Connection *c) {
   for (unsigned int i=0; i<conns_length(); i++) {
     MySQL_Connection *conn=(MySQL_Connection *)conns->index(i);
@@ -99,12 +100,15 @@ int MySrvConnList::find_idx(MySQL_Connection *c) {
   }
   return -1;
 }
+*/
 
+/*
 void MySrvConnList::remove(MySQL_Connection *c) {
 	int i=find_idx(c);
 	assert(i>=0);
 	conns->remove_index_fast((unsigned int)i);
 }
+*/
 
 void MySrvConnList::drop_all_connections() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Dropping all connections (%lu total) on MySrvConnList %p for server %s:%d , hostgroup=%d , status=%d\n", conns_length(), this, mysrvc->address, mysrvc->port, mysrvc->myhgc->hid, mysrvc->status);
