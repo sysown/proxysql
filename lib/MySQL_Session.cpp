@@ -2124,12 +2124,20 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 	
 //	if (rand()%3==0) {
 		MySQL_Connection *mc=NULL;
-		mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+		//mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+		int i=100;
+		while (i) {
 		if (mc==NULL) {
 			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
 		}
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
+			if (i > 1) {
+				mybe->server_myds->return_MySQL_Connection_To_Pool();
+				mc=NULL;
+			}
+		}
+		i--;
 		}
 //	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);

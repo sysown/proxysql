@@ -969,8 +969,8 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		detach_connection();
 		unplug_backend();
 		//mc->async_state_machine=ASYNC_IDLE;
-		sess->thread->push_MyConn_local(mc);
-		//MyHGM->push_MyConn_to_pool(mc);  // #644
+		//sess->thread->push_MyConn_local(mc);
+		MyHGM->push_MyConn_to_pool(mc);  // #644
 	}
 }
 
