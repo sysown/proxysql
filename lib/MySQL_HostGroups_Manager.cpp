@@ -279,7 +279,11 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.autocommit_cnt_filtered=0;
 	status.commit_cnt_filtered=0;
 	status.rollback_cnt_filtered=0;
+#ifdef MHM_PTHREAD_MUTEX
+	pthread_mutex_init(&lock, NULL);
+#else
 	spinlock_rwlock_init(&rwlock);
+#endif
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -300,8 +304,12 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	if (admindb) {
 		delete admindb;
 	}
+#ifdef MHM_PTHREAD_MUTEX
+	pthread_mutex_destroy(&lock);
+#endif
 }
 
+/*
 void MySQL_HostGroups_Manager::rdlock() {
 	spin_wrlock(&rwlock);
 }
@@ -309,15 +317,23 @@ void MySQL_HostGroups_Manager::rdlock() {
 void MySQL_HostGroups_Manager::rdunlock() {
 	spin_wrunlock(&rwlock);
 }
-
+*/
 
 // wrlock() is only required during commit()
 void MySQL_HostGroups_Manager::wrlock() {
+#ifdef MHM_PTHREAD_MUTEX
+	pthread_mutex_lock(&lock);
+#else
 	spin_wrlock(&rwlock);
+#endif
 }
 
 void MySQL_HostGroups_Manager::wrunlock() {
+#ifdef MHM_PTHREAD_MUTEX
+	pthread_mutex_unlock(&lock);
+#else
 	spin_wrunlock(&rwlock);
+#endif
 }
 
 unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
