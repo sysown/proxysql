@@ -54,6 +54,21 @@ char *s_strdup(char *s) {
 	return ret;
 }
 
+
+static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
+	if (sha1_pass==NULL) return NULL;
+	char *buff=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
+	buff[0]='*';
+	buff[SHA_DIGEST_LENGTH*2+1]='\0';
+	int i;
+	uint8_t a;
+	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
+		memcpy(&a,sha1_pass+i,1);
+		sprintf(buff+1+2*i, "%02X", a);
+	}
+	return buff;
+}
+
 static volatile int load_main_=0;
 static volatile bool nostart_=false;
 
@@ -166,6 +181,7 @@ static char * admin_variables_names[]= {
   (char *)"telnet_stats_ifaces",
   (char *)"refresh_interval",
 	(char *)"read_only",
+	(char *)"hash_passwords",
 	(char *)"version",
 #ifdef DEBUG
   (char *)"debug",
@@ -2388,6 +2404,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	//variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
 	//variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
+	variables.hash_passwords=true;	// issue #676
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 	variables.admin_version=(char *)PROXYSQL_VERSION;
 #ifdef DEBUG
@@ -2919,6 +2936,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"read_only")) {
 		return strdup((variables.admin_read_only ? "true" : "false"));
 	}
+	if (!strcasecmp(name,"hash_passwords")) {
+		return strdup((variables.hash_passwords ? "true" : "false"));
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -3093,6 +3113,17 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"hash_passwords")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.hash_passwords=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.hash_passwords=false;
+			return true;
+		}
+		return false;
 	}
 	if (!strcasecmp(name,"read_only")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -3752,9 +3783,38 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
+			char *password=NULL;
+			if (variables.hash_passwords) { // We must use hashed password. See issue #676
+				// Admin needs to hash the password
+				if (r->fields[1] && strlen(r->fields[1])) {
+					if (r->fields[1][0]=='*') { // the password is already hashed
+						password=strdup(r->fields[1]);
+					} else { // we must hash it
+						uint8 hash_stage1[SHA_DIGEST_LENGTH];
+						uint8 hash_stage2[SHA_DIGEST_LENGTH];
+						SHA_CTX sha1_context;
+						SHA1_Init(&sha1_context);
+						SHA1_Update(&sha1_context, r->fields[1], strlen(r->fields[1]));
+						SHA1_Final(hash_stage1, &sha1_context);
+						SHA1_Init(&sha1_context);
+						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
+						SHA1_Final(hash_stage2, &sha1_context);
+						password=sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
+					}
+				} else {
+					password=strdup((char *)""); // we also generate a new string if hash_passwords is set
+				}
+			} else {
+				if (r->fields[1]) {
+					password=r->fields[1];
+				} else {
+					password=(char *)"";
+				}
+			}
 			GloMyAuth->add(
 				r->fields[0], // username
-				(r->fields[1]==NULL ? (char *)"" : r->fields[1]), //password
+				//(r->fields[1]==NULL ? (char *)"" : r->fields[1]), //password
+				password, // before #676, wewere always passing the password. Now it is possible that the password can be hashed
 				usertype, // backend/frontend
 				(strcmp(r->fields[2],"1")==0 ? true : false) , // use_ssl
 				atoi(r->fields[3]), // default_hostgroup
@@ -3765,6 +3825,9 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 				(strcmp(r->fields[7],"1")==0 ? true : false), // fast_forward
 				( atoi(r->fields[8])>0 ? atoi(r->fields[8]) : 0)  // max_connections
 			);
+			if (variables.hash_passwords) {
+				free(password); // because we always generate a new string
+			}
 		}
 	}
 //	if (error) free(error);
