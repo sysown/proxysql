@@ -2,7 +2,7 @@
 
 ProxySQL is a protocol aware proxy.  
 Because ProxySQL performs routing based on traffic, when a client connects it cannot yet identify a destination HG, therefore ProxySQL needs to authenticate the client.  
-For this reason, ProxySQL needs to have some information related to the password of the user: enough information to allow the authentication.
+For this reason, it needs to have some information related to the password of the user: enough information to allow the authentication.
 
 ProxySQL also needs these information to later establish connections to backends, or issue `CHANGE_USER` within already established connections.
 
@@ -35,7 +35,7 @@ During the first client authentication, ProxySQL can derive a partially hashed p
 
 ### How to input new passwords
 
-The Admin interface of ProxySQL does not have any  `PASSWORD()` function. That means that:
+The Admin interface of ProxySQL does not have any  `PASSWORD()` function. This means that:
 * passwords are stored in the format they are inserted, either in plain text or hashed
 * while inputting password in the Admin interface, it is not possible to derive an hashed password from a plain text password (yet you can run `SELECT PASSWORD('password')` in MySQL server and copy paste the result)
 
@@ -43,9 +43,9 @@ The Admin interface of ProxySQL does not have any  `PASSWORD()` function. That m
 ### Variable `admin-hash_passwords`
 
 To facilitate the support of hashed passwords, ProxySQL v1.2.3 introduced a new global boolean variable, `admin-hash_password`, enabled by default.  
-When `admin-hash_password=true` , password are automatically _at_RUNTIME_only_ hashed when running `LOAD MYSQL USERS TO RUNTIME` .
-Passwords in `mysql_users` are yet *not* automatically hashed.  
-Nonetheless, it is easily possible to hash the password in `mysql_users` table, both in-memory and on-disk. It is enough to copy users from RUNTIME, for example running `SAVE MYSQL USERS FROM RUNTIME` after `LOAD MYSQL USERS TO RUNTIME`, and then `SAVE MYSQL USERS TO DISK` (recommended).
+When `admin-hash_password=true` , password are automatically hashed _at RUNTIME only_ when running `LOAD MYSQL USERS TO RUNTIME` .
+Passwords in `mysql_users` tables are yet *not* automatically hashed.  
+Nonetheless, it is easily possible to hash the passwords in `mysql_users` table, both in-memory and on-disk. It is enough to copy users _from RUNTIME_, for example running `SAVE MYSQL USERS FROM RUNTIME` after `LOAD MYSQL USERS TO RUNTIME`, and then `SAVE MYSQL USERS TO DISK` (recommended).
 
 Here an example:
 ```sql
