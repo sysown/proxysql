@@ -27,7 +27,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_CACHE_VERSION "1.2.0817" DEB
+#define QUERY_CACHE_VERSION "1.2.0905" DEB
 
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -47,7 +47,7 @@ class KV_BtreeArray {
 	KV_BtreeArray();
 	~KV_BtreeArray();
 	uint64_t get_data_size();
-	void purge_some(unsigned long long);
+	void purge_some(unsigned long long, bool);
 	int cnt();
 	bool replace(uint64_t key, QC_entry_t *entry);
 	QC_entry_t *lookup(uint64_t key);
@@ -122,30 +122,75 @@ KV_BtreeArray::~KV_BtreeArray() {
 
 
 uint64_t KV_BtreeArray::get_data_size() {
-	uint64_t r = __sync_fetch_and_add(&Glo_num_entries,0) * (sizeof(QC_entry_t)+sizeof(QC_entry_t *)*2+sizeof(uint64_t)*2) +  __sync_fetch_and_add(&Glo_size_values,0) ;
+	uint64_t r = __sync_fetch_and_add(&Glo_num_entries,0) * (sizeof(QC_entry_t)+sizeof(QC_entry_t *)*2+sizeof(uint64_t)*2); // +  __sync_fetch_and_add(&Glo_size_values,0) ;
 	return r;
 };
 
-void KV_BtreeArray::purge_some(unsigned long long QCnow_ms) {
+void KV_BtreeArray::purge_some(unsigned long long QCnow_ms, bool aggressive) {
 	uint64_t ret=0, i, _size=0;
 	QC_entry_t *qce;
+	unsigned long long access_ms_min=0;
+	unsigned long long access_ms_max=0;
   spin_rdlock(&lock);
 	for (i=0; i<ptrArray->len;i++) {
 		qce=(QC_entry_t *)ptrArray->index(i);
-		if (qce->expire_ms==EXPIRE_DROPIT || qce->expire_ms<QCnow_ms) {
-			ret++;
-			_size+=qce->length;
+		if (aggressive) { // we have been asked to do aggressive purging
+			if (access_ms_min==0) {
+				access_ms_min = qce->access_ms;
+			} else {
+				if (access_ms_min > qce->access_ms) {
+					access_ms_min = qce->access_ms;
+				}
+			}
+			if (access_ms_max==0) {
+				access_ms_max = qce->access_ms;
+			} else {
+				if (access_ms_max < qce->access_ms) {
+					access_ms_max = qce->access_ms;
+				}
+			}
+		} else { // no aggresssive purging , legacy algorithm
+			if (qce->expire_ms==EXPIRE_DROPIT || qce->expire_ms<QCnow_ms) {
+				ret++;
+				_size+=qce->length;
+			}
 		}
 	}
 	freeable_memory=_size;
 	spin_rdunlock(&lock);
-	if ( (freeable_memory + ret * (sizeof(QC_entry_t)+sizeof(QC_entry_t *)*2+sizeof(uint64_t)*2) ) > get_data_size()*0.01) {
+	bool cond_freeable_memory=false;
+	if (aggressive==false) {
+		uint64_t total_freeable_memory=0;
+		total_freeable_memory=freeable_memory + ret * (sizeof(QC_entry_t)+sizeof(QC_entry_t *)*2+sizeof(uint64_t)*2);
+		if ( total_freeable_memory > get_data_size()*0.01 ) {
+			cond_freeable_memory=true;	// there is memory that can be freed
+		}
+	}
+	//if ( freeable_memory + ret * (sizeof(QC_entry_t) > get_data_size()*0.01) {
+	if ( aggressive || cond_freeable_memory ) {
 		uint64_t removed_entries=0;
 		uint64_t freed_memory=0;
+		unsigned long long access_ms_lower_mark=0;
+		if (aggressive) {
+			access_ms_lower_mark=access_ms_min+(access_ms_max-access_ms_min)*0.1; // hardcoded for now. Remove the entries with access time in the 10% range closest to access_ms_min
+		}
   	spin_wrlock(&lock);
 		for (i=0; i<ptrArray->len;i++) {
 			qce=(QC_entry_t *)ptrArray->index(i);
-			if ((qce->expire_ms==EXPIRE_DROPIT || qce->expire_ms<QCnow_ms) && (__sync_fetch_and_add(&qce->ref_count,0)<=1)) {
+			bool drop_entry=false;
+			if (__sync_fetch_and_add(&qce->ref_count,0)<=1) { // currently not in use
+				if (qce->expire_ms==EXPIRE_DROPIT || qce->expire_ms<QCnow_ms) { //legacy algorithm
+					drop_entry=true;
+				}
+				if (aggressive) { // we have been asked to do aggressive purging
+					if (drop_entry==false) { // if the entry is already marked to be dropped, no further check
+						if (qce->access_ms < access_ms_lower_mark) {
+							drop_entry=true;
+						}
+					}
+				}
+			}
+			if (drop_entry) {
 				qce=(QC_entry_t *)ptrArray->remove_index_fast(i);
 
 		    btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
@@ -242,6 +287,7 @@ uint64_t Query_Cache::get_data_size_total() {
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
 		r+=KVs[i]->get_data_size();
 	}
+	r += __sync_fetch_and_add(&Glo_size_values,0);
 	return r;
 };
 
@@ -364,9 +410,10 @@ void * Query_Cache::purgeHash_thread(void *) {
 				max_memory_size=mysql_thread___query_cache_size_MB*1024*1024;
 			}
 		}
-		if (current_used_memory_pct() < purge_threshold_pct_min ) continue;
+		unsigned int curr_pct=current_used_memory_pct();
+		if (curr_pct < purge_threshold_pct_min ) continue;
 		for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
-			KVs[i]->purge_some(QCnow_ms);
+			KVs[i]->purge_some(QCnow_ms, (curr_pct > purge_threshold_pct_max));
 		}
 	}
 	delete mysql_thr;
