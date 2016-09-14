@@ -1595,6 +1595,7 @@ __get_pkts_from_client:
 										break;
 									}
 									CurrentQuery.stmt_info=stmt_info;
+									CurrentQuery.start_time=thread->curtime;
 									//stmt_execute_metadata_t *stmt_meta=client_myds->myprot.get_binds_from_pkt(pkt.ptr,pkt.size,stmt_info->num_params);
 
 									// we now take the metadata associated with STMT_EXECUTE from MySQL_STMTs_meta
