@@ -597,7 +597,18 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		free(unstripped);
 		return true;
 	}
-
+	if ( (pkt->size == 18) && (strncasecmp((char *)"SHOW WARNINGS",(char *)pkt->ptr+5,13)==0) ) {
+		SQLite3_result * resultset=new SQLite3_result(3);
+		resultset->add_column_definition(SQLITE_TEXT,"Level");
+		resultset->add_column_definition(SQLITE_TEXT,"Code");
+		resultset->add_column_definition(SQLITE_TEXT,"Message");
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot);
+		delete resultset;
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
 	return false;
 }
 
