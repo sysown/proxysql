@@ -2,6 +2,7 @@
 #include "cpp.h"
 
 #include <ctime>
+#include <iostream>
 
 #define QUERY1	"SELECT ?"
 #define NUMPREP	100000

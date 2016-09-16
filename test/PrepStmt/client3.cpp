@@ -3,6 +3,7 @@
 
 #include <ctime>
 #include <thread>
+#include <iostream>
 
 #define QUERY1	"SELECT ?"
 #define NUMPREP	100000

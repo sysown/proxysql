@@ -1474,6 +1474,18 @@ __get_pkts_from_client:
 							case _MYSQL_COM_CHANGE_USER:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
+							case _MYSQL_COM_STMT_RESET: // FIXME: not really implemented yet
+								{
+									l_free(pkt.size,pkt.ptr);
+									client_myds->setDSS_STATE_QUERY_SENT_NET();
+									unsigned int nTrx=NumActiveTransactions();
+									uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+									if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+									client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+									client_myds->DSS=STATE_SLEEP;
+									status=WAITING_CLIENT_DATA;
+								}
+								break;
 							case _MYSQL_COM_STMT_CLOSE:
 								{
 									uint32_t stmt_global_id=0;
