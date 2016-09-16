@@ -145,13 +145,19 @@ class MySQL_STMTs_meta {
 };
 
 // class MySQL_STMTs_local associates a global statement ID with a local statement ID for a specific connection
+
 class MySQL_STMTs_local {
 	private:
 	unsigned int num_entries;
+	bool is_client;
 	std::map<uint32_t, MYSQL_STMT *> m;
 	public:
-	MySQL_STMTs_local() {
+	MySQL_STMTs_local(bool _ic) {
+		is_client=_ic;
 		num_entries=0;
+	}
+	void set_is_client() {
+		is_client=true;
 	}
 	~MySQL_STMTs_local();
 	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt);
@@ -180,8 +186,9 @@ class MySQL_STMTs_local {
 		}
 		return false;	// not found
 	}
-	bool erase(uint32_t global_statement_id, bool client);
+	bool erase(uint32_t global_statement_id);
 	uint64_t compute_hash(unsigned int hostgroup, char *user, char *schema, char *query, unsigned int query_length);
+	unsigned int get_num_entries() { return num_entries; }
 };
 
 

@@ -1492,7 +1492,7 @@ __get_pkts_from_client:
 									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 									// FIXME: no input validation
 									//sess_STMTs_meta->erase(stmt_global_id);
-									client_myds->myconn->local_stmts->erase(stmt_global_id, true);
+									client_myds->myconn->local_stmts->erase(stmt_global_id);
 								}
 								l_free(pkt.size,pkt.ptr);
 								// FIXME: this is not complete. Counters should be decreased
@@ -1533,7 +1533,7 @@ __get_pkts_from_client:
 //										Session_STMT_Manager = new MySQL_STMT_Manager();
 //									}
 									if (client_myds->myconn->local_stmts==NULL) {
-										client_myds->myconn->local_stmts=new MySQL_STMTs_local();
+										client_myds->myconn->local_stmts=new MySQL_STMTs_local(true);
 									}
 									uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 									MySQL_STMT_Global_info *stmt_info=NULL;

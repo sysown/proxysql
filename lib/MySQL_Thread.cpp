@@ -1611,7 +1611,8 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 #endif
 	//sess->client_myds->myconn=new MySQL_Connection();
 	//MySQL_Connection *myconn=sess->client_myds->myconn;
-	MySQL_Connection *myconn=new MySQL_Connection;
+	MySQL_Connection *myconn=new MySQL_Connection();
+	myconn->set_is_client(); // this is used for prepared statements
 	sess->client_myds->attach_connection(myconn);
 	//myconn=new MySQL_Connection();  // 20141011
 //	if (mysql_thread___have_compress) {

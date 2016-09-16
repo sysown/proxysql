@@ -78,15 +78,17 @@ MySQL_STMTs_local::~MySQL_STMTs_local() {
 	m.erase(m.begin(),m.end());
 }
 
-bool MySQL_STMTs_local::erase(uint32_t global_statement_id, bool client) {
+bool MySQL_STMTs_local::erase(uint32_t global_statement_id) {
 	auto s=m.find(global_statement_id);
 	if (s!=m.end()) { // found
-		if (client) {
+		if (is_client) {
 			// we are removing it from a client, not backend
 			GloMyStmt->ref_count(global_statement_id,-1,true, true);
 			m.erase(s);
 			return true;
 		}
+		// the following seems deprecated for now. Asserting
+		assert(0);
 		if (num_entries>1000) {
 			MYSQL_STMT *stmt=s->second;
 			mysql_stmt_close(stmt);
