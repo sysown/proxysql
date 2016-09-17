@@ -54,6 +54,21 @@ char *s_strdup(char *s) {
 	return ret;
 }
 
+
+static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
+	if (sha1_pass==NULL) return NULL;
+	char *buff=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
+	buff[0]='*';
+	buff[SHA_DIGEST_LENGTH*2+1]='\0';
+	int i;
+	uint8_t a;
+	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
+		memcpy(&a,sha1_pass+i,1);
+		sprintf(buff+1+2*i, "%02X", a);
+	}
+	return buff;
+}
+
 static volatile int load_main_=0;
 static volatile bool nostart_=false;
 
@@ -90,6 +105,9 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_2_2 "CREATE TABLE mysql_servers (hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
+
+#define ADMIN_SQLITE_RUNTIME_MYSQL_USERS "CREATE TABLE runtime_mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
+
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
 
 // mysql_query_rules in v1.1.0
@@ -167,6 +185,7 @@ static char * admin_variables_names[]= {
   (char *)"telnet_stats_ifaces",
   (char *)"refresh_interval",
 	(char *)"read_only",
+	(char *)"hash_passwords",
 	(char *)"version",
 #ifdef DEBUG
   (char *)"debug",
@@ -826,7 +845,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->save_mysql_users_runtime_to_database();
+			SPA->save_mysql_users_runtime_to_database(false);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -1207,6 +1226,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
+	bool runtime_mysql_users=false;
 	bool runtime_mysql_servers=false;
 	bool runtime_mysql_query_rules=false;
 
@@ -1238,6 +1258,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_replication_hostgroups")
 			) {
 				runtime_mysql_servers=true; refresh=true;
+			}
+			if (strstr(query_no_space,"runtime_mysql_users")) {
+				runtime_mysql_users=true; refresh=true;
 			}
 			if (strstr(query_no_space,"runtime_mysql_query_rules")) {
 				runtime_mysql_query_rules=true; refresh=true;
@@ -1275,6 +1298,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				mysql_servers_wrlock();
 				save_mysql_servers_runtime_to_database(true);
 				mysql_servers_wrunlock();
+			}
+			if (runtime_mysql_users) {
+				save_mysql_users_runtime_to_database(true);
 			}
 			if (runtime_mysql_query_rules) {
 				save_mysql_query_rules_from_runtime(true);
@@ -2389,6 +2415,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	//variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
 	//variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
+	variables.hash_passwords=true;	// issue #676
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 	variables.admin_version=(char *)PROXYSQL_VERSION;
 #ifdef DEBUG
@@ -2478,6 +2505,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_servers", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_users", ADMIN_SQLITE_RUNTIME_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
@@ -2920,6 +2948,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"read_only")) {
 		return strdup((variables.admin_read_only ? "true" : "false"));
 	}
+	if (!strcasecmp(name,"hash_passwords")) {
+		return strdup((variables.hash_passwords ? "true" : "false"));
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -3094,6 +3125,17 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"hash_passwords")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.hash_passwords=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.hash_passwords=false;
+			return true;
+		}
+		return false;
 	}
 	if (!strcasecmp(name,"read_only")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -3772,9 +3814,38 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
+			char *password=NULL;
+			if (variables.hash_passwords) { // We must use hashed password. See issue #676
+				// Admin needs to hash the password
+				if (r->fields[1] && strlen(r->fields[1])) {
+					if (r->fields[1][0]=='*') { // the password is already hashed
+						password=strdup(r->fields[1]);
+					} else { // we must hash it
+						uint8 hash_stage1[SHA_DIGEST_LENGTH];
+						uint8 hash_stage2[SHA_DIGEST_LENGTH];
+						SHA_CTX sha1_context;
+						SHA1_Init(&sha1_context);
+						SHA1_Update(&sha1_context, r->fields[1], strlen(r->fields[1]));
+						SHA1_Final(hash_stage1, &sha1_context);
+						SHA1_Init(&sha1_context);
+						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
+						SHA1_Final(hash_stage2, &sha1_context);
+						password=sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
+					}
+				} else {
+					password=strdup((char *)""); // we also generate a new string if hash_passwords is set
+				}
+			} else {
+				if (r->fields[1]) {
+					password=r->fields[1];
+				} else {
+					password=(char *)"";
+				}
+			}
 			GloMyAuth->add(
 				r->fields[0], // username
-				(r->fields[1]==NULL ? (char *)"" : r->fields[1]), //password
+				//(r->fields[1]==NULL ? (char *)"" : r->fields[1]), //password
+				password, // before #676, wewere always passing the password. Now it is possible that the password can be hashed
 				usertype, // backend/frontend
 				(strcmp(r->fields[2],"1")==0 ? true : false) , // use_ssl
 				atoi(r->fields[3]), // default_hostgroup
@@ -3785,6 +3856,9 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 				(strcmp(r->fields[7],"1")==0 ? true : false), // fast_forward
 				( atoi(r->fields[8])>0 ? atoi(r->fields[8]) : 0)  // max_connections
 			);
+			if (variables.hash_passwords) {
+				free(password); // because we always generate a new string
+			}
 		}
 	}
 //	if (error) free(error);
@@ -3793,7 +3867,7 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 }
 
 
-void ProxySQL_Admin::save_mysql_users_runtime_to_database() {
+void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 /*
 	char *error=NULL;
 	int cols=0;
@@ -3808,32 +3882,48 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database() {
 	}	
 	if(resultset) delete resultset;
 */
-	char *qd=(char *)"UPDATE mysql_users SET active=0";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", qd);
-	admindb->execute(qd);
+	char *query=NULL;
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_users";
+		admindb->execute(query);
+	} else {
+		char *qd=(char *)"UPDATE mysql_users SET active=0";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", qd);
+		admindb->execute(qd);
+	}
 	account_details_t **ads=NULL;
 	int num_users;
 	int i;
 	char *qf=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,COALESCE((SELECT backend FROM mysql_users WHERE username=\"%s\" AND frontend=1),0),1,%d)";
 	char *qb=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,1,COALESCE((SELECT frontend FROM mysql_users WHERE username=\"%s\" AND backend=1),0),%d)";
+	char *qfr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username=\"%s\" AND frontend=1),0),1,%d)";
+	char *qbr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username=\"%s\" AND backend=1),0),%d)";
 	num_users=GloMyAuth->dump_all_users(&ads);
 	if (num_users==0) return;
 	for (i=0; i<num_users; i++) {
 	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
 		account_details_t *ad=ads[i];
 		if (ads[i]->default_hostgroup >= 0) {
-			char *query;
-			char *q;
-			if (ad->__frontend) {
-				q=qf;
-			} else {
-				q=qb;
+			char *q=NULL;
+			if (_runtime==false) {
+				if (ad->__frontend) {
+					q=qf;
+				} else {
+					q=qb;
+				}
+			} else { // _runtime==true
+				if (ad->__frontend) {
+					q=qfr;
+				} else {
+					q=qbr;
+				}
 			}
 			query=(char *)malloc(strlen(q)+strlen(ad->username)*2+strlen(ad->password)+strlen(ad->default_schema)+256);
 			sprintf(query, q, ad->username, ad->password, ad->use_ssl, ad->default_hostgroup, ad->default_schema, ad->schema_locked, ad->transaction_persistent, ad->fast_forward, ad->username, ad->max_connections);
 			//fprintf(stderr,"%s\n",query);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 			admindb->execute(query);
+			free(query);
 		}
 		free(ad->username);
 		free(ad->password);

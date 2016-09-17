@@ -71,6 +71,7 @@ class ProxySQL_Admin {
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
+		bool hash_passwords;
 		char * admin_version;
 #ifdef DEBUG
 		bool debug;
@@ -147,7 +148,7 @@ class ProxySQL_Admin {
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();
-	void save_mysql_users_runtime_to_database();
+	void save_mysql_users_runtime_to_database(bool _runtime);
 	void save_mysql_servers_runtime_to_database(bool);
 	void admin_shutdown();
 	bool is_command(std::string);

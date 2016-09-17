@@ -298,8 +298,10 @@ Query_Processor::Query_Processor() {
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) commands_counters[i]=new Command_Counter(i);
 
 	commands_counters_desc[MYSQL_COM_QUERY_ALTER_TABLE]=(char *)"ALTER_TABLE";
+	commands_counters_desc[MYSQL_COM_QUERY_ALTER_VIEW]=(char *)"ALTER_VIEW";
   commands_counters_desc[MYSQL_COM_QUERY_ANALYZE_TABLE]=(char *)"ANALYZE_TABLE";
   commands_counters_desc[MYSQL_COM_QUERY_BEGIN]=(char *)"BEGIN";
+  commands_counters_desc[MYSQL_COM_QUERY_CALL]=(char *)"CALL";
   commands_counters_desc[MYSQL_COM_QUERY_CHANGE_MASTER]=(char *)"CHANGE_MASTER";
   commands_counters_desc[MYSQL_COM_QUERY_COMMIT]=(char *)"COMMIT";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_DATABASE]=(char *)"CREATE_DATABASE";
@@ -308,6 +310,8 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_TEMPORARY]=(char *)"CREATE_TEMPORARY";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_TRIGGER]=(char *)"CREATE_TRIGGER";
   commands_counters_desc[MYSQL_COM_QUERY_CREATE_USER]=(char *)"CREATE_USER";
+  commands_counters_desc[MYSQL_COM_QUERY_CREATE_VIEW]=(char *)"CREATE_VIEW";
+  commands_counters_desc[MYSQL_COM_QUERY_DEALLOCATE]=(char *)"DEALLOCATE";
   commands_counters_desc[MYSQL_COM_QUERY_DELETE]=(char *)"DELETE";
   commands_counters_desc[MYSQL_COM_QUERY_DESCRIBE]=(char *)"DESCRIBE";
   commands_counters_desc[MYSQL_COM_QUERY_DROP_DATABASE]=(char *)"DROP_DATABASE";
@@ -315,9 +319,11 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_DROP_TABLE]=(char *)"DROP_TABLE";
   commands_counters_desc[MYSQL_COM_QUERY_DROP_TRIGGER]=(char *)"DROP_TRIGGER";
   commands_counters_desc[MYSQL_COM_QUERY_DROP_USER]=(char *)"DROP_USER";
-  commands_counters_desc[MYSQL_COM_QUERY_GRANT]=(char *)"GRANT";
+  commands_counters_desc[MYSQL_COM_QUERY_DROP_VIEW]=(char *)"DROP_VIEW";
+  commands_counters_desc[MYSQL_COM_QUERY_EXECUTE]=(char *)"EXECUTE";
   commands_counters_desc[MYSQL_COM_QUERY_EXPLAIN]=(char *)"EXPLAIN";
   commands_counters_desc[MYSQL_COM_QUERY_FLUSH]=(char *)"FLUSH";
+  commands_counters_desc[MYSQL_COM_QUERY_GRANT]=(char *)"GRANT";
   commands_counters_desc[MYSQL_COM_QUERY_INSERT]=(char *)"INSERT";
   commands_counters_desc[MYSQL_COM_QUERY_KILL]=(char *)"KILL";
   commands_counters_desc[MYSQL_COM_QUERY_LOAD]=(char *)"LOAD";
@@ -336,11 +342,12 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_SELECT_FOR_UPDATE]=(char *)"SELECT_FOR_UPDATE";
   commands_counters_desc[MYSQL_COM_QUERY_SET]=(char *)"SET";
   commands_counters_desc[MYSQL_COM_QUERY_SHOW_TABLE_STATUS]=(char *)"SHOW_TABLE_STATUS";
+  commands_counters_desc[MYSQL_COM_QUERY_SHOW]=(char *)"SHOW";
   commands_counters_desc[MYSQL_COM_QUERY_START_TRANSACTION]=(char *)"START_TRANSACTION";
+  commands_counters_desc[MYSQL_COM_QUERY_TRUNCATE_TABLE]=(char *)"TRUNCATE_TABLE";
   commands_counters_desc[MYSQL_COM_QUERY_UNLOCK_TABLES]=(char *)"UNLOCK_TABLES";
   commands_counters_desc[MYSQL_COM_QUERY_UPDATE]=(char *)"UPDATE";
   commands_counters_desc[MYSQL_COM_QUERY_USE]=(char *)"USE";
-  commands_counters_desc[MYSQL_COM_QUERY_SHOW]=(char *)"SHOW";
   commands_counters_desc[MYSQL_COM_QUERY_UNKNOWN]=(char *)"UNKNOWN";
 };
 
@@ -1031,18 +1038,21 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 				if (token==NULL) break;
 				if (!mystrcasecmp("TABLE",token)) {
 					ret=MYSQL_COM_QUERY_ALTER_TABLE;
+					break;
 				} else {
 					if (!mystrcasecmp("OFFLINE",token) || !mystrcasecmp("ONLINE",token)) {
 						token=(char *)tokenize(&tok);
 						if (token==NULL) break;
 						if (!mystrcasecmp("TABLE",token)) {
 							ret=MYSQL_COM_QUERY_ALTER_TABLE;
+							break;
 						} else {
 							if (!mystrcasecmp("IGNORE",token)) {
 								if (token==NULL) break;
 								token=(char *)tokenize(&tok);
 								if (!mystrcasecmp("TABLE",token))
 									ret=MYSQL_COM_QUERY_ALTER_TABLE;
+									break;
 							}
 						}
 					} else {
@@ -1051,8 +1061,13 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 							token=(char *)tokenize(&tok);
 							if (!mystrcasecmp("TABLE",token))
 								ret=MYSQL_COM_QUERY_ALTER_TABLE;
+								break;
 						}
 					}
+				}
+				if (!mystrcasecmp("VIEW",token)) {
+					ret=MYSQL_COM_QUERY_ALTER_VIEW;
+					break;
 				}
 				break;
 			}
@@ -1081,26 +1096,196 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 			break;
 		case 'c':
 		case 'C':
+			if (!strcasecmp("CALL",token)) { // CALL
+				ret=MYSQL_COM_QUERY_CALL;
+				break;
+			}
+			if (!strcasecmp("CHANGE",token)) { // CHANGE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("MASTER",token)) {
+					ret=MYSQL_COM_QUERY_CHANGE_MASTER;
+					break;
+				}
+				break;
+			}
 			if (!strcasecmp("COMMIT",token)) { // COMMIT
 				ret=MYSQL_COM_QUERY_COMMIT;
+				break;
+			}
+			if (!strcasecmp("CREATE",token)) { // CREATE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("DATABASE",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_DATABASE;
+					break;
+				}
+				if (!strcasecmp("INDEX",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_INDEX;
+					break;
+				}
+				if (!strcasecmp("SCHEMA",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_DATABASE;
+					break;
+				}
+				if (!strcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_TABLE;
+					break;
+				}
+				if (!strcasecmp("TEMPORARY",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_TEMPORARY;
+					break;
+				}
+				if (!strcasecmp("TRIGGER",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_TRIGGER;
+					break;
+				}
+				if (!strcasecmp("USER",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_USER;
+					break;
+				}
+				if (!strcasecmp("VIEW",token)) {
+					ret=MYSQL_COM_QUERY_CREATE_VIEW;
+					break;
+				}
+				break;
 			}
 			break;
 		case 'd':
 		case 'D':
+			if (!strcasecmp("DEALLOCATE",token)) { // DEALLOCATE PREPARE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("PREPARE",token)) {
+					ret=MYSQL_COM_QUERY_DEALLOCATE;
+					break;
+				}
+			}
 			if (!strcasecmp("DELETE",token)) { // DELETE
 				ret=MYSQL_COM_QUERY_DELETE;
+				break;
+			}
+			if (!strcasecmp("DESCRIBE",token)) { // DESCRIBE
+				ret=MYSQL_COM_QUERY_DESCRIBE;
+				break;
+			}
+			if (!strcasecmp("DROP",token)) { // DROP
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_DROP_TABLE;
+					break;
+				}
+				if (!strcasecmp("TRIGGER",token)) {
+					ret=MYSQL_COM_QUERY_DROP_TRIGGER;
+					break;
+				}
+				if (!strcasecmp("USER",token)) {
+					ret=MYSQL_COM_QUERY_DROP_USER;
+					break;
+				}
+				if (!strcasecmp("VIEW",token)) {
+					ret=MYSQL_COM_QUERY_DROP_VIEW;
+					break;
+				}
+			}
+			break;
+		case 'e':
+		case 'E':
+			if (!strcasecmp("EXECUTE",token)) { // EXECUTE
+				ret=MYSQL_COM_QUERY_EXECUTE;
+			}
+			break;
+		case 'f':
+		case 'F':
+			if (!strcasecmp("FLUSH",token)) { // FLUSH
+				ret=MYSQL_COM_QUERY_FLUSH;
+				break;
+			}
+			break;
+		case 'g':
+		case 'G':
+			if (!strcasecmp("GRANT",token)) { // GRANT
+				ret=MYSQL_COM_QUERY_GRANT;
+				break;
 			}
 			break;
 		case 'i':
 		case 'I':
 			if (!strcasecmp("INSERT",token)) { // INSERT
 				ret=MYSQL_COM_QUERY_INSERT;
+				break;
+			}
+			break;
+		case 'k':
+		case 'K':
+			if (!strcasecmp("KILL",token)) { // KILL
+				ret=MYSQL_COM_QUERY_KILL;
+				break;
+			}
+			break;
+		case 'l':
+		case 'L':
+			if (!strcasecmp("LOCK",token)) { // LOCK
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_LOCK_TABLE;
+					break;
+				}
+			}
+			if (!strcasecmp("LOAD",token)) { // LOAD
+				ret=MYSQL_COM_QUERY_LOAD;
+				break;
+			}
+			break;
+		case 'o':
+		case 'O':
+			if (!strcasecmp("OPTIMIZE",token)) { // OPTIMIZE
+				ret=MYSQL_COM_QUERY_OPTIMIZE;
+				break;
+			}
+			break;
+		case 'p':
+		case 'P':
+			if (!strcasecmp("PREPARE",token)) { // PREPARE
+				ret=MYSQL_COM_QUERY_PREPARE;
+				break;
+			}
+			if (!strcasecmp("PURGE",token)) { // PURGE
+				ret=MYSQL_COM_QUERY_PURGE;
+				break;
 			}
 			break;
 		case 'r':
 		case 'R':
-			if (!strcasecmp("REPLACE",token)) { // ROLLBACK
+			if (!strcasecmp("RENAME",token)) { // RENAME
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_RENAME_TABLE;
+					break;
+				}
+			}
+			if (!strcasecmp("REPLACE",token)) { // REPLACE
 				ret=MYSQL_COM_QUERY_REPLACE;
+				break;
+			}
+			if (!strcasecmp("RESET",token)) { // RESET
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("MASTER",token)) {
+					ret=MYSQL_COM_QUERY_RESET_MASTER;
+					break;
+				}
+				if (!strcasecmp("SLAVE",token)) {
+					ret=MYSQL_COM_QUERY_RESET_SLAVE;
+					break;
+				}
+				break;
+			}
+			if (!strcasecmp("REVOKE",token)) { // REVOKE
+				ret=MYSQL_COM_QUERY_REVOKE;
 				break;
 			}
 			if (!strcasecmp("ROLLBACK",token)) { // ROLLBACK
@@ -1110,9 +1295,14 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 			break;
 		case 's':
 		case 'S':
+			if (!mystrcasecmp("SAVEPOINT",token)) { // SAVEPOINT
+				ret=MYSQL_COM_QUERY_SAVEPOINT;
+				break;
+			}
 			if (!mystrcasecmp("SELECT",token)) { // SELECT
 				ret=MYSQL_COM_QUERY_SELECT;
 				break;
+				// FIXME: SELECT FOR UPDATE is not implemented
 			}
 			if (!mystrcasecmp("SET",token)) { // SET
 				ret=MYSQL_COM_QUERY_SET;
@@ -1140,10 +1330,25 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 				break;
 			}
 			break;
+		case 't':
+		case 'T':
+			if (!strcasecmp("TRUNCATE",token)) { // TRUNCATE
+				if (token==NULL) break;
+				if (!strcasecmp("TABLE",token)) {
+					ret=MYSQL_COM_QUERY_TRUNCATE_TABLE;
+					break;
+				}
+			}
+			break;
 		case 'u':
 		case 'U':
+			if (!strcasecmp("UNLOCK",token)) { // UNLOCK
+				ret=MYSQL_COM_QUERY_UNLOCK_TABLES;
+				break;
+			}
 			if (!strcasecmp("UPDATE",token)) { // UPDATE
 				ret=MYSQL_COM_QUERY_UPDATE;
+				break;
 			}
 			break;
 		default:

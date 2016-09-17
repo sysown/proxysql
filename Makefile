@@ -10,7 +10,7 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
-CURVER=1.2.2
+CURVER=1.2.3
 DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 
 .PHONY: default
@@ -48,7 +48,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 
-packages: centos6.7 centos7 centos6.7-dbg centos7-dbg ubuntu12 ubuntu14 debian7 debian8 ubuntu12-dbg ubuntu14-dbg debian7-dbg debian8-dbg
+packages: centos6.7 centos7 centos6.7-dbg centos7-dbg ubuntu12 ubuntu14 debian7 debian8 ubuntu12-dbg ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg
 .PHONY: packages
 
 
@@ -64,14 +64,20 @@ centos6.7-dbg: binaries/proxysql-${CURVER}-1-dbg-centos67.x86_64.rpm
 centos7-dbg: binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm
 .PHONY: centos7-dbg
 
+fedora24: binaries/proxysql-${CURVER}-1-fedora24.x86_64.rpm
+.PHONY: fedora24
+
+fedora24-dbg: binaries/proxysql-${CURVER}-1-dbg-fedora24.x86_64.rpm
+.PHONY: fedora24-dbg
+
 ubuntu12: binaries/proxysql_${CURVER}-ubuntu12_amd64.deb
 .PHONY: ubuntu12
 
 ubuntu14: binaries/proxysql_${CURVER}-ubuntu14_amd64.deb
 .PHONY: ubuntu14
 
-ubuntu15: binaries/proxysql_${CURVER}-ubuntu15_amd64.deb
-.PHONY: ubuntu15
+ubuntu16: binaries/proxysql_${CURVER}-ubuntu16_amd64.deb
+.PHONY: ubuntu16
 
 debian7: binaries/proxysql_${CURVER}-debian7_amd64.deb
 .PHONY: debian7
@@ -85,8 +91,8 @@ ubuntu12-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu12_amd64.deb
 ubuntu14-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb
 .PHONY: ubuntu14-dbg
 
-ubuntu15-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu15_amd64.deb
-.PHONY: ubuntu15-dbg
+ubuntu16-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb
+.PHONY: ubuntu16-dbg
 
 debian7-dbg: binaries/proxysql_${CURVER}-dbg-debian7_amd64.deb
 .PHONY: debian7-dbg
@@ -168,6 +174,43 @@ binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm:
 	docker rm centos7_build
 
 
+binaries/proxysql-${CURVER}-1-fedora24.x86_64.rpm:
+	docker stop fedora24_build || true
+	docker rm fedora24_build || true
+	docker create --name fedora24_build renecannao/proxysql:build-fedora24 bash -c "while : ; do sleep 10 ; done"
+	docker start fedora24_build
+	docker exec fedora24_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec fedora24_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE}"
+	docker exec -it fedora24_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	docker exec -it fedora24_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
+	docker cp docker/images/proxysql/fedora24-build/rpmmacros fedora24_build:/root/.rpmmacros
+	docker cp docker/images/proxysql/fedora24-build/proxysql.spec fedora24_build:/root/rpmbuild/SPECS/proxysql.spec
+	docker exec -it fedora24_build bash -c "cp /opt/proxysql/proxysql-${CURVER}.tar.gz /root/rpmbuild/SOURCES"
+	docker exec -it fedora24_build bash -c "cd /root/rpmbuild; rpmbuild -ba SPECS/proxysql.spec"
+	docker exec -it fedora24_build bash -c "cp /root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm /root/rpm"
+	docker cp fedora24_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries/proxysql-${CURVER}-1-fedora24.x86_64.rpm
+	docker stop fedora24_build
+	docker rm fedora24_build
+
+binaries/proxysql-${CURVER}-1-dbg-fedora24.x86_64.rpm:
+	docker stop fedora24_build || true
+	docker rm fedora24_build || true
+	docker create --name fedora24_build renecannao/proxysql:build-fedora24 bash -c "while : ; do sleep 10 ; done"
+	docker start fedora24_build
+	docker exec fedora24_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec fedora24_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} debug"
+	docker exec -it fedora24_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	docker exec -it fedora24_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
+	docker cp docker/images/proxysql/fedora24-build/rpmmacros fedora24_build:/root/.rpmmacros
+	docker cp docker/images/proxysql/fedora24-build/proxysql.spec fedora24_build:/root/rpmbuild/SPECS/proxysql.spec
+	docker exec -it fedora24_build bash -c "cp /opt/proxysql/proxysql-${CURVER}.tar.gz /root/rpmbuild/SOURCES"
+	docker exec -it fedora24_build bash -c "cd /root/rpmbuild; rpmbuild -ba SPECS/proxysql.spec"
+	docker exec -it fedora24_build bash -c "cp /root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm /root/rpm"
+	docker cp fedora24_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries/proxysql-${CURVER}-1-dbg-fedora24.x86_64.rpm
+	docker stop fedora24_build
+	docker rm fedora24_build
+
+
 binaries/proxysql_${CURVER}-ubuntu12_amd64.deb:
 	docker stop ubuntu12_build || true
 	docker rm ubuntu12_build || true
@@ -194,18 +237,18 @@ binaries/proxysql_${CURVER}-ubuntu14_amd64.deb:
 	docker stop ubuntu14_build
 	docker rm ubuntu14_build
 
-binaries/proxysql_${CURVER}-ubuntu15_amd64.deb:
-	docker stop ubuntu15_build || true
-	docker rm ubuntu15_build || true
-	docker create --name ubuntu15_build renecannao/proxysql:build-ubuntu15 bash -c "while : ; do sleep 10 ; done"
-	docker start ubuntu15_build
-	docker exec ubuntu15_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
-	docker exec ubuntu15_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} -j 4"
-	docker cp docker/images/proxysql/ubuntu-15.10-build/proxysql.ctl ubuntu15_build:/opt/proxysql/
-	docker exec ubuntu15_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
-	docker cp ubuntu15_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-ubuntu15_amd64.deb
-	docker stop ubuntu15_build
-	docker rm ubuntu15_build
+binaries/proxysql_${CURVER}-ubuntu16_amd64.deb:
+	docker stop ubuntu16_build || true
+	docker rm ubuntu16_build || true
+	docker create --name ubuntu16_build renecannao/proxysql:build-ubuntu16 bash -c "while : ; do sleep 10 ; done"
+	docker start ubuntu16_build
+	docker exec ubuntu16_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec ubuntu16_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} -j 4"
+	docker cp docker/images/proxysql/ubuntu-16.04-build/proxysql.ctl ubuntu16_build:/opt/proxysql/
+	docker exec ubuntu16_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	docker cp ubuntu16_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-ubuntu16_amd64.deb
+	docker stop ubuntu16_build
+	docker rm ubuntu16_build
 
 binaries/proxysql_${CURVER}-debian7_amd64.deb:
 	docker stop debian7_build || true
@@ -260,18 +303,18 @@ binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb:
 	docker stop ubuntu14_build
 	docker rm ubuntu14_build
 
-binaries/proxysql_${CURVER}-dbg-ubuntu15_amd64.deb:
-	docker stop ubuntu15_build || true
-	docker rm ubuntu15_build || true
-	docker create --name ubuntu15_build renecannao/proxysql:build-ubuntu15 bash -c "while : ; do sleep 10 ; done"
-	docker start ubuntu15_build
-	docker exec ubuntu15_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
-	docker exec ubuntu15_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} debug"
-	docker cp docker/images/proxysql/ubuntu-15.10-build/proxysql.ctl ubuntu15_build:/opt/proxysql/
-	docker exec ubuntu15_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
-	docker cp ubuntu15_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-ubuntu15_amd64.deb
-	docker stop ubuntu15_build
-	docker rm ubuntu15_build
+binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb:
+	docker stop ubuntu16_build || true
+	docker rm ubuntu16_build || true
+	docker create --name ubuntu16_build renecannao/proxysql:build-ubuntu16 bash -c "while : ; do sleep 10 ; done"
+	docker start ubuntu16_build
+	docker exec ubuntu16_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec ubuntu16_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} debug"
+	docker cp docker/images/proxysql/ubuntu-16.04-build/proxysql.ctl ubuntu16_build:/opt/proxysql/
+	docker exec ubuntu16_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	docker cp ubuntu16_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-ubuntu16_amd64.deb
+	docker stop ubuntu16_build
+	docker rm ubuntu16_build
 
 binaries/proxysql_${CURVER}-dbg-debian7_amd64.deb:
 	docker stop debian7_build || true
