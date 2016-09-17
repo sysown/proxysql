@@ -136,13 +136,15 @@ void MySQL_STMT_Manager::active_prepared_statements(uint32_t *unique, uint32_t *
 	uint32_t u=0;
 	uint32_t t=0;
 	spin_wrlock(&rwlock);
-	fprintf(stderr,"%u , %u , %u , %u\n", find_prepared_statement_by_hash_calls, add_prepared_statement_calls, m.size(), total_prepared_statements());
+	//fprintf(stderr,"%u , %u , %u , %u\n", find_prepared_statement_by_hash_calls, add_prepared_statement_calls, m.size(), total_prepared_statements());
 	for (std::map<uint32_t, MySQL_STMT_Global_info *>::iterator it=m.begin(); it!=m.end(); ++it) {
 		MySQL_STMT_Global_info *a=it->second;
 		if (a->ref_count_client) {
 			u++;
 			t+=a->ref_count_client;
-			fprintf(stderr,"stmt %d , count %d\n", a->statement_id, a->ref_count_client);
+#ifdef DEBUG
+			fprintf(stderr,"stmt %d , client_ref_count %d\n", a->statement_id, a->ref_count_client);
+#endif
 		}
 	}
 	spin_wrunlock(&rwlock);
