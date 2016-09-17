@@ -90,7 +90,6 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 
 
-	MySQL_STMTs_meta *sess_STMTs_meta;
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
@@ -148,6 +147,9 @@ class MySQL_Session
 	bool transaction_persistent;
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, of if proysql is still buffering everything
+
+	MySQL_STMTs_meta *sess_STMTs_meta;
+
 	MySQL_Session();
 //	MySQL_Session(int);
 	~MySQL_Session();

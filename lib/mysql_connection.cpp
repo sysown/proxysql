@@ -515,7 +515,7 @@ void MySQL_Connection::store_result_cont(short event) {
 }
 
 void MySQL_Connection::set_is_client() {
-	local_stmts->set_is_client();
+	local_stmts->set_is_client(myds->sess);
 }
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)

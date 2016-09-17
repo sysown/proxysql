@@ -130,17 +130,18 @@ class MySQL_STMTs_meta {
 		}
 		return NULL;	// not found
 	}
-/*
+
 	void erase(uint32_t global_statement_id) {
 		auto s=m.find(global_statement_id);
 		if (s!=m.end()) { // found
 			stmt_execute_metadata_t *sem=s->second;
-			__sync_fetch_and_sub(&sem->stmt_info->ref_count,1); // decrease reference count
+			//__sync_fetch_and_sub(&sem->stmt_info->ref_count,1); // decrease reference count
 			delete sem;
 			num_entries--;
+			m.erase(s);
 		}
 	}
-*/
+
 	//bool erase(uint32_t global_statement_id);
 };
 
@@ -152,11 +153,14 @@ class MySQL_STMTs_local {
 	bool is_client;
 	std::map<uint32_t, MYSQL_STMT *> m;
 	public:
+	MySQL_Session *sess;
 	MySQL_STMTs_local(bool _ic) {
+		sess=NULL;
 		is_client=_ic;
 		num_entries=0;
 	}
-	void set_is_client() {
+	void set_is_client(MySQL_Session *_s) {
+		sess=_s;
 		is_client=true;
 	}
 	~MySQL_STMTs_local();

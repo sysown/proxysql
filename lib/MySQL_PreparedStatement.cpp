@@ -161,6 +161,32 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, boo
 		if (is_client) {
 			__sync_fetch_and_add(&a->ref_count_client,cnt);
 			ret=a->ref_count_client;
+			if (m.size() > 500) {
+				int i=-1;
+				uint32_t torem[10];
+				for (std::map<uint32_t, MySQL_STMT_Global_info *>::iterator it=m.begin(); it!=m.end(); ++it) {
+					if (i==9) continue;
+					MySQL_STMT_Global_info *a=it->second;
+					if (a->ref_count_client == 0) {
+						uint64_t hash=a->hash;
+						auto s2=h.find(hash);
+						if (s2!=h.end()) {
+							h.erase(s2);
+						}
+						//m.erase(it);
+						//delete a;
+						i++;
+						torem[i]=it->first;
+					}
+				}
+				while (i>=0) {
+					auto s3=m.find(torem[i]);
+					MySQL_STMT_Global_info *a=s3->second;
+					m.erase(s3);
+					delete a;
+					i--;
+				}
+			}
 		} else {
 			__sync_fetch_and_add(&a->ref_count_server,cnt);
 			ret=a->ref_count_server;
@@ -241,6 +267,7 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::find_prepared_statement_by_hash(uin
 		ret=s->second;
 		//__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference count
 		__sync_fetch_and_add(&find_prepared_statement_by_hash_calls,1);
+		__sync_fetch_and_add(&ret->ref_count_client,1);
 	}
 
 	if (lock) {
