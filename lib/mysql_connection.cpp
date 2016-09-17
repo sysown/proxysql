@@ -179,7 +179,7 @@ MySQL_Connection::MySQL_Connection() {
 	creation_time=0;
 	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
-	local_stmts=new MySQL_STMTs_local();
+	local_stmts=new MySQL_STMTs_local(false); // false by default, it is a backend
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -214,7 +214,8 @@ MySQL_Connection::~MySQL_Connection() {
 		delete local_stmts;
 	}
 	if (query.stmt) {
-		mysql_stmt_close(query.stmt);
+		// we don't run mysql_stmt_close() : should be already destroyed
+//		mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
 	}
 };
@@ -511,6 +512,10 @@ void MySQL_Connection::store_result_start() {
 void MySQL_Connection::store_result_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_store_result_cont(&mysql_result , mysql , mysql_status(event, true));
+}
+
+void MySQL_Connection::set_is_client() {
+	local_stmts->set_is_client(myds->sess);
 }
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)

@@ -148,5 +148,8 @@ class MySQL_Connection {
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 	void optimize();
 	void close_mysql();
+
+	void set_is_client(); // used for local_stmts
+
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

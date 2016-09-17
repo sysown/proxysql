@@ -130,28 +130,38 @@ class MySQL_STMTs_meta {
 		}
 		return NULL;	// not found
 	}
-/*
+
 	void erase(uint32_t global_statement_id) {
 		auto s=m.find(global_statement_id);
 		if (s!=m.end()) { // found
 			stmt_execute_metadata_t *sem=s->second;
-			__sync_fetch_and_sub(&sem->stmt_info->ref_count,1); // decrease reference count
+			//__sync_fetch_and_sub(&sem->stmt_info->ref_count,1); // decrease reference count
 			delete sem;
 			num_entries--;
+			m.erase(s);
 		}
 	}
-*/
+
 	//bool erase(uint32_t global_statement_id);
 };
 
 // class MySQL_STMTs_local associates a global statement ID with a local statement ID for a specific connection
+
 class MySQL_STMTs_local {
 	private:
 	unsigned int num_entries;
+	bool is_client;
 	std::map<uint32_t, MYSQL_STMT *> m;
 	public:
-	MySQL_STMTs_local() {
+	MySQL_Session *sess;
+	MySQL_STMTs_local(bool _ic) {
+		sess=NULL;
+		is_client=_ic;
 		num_entries=0;
+	}
+	void set_is_client(MySQL_Session *_s) {
+		sess=_s;
+		is_client=true;
 	}
 	~MySQL_STMTs_local();
 	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt);
@@ -180,8 +190,9 @@ class MySQL_STMTs_local {
 		}
 		return false;	// not found
 	}
-	bool erase(uint32_t global_statement_id, bool client);
+	bool erase(uint32_t global_statement_id);
 	uint64_t compute_hash(unsigned int hostgroup, char *user, char *schema, char *query, unsigned int query_length);
+	unsigned int get_num_entries() { return num_entries; }
 };
 
 
@@ -192,6 +203,7 @@ class MySQL_STMT_Manager {
 	rwlock_t rwlock;
 	std::map<uint32_t, MySQL_STMT_Global_info *> m;	// map using statement id
 	std::map<uint64_t, MySQL_STMT_Global_info *> h;	// map using hashes
+	std::stack<uint32_t> free_stmt_ids;
 	public:
 	MySQL_STMT_Manager();
 	~MySQL_STMT_Manager();

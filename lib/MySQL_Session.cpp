@@ -1502,8 +1502,8 @@ __get_pkts_from_client:
 									uint32_t stmt_global_id=0;
 									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 									// FIXME: no input validation
-									//sess_STMTs_meta->erase(stmt_global_id);
-									client_myds->myconn->local_stmts->erase(stmt_global_id, true);
+									sess_STMTs_meta->erase(stmt_global_id);
+									client_myds->myconn->local_stmts->erase(stmt_global_id);
 								}
 								l_free(pkt.size,pkt.ptr);
 								// FIXME: this is not complete. Counters should be decreased
@@ -1544,12 +1544,12 @@ __get_pkts_from_client:
 //										Session_STMT_Manager = new MySQL_STMT_Manager();
 //									}
 									if (client_myds->myconn->local_stmts==NULL) {
-										client_myds->myconn->local_stmts=new MySQL_STMTs_local();
+										client_myds->myconn->local_stmts=new MySQL_STMTs_local(true);
 									}
 									uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 									MySQL_STMT_Global_info *stmt_info=NULL;
 //									if (mysql_thread___stmt_multiplexing) {
-										stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash);
+										stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash); // find_prepared_statement_by_hash() always increase ref_count_client
 //									} else {
 //										stmt_info=Session_STMT_Manager->find_prepared_statement_by_hash(hash);
 //									}
@@ -1559,6 +1559,7 @@ __get_pkts_from_client:
 										// FIXME: we should check local_stmts to verify is this stmt_id was already sent
 										if (client_myds->myconn->local_stmts->exists(stmt_info->statement_id)) {
 											// the client is asking to prepare another identical prepared statements
+											__sync_fetch_and_sub(&stmt_info->ref_count_client,1); // since find_prepared_statement_by_hash() already increased red_count_client we decrease it here
 											stmt_info=NULL;
 										}
 									}
@@ -1568,8 +1569,10 @@ __get_pkts_from_client:
 										client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
 										//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 										client_myds->myconn->local_stmts->insert(stmt_info->statement_id,NULL);
+										__sync_fetch_and_sub(&stmt_info->ref_count_client,1); // since find_prepared_statement_by_hash() already increased red_count_client before insert(), we decrease it here
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
+										CurrentQuery.end_time=thread->curtime;
 										CurrentQuery.end();
 										break;
 									} else {

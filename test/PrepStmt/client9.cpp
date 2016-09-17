@@ -3,7 +3,7 @@
 
 #define QUERY1	"SELECT %u + ? + ? + ?"
 #define DBG 0
-#define ITERA	1000
+#define ITERA	10000
 
 #include <thread>
 
@@ -40,7 +40,7 @@ int run_stmt(MYSQL_STMT *stmt, int int_data) {
 	prepare_meta_result = mysql_stmt_result_metadata(stmt); // FIXME: no error check
 	if (mysql_stmt_execute(stmt)) {
 		fprintf(stderr, " mysql_stmt_execute(), 1 failed\n");
-		fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+		fprintf(stderr, " id=%lu , error=%s\n", stmt->stmt_id, mysql_stmt_error(stmt));
 		exit(EXIT_FAILURE);
 	}
 //	memset(bind, 0, sizeof(bind));
@@ -62,7 +62,7 @@ void run(MYSQL *mysql) {
 		exit(EXIT_FAILURE);
 	}
 	uint32_t r=(uint32_t)mt_rand();
-	r=r%30000;
+	r=r%3000;
 	char *query=(char *)malloc(strlen(QUERY1)+16);
 	sprintf(query,QUERY1,r);
 	if (DBG) {
@@ -103,7 +103,7 @@ int m_thread() {
 }
 
 int main() {
-#define NTH 10
+#define NTH 64
 	int i;
 	std::thread *thr[NTH];
 	for (i=0;i<NTH;i++) {
