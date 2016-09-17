@@ -214,6 +214,7 @@ MySQL_Connection::~MySQL_Connection() {
 		delete local_stmts;
 	}
 	if (query.stmt) {
+		query.stmt->mysql=NULL;
 		mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
 	}

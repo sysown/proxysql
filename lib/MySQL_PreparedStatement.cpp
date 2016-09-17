@@ -132,7 +132,7 @@ void MySQL_STMT_Manager::active_prepared_statements(uint32_t *unique, uint32_t *
 	uint32_t u=0;
 	uint32_t t=0;
 	spin_wrlock(&rwlock);
-	fprintf(stderr,"%u , %u\n", find_prepared_statement_by_hash_calls, add_prepared_statement_calls);
+	fprintf(stderr,"%u , %u , %u\n", find_prepared_statement_by_hash_calls, add_prepared_statement_calls, m.size());
 	for (std::map<uint32_t, MySQL_STMT_Global_info *>::iterator it=m.begin(); it!=m.end(); ++it) {
 		MySQL_STMT_Global_info *a=it->second;
 		if (a->ref_count_client) {

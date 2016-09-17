@@ -2598,6 +2598,9 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case PROCESSING_STMT_EXECUTE:
 						pta[11]=strdup("Execute");
 						break;
+					case PROCESSING_STMT_PREPARE:
+						pta[11]=strdup("Prepare");
+						break;
 					default:
 						sprintf(buf,"%d", sess->status);
 						pta[11]=strdup(buf);
