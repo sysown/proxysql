@@ -70,6 +70,10 @@ MySQL_STMTs_local::~MySQL_STMTs_local() {
 		uint32_t stmt_id=it->first;
 		MYSQL_STMT *stmt=it->second;
 		if (stmt) { // is a server
+			// we do a hack here: we pretend there is no server associate
+			// the connection will be dropped anyway immediately after
+			stmt->mysql=NULL;
+			mysql_stmt_close(stmt);
 			GloMyStmt->ref_count(stmt_id,-1,true, false);
 		} else { // is a client
 			GloMyStmt->ref_count(stmt_id,-1,true, true);
