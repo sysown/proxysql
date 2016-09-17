@@ -1561,6 +1561,7 @@ __get_pkts_from_client:
 										__sync_fetch_and_sub(&stmt_info->ref_count_client,1); // since find_prepared_statement_by_hash() already increased red_count_client before insert(), we decrease it here
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
+										CurrentQuery.end_time=thread->curtime;
 										CurrentQuery.end();
 										break;
 									} else {
