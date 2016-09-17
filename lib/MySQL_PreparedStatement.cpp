@@ -161,11 +161,12 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, boo
 		if (is_client) {
 			__sync_fetch_and_add(&a->ref_count_client,cnt);
 			ret=a->ref_count_client;
-			if (m.size() > 500) {
+			if (m.size() > (unsigned)mysql_thread___max_stmts_cache) {
+				int max_purge=m.size()/20; // purge up to 5%
 				int i=-1;
-				uint32_t torem[10];
+				uint32_t *torem=(uint32_t *)malloc(max_purge*sizeof(uint32_t));
 				for (std::map<uint32_t, MySQL_STMT_Global_info *>::iterator it=m.begin(); it!=m.end(); ++it) {
-					if (i==9) continue;
+					if (i==(max_purge-1)) continue;
 					MySQL_STMT_Global_info *a=it->second;
 					if (a->ref_count_client == 0) {
 						uint64_t hash=a->hash;
@@ -186,6 +187,7 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, boo
 					delete a;
 					i--;
 				}
+				free(torem);
 			}
 		} else {
 			__sync_fetch_and_add(&a->ref_count_server,cnt);
