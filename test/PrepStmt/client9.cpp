@@ -3,7 +3,7 @@
 
 #define QUERY1	"SELECT %u + ? + ? + ?"
 #define DBG 0
-#define ITERA	1000
+#define ITERA	10000
 
 #include <thread>
 
@@ -62,7 +62,7 @@ void run(MYSQL *mysql) {
 		exit(EXIT_FAILURE);
 	}
 	uint32_t r=(uint32_t)mt_rand();
-	r=r%30000;
+	r=r%3000;
 	char *query=(char *)malloc(strlen(QUERY1)+16);
 	sprintf(query,QUERY1,r);
 	if (DBG) {
@@ -103,7 +103,7 @@ int m_thread() {
 }
 
 int main() {
-#define NTH 10
+#define NTH 64
 	int i;
 	std::thread *thr[NTH];
 	for (i=0;i<NTH;i++) {
