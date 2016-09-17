@@ -40,7 +40,7 @@ int run_stmt(MYSQL_STMT *stmt, int int_data) {
 	prepare_meta_result = mysql_stmt_result_metadata(stmt); // FIXME: no error check
 	if (mysql_stmt_execute(stmt)) {
 		fprintf(stderr, " mysql_stmt_execute(), 1 failed\n");
-		fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+		fprintf(stderr, " id=%lu , error=%s\n", stmt->stmt_id, mysql_stmt_error(stmt));
 		exit(EXIT_FAILURE);
 	}
 //	memset(bind, 0, sizeof(bind));

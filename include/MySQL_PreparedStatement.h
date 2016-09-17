@@ -203,6 +203,7 @@ class MySQL_STMT_Manager {
 	rwlock_t rwlock;
 	std::map<uint32_t, MySQL_STMT_Global_info *> m;	// map using statement id
 	std::map<uint64_t, MySQL_STMT_Global_info *> h;	// map using hashes
+	std::stack<uint32_t> free_stmt_ids;
 	public:
 	MySQL_STMT_Manager();
 	~MySQL_STMT_Manager();

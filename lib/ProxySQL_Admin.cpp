@@ -3184,6 +3184,12 @@ void ProxySQL_Admin::stats___mysql_global() {
 		sprintf(query,a,vn,bu);
 		statsdb->execute(query);
 		free(query);
+		vn=(char *)"Stmt_Max_Stmt_id";
+		sprintf(bu,"%u",GloMyStmt->total_prepared_statements());
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
 	}
 
 	resultset=GloQC->SQL3_getStats();

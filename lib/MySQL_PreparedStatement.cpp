@@ -136,7 +136,7 @@ void MySQL_STMT_Manager::active_prepared_statements(uint32_t *unique, uint32_t *
 	uint32_t u=0;
 	uint32_t t=0;
 	spin_wrlock(&rwlock);
-	fprintf(stderr,"%u , %u , %u\n", find_prepared_statement_by_hash_calls, add_prepared_statement_calls, m.size());
+	fprintf(stderr,"%u , %u , %u , %u\n", find_prepared_statement_by_hash_calls, add_prepared_statement_calls, m.size(), total_prepared_statements());
 	for (std::map<uint32_t, MySQL_STMT_Global_info *>::iterator it=m.begin(); it!=m.end(); ++it) {
 		MySQL_STMT_Global_info *a=it->second;
 		if (a->ref_count_client) {
@@ -181,8 +181,12 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, boo
 					}
 				}
 				while (i>=0) {
-					auto s3=m.find(torem[i]);
+					uint32_t id=torem[i];
+					auto s3=m.find(id);
 					MySQL_STMT_Global_info *a=s3->second;
+					if (a->ref_count_server==0) {
+						free_stmt_ids.push(id);
+					}
 					m.erase(s3);
 					delete a;
 					i--;
@@ -219,7 +223,17 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int
 		ret=f->second;
 	} else {
 		// we need to create a new one
-		MySQL_STMT_Global_info *a=new MySQL_STMT_Global_info(next_statement_id,_h,u,s,q,ql,stmt,hash);
+		bool free_id_avail=false;
+		free_id_avail=free_stmt_ids.size();
+		uint32_t next_id=0;
+		if (free_id_avail) {
+			next_id=free_stmt_ids.top();
+			free_stmt_ids.pop();
+		} else {
+			next_id=next_statement_id;
+			next_statement_id++;
+		}
+		MySQL_STMT_Global_info *a=new MySQL_STMT_Global_info(next_id,_h,u,s,q,ql,stmt,hash);
 		a->properties.cache_ttl=_cache_ttl;
 		a->properties.timeout=_timeout;
 		a->properties.delay=_delay;
@@ -228,7 +242,7 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int
 		h.insert(std::make_pair(a->hash, a));
 		//ret=a->statement_id;
 		ret=a;
-		next_statement_id++;	// increment it
+		//next_statement_id++;	// increment it
 		//__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference count
 	}
 	__sync_fetch_and_add(&add_prepared_statement_calls,1);
