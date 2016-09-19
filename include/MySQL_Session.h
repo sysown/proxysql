@@ -136,6 +136,9 @@ class MySQL_Session
 				}
 			}
 		}
+		if (mirror) {
+			fprintf(stderr,"thr %x , status %d\n", this ,e );
+		}
 		status=e;
 	}
 	//MySQL_Protocol myprot_client;
