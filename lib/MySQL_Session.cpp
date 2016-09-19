@@ -1572,8 +1572,16 @@ handler_again:
 
 		case CONNECTING_SERVER:
 			//fprintf(stderr,"CONNECTING_SERVER\n");
+			if (mirror) {
+					mybe->server_myds->connect_retries_on_failure=0; // no try for mirror
+					mybe->server_myds->wait_until=thread->curtime;;
+					pause_until=0;
+			}
 			if (mybe->server_myds->max_connect_time) {
 				if (thread->curtime >= mybe->server_myds->max_connect_time) {
+					if (mirror) {
+						PROXY_TRACE();
+					}
 					char buf[256];
 					sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
@@ -1589,6 +1597,10 @@ handler_again:
 					if (mybe->server_myds->myconn) {
 						//mybe->server_myds->destroy_MySQL_Connection();
 						mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+						if (mirror) {
+							PROXY_TRACE();
+							NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
+						}
 					}
 					mybe->server_myds->max_connect_time=0;
 					NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
@@ -1596,6 +1608,12 @@ handler_again:
 			}
 			if (mybe->server_myds->myconn==NULL) {
 				handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+			}
+			if (mybe->server_myds->myconn==NULL) {
+				if (mirror) {
+					PROXY_TRACE();
+					NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
+				}
 			}	
 			if (mybe->server_myds->myconn==NULL) {
 				pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
@@ -1622,10 +1640,16 @@ handler_again:
 /* */
 				assert(myconn->async_state_machine!=ASYNC_IDLE);
 				rc=myconn->async_connect(myds->revents);
+				if (mirror) {
+					PROXY_TRACE();
+				}
 				if (myds->mypolls==NULL) {
 					// connection yet not in mypolls
 					myds->assign_fd_from_mysql_conn();
 					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
+					if (mirror) {
+						PROXY_TRACE();
+					}
 				}
 				switch (rc) {
 					case 0:
@@ -1649,6 +1673,9 @@ handler_again:
 						if (myds->connect_retries_on_failure >0 ) {
 							myds->connect_retries_on_failure--;
 							//myds->destroy_MySQL_Connection();
+							if (mirror) {
+								PROXY_TRACE();
+							}
 							myds->destroy_MySQL_Connection_From_Pool(false);
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
 						} else {
@@ -1671,6 +1698,9 @@ handler_again:
 								previous_status.pop();
 							}
 							//myds->destroy_MySQL_Connection();
+							if (mirror) {
+								PROXY_TRACE();
+							}
 							myds->destroy_MySQL_Connection_From_Pool( myerr ? true : false );
 							myds->max_connect_time=0;
 							NEXT_IMMEDIATE(WAITING_CLIENT_DATA);
