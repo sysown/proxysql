@@ -1574,7 +1574,7 @@ handler_again:
 			//fprintf(stderr,"CONNECTING_SERVER\n");
 			if (mirror) {
 					mybe->server_myds->connect_retries_on_failure=0; // no try for mirror
-					mybe->server_myds->wait_until=thread->curtime;;
+					mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
 					pause_until=0;
 			}
 			if (mybe->server_myds->max_connect_time) {
