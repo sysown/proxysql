@@ -4,6 +4,10 @@
 #include "cpp.h"
 #include "MySQL_Thread.h"
 
+#ifdef DEBUG
+MySQL_Session *sess_stopat;
+#endif
+
 #define PROXYSQL_LISTEN_LEN 1024
 
 extern Query_Processor *GloQPro;
@@ -1984,6 +1988,11 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+#ifdef DEBUG
+		if(sess==sess_stopat) {
+			sess_stopat=sess;
+		}
+#endif
 		if (sess->mirror==true) { // this is a mirror session
 			if (sess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 				unregister_session(n);
