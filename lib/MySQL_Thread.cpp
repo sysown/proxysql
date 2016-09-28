@@ -4,6 +4,10 @@
 #include "cpp.h"
 #include "MySQL_Thread.h"
 
+#ifdef DEBUG
+MySQL_Session *sess_stopat;
+#endif
+
 #define PROXYSQL_LISTEN_LEN 1024
 
 extern Query_Processor *GloQPro;
@@ -2038,6 +2042,11 @@ void MySQL_Thread::process_all_sessions() {
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+#ifdef DEBUG
+		if(sess==sess_stopat) {
+			sess_stopat=sess;
+		}
+#endif
 		if (sess->mirror==true) { // this is a mirror session
 			if (sess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 				unregister_session(n);
@@ -2229,6 +2238,9 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.mysql_backend_buffers_bytes=0;
 	status_variables.mysql_frontend_buffers_bytes=0;
 	status_variables.mysql_session_internal_bytes=0;
+	status_variables.ConnPool_get_conn_immediate=0;
+	status_variables.ConnPool_get_conn_success=0;
+	status_variables.ConnPool_get_conn_failure=0;
 	status_variables.active_transactions=0;
 }
 
@@ -2473,6 +2485,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 			pta[1]=buf;
 			result->add_row(pta);
 		}
+	}
+	{	// ConnPool_get_conn_immediate
+		pta[0]=(char *)"ConnPool_get_conn_immediate";
+		sprintf(buf,"%llu",get_ConnPool_get_conn_immediate());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// ConnPool_get_conn_success
+		pta[0]=(char *)"ConnPool_get_conn_success";
+		sprintf(buf,"%llu",get_ConnPool_get_conn_success());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// ConnPool_get_conn_failure
+		pta[0]=(char *)"ConnPool_get_conn_failure";
+		sprintf(buf,"%llu",get_ConnPool_get_conn_failure());
+		pta[1]=buf;
+		result->add_row(pta);
 	}
 	free(pta);
 	return result;
@@ -2933,4 +2963,43 @@ void MySQL_Thread::return_local_connections() {
 	ca[i]=NULL;
 	MyHGM->push_MyConn_to_pool_array(ca);
 	free(ca);
+}
+
+unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_immediate,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_success() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_success,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_failure() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_failure,0);
+		}
+	}
+	return q;
 }

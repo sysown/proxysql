@@ -999,8 +999,16 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 
 bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) { 
 	//fprintf(stderr,"CONNECTING_SERVER\n");
+	if (mirror) {
+		mybe->server_myds->connect_retries_on_failure=0; // no try for mirror
+		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
+		pause_until=0;
+	}
 	if (mybe->server_myds->max_connect_time) {
 		if (thread->curtime >= mybe->server_myds->max_connect_time) {
+			if (mirror) {
+				PROXY_TRACE();
+			}
 			char buf[256];
 			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
@@ -1016,6 +1024,10 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			if (mybe->server_myds->myconn) {
 				//mybe->server_myds->destroy_MySQL_Connection();
 				mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+				if (mirror) {
+					PROXY_TRACE();
+					NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+				}
 			}
 			mybe->server_myds->max_connect_time=0;
 			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
@@ -1023,6 +1035,12 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 	}
 	if (mybe->server_myds->myconn==NULL) {
 		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+	}
+	if (mybe->server_myds->myconn==NULL) {
+		if (mirror) {
+			PROXY_TRACE();
+			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+		}		
 	}
 	if (mybe->server_myds->myconn==NULL) {
 		pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
@@ -1050,11 +1068,17 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		//mybe->server_myds->myprot.init(&mybe->server_myds, mybe->server_myds->myconn->userinfo, this);
 /* */
 		assert(myconn->async_state_machine!=ASYNC_IDLE);
+		if (mirror) {
+			PROXY_TRACE();
+		}
 		rc=myconn->async_connect(myds->revents);
 		if (myds->mypolls==NULL) {
 			// connection yet not in mypolls
 			myds->assign_fd_from_mysql_conn();
 			thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, curtime);
+			if (mirror) {
+				PROXY_TRACE();
+			}
 		}
 		switch (rc) {
 			case 0:
@@ -1078,6 +1102,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				if (myds->connect_retries_on_failure >0 ) {
 					myds->connect_retries_on_failure--;
 					//myds->destroy_MySQL_Connection();
+					if (mirror) {
+						PROXY_TRACE();
+					}			
 					myds->destroy_MySQL_Connection_From_Pool(false);
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				} else {
@@ -1100,6 +1127,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 						previous_status.pop();
 					}
 					//myds->destroy_MySQL_Connection();
+					if (mirror) {
+						PROXY_TRACE();
+					}
 					myds->destroy_MySQL_Connection_From_Pool( myerr ? true : false );
 					myds->max_connect_time=0;
 					NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
@@ -2769,9 +2799,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
 		if (mc==NULL) {
 			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+		} else {
+			thread->status_variables.ConnPool_get_conn_immediate++;
 		}
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
+			thread->status_variables.ConnPool_get_conn_success++;
+		} else {
+			thread->status_variables.ConnPool_get_conn_failure++;
 		}
 #endif
 //	}

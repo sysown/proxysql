@@ -174,6 +174,9 @@ class MySQL_Thread
 		unsigned long long mysql_backend_buffers_bytes;
 		unsigned long long mysql_frontend_buffers_bytes;
 		unsigned long long mysql_session_internal_bytes;
+		unsigned long long ConnPool_get_conn_immediate;
+		unsigned long long ConnPool_get_conn_success;
+		unsigned long long ConnPool_get_conn_failure;
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -377,6 +380,9 @@ class MySQL_Threads_Handler
 	unsigned long long get_mysql_backend_buffers_bytes();
 	unsigned long long get_mysql_frontend_buffers_bytes();
 	unsigned long long get_mysql_session_internal_bytes();
+	unsigned long long get_ConnPool_get_conn_immediate();
+	unsigned long long get_ConnPool_get_conn_success();
+	unsigned long long get_ConnPool_get_conn_failure();
 	iface_info *MLM_find_iface_from_fd(int fd) {
 		return MLM->find_iface_from_fd(fd);
 	}

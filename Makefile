@@ -10,8 +10,13 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
-CURVER=1.2.3
+CURVER=1.2.4
 DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
+ifeq ($(wildcard /usr/lib/systemd/systemd), /usr/lib/systemd/systemd)
+	SYSTEMD=1
+else
+	SYSTEMD=0
+endif
 
 .PHONY: default
 default: build_deps build_lib build_src
@@ -354,8 +359,13 @@ cleanall:
 install: src/proxysql
 	install -m 0755 src/proxysql /usr/local/bin
 	install -m 0600 etc/proxysql.cnf /etc
-	install -m 0755 etc/init.d/proxysql /etc/init.d
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
+ifeq ($(SYSTEMD), 1)
+	install -m 0644 systemd/proxysql.service /usr/lib/systemd/system/
+	systemctl daemon-reload
+	systemctl enable proxysql.service
+else
+	install -m 0755 etc/init.d/proxysql /etc/init.d
 ifeq ($(DISTRO),"CentOS Linux")
 		chkconfig --level 0123456 proxysql on
 else
@@ -365,12 +375,17 @@ else
 		update-rc.d proxysql defaults
 endif
 endif
+endif
 .PHONY: install
 
 uninstall:
 	rm /etc/proxysql.cnf
 	rm /usr/local/bin/proxysql
 	rmdir /var/lib/proxysql 2>/dev/null || true
+ifeq ($(SYSTEMD), 1)
+		systemctl stop proxysql.service
+		rm /usr/lib/systemd/system/proxysql.service
+else
 ifeq ($(DISTRO),"CentOS Linux")
 		chkconfig --level 0123456 proxysql off
 		rm /etc/init.d/proxysql
@@ -381,6 +396,7 @@ ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
 else
 		rm /etc/init.d/proxysql
 		update-rc.d proxysql remove
+endif
 endif
 endif
 .PHONY: uninstall

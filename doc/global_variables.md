@@ -298,7 +298,7 @@ This variable controls whether ProxySQL should use a cached (and less accurate) 
 
 Default value: `true`
 
-### `mysql-ping_interval_server`
+### `mysql-ping_interval_server_msec`
 
 The interval at which the proxy should ping backend connections in order to maintain them alive, even though there is no outgoing traffic. The purpose here is to keep some connections alive in order to reduce the latency of new queries towards a less frequently used destination backend server.
 
