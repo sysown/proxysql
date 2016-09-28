@@ -107,6 +107,7 @@ char *trim_spaces_and_quotes_in_place(char *str) {
 	return str;
 }
 
+/*
 #define MIN_ARRAY_LEN	8
 #define MIN_ARRAY_DELETE_RATIO	8
 
@@ -115,7 +116,7 @@ static unsigned int l_near_pow_2 (unsigned int n) {
 	while (i < n) i <<= 1;
 	return i ? i : n;
 }
-
+*/
 
 // PtrArray is used also for shared struct, needs to fork the class in two)
 
@@ -137,6 +138,7 @@ void PtrArray::operator delete(void *ptr, bool b) {
 }
 */
 
+/*
 //PtrArray::PtrArray(unsigned int __size, bool _use_l_alloc) {
 PtrArray::PtrArray(unsigned int __size) {
 //	use_l_alloc=false;
@@ -166,7 +168,8 @@ void PtrArray::shrink() {
 	//pdata=(void **)l_realloc(pdata,new_size*sizeof(void *),size*sizeof(void *));
 	size=new_size;
 }
-
+*/
+/*
 void PtrArray::expand(unsigned int more) {
     if ( (len+more) > size ) {
         unsigned int new_size=l_near_pow_2(len+more);
@@ -186,7 +189,7 @@ void PtrArray::expand(unsigned int more) {
         pdata=(void **)new_pdata;
     }
 }
-
+*/
 /*
 void * PtrArray::index(unsigned int i) {
 	return pdata[i];
@@ -200,6 +203,7 @@ void PtrArray::add(void *p) {
 }
 */
 
+/*
 bool PtrArray::remove(void *p) {
 	unsigned int i;
     for (i=0; i<len; i++) {
@@ -223,8 +227,8 @@ void * PtrArray::remove_index(unsigned int i) {
 	}
     return r;
 }
-
-
+*/
+/*
 bool PtrArray::remove_fast(void *p) {
     unsigned int i;
     //unsigned l=len;
@@ -248,7 +252,7 @@ void * PtrArray::remove_index_fast(unsigned int i) {
 	}
     return r;
 }
-
+*/
 
 void * PtrSizeArray::operator new(size_t size) {
 	return l_alloc(size);
