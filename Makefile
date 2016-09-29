@@ -317,7 +317,7 @@ binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb:
 	docker exec ubuntu16_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} -j 4 build_deps && ${MAKE} debug"
 	docker cp docker/images/proxysql/ubuntu-16.04-build/proxysql.ctl ubuntu16_build:/opt/proxysql/
 	docker exec ubuntu16_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
-	docker cp ubuntu16_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-ubuntu16_amd64.deb
+	docker cp ubuntu16_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb
 	docker stop ubuntu16_build
 	docker rm ubuntu16_build
 
