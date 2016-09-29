@@ -598,13 +598,16 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	while (i<PSarrayOUT->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
 		p=PSarrayOUT->index(i);
 		total_size+=p->size;
-		if (i==0) {
-			mysql_hdr hdr;
-			memcpy(&hdr,p->ptr,sizeof(mysql_hdr));
-			if (hdr.pkt_id==0) {
-				myconn->compression_pkt_id=-1;
-			}
-		}
+//	The following 7 lines of code are commented as they seem responsible for bug reported in
+//	https://github.com/sysown/proxysql/issues/297#issuecomment-247152748
+//	They seems logically completely incorrect!
+//		if (i==0) {
+//			mysql_hdr hdr;
+//			memcpy(&hdr,p->ptr,sizeof(mysql_hdr));
+//			if (hdr.pkt_id==0) {
+//				myconn->compression_pkt_id=-1;
+//			}
+//		}
 		i++;
 	}
 	if (i>=2) {

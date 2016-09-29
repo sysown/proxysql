@@ -155,13 +155,13 @@ CREATE TABLE mysql_replication_hostgroups (
 ```
 
 Each row in `mysql_replication_hostgroups` represent a pair of *writer_hostgroup* and *reader_hostgroup* .  
-ProxySQL will monitor the value of read_only for all the servers in specified hostgroups, and based on the value of read_only will assign the server to the writer or reader hostgroups.  
+ProxySQL will monitor the value of `read_only` for all the servers in specified hostgroups, and based on the value of `read_only` will assign the server to the writer or reader hostgroups.  
 The field `comment` can be used to store any arbitrary data.
 
 
 ## mysql_query_rules
 
-Here is the statement used to create the `mysql_users` table:
+Here is the statement used to create the `mysql_query_rules` table:
 
 ```sql
 CREATE TABLE mysql_query_rules (

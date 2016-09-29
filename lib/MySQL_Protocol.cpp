@@ -1547,6 +1547,8 @@ unsigned long long MySQL_ResultSet::current_size() {
 	unsigned long long intsize=0;
 	intsize+=sizeof(MySQL_ResultSet);
 	intsize+=RESULTSET_BUFLEN; // size of buffer
+	if (PSarrayOUT==NULL)	// see bug #699
+		return intsize;
 	intsize+=sizeof(PtrSizeArray);
 	intsize+=(PSarrayOUT->size*sizeof(PtrSize_t *));
 	unsigned int i;

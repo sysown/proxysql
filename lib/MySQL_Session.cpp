@@ -597,7 +597,18 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		free(unstripped);
 		return true;
 	}
-
+	if ( (pkt->size == 18) && (strncasecmp((char *)"SHOW WARNINGS",(char *)pkt->ptr+5,13)==0) ) {
+		SQLite3_result * resultset=new SQLite3_result(3);
+		resultset->add_column_definition(SQLITE_TEXT,"Level");
+		resultset->add_column_definition(SQLITE_TEXT,"Code");
+		resultset->add_column_definition(SQLITE_TEXT,"Message");
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot);
+		delete resultset;
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
 	return false;
 }
 
@@ -2159,9 +2170,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
 		if (mc==NULL) {
 			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+		} else {
+			thread->status_variables.ConnPool_get_conn_immediate++;
 		}
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
+			thread->status_variables.ConnPool_get_conn_success++;
+		} else {
+			thread->status_variables.ConnPool_get_conn_failure++;
 		}
 //	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);

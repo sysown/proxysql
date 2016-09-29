@@ -1,6 +1,6 @@
 # Scheduler
 
-Scheduler is a feature introduced in v1.2.0.
+Scheduler is a feature introduced in v1.2.0 .
 
 Scheduler is a cron-like implementation integrated inside ProxySQL with millisecond granularity. It is possible to be configured only through the Admin interface: configuration from config file is not supported yet and not in the roadmap.
 
@@ -28,44 +28,48 @@ To enter into details:
 
 Table `scheduler` has the following structure:
 
-```sql
+```mysql
 Admin> SHOW CREATE TABLE scheduler\G
 *************************** 1. row ***************************
        table: scheduler
 Create Table: CREATE TABLE scheduler (
-id INTEGER NOT NULL,
-interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL,
-filename VARCHAR NOT NULL,
-arg1 VARCHAR,
-arg2 VARCHAR,
-arg3 VARCHAR,
-arg4 VARCHAR,
-arg5 VARCHAR,
-PRIMARY KEY(id))
+    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+    active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,
+    interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL,
+    filename VARCHAR NOT NULL,
+    arg1 VARCHAR,
+    arg2 VARCHAR,
+    arg3 VARCHAR,
+    arg4 VARCHAR,
+    arg5 VARCHAR,
+    comment VARCHAR NOT NULL DEFAULT '')
 1 row in set (0.00 sec)
 ```
 
 In details:
 * `id` : unique identifier of the scheduler job
+* `active` : if set to 1, the job is active. Otherwise is not
 * `interval_ms` : how often (in millisecond) the job will be started. Minimum interval_ms is 100 milliseconds
 * `filename` : full path of the executable to be executed
 * `arg1` to `arg5` : arguments (maximum 5) that can be passed to the job
+* `comment` : an free form text field to annotate the purpose of the job
 
-For reference only, table `runtime_scheduler` has the same identical tructure:
+For reference only, table `runtime_scheduler` has the same identical structure:
 ```sql
 Admin> SHOW CREATE TABLE runtime_scheduler\G
 *************************** 1. row ***************************
        table: runtime_scheduler
 Create Table: CREATE TABLE runtime_scheduler (
-id INTEGER NOT NULL,
-interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL,
-filename VARCHAR NOT NULL,
-arg1 VARCHAR,
-arg2 VARCHAR,
-arg3 VARCHAR,
-arg4 VARCHAR,
-arg5 VARCHAR,
-PRIMARY KEY(id))
+    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+    active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1,
+    interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL,
+    filename VARCHAR NOT NULL,
+    arg1 VARCHAR,
+    arg2 VARCHAR,
+    arg3 VARCHAR,
+    arg4 VARCHAR,
+    arg5 VARCHAR,
+    comment VARCHAR NOT NULL DEFAULT '')
 1 row in set (0.00 sec)
 ```
 
@@ -76,4 +80,4 @@ For this reason ProxySQL has new commands to support Scheduler:
 * `SAVE SCHEDULER FROM RUNTIME` and `SAVE SCHEDULER TO MEMORY` : save the configuration from runtime to `main`.`scheduler`;
 * `SAVE SCHEDULER FROM MEMORY` and `SAVE SCHEDULER TO DISK` : save the configuration from `main`.`scheduler` to `disk`.`scheduler`, and becomes persistent across restart.
 
-The scheduler is implemented calling `fork()` and then `excve()`. If `execve()` fails the error is reported into error log.
+The scheduler is implemented calling `fork()` and then `execve()`. If `execve()` fails the error is reported into error log.
