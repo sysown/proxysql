@@ -181,6 +181,8 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	// alwasy try to open a config file
 	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
 		GloVars.configfile_open=true;
+	} else {
+		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
 	}
 	char *t=getcwd(NULL, 512);
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
