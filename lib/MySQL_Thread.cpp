@@ -77,6 +77,9 @@ MySQL_Listeners_Manager::~MySQL_Listeners_Manager() {
 		iface_info *ifi=(iface_info *)ifaces->remove_index_fast(0);
 		shutdown(ifi->fd,SHUT_RDWR);
 		close(ifi->fd);
+		if (ifi->port==0) {
+			unlink(ifi->address);
+		}
 		delete ifi;
 	}
 	delete ifaces;
