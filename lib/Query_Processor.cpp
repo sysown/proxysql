@@ -54,8 +54,12 @@ class QP_rule_text {
 		//uint32_t d32[2];
 		//memcpy(&d32,&QPr->digest,sizeof(QPr->digest));
 		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
-		sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
-    pta[8]=strdup(buf);
+		if (QPr->digest) {
+			sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
+			pta[8]=strdup(buf);
+		} else {
+			pta[8]=NULL;
+		}
 
 		pta[9]=strdup_null(QPr->match_digest);
 		pta[10]=strdup_null(QPr->match_pattern);
