@@ -730,7 +730,15 @@ __internal_loop:
 			}
 		}
 
-
+		// match on digest
+		if (qp && qp->digest) {
+			if (qr->digest) {
+				if (qr->digest != qp->digest) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching digest\n", qr->rule_id);
+					continue;
+				}
+			}
+		}
 
 		// match on query digest
 		if (qp && qp->digest_text ) { // we call this only if we have a query digest
