@@ -16,8 +16,14 @@ int listen_on_port(char *ip, uint16_t port, int backlog) {
 		return -1;
 	}
 
+#ifdef SO_REUSEPORT
+	// set SO_REUSEADDR and SO_REUSEPORT
+	rc = setsockopt(sd, SOL_SOCKET,  SO_REUSEADDR | SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on));
+#else
 	// set SO_REUSEADDR
 	rc = setsockopt(sd, SOL_SOCKET,  SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on));
+#endif /* SO_REUSEPORT */
+
 	if (rc < 0) {
 		proxy_error("setsockopt() failed\n");
 	}
