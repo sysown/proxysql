@@ -2353,7 +2353,22 @@ __end_while_pool:
 			i=0; j=0;
 			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
-				c_split_2(sn, ":" , &add, &port);
+
+                                char *h = NULL;
+                                if (*sn == '[') {
+                                        char *p = strchr(sn, ']');
+                                        if (p == NULL)
+                                                proxy_error("Invalid IPv6 address: %s\n", sn);
+
+                                        h = ++sn; // remove first '['
+                                        *p = '\0';
+                                        sn = p++; // remove last ']'
+                                        add = h;
+                                        port = ++p; // remove ':'
+                                } else {
+                                        c_split_2(sn, ":" , &add, &port);
+                                }
+
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
 			}

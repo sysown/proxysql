@@ -5,51 +5,63 @@
  * returns the socket
  */
 int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
-	int rc, arg_on=1;
-	struct sockaddr_in addr;
-	int sd;
+        int arg_on = 1;
+        struct addrinfo hints = {
+                .ai_flags = AI_PASSIVE,
+                .ai_family = AF_UNSPEC,
+                .ai_socktype = SOCK_STREAM
+        };
+        struct addrinfo *next, *ai;
+        char port_string[NI_MAXSERV];
+        int sd = -1;
 
-	// create a socket
-	if ( (sd = socket(PF_INET, SOCK_STREAM, 0)) < 0 ) {
-		proxy_error("Error on creating socket\n");
-		close(sd);
-		return -1;
-	}
+        snprintf(port_string, sizeof(port_string), "%d", port);
+        if (getaddrinfo(ip, port_string, &hints, &ai) != 0) {
+                proxy_error("getaddrinfo(): %s\n", gai_strerror(errno));
+                return -1;
+  	}
 
-	// set SO_REUSEADDR
-	rc = setsockopt(sd, SOL_SOCKET,  SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on));
-	if (rc < 0) {
-		proxy_error("setsockopt() failed\n");
-	}
+        for (next = ai; next != NULL; next = next->ai_next) {
+	        if ((sd = socket(next->ai_family, next->ai_socktype, next->ai_protocol)) == -1) 
+                        continue;
+#ifdef IPV6_V6ONLY
+                if (next->ai_family == AF_INET6) {
+                        if(setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&arg_on, sizeof(arg_on)) == -1) 
+				proxy_error("setsockopt() IPV6_V6ONLY: %d\n", gai_strerror(errno));
+                }
+#endif
+
+                if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on)) == -1) {
+                        proxy_error("setsockopt() SO_REUSEADDR: %s\n", gai_strerror(errno));
+                        close(sd);
+                        freeaddrinfo(ai);
+                        return -1;
+                }
 
 #ifdef SO_REUSEPORT
-	// set SO_REUSEPORT
-	if (reuseport) {
-		rc = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on));
-		if (rc < 0) {
-			proxy_error("setsockopt() failed\n");
+  		if (reuseport) {
+			if (setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on)) == -1) {
+				proxy_error("setsockopt() SO_REUSEPORT: %d\n", gai_strerror(errno));
+			}
 		}
-	}
 #endif /* SO_REUSEPORT */
 
-	// define addr with the specified IP and port	
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(port);
-	addr.sin_addr.s_addr = inet_addr(ip);
-
-	// call bind() to bind the socket on the specified address
-	if ( bind(sd, (struct sockaddr*)&addr, sizeof(addr)) != 0 ) {
-		proxy_error("Error on Bind , address %s:%d\n", ip, port);
-		close(sd);
-		return -1;
-	}
-
-	// define the backlog
-	if ( listen(sd, backlog) != 0 ) {
-		proxy_error("Error on Listen , address %s:%d\n", ip, port);
-		close(sd);
-		return -1;
-	}
+                if (bind(sd, next->ai_addr, next->ai_addrlen) == -1) {
+                        if (errno != EADDRINUSE) {
+                                proxy_error("bind(): %s\n", gai_strerror(errno));
+                                close(sd);
+                                freeaddrinfo(ai);
+                                return -1;
+                        }
+                } else {
+                        if (listen(sd, backlog) == -1) {
+                                proxy_error("listen(): %s\n", gai_strerror(errno));
+                                close(sd);
+                                freeaddrinfo(ai);
+                                return -1;
+                        }
+                }
+        }
 
 	// return the socket
 	return sd;

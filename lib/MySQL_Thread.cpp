@@ -10,18 +10,7 @@ MySQL_Session *sess_stopat;
 
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
-
-/*
-// qsort int comparison function
-static int int_cmp(const void *a, const void *b) {
-	const int *ia = (const int *)a; // casting pointer types
-	const int *ib = (const int *)b;
-	return *ia  - *ib;
-	// integer comparison: returns negative if b > a
-	// and positive if a > b
-}
-*/
-
+#define BUFLEN 256
 
 extern Query_Processor *GloQPro;
 extern MySQL_Authentication *GloMyAuth;
@@ -107,8 +96,24 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 		}
 	}
 	char *address=NULL; char *port=NULL;
-	c_split_2(iface, ":" , &address, &port);
-	int s=-1;
+	int s = -1;
+        char *h = NULL;
+
+        if (*(char *)iface == '[') {
+                char *p = strchr((char *)iface, ']');
+                if (p == NULL) {
+                        proxy_error("Invalid IPv6 address: %s\n", iface);
+                        return -1;
+                }
+                h = (char *)++iface; // remove first '['
+                *p = '\0';
+                iface = p++; // remove last ']'
+                address = h;
+                port = ++p; // remove ':'
+        } else {
+                c_split_2(iface, ":" , &address, &port);
+        }
+
 #ifdef SO_REUSEPORT
 	if (GloVars.global.reuseport==false) {
 		s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
@@ -2846,13 +2851,29 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		}
 		sess->client_myds->client_addrlen=addrlen;
 		sess->client_myds->client_addr=addr;
-		if (sess->client_myds->client_addr->sa_family==AF_INET) {
-			struct sockaddr_in * ipv4addr=(struct sockaddr_in *)sess->client_myds->client_addr;
-			sess->client_myds->addr.addr=strdup(inet_ntoa(ipv4addr->sin_addr));
-			sess->client_myds->addr.port=htons(ipv4addr->sin_port);
-		} else {
-			sess->client_myds->addr.addr=strdup("localhost");
-		}
+
+                switch (sess->client_myds->client_addr->sa_family) {
+                        case AF_INET: {
+                                struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
+                                char buf[BUFLEN];
+                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                sess->client_myds->addr.addr = strdup(buf);
+                                sess->client_myds->addr.port = htons(ipv4->sin_port);
+                                break;
+                                }
+                        case AF_INET6: {
+                                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
+                                char buf[BUFLEN];
+                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                sess->client_myds->addr.addr = strdup(buf);
+                                sess->client_myds->addr.port = htons(ipv6->sin6_port);
+                                break;
+                        }
+                        default:
+                                sess->client_myds->addr.addr = strdup("localhost");
+                                break;
+                }
+
 		iface_info *ifi=NULL;
 		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd); // here we try to get the info about the proxy bind address
 		if (ifi) {
@@ -3114,6 +3135,7 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	const int colnum=14;
+        char port[NI_MAXSERV];
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
   SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"ThreadID");
@@ -3173,15 +3195,31 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						pta[3]=strdup(ui->schemaname);
 					}
 				}
-				if (sess->mirror==false && sess->client_myds->client_addr->sa_family==AF_INET) {
-					struct sockaddr_in * ipv4addr=(struct sockaddr_in *)sess->client_myds->client_addr;
-					pta[4]=strdup(inet_ntoa(ipv4addr->sin_addr));
-					sprintf(buf,"%d", htons(ipv4addr->sin_port));
-					pta[5]=strdup(buf);
-				} else {
-					pta[4]=strdup("localhost");
-					pta[5]=NULL;
-				}
+
+                                if (sess->mirror==false) {
+                                        switch (sess->client_myds->client_addr->sa_family) {
+                                        case AF_INET: {
+                                                struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
+                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                                pta[4] = strdup(buf);
+                                                sprintf(port, "%d", ntohs(ipv4->sin_port));
+                                                pta[5] = strdup(port);
+                                                break;
+                                                }
+                                        case AF_INET6: {
+                                                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
+                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                                pta[4] = strdup(buf);
+                                                sprintf(port, "%d", ntohs(ipv6->sin6_port));
+                                                pta[5] = strdup(port);
+                                                break;
+                                                }
+                                        default:
+                                                pta[4] = strdup("localhost");
+                                                pta[5] = NULL;
+                                                break;
+                                        }
+                                }
 				sprintf(buf,"%d", sess->current_hostgroup);
 				pta[6]=strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
@@ -3194,15 +3232,28 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					int rc;
 					rc=getsockname(mc->fd, &addr, &addr_len);
 					if (rc==0) {
-						if (addr.sa_family==AF_INET) {
-							struct sockaddr_in * ipv4addr=(struct sockaddr_in *)&addr;
-							pta[7]=strdup(inet_ntoa(ipv4addr->sin_addr));
-							sprintf(buf,"%d", htons(ipv4addr->sin_port));
-							pta[8]=strdup(buf);
-						} else {
-							pta[7]=strdup("localhost");
-							pta[8]=NULL;
-						}
+                                        switch (addr.sa_family) { 
+                                                case AF_INET: {
+                                                        struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
+                                                        inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                                        pta[7] = strdup(buf);
+                                                        sprintf(port, "%d", ntohs(ipv4->sin_port));
+                                                        pta[8] = strdup(port);
+                                                        break;
+                                                        }
+                                                case AF_INET6: {
+                                                        struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
+                                                        inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                                        pta[7] = strdup(buf);
+                                                        sprintf(port, "%d", ntohs(ipv6->sin6_port));
+                                                        pta[8] = strdup(port);
+                                                        break;
+                                                        }
+                                                default:
+                                                        pta[7] = strdup("localhost");
+                                                        pta[8] = NULL;
+                                                        break;
+                                                }
 					} else {
 						pta[7]=NULL;
 						pta[8]=NULL;
