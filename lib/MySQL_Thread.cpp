@@ -2306,7 +2306,13 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	memset(addr, 0, sizeof(struct sockaddr));
 	if (GloMTH->num_threads > 1) {
 		// there are more than 1 thread . We pause for a little bit to avoid all connections to be handled by the same thread
+#ifdef SO_REUSEPORT
+		if (GloVars.global.reuseport==false) { // only if reuseport is not enabled
+			usleep(10+rand()%50);
+		}
+#else
 		usleep(10+rand()%50);
+#endif /* SO_REUSEPORT */
 	}
 	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
