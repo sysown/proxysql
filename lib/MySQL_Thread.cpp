@@ -86,7 +86,7 @@ MySQL_Listeners_Manager::~MySQL_Listeners_Manager() {
 	ifaces=NULL;
 }
 
-int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, int *perthrsocks) {
+int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, int **perthrsocks) {
 	for (unsigned int i=0; i<ifaces->len; i++) {
 		iface_info *ifi=(iface_info *)ifaces->index(i);
 		if (strcmp(ifi->iface,iface)==0) {
@@ -104,15 +104,16 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 			s = listen_on_unix(address, PROXYSQL_LISTEN_LEN);
 		} else {
 			// for TCP we will use SO_REUSEPORT
-			perthrsocks=(int *)malloc(sizeof(int)*num_threads);
+			int *l_perthrsocks=(int *)malloc(sizeof(int)*num_threads);
 			int i;
 			for (i=0;i<num_threads;i++) {
 				s=listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
 				ioctl_FIONBIO(s,1);
 				iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
 				ifaces->add(ifi);
-				perthrsocks[i]=s;
+				l_perthrsocks[i]=s;
 			}
+			*perthrsocks=l_perthrsocks;
 			s=0;
 		}
 	}
@@ -361,7 +362,7 @@ int MySQL_Threads_Handler::listener_add(const char *address, int port) {
 int MySQL_Threads_Handler::listener_add(const char *iface) {
 	int rc;
 	int *perthrsocks=NULL;;
-	rc=MLM->add(iface, num_threads, perthrsocks);
+	rc=MLM->add(iface, num_threads, &perthrsocks);
 	if (rc>-1) {
 		unsigned int i;
 		if (perthrsocks==NULL) {

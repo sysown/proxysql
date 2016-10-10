@@ -59,7 +59,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.foreground=false;
 	global.monitor=true;
 #ifdef SO_REUSEPORT
-	global.reuseport=true;
+	global.reuseport=false;
 #endif /* SO_REUSEPORT */
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
