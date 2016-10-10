@@ -111,7 +111,7 @@ extern "C" {
 #endif /* __cplusplus */
 
 //mysql_data_stream_t * mysql_data_stream_New(mysql_session_t *, int, mysql_backend_t *);
-int listen_on_port(char *, uint16_t, int);
+int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport=false);
 int listen_on_unix(char *, int);
 int connect_socket(char *, int);
 //void process_global_variables_from_file(GKeyFile *, int );

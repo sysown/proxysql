@@ -241,8 +241,8 @@ class MySQL_Listeners_Manager {
 	public:
   MySQL_Listeners_Manager();
 	~MySQL_Listeners_Manager();
-	int add(const char *iface);
-	int add(const char *address, int port);
+	int add(const char *iface, unsigned int num_threads, int *perthrsocks);
+	//int add(const char *address, int port);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
 	iface_info * find_iface_from_fd(int fd);

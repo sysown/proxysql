@@ -86,7 +86,7 @@ MySQL_Listeners_Manager::~MySQL_Listeners_Manager() {
 	ifaces=NULL;
 }
 
-int MySQL_Listeners_Manager::add(const char *iface) {
+int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, int *perthrsocks) {
 	for (unsigned int i=0; i<ifaces->len; i++) {
 		iface_info *ifi=(iface_info *)ifaces->index(i);
 		if (strcmp(ifi->iface,iface)==0) {
@@ -95,14 +95,40 @@ int MySQL_Listeners_Manager::add(const char *iface) {
 	}
 	char *address=NULL; char *port=NULL;
 	c_split_2(iface, ":" , &address, &port);
-	int s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+	int s=-1;
+#ifdef SO_REUSEPORT
+	if (GloVars.global.reuseport==false) {
+		s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+	} else {
+		if (atoi(port)==0) {
+			s = listen_on_unix(address, PROXYSQL_LISTEN_LEN);
+		} else {
+			// for TCP we will use SO_REUSEPORT
+			perthrsocks=(int *)malloc(sizeof(int)*num_threads);
+			int i;
+			for (i=0;i<num_threads;i++) {
+				s=listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
+				ioctl_FIONBIO(s,1);
+				iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
+				ifaces->add(ifi);
+				perthrsocks[i]=s;
+			}
+			s=0;
+		}
+	}
+#else
+	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+#endif /* SO_REUSEPORT */
 	if (s==-1) return s;
-	ioctl_FIONBIO(s,1);
-	iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
-	ifaces->add(ifi);
+	if (s>0) {
+		ioctl_FIONBIO(s,1);
+		iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
+		ifaces->add(ifi);
+	}
 	return s;
 }
 
+/* unused ?
 int MySQL_Listeners_Manager::add(const char *address, int port) {
 	char *s=(char *)malloc(strlen(address)+32);
 	sprintf(s,"%s:%d",address,port);
@@ -110,6 +136,7 @@ int MySQL_Listeners_Manager::add(const char *address, int port) {
 	free(s);
 	return ret;
 }
+*/
 
 int MySQL_Listeners_Manager::find_idx(const char *iface) {
 	for (unsigned int i=0; i<ifaces->len; i++) {
@@ -333,14 +360,26 @@ int MySQL_Threads_Handler::listener_add(const char *address, int port) {
 
 int MySQL_Threads_Handler::listener_add(const char *iface) {
 	int rc;
-	rc=MLM->add(iface);
+	int *perthrsocks=NULL;;
+	rc=MLM->add(iface, num_threads, perthrsocks);
 	if (rc>-1) {
 		unsigned int i;
-		for (i=0;i<num_threads;i++) {
-			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc)) {
-				usleep(10); // pause a bit
+		if (perthrsocks==NULL) {
+			for (i=0;i<num_threads;i++) {
+				MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+				while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc)) {
+					usleep(10); // pause a bit
+				}
 			}
+		} else {
+			for (i=0;i<num_threads;i++) {
+				MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+				while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,perthrsocks[i])) {
+					usleep(10); // pause a bit
+				}
+			}
+			free(perthrsocks);
+		}
 /*
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_change,0,1)) { cpu_relax_pa(); }
 			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_change,0)==1) { cpu_relax_pa(); }
@@ -349,7 +388,6 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_change,2,0));
 //			spin_wrunlock(&thr->thread_mutex);
 */
-  	}
 	}
 	return rc;
 }
