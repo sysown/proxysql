@@ -2019,7 +2019,11 @@ __run_skip_1:
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
-		if (curtime > last_maintenance_time + 200000) { // hardcoded value for now
+		unsigned int maintenance_interval = 300000; // hardcoded value for now
+		if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+			maintenance_interval=maintenance_interval*4;
+		}
+		if (curtime > last_maintenance_time + maintenance_interval) {
 			last_maintenance_time=curtime;
 			maintenance_loop=true;
 		} else {
@@ -2218,6 +2222,9 @@ void MySQL_Thread::process_all_sessions() {
 	unsigned int total_active_transactions_=0;
 	int rc;
 	bool sess_sort=mysql_thread___sessions_sort;
+	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+		sess_sort=false;
+	}
 	if (sess_sort && mysql_sessions->len > 3) {
 		unsigned int a=0;
 		for (n=0; n<mysql_sessions->len; n++) {
