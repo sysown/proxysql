@@ -1984,14 +1984,15 @@ __run_skip_1:
 			}
 			spin_wrlock(&GloMTH->rwlock_resumes);
 			if (GloMTH->resume_mysql_sessions->len) {
-				unsigned int maxsess=GloMTH->resume_mysql_sessions->len;
-				maxsess=maxsess/2+1;
-				while (maxsess && GloMTH->resume_mysql_sessions->len) {
+				//unsigned int maxsess=GloMTH->resume_mysql_sessions->len;
+				//maxsess=maxsess/2+1;
+				//while (maxsess && GloMTH->resume_mysql_sessions->len) {
+				while (GloMTH->resume_mysql_sessions->len) {
 					MySQL_Session *mysess=(MySQL_Session *)GloMTH->resume_mysql_sessions->remove_index_fast(0);
 					register_session(mysess, false);
 					MySQL_Data_Stream *myds=mysess->client_myds;
 					mypolls.add(POLLIN, myds->fd, myds, monotonic_time());	
-					maxsess--;
+					//maxsess--;
 				}
 			}
 			spin_wrunlock(&GloMTH->rwlock_resumes);
@@ -2152,11 +2153,27 @@ __run_skip_1:
 					GloMTH->resume_mysql_sessions->add(mysess);
 				}
 				spin_wrunlock(&GloMTH->rwlock_resumes);
-				GloMTH->signal_all_threads(1);
+				{
+					unsigned int w=rand()%(GloMTH->num_threads-1);
+					w++;
+					unsigned char c=0;
+					MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
+					int fd=thr->pipefd[1];
+					if (write(fd,&c,1)==-1) {
+						proxy_error("Error while signaling maintenance thread\n");
+					}
+				}
 			} else {
 				spin_wrlock(&GloMTH->rwlock_resumes);
 				if (GloMTH->resume_mysql_sessions->len) {
-					GloMTH->signal_all_threads(1);
+					unsigned int w=rand()%(GloMTH->num_threads-1);
+					w++;
+					unsigned char c=0;
+					MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
+					int fd=thr->pipefd[1];
+					if (write(fd,&c,1)==-1) {
+						proxy_error("Error while signaling maintenance thread\n");
+					}
 				}
 				spin_wrunlock(&GloMTH->rwlock_resumes);
 			}
