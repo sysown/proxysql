@@ -1884,7 +1884,7 @@ __run_skip_1:
 			myds=mypolls.myds[n];
 			mypolls.fds[n].revents=0;
 			if (myds) {
-				if (idle_maintenance_thread==false) {
+				if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
 					// here we try to move it to the maintenance thread
 					if (mypolls.last_recv[n] < curtime - 1000000) {
 						if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
@@ -1959,7 +1959,7 @@ __run_skip_1:
 			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 		}
 
-		if (idle_maintenance_thread==false) {
+		if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
 			if (idle_mysql_sessions->len) {
 				unsigned int ims=0;
 				spin_wrlock(&GloMTH->rwlock_idles);
