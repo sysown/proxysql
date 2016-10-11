@@ -155,6 +155,8 @@ class MySQL_Thread
 	unsigned long long curtime;
 	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
+	PtrArray *idle_mysql_sessions;
+	PtrArray *resume_mysql_sessions;
 	int pipefd[2];
 	int shutdown;
 
@@ -189,10 +191,10 @@ class MySQL_Thread
   void run();
   void poll_listener_add(int sock);
   void poll_listener_del(int sock);
-  void register_session(MySQL_Session*);
+  void register_session(MySQL_Session*, bool up_start=true);
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
-  void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
+  bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
   void process_all_sessions();
   void refresh_variables();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
@@ -336,6 +338,10 @@ class MySQL_Threads_Handler
 	public:
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
+	rwlock_t rwlock_idles;
+	rwlock_t rwlock_resumes;
+	PtrArray *idle_mysql_sessions;
+	PtrArray *resume_mysql_sessions;
 	//virtual const char *version() {return NULL;};
 	unsigned int get_global_version();
 	void wrlock();
