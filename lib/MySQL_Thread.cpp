@@ -2175,6 +2175,13 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 						// timeout
 						myds->sess->to_process=1;
 						assert(myds->sess->status!=NONE);
+					} else {
+						if (myds->pause_until && curtime > myds->pause_until) {
+							// timeout
+							myds->sess->to_process=1;
+						} else {
+							to_process=0;
+						}
 					}
 				}
 				if (myds->myds_type==MYDS_BACKEND && myds->sess->status!=FAST_FORWARD) {
@@ -2262,6 +2269,7 @@ void MySQL_Thread::process_all_sessions() {
 		if (maintenance_loop) {
 			unsigned int numTrx=0;
 			unsigned long long sess_time = sess->IdleTime();
+			sess->to_process=1;
 			if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 				numTrx = sess->NumActiveTransactions();
 				if (numTrx) {
