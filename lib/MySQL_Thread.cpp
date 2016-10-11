@@ -1909,7 +1909,7 @@ __run_skip_1:
 										}
 									}
 									if (exit_cond) {
-										break;
+										continue;
 									}
 								}
 							}
