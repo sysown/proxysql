@@ -1887,7 +1887,8 @@ __run_skip_1:
 									unsigned int j;
 									int conns=0;
 									for (j=0;j<myds->sess->mybes->len;j++) {
-										MySQL_Data_Stream *__myds=(MySQL_Data_Stream *)myds->sess->mybes->index(j);
+										MySQL_Backend *tmp_mybe=(MySQL_Backend *)myds->sess->mybes->index(j);
+										MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
 										if (__myds->myconn) {
 											conns++;
 										}
