@@ -1805,13 +1805,19 @@ void MySQL_Thread::run() {
 	int rc;
 	//int arg_on=1;
 
+	bool idle_maintenance_thread=false;
+	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+		idle_maintenance_thread=true;
+	}
+
+
 	curtime=monotonic_time();
 
 	spin_wrlock(&thread_mutex);
 
 	while (shutdown==0) {
 
-	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+	if (idle_maintenance_thread) {
 		goto __run_skip_1;
 	}
 
@@ -1863,7 +1869,7 @@ void MySQL_Thread::run() {
 
 __run_skip_1:
 
-		if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+		if (idle_maintenance_thread) {
 			spin_wrlock(&GloMTH->rwlock_idles);
 			while (GloMTH->idle_mysql_sessions->len) {
 				MySQL_Session *mysess=(MySQL_Session *)GloMTH->idle_mysql_sessions->remove_index_fast(0);
@@ -1878,12 +1884,12 @@ __run_skip_1:
 			myds=mypolls.myds[n];
 			mypolls.fds[n].revents=0;
 			if (myds) {
-				if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this != GloMTH->mysql_threads[0].worker) {
+				if (idle_maintenance_thread==false) {
 					// here we try to move it to the maintenance thread
-					if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
-						if (myds->sess->client_myds == myds) { // extra check
-							if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
-								if (mypolls.last_recv[n] < curtime - 1000000) {
+					if (mypolls.last_recv[n] < curtime - 1000000) {
+						if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
+							if (myds->sess->client_myds == myds) { // extra check
+								if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
 									unsigned int j;
 									int conns=0;
 									for (j=0;j<myds->sess->mybes->len;j++) {
@@ -1938,18 +1944,22 @@ __run_skip_1:
 			}
 			if (myds) myds->revents=0;
 			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER) {
-				if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
+				if (myds && myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
 					mypolls.fds[n].events = POLLIN;
-					if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
-						mypolls.fds[n].events |= POLLOUT;
 				} else {
-					mypolls.myds[n]->set_pollout();
+					if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
+						mypolls.fds[n].events = POLLIN;
+						if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
+							mypolls.fds[n].events |= POLLOUT;
+					} else {
+						mypolls.myds[n]->set_pollout();
+					}
 				}
 			}
 			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 		}
 
-		if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this != GloMTH->mysql_threads[0].worker) {
+		if (idle_maintenance_thread==false) {
 			if (idle_mysql_sessions->len) {
 				unsigned int ims=0;
 				spin_wrlock(&GloMTH->rwlock_idles);
@@ -2028,7 +2038,7 @@ __run_skip_1:
 
 		curtime=monotonic_time();
 		unsigned int maintenance_interval = 300000; // hardcoded value for now
-		if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+		if (idle_maintenance_thread) {
 			maintenance_interval=maintenance_interval*4;
 		}
 		if (curtime > last_maintenance_time + maintenance_interval) {
@@ -2133,7 +2143,7 @@ __run_skip_1:
 				}
 		}
 		}
-		if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+		if (idle_maintenance_thread) {
 			if (resume_mysql_sessions->len) {
 				spin_wrlock(&GloMTH->rwlock_resumes);
 				unsigned int ims;
@@ -2198,23 +2208,24 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 				if (myds->myds_type==MYDS_BACKEND && myds->sess->status!=FAST_FORWARD) {
 					return true;
 				}
-				if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
-					// only if we aren't using MariaDB Client Library
-					myds->read_from_net();
-					myds->read_pkts();
-				} else {
-					if (mypolls.fds[n].revents) {
-						myds->myconn->handler(mypolls.fds[n].revents);
+				if (mypolls.fds[n].revents) {
+					if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
+						// only if we aren't using MariaDB Client Library
+						myds->read_from_net();
+						myds->read_pkts();
+					} else {
+						if (mypolls.fds[n].revents) {
+							myds->myconn->handler(mypolls.fds[n].revents);
+						}
 					}
+					if ( (mypolls.fds[n].events & POLLOUT)
+							&&
+							( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) )
+					) {
+						myds->set_net_failure();
+					}
+					myds->check_data_flow();
 				}
-				if ( (mypolls.fds[n].events & POLLOUT)
-						&&
-						( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) )
-				) {
-					myds->set_net_failure();
-				}
-
-				myds->check_data_flow();
 
 
 	      if (myds->active==FALSE) {
@@ -2238,9 +2249,13 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 void MySQL_Thread::process_all_sessions() {
 	unsigned int n;
 	unsigned int total_active_transactions_=0;
+	bool idle_maintenance_thread=false;
+	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+		idle_maintenance_thread=true;
+	}
 	int rc;
 	bool sess_sort=mysql_thread___sessions_sort;
-	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+	if (idle_maintenance_thread) {
 		sess_sort=false;
 	}
 	if (sess_sort && mysql_sessions->len > 3) {
@@ -2280,15 +2295,22 @@ void MySQL_Thread::process_all_sessions() {
 		if (maintenance_loop) {
 			unsigned int numTrx=0;
 			unsigned long long sess_time = sess->IdleTime();
-			sess->to_process=1;
-			if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
-				numTrx = sess->NumActiveTransactions();
-				if (numTrx) {
-					// the session has idle transactions, kill it
-					if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
-				} else {
-					// the session is idle, kill it
-					if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+			if (idle_maintenance_thread==false) {
+				sess->to_process=1;
+				if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+					numTrx = sess->NumActiveTransactions();
+					if (numTrx) {
+						// the session has idle transactions, kill it
+						if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
+					} else {
+						// the session is idle, kill it
+						if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+					}
+				}
+			} else {
+				if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+					sess->killed=true;
+					sess->to_process=1;
 				}
 			}
 		}
