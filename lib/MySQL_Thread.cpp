@@ -1952,16 +1952,23 @@ __run_skip_1:
 			if (idle_mysql_sessions->len) {
 				unsigned int ims=0;
 				spin_wrlock(&GloMTH->rwlock_idles);
+				bool empty_queue=true;
+				if (GloMTH->idle_mysql_sessions->len) {
+					// there are already sessions in the queues. We assume someone already notified worker 0
+					empty_queue=false;
+				}
 				for (ims=0; ims<idle_mysql_sessions->len; ims++) {
 					MySQL_Session *mysess=(MySQL_Session *)idle_mysql_sessions->remove_index_fast(0);
 					GloMTH->idle_mysql_sessions->add(mysess);
 				}
 				spin_wrunlock(&GloMTH->rwlock_idles);
-				unsigned char c=1;
-				MySQL_Thread *thr=GloMTH->mysql_threads[0].worker;
-				int fd=thr->pipefd[1];
-				if (write(fd,&c,1)==-1) {
-					proxy_error("Error while signaling maintenance thread\n");
+				if (empty_queue==true) {
+					unsigned char c=1;
+					MySQL_Thread *thr=GloMTH->mysql_threads[0].worker;
+					int fd=thr->pipefd[1];
+					if (write(fd,&c,1)==-1) {
+						proxy_error("Error while signaling maintenance thread\n");
+					}
 				}
 			}
 			spin_wrlock(&GloMTH->rwlock_resumes);
