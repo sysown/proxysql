@@ -2050,6 +2050,10 @@ __run_skip_1:
 			refresh_variables();
 		}
 
+		for (n=0; n<mysql_sessions->len; n++) {
+			MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
+			_sess->to_process=0;
+		}
 
 		for (n = 0; n < mypolls.len; n++) {
 			proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
@@ -2072,6 +2076,7 @@ __run_skip_1:
 						usleep(c*1000);
 						spin_wrlock(&thread_mutex);
 					}
+					maintenance_loop=true;
 				}
 			continue;
 			}
@@ -2176,11 +2181,9 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 						myds->sess->to_process=1;
 						assert(myds->sess->status!=NONE);
 					} else {
-						if (myds->pause_until && curtime > myds->pause_until) {
+						if (myds->sess->pause_until && curtime > myds->sess->pause_until) {
 							// timeout
 							myds->sess->to_process=1;
-						} else {
-							to_process=0;
 						}
 					}
 				}
