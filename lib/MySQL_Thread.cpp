@@ -13,14 +13,16 @@ MySQL_Session *sess_stopat;
 #define MIN_THREADS_FOR_MAINTENANCE 8
 #define MAXEVENTS 128
 
-/* qsort int comparison function */
+/*
+// qsort int comparison function
 static int int_cmp(const void *a, const void *b) {
 	const int *ia = (const int *)a; // casting pointer types
 	const int *ib = (const int *)b;
 	return *ia  - *ib;
-	/* integer comparison: returns negative if b > a
-	and positive if a > b */
+	// integer comparison: returns negative if b > a
+	// and positive if a > b
 }
+*/
 
 
 extern Query_Processor *GloQPro;
@@ -1826,8 +1828,9 @@ void MySQL_Thread::run() {
 			efd = epoll_create1(0);
 			int fd=pipefd[0];
 			struct epoll_event event;
+			memset(&event,0,sizeof(event)); // let's make valgrind happy
 			event.events = EPOLLIN;
-			event.data.fd = -1; // special value to point to the pipe
+			event.data.u32=0; // special value to point to the pipe
 			epoll_ctl(efd, EPOLL_CTL_ADD, fd, &event);
 		}
 	}
@@ -1900,10 +1903,11 @@ __run_skip_1:
 				mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 				// add in epoll()
 				struct epoll_event event;
-				event.data.fd = mysql_sessions->len; // index in mysql_session
-				event.data.fd--; // index in mysql_session
+				memset(&event,0,sizeof(event)); // let's make valgrind happy
+				event.data.u32=mysess->thread_session_id;
 				event.events = EPOLLIN;
 				epoll_ctl (efd, EPOLL_CTL_ADD, myds->fd, &event);
+				fprintf(stderr,"Adding session %p idx, DS %p idx %d\n",mysess,myds,myds->poll_fds_idx);
 			}
 			spin_wrunlock(&GloMTH->rwlock_idles);
 			goto __run_skip_1a;
@@ -2111,6 +2115,38 @@ __run_skip_1a:
 		// here we handle epoll_wait()
 		if (idle_maintenance_thread) {
 			if (rc) {
+				int epi=mysql_sessions->len;
+				int i=0;
+				while (epi) {
+					epi--;
+					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(epi);
+					for (i=0; i<rc; i++) {
+						uint32_t sess_thr_id=events[epi].data.u32;
+						//memcpy(&mysess2,&events[epi].data.ptr,sizeof(MySQL_Session *));
+						if (mysess->thread_session_id==sess_thr_id) { // found it!
+							MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+							int dsidx=tmp_myds->poll_fds_idx;
+							fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+							mypolls.remove_index_fast(dsidx);
+							tmp_myds->mypolls=NULL;
+							mysess->thread=NULL;
+							unregister_session(i);
+							resume_mysql_sessions->add(mysess);
+							epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+							i=rc;
+						}
+					}
+				}
+				for (i=0; i<rc; i++) {
+					if (events[epi].data.u32==0) {
+						unsigned char c;
+						int fd=pipefd[0];
+						if (read(fd, &c, 1)==-1) {
+						}
+						maintenance_loop=true;
+					}
+				}
+/*
 				int epi;
 				int sessindexes[MAXEVENTS];
 				for (epi=0; epi<rc; epi++) {
@@ -2139,6 +2175,7 @@ __run_skip_1a:
 					}
 					epi--;
 				}
+*/
 /*
 				mypolls.remove_index_fast(n);
 				myds->mypolls=NULL;
