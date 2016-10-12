@@ -2114,7 +2114,7 @@ __run_skip_1a:
 				int epi;
 				int sessindexes[MAXEVENTS];
 				for (epi=0; epi<rc; epi++) {
-					sessindexes[epi]=events->data.fd; // is not really a fd! But an integer pointer of mysql_sessions
+					sessindexes[epi]=events[epi].data.fd; // is not really a fd! But an integer pointer of mysql_sessions
 				}
 				qsort(sessindexes, rc, sizeof(int), int_cmp);
 				epi=rc-1;
