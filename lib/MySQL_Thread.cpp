@@ -1906,6 +1906,7 @@ __run_skip_1:
 				epoll_ctl (efd, EPOLL_CTL_ADD, myds->fd, &event);
 			}
 			spin_wrunlock(&GloMTH->rwlock_idles);
+			goto __run_skip_1a;
 		}
 		for (n = 0; n < mypolls.len; n++) {
 			MySQL_Data_Stream *myds=NULL;
@@ -2025,7 +2026,7 @@ __run_skip_1:
 			}
 			spin_wrunlock(&GloMTH->rwlock_resumes);
 		}
-
+__run_skip_1a:
 		spin_wrunlock(&thread_mutex);
 
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
