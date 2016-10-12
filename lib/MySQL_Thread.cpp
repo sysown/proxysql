@@ -1904,7 +1904,7 @@ __run_skip_1:
 				event.data.u32=mysess->thread_session_id;
 				event.events = EPOLLIN;
 				epoll_ctl (efd, EPOLL_CTL_ADD, myds->fd, &event);
-				fprintf(stderr,"Adding session %p idx, DS %p idx %d\n",mysess,myds,myds->poll_fds_idx);
+				//fprintf(stderr,"Adding session %p idx, DS %p idx %d\n",mysess,myds,myds->poll_fds_idx);
 			}
 			spin_wrunlock(&GloMTH->rwlock_idles);
 			goto __run_skip_1a;
@@ -2120,10 +2120,10 @@ __run_skip_1a:
 					for (i=0; i<rc; i++) {
 						uint32_t sess_thr_id=events[i].data.u32;
 						//memcpy(&mysess2,&events[epi].data.ptr,sizeof(MySQL_Session *));
-						if (mysess->thread_session_id==sess_thr_id) { // found it!
+						if (events[i].events == EPOLLIN && mysess->thread_session_id==sess_thr_id) { // found it!
 							MySQL_Data_Stream *tmp_myds=mysess->client_myds;
 							int dsidx=tmp_myds->poll_fds_idx;
-							fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+							//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
 							mypolls.remove_index_fast(dsidx);
 							tmp_myds->mypolls=NULL;
 							mysess->thread=NULL;
@@ -2135,7 +2135,7 @@ __run_skip_1a:
 					}
 				}
 				for (i=0; i<rc; i++) {
-					if (events[i].data.u32==0) {
+					if (events[i].events == EPOLLIN && events[i].data.u32==0) {
 						unsigned char c;
 						int fd=pipefd[0];
 						if (read(fd, &c, 1)==-1) {
