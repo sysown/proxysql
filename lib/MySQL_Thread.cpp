@@ -3,7 +3,6 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Thread.h"
-#include <sys/epoll.h>
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -11,7 +10,6 @@ MySQL_Session *sess_stopat;
 
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
-#define MAXEVENTS 128
 
 /*
 // qsort int comparison function
@@ -1823,8 +1821,7 @@ void MySQL_Thread::run() {
 	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
 		idle_maintenance_thread=true;
 		// we check if it is the first time we are called
-		if (events==NULL) {
-			events=(epoll_event *)calloc(MAXEVENTS, sizeof(struct epoll_event));
+		if (efd==-1) {
 			efd = epoll_create1(0);
 			int fd=pipefd[0];
 			struct epoll_event event;
@@ -2055,7 +2052,7 @@ __run_skip_1a:
 
 		if (idle_maintenance_thread) {
 			// we call epoll()
-			rc = epoll_wait (efd, events, MAXEVENTS, mysql_thread___poll_timeout);
+			rc = epoll_wait (efd, events, MY_EPOLL_THREAD_MAXEVENTS, mysql_thread___poll_timeout);
 		} else {
 		//this is the only portion of code not protected by a global mutex
 		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
@@ -2143,6 +2140,7 @@ __run_skip_1a:
 						int fd=pipefd[0];
 						if (read(fd, &c, 1)==-1) {
 						}
+						i=rc;
 						maintenance_loop=true;
 					}
 				}
@@ -2586,7 +2584,7 @@ void MySQL_Thread::refresh_variables() {
 }
 
 MySQL_Thread::MySQL_Thread() {
-	events=NULL;
+	efd=-1;
 	spinlock_rwlock_init(&thread_mutex);
 //	mypolls.len=0;
 //	mypolls.size=0;

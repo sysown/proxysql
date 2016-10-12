@@ -3,11 +3,11 @@
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
 #include "proxysql.h"
 #include "cpp.h"
-
+#include <sys/epoll.h>
 
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
-
+#define MY_EPOLL_THREAD_MAXEVENTS 128
 
 #define ADMIN_HOSTGROUP	-2
 #define STATS_HOSTGROUP	-3
@@ -145,7 +145,7 @@ class MySQL_Thread
 
 	PtrArray *cached_connections;
 
-	struct epoll_event *events;
+	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
 	int efd;
 
 	protected:
