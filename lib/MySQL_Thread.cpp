@@ -2121,7 +2121,7 @@ __run_skip_1a:
 					epi--;
 					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(epi);
 					for (i=0; i<rc; i++) {
-						uint32_t sess_thr_id=events[epi].data.u32;
+						uint32_t sess_thr_id=events[i].data.u32;
 						//memcpy(&mysess2,&events[epi].data.ptr,sizeof(MySQL_Session *));
 						if (mysess->thread_session_id==sess_thr_id) { // found it!
 							MySQL_Data_Stream *tmp_myds=mysess->client_myds;
