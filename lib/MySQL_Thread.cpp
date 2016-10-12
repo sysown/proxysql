@@ -2263,12 +2263,12 @@ __run_skip_2:
 				}
 				spin_wrunlock(&GloMTH->rwlock_resumes);
 			}
+		} else {
+			// iterate through all sessions and process the session logic
+			process_all_sessions();
+
+			return_local_connections();
 		}
-		// iterate through all sessions and process the session logic
-		process_all_sessions();
-
-		return_local_connections();
-
 	}
 }
 
