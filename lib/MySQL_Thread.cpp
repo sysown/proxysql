@@ -2138,7 +2138,7 @@ __run_skip_1a:
 					}
 				}
 				for (i=0; i<rc; i++) {
-					if (events[epi].data.u32==0) {
+					if (events[i].data.u32==0) {
 						unsigned char c;
 						int fd=pipefd[0];
 						if (read(fd, &c, 1)==-1) {
