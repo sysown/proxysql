@@ -145,6 +145,9 @@ class MySQL_Thread
 
 	PtrArray *cached_connections;
 
+	struct epoll_event *events;
+	int efd;
+
 	protected:
 	int nfds;
 

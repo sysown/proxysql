@@ -3,6 +3,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Thread.h"
+#include <sys/epoll.h>
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -10,6 +11,17 @@ MySQL_Session *sess_stopat;
 
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
+#define MAXEVENTS 128
+
+/* qsort int comparison function */
+static int int_cmp(const void *a, const void *b) {
+	const int *ia = (const int *)a; // casting pointer types
+	const int *ib = (const int *)b;
+	return *ia  - *ib;
+	/* integer comparison: returns negative if b > a
+	and positive if a > b */
+}
+
 
 extern Query_Processor *GloQPro;
 extern MySQL_Authentication *GloMyAuth;
@@ -1808,6 +1820,16 @@ void MySQL_Thread::run() {
 	bool idle_maintenance_thread=false;
 	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
 		idle_maintenance_thread=true;
+		// we check if it is the first time we are called
+		if (events==NULL) {
+			events=(epoll_event *)calloc(MAXEVENTS, sizeof(struct epoll_event));
+			efd = epoll_create1(0);
+			int fd=pipefd[0];
+			struct epoll_event event;
+			event.events = EPOLLIN;
+			event.data.fd = -1; // special value to point to the pipe
+			epoll_ctl(efd, EPOLL_CTL_ADD, fd, &event);
+		}
 	}
 
 
@@ -1876,6 +1898,12 @@ __run_skip_1:
 				register_session(mysess, false);
 				MySQL_Data_Stream *myds=mysess->client_myds;
 				mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
+				// add in epoll()
+				struct epoll_event event;
+				event.data.fd = mysql_sessions->len; // index in mysql_session
+				event.data.fd--; // index in mysql_session
+				event.events = EPOLLIN;
+				epoll_ctl (efd, EPOLL_CTL_ADD, myds->fd, &event);
 			}
 			spin_wrunlock(&GloMTH->rwlock_idles);
 		}
@@ -2020,12 +2048,17 @@ __run_skip_1:
 		GloMyLogger->flush();
 
 
+		if (idle_maintenance_thread) {
+			// we call epoll()
+			rc = epoll_wait (efd, events, MAXEVENTS, mysql_thread___poll_timeout);
+		} else {
 		//this is the only portion of code not protected by a global mutex
 		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
 		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 > (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout )  );
 		// poll is called with a timeout of mypolls.poll_timeout if set , or mysql_thread___poll_timeout
 		rc=poll(mypolls.fds,mypolls.len, ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout ) );
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
+		}
 
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
 			poll_listener_del(n);
@@ -2072,6 +2105,56 @@ __run_skip_1:
 		for (n=0; n<mysql_sessions->len; n++) {
 			MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
 			_sess->to_process=0;
+		}
+
+		// here we handle epoll_wait()
+		if (idle_maintenance_thread) {
+			if (rc) {
+				int epi;
+				int sessindexes[MAXEVENTS];
+				for (epi=0; epi<rc; epi++) {
+					sessindexes[epi]=events->data.fd; // is not really a fd! But an integer pointer of mysql_sessions
+				}
+				qsort(sessindexes, rc, sizeof(int), int_cmp);
+				epi=rc-1;
+				while(epi>-1) {
+					int sessidx=sessindexes[epi];
+					if (sessidx==-1) { // this is the pipe
+						unsigned char c;
+						int fd=pipefd[0];
+						if (read(fd, &c, 1)==-1) {
+						}
+						maintenance_loop=true;
+					} else {
+						MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sessidx);
+						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+						int dsidx=tmp_myds->poll_fds_idx;
+						mypolls.remove_index_fast(dsidx);
+						tmp_myds->mypolls=NULL;
+						mysess->thread=NULL;
+						unregister_session(sessidx);
+						resume_mysql_sessions->add(mysess);
+						epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+					}
+					epi--;
+				}
+/*
+				mypolls.remove_index_fast(n);
+				myds->mypolls=NULL;
+				unsigned int i;
+				for (i=0;i<mysql_sessions->len;i++) {
+					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
+					if (mysess==myds->sess) {
+					mysess->thread=NULL;
+					unregister_session(i);
+					//exit_cond=true;
+					resume_mysql_sessions->add(myds->sess);
+						return false;
+								}
+							}
+*/
+			}
+			goto __run_skip_2;
 		}
 
 		for (n = 0; n < mypolls.len; n++) {
@@ -2144,6 +2227,8 @@ __run_skip_1:
 				}
 		}
 		}
+
+__run_skip_2:
 		if (idle_maintenance_thread) {
 			if (resume_mysql_sessions->len) {
 				spin_wrlock(&GloMTH->rwlock_resumes);
@@ -2463,6 +2548,7 @@ void MySQL_Thread::refresh_variables() {
 }
 
 MySQL_Thread::MySQL_Thread() {
+	events=NULL;
 	spinlock_rwlock_init(&thread_mutex);
 //	mypolls.len=0;
 //	mypolls.size=0;
