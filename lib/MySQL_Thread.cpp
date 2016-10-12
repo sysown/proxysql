@@ -2130,7 +2130,7 @@ __run_skip_1a:
 							mypolls.remove_index_fast(dsidx);
 							tmp_myds->mypolls=NULL;
 							mysess->thread=NULL;
-							unregister_session(i);
+							unregister_session(epi);
 							resume_mysql_sessions->add(mysess);
 							epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
 							i=rc;
