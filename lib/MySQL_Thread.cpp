@@ -2120,7 +2120,9 @@ __run_skip_1a:
 					for (i=0; i<rc; i++) {
 						uint32_t sess_thr_id=events[i].data.u32;
 						//memcpy(&mysess2,&events[epi].data.ptr,sizeof(MySQL_Session *));
-						if (events[i].events == EPOLLIN && mysess->thread_session_id==sess_thr_id) { // found it!
+						//if (events[i].events == EPOLLIN && mysess->thread_session_id==sess_thr_id) { // found it!
+						// NOTE: not sure why, sometime events returns odd values. If set, we take it out as normal worker threads know how to handle it
+						if (events[i].events && mysess->thread_session_id==sess_thr_id) { // found it!
 							MySQL_Data_Stream *tmp_myds=mysess->client_myds;
 							int dsidx=tmp_myds->poll_fds_idx;
 							//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
