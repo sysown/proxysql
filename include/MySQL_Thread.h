@@ -165,6 +165,8 @@ class MySQL_Thread
 	int pipefd[2];
 	int shutdown;
 
+	bool epoll_thread;
+
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
@@ -344,6 +346,7 @@ class MySQL_Threads_Handler
 	public:
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
+	proxysql_mysql_thread_t *mysql_threads_idles;
 	rwlock_t rwlock_idles;
 	rwlock_t rwlock_resumes;
 	PtrArray *idle_mysql_sessions;
