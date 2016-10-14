@@ -208,6 +208,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_filesize",
 	(char *)"default_charset",
 	(char *)"free_connections_pct",
+	(char *)"session_idle_ms",
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
@@ -297,6 +298,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connect_timeout_server=1000;
 	variables.connect_timeout_server_max=10000;
 	variables.free_connections_pct=10;
+	variables.session_idle_ms=1000;
 	variables.connect_retries_delay=1;
 	variables.monitor_enabled=true;
 	variables.monitor_history=600000;
@@ -559,6 +561,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
 	if (!strcasecmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
+	if (!strcasecmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
 	if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
@@ -729,6 +732,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"free_connections_pct")) {
 		sprintf(intbuf,"%d",variables.free_connections_pct);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"session_idle_ms")) {
+		sprintf(intbuf,"%d",variables.session_idle_ms);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"connect_retries_delay")) {
@@ -1080,6 +1087,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 100) {
 			variables.free_connections_pct=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"session_idle_ms")) {
+		int intv=atoi(value);
+		if (intv >= 100 && intv <= 3600*1000) {
+			variables.session_idle_ms=intv;
 			return true;
 		} else {
 			return false;
@@ -2238,7 +2254,7 @@ __run_skip_1a:
 				if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
 					mysess_idx=0;
 				}
-				int i;
+				unsigned int i;
 				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
 					uint32_t sess_pos=mysess_idx;
 					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
@@ -2246,7 +2262,7 @@ __run_skip_1a:
 					unsigned long long sess_time = mysess->IdleTime();
 					if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 						mysess->killed=true;
-						uint32_t sess_thr_id=mysess->thread_session_id;
+						//uint32_t sess_thr_id=mysess->thread_session_id;
 						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
 						int dsidx=tmp_myds->poll_fds_idx;
 						//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
@@ -2592,6 +2608,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
 	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");
 	mysql_thread___free_connections_pct=GloMTH->get_variable_int((char *)"free_connections_pct");
+	mysql_thread___session_idle_ms=GloMTH->get_variable_int((char *)"session_idle_ms");
 	mysql_thread___connect_retries_delay=GloMTH->get_variable_int((char *)"connect_retries_delay");
 
 	if (mysql_thread___monitor_username) free(mysql_thread___monitor_username);
