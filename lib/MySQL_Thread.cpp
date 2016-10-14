@@ -1934,7 +1934,7 @@ __run_skip_1:
 			if (myds) {
 				//if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
 					// here we try to move it to the maintenance thread
-					if (mypolls.last_recv[n] < curtime - 1000000) {
+					if (mypolls.last_recv[n] < curtime - mysql_thread___session_idle_ms) {
 						if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
 							if (myds->sess->client_myds == myds) { // extra check
 								if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
