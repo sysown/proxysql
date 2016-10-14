@@ -1916,7 +1916,7 @@ __run_skip_1:
 			myds=mypolls.myds[n];
 			mypolls.fds[n].revents=0;
 			if (myds) {
-				if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
+				//if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
 					// here we try to move it to the maintenance thread
 					if (mypolls.last_recv[n] < curtime - 1000000) {
 						if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
@@ -1954,7 +1954,7 @@ __run_skip_1:
 							}
 						}
 					}
-				}
+				//}
 				if (myds->wait_until) {
 					if (myds->wait_until > curtime) {
 						if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
