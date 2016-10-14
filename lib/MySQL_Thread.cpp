@@ -1904,6 +1904,8 @@ __run_skip_1:
 				event.data.u32=mysess->thread_session_id;
 				event.events = EPOLLIN;
 				epoll_ctl (efd, EPOLL_CTL_ADD, myds->fd, &event);
+				// we map thread_id -> position in mysql_session (end of the list)
+				sessmap[mysess->thread_session_id]=mysql_sessions->len-1;
 				//fprintf(stderr,"Adding session %p idx, DS %p idx %d\n",mysess,myds,myds->poll_fds_idx);
 			}
 			spin_wrunlock(&GloMTH->rwlock_idles);
@@ -2129,6 +2131,13 @@ __run_skip_1a:
 							mypolls.remove_index_fast(dsidx);
 							tmp_myds->mypolls=NULL;
 							mysess->thread=NULL;
+							// we first delete the association in sessmap
+							sessmap.erase(mysess->thread_session_id);
+							if (mysql_sessions->len-1 > 0) {
+								// take the last element and adjust the map
+								MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+								sessmap[mysess_last->thread_session_id]=epi;
+							}
 							unregister_session(epi);
 							resume_mysql_sessions->add(mysess);
 							epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);

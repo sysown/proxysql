@@ -147,6 +147,7 @@ class MySQL_Thread
 
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
 	int efd;
+	std::map<unsigned int, unsigned int> sessmap;
 
 	protected:
 	int nfds;
