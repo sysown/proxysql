@@ -2078,7 +2078,7 @@ __run_skip_1a:
 		curtime=monotonic_time();
 		unsigned int maintenance_interval = 300000; // hardcoded value for now
 		if (idle_maintenance_thread) {
-			maintenance_interval=maintenance_interval*4;
+			maintenance_interval=maintenance_interval*2;
 		}
 		if (curtime > last_maintenance_time + maintenance_interval) {
 			last_maintenance_time=curtime;
@@ -2232,6 +2232,40 @@ __run_skip_1a:
 								}
 							}
 */
+			}
+			if (mysql_sessions->len && maintenance_loop) {
+#define	SESS_TO_SCAN	128
+				if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
+					mysess_idx=0;
+				}
+				int i;
+				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
+					uint32_t sess_pos=mysess_idx;
+					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
+
+					unsigned long long sess_time = mysess->IdleTime();
+					if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+						mysess->killed=true;
+						uint32_t sess_thr_id=mysess->thread_session_id;
+						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+						int dsidx=tmp_myds->poll_fds_idx;
+						//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+						mypolls.remove_index_fast(dsidx);
+						tmp_myds->mypolls=NULL;
+						mysess->thread=NULL;
+						// we first delete the association in sessmap
+						sessmap.erase(mysess->thread_session_id);
+						if (mysql_sessions->len-1 > 0) {
+						// take the last element and adjust the map
+						MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+							sessmap[mysess_last->thread_session_id]=sess_pos;
+						}
+						unregister_session(sess_pos);
+						resume_mysql_sessions->add(mysess);
+						epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+					}
+					mysess_idx++;
+				}
 			}
 			goto __run_skip_2;
 		}
@@ -2631,6 +2665,7 @@ void MySQL_Thread::refresh_variables() {
 MySQL_Thread::MySQL_Thread() {
 	efd=-1;
 	spinlock_rwlock_init(&thread_mutex);
+	mysess_idx=0;
 //	mypolls.len=0;
 //	mypolls.size=0;
 //	mypolls.fds=NULL;
