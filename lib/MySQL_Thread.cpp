@@ -2256,8 +2256,10 @@ __run_skip_1a:
 						spin_wrunlock(&thread_mutex);
 						usleep(c*1000);
 						spin_wrlock(&thread_mutex);
+						// we enter in maintenance loop only if c is set
+						// when threads are signaling each other, there is no need to set maintenance_loop
+						maintenance_loop=true;
 					}
-					maintenance_loop=true;
 				}
 			continue;
 			}
