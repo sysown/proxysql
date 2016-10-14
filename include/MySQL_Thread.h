@@ -370,7 +370,7 @@ class MySQL_Threads_Handler
 	int get_variable_int(char *name);
 	void print_version();
 	void init(unsigned int num=0, size_t stack=0);
-	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *));
+	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *), bool);
 	void shutdown_threads();
 	int listener_add(const char *iface);
 	int listener_add(const char *address, int port);
