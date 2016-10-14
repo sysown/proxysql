@@ -2114,6 +2114,7 @@ __run_skip_1a:
 		// here we handle epoll_wait()
 		if (idle_maintenance_thread) {
 			if (rc) {
+/*
 				int epi=mysql_sessions->len;
 				int i=0;
 				while (epi) {
@@ -2142,6 +2143,34 @@ __run_skip_1a:
 							resume_mysql_sessions->add(mysess);
 							epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
 							i=rc;
+						}
+					}
+				}
+*/
+				int i;
+				for (i=0; i<rc; i++) {
+					if (events[i].data.u32) {
+						// NOTE: not sure why, sometime events returns odd values. If set, we take it out as normal worker threads know how to handle it
+						if (events[i].events) {
+							uint32_t sess_thr_id=events[i].data.u32;
+							uint32_t sess_pos=sessmap[sess_thr_id];
+							MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
+							MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+							int dsidx=tmp_myds->poll_fds_idx;
+							//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+							mypolls.remove_index_fast(dsidx);
+							tmp_myds->mypolls=NULL;
+							mysess->thread=NULL;
+							// we first delete the association in sessmap
+							sessmap.erase(mysess->thread_session_id);
+							if (mysql_sessions->len-1 > 0) {
+								// take the last element and adjust the map
+								MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+								sessmap[mysess_last->thread_session_id]=sess_pos;
+							}
+							unregister_session(sess_pos);
+							resume_mysql_sessions->add(mysess);
+							epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
 						}
 					}
 				}
