@@ -2106,9 +2106,11 @@ __run_skip_1a:
 			refresh_variables();
 		}
 
-		for (n=0; n<mysql_sessions->len; n++) {
-			MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
-			_sess->to_process=0;
+		if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
+			for (n=0; n<mysql_sessions->len; n++) {
+				MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
+				_sess->to_process=0;
+			}
 		}
 
 		// here we handle epoll_wait()
