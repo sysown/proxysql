@@ -19,6 +19,13 @@ static unsigned int near_pow_2 (unsigned int n) {
   return i ? i : n;
 }
 
+typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) _conn_exchange_t {
+	pthread_mutex_t mutex_idles;
+	PtrArray *idle_mysql_sessions;
+	pthread_mutex_t mutex_resumes;
+	PtrArray *resume_mysql_sessions;
+} conn_exchange_t;
+
 class ProxySQL_Poll {
 
   private:
@@ -162,6 +169,9 @@ class MySQL_Thread
 	PtrArray *mysql_sessions;
 	PtrArray *idle_mysql_sessions;
 	PtrArray *resume_mysql_sessions;
+
+	conn_exchange_t myexchange;
+
 	int pipefd[2];
 	int shutdown;
 
@@ -347,10 +357,10 @@ class MySQL_Threads_Handler
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 	proxysql_mysql_thread_t *mysql_threads_idles;
-	rwlock_t rwlock_idles;
-	rwlock_t rwlock_resumes;
-	PtrArray *idle_mysql_sessions;
-	PtrArray *resume_mysql_sessions;
+	//rwlock_t rwlock_idles;
+	//rwlock_t rwlock_resumes;
+	//PtrArray *idle_mysql_sessions;
+	//PtrArray *resume_mysql_sessions;
 	//virtual const char *version() {return NULL;};
 	unsigned int get_global_version();
 	void wrlock();
