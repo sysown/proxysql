@@ -109,6 +109,8 @@ class MySQL_Session
 	unsigned long long start_time;
 	unsigned long long pause_until;
 
+	unsigned long long idle_since;
+
 	// pointers
 	MySQL_Thread *thread;
 	Query_Processor_Output *qpo;

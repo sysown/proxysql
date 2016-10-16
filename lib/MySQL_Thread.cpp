@@ -2014,6 +2014,7 @@ __run_skip_1:
 												mysess->thread=NULL;
 												unregister_session(i);
 												exit_cond=true;
+												mysess->idle_since = curtime - mysess->IdleTime();
 												idle_mysql_sessions->add(mysess);
 												break;
 											}
@@ -2321,7 +2322,8 @@ __run_skip_1a:
 					uint32_t sess_pos=mysess_idx;
 					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
 
-					unsigned long long sess_time = mysess->IdleTime();
+					//unsigned long long sess_time = mysess->IdleTime();
+					unsigned long long sess_time = curtime - mysess->idle_since;
 					if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 						mysess->killed=true;
 						//uint32_t sess_thr_id=mysess->thread_session_id;
