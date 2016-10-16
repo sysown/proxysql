@@ -298,6 +298,9 @@ MySQL_Monitor::MySQL_Monitor() {
 			num_threads=GloMTH->num_threads*2;
 		}
 	}
+	if (num_threads>16) {
+		num_threads=16;	// limit to 16
+	}
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
