@@ -3085,7 +3085,7 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
 		} else {
-			thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 		}
 		spin_wrlock(&thr->thread_mutex);
 	}
@@ -3093,7 +3093,7 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
 		} else {
-			thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 		}
 		thr->Get_Memory_Stats();
 	}
@@ -3101,7 +3101,7 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
 		} else {
-			thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 		}
 		spin_wrunlock(&thr->thread_mutex);
 	}
