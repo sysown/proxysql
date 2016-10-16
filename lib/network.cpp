@@ -4,7 +4,7 @@
  * create a socket and listen on a specified IP and port
  * returns the socket
  */
-int listen_on_port(char *ip, uint16_t port, int backlog) {
+int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 	int rc, arg_on=1;
 	struct sockaddr_in addr;
 	int sd;
@@ -21,6 +21,16 @@ int listen_on_port(char *ip, uint16_t port, int backlog) {
 	if (rc < 0) {
 		proxy_error("setsockopt() failed\n");
 	}
+
+#ifdef SO_REUSEPORT
+	// set SO_REUSEPORT
+	if (reuseport) {
+		rc = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on));
+		if (rc < 0) {
+			proxy_error("setsockopt() failed\n");
+		}
+	}
+#endif /* SO_REUSEPORT */
 
 	// define addr with the specified IP and port	
 	addr.sin_family = AF_INET;

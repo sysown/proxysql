@@ -36,6 +36,9 @@ class ProxySQL_GlobalVariables {
 		bool gdbg;
 		bool nostart;
 		bool monitor;
+#ifdef SO_REUSEPORT
+		bool reuseport;
+#endif /* SO_REUSEPORT */
 //		bool use_proxysql_mem;
 		pthread_mutex_t start_mutex;
 		bool foreground;

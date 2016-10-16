@@ -818,7 +818,9 @@ __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
 __thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
+__thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
+__thread bool mysql_thread___session_idle_ms;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -904,7 +906,9 @@ extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
 extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
+extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
+extern __thread bool mysql_thread___session_idle_ms;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

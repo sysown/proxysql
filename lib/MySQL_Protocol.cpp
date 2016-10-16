@@ -1004,8 +1004,10 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   //srand(pthread_self());
   //uint32_t thread_id=rand()%100000;
   uint32_t thread_id=__sync_fetch_and_add(&glovars.thread_id,1);
-	if (_thread_id)
-		*_thread_id=thread_id;
+	if (thread_id==0) {
+		thread_id=__sync_fetch_and_add(&glovars.thread_id,1); // again!
+	}
+	*_thread_id=thread_id;
   //uint32_t thread_id=pthread_self();
 
   rand_struct rand_st;

@@ -9,6 +9,19 @@ MySQL_Session *sess_stopat;
 #endif
 
 #define PROXYSQL_LISTEN_LEN 1024
+#define MIN_THREADS_FOR_MAINTENANCE 8
+
+/*
+// qsort int comparison function
+static int int_cmp(const void *a, const void *b) {
+	const int *ia = (const int *)a; // casting pointer types
+	const int *ib = (const int *)b;
+	return *ia  - *ib;
+	// integer comparison: returns negative if b > a
+	// and positive if a > b
+}
+*/
+
 
 extern Query_Processor *GloQPro;
 extern MySQL_Authentication *GloMyAuth;
@@ -86,7 +99,7 @@ MySQL_Listeners_Manager::~MySQL_Listeners_Manager() {
 	ifaces=NULL;
 }
 
-int MySQL_Listeners_Manager::add(const char *iface) {
+int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, int **perthrsocks) {
 	for (unsigned int i=0; i<ifaces->len; i++) {
 		iface_info *ifi=(iface_info *)ifaces->index(i);
 		if (strcmp(ifi->iface,iface)==0) {
@@ -95,14 +108,41 @@ int MySQL_Listeners_Manager::add(const char *iface) {
 	}
 	char *address=NULL; char *port=NULL;
 	c_split_2(iface, ":" , &address, &port);
-	int s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+	int s=-1;
+#ifdef SO_REUSEPORT
+	if (GloVars.global.reuseport==false) {
+		s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+	} else {
+		if (atoi(port)==0) {
+			s = listen_on_unix(address, PROXYSQL_LISTEN_LEN);
+		} else {
+			// for TCP we will use SO_REUSEPORT
+			int *l_perthrsocks=(int *)malloc(sizeof(int)*num_threads);
+			unsigned int i;
+			for (i=0;i<num_threads;i++) {
+				s=listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
+				ioctl_FIONBIO(s,1);
+				iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
+				ifaces->add(ifi);
+				l_perthrsocks[i]=s;
+			}
+			*perthrsocks=l_perthrsocks;
+			s=0;
+		}
+	}
+#else
+	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+#endif /* SO_REUSEPORT */
 	if (s==-1) return s;
-	ioctl_FIONBIO(s,1);
-	iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
-	ifaces->add(ifi);
+	if (s>0) {
+		ioctl_FIONBIO(s,1);
+		iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
+		ifaces->add(ifi);
+	}
 	return s;
 }
 
+/* unused ?
 int MySQL_Listeners_Manager::add(const char *address, int port) {
 	char *s=(char *)malloc(strlen(address)+32);
 	sprintf(s,"%s:%d",address,port);
@@ -110,6 +150,7 @@ int MySQL_Listeners_Manager::add(const char *address, int port) {
 	free(s);
 	return ret;
 }
+*/
 
 int MySQL_Listeners_Manager::find_idx(const char *iface) {
 	for (unsigned int i=0; i<ifaces->len; i++) {
@@ -167,6 +208,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_filesize",
 	(char *)"default_charset",
 	(char *)"free_connections_pct",
+	(char *)"session_idle_ms",
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
@@ -212,6 +254,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"sessions_sort",
+	(char *)"session_idle_show_processlist",
 	(char *)"commands_stats",
 	(char *)"query_digests",
 	(char *)"servers_stats",
@@ -240,9 +283,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	}
 	num_threads=0;
 	mysql_threads=NULL;
+	mysql_threads_idles=NULL;
 	stacksize=0;
 	shutdown_=0;
 	spinlock_rwlock_init(&rwlock);
+	//spinlock_rwlock_init(&rwlock_idles);
+	//spinlock_rwlock_init(&rwlock_resumes);
+	//idle_mysql_sessions = new PtrArray();
+	//resume_mysql_sessions = new PtrArray();
 	pthread_attr_init(&attr);
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
@@ -252,6 +300,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connect_timeout_server=1000;
 	variables.connect_timeout_server_max=10000;
 	variables.free_connections_pct=10;
+	variables.session_idle_ms=1000;
 	variables.connect_retries_delay=1;
 	variables.monitor_enabled=true;
 	variables.monitor_history=600000;
@@ -305,6 +354,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.enforce_autocommit_on_reads=false;
 	variables.query_digests=true;
 	variables.sessions_sort=true;
+	variables.session_idle_show_processlist=false;
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
 	variables.ssl_p2s_ca=NULL;
@@ -333,14 +383,33 @@ int MySQL_Threads_Handler::listener_add(const char *address, int port) {
 
 int MySQL_Threads_Handler::listener_add(const char *iface) {
 	int rc;
-	rc=MLM->add(iface);
+	int *perthrsocks=NULL;;
+	rc=MLM->add(iface, num_threads, &perthrsocks);
 	if (rc>-1) {
 		unsigned int i;
-		for (i=0;i<num_threads;i++) {
-			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc)) {
-				usleep(10); // pause a bit
+		if (perthrsocks==NULL) {
+			for (i=0;i<num_threads;i++) {
+				//if (i==0 && num_threads >= MIN_THREADS_FOR_MAINTENANCE) {
+				//	continue;
+				//}
+				MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+				while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,rc)) {
+					usleep(10); // pause a bit
+				}
 			}
+		} else {
+			for (i=0;i<num_threads;i++) {
+				//if (i==0 && num_threads >= MIN_THREADS_FOR_MAINTENANCE) {
+				//	close(perthrsocks[i]);
+				//	continue;
+				//}
+				MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+				while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_add,0,perthrsocks[i])) {
+					usleep(10); // pause a bit
+				}
+			}
+			free(perthrsocks);
+		}
 /*
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_change,0,1)) { cpu_relax_pa(); }
 			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_change,0)==1) { cpu_relax_pa(); }
@@ -349,7 +418,6 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_change,2,0));
 //			spin_wrunlock(&thr->thread_mutex);
 */
-  	}
 	}
 	return rc;
 }
@@ -496,6 +564,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
 	if (!strcasecmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
+	if (!strcasecmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
 	if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
@@ -506,6 +575,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
+	if (!strcasecmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
 	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcasecmp(name,"default_reconnect")) return (int)variables.default_reconnect;
 	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
@@ -668,6 +738,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.free_connections_pct);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"session_idle_ms")) {
+		sprintf(intbuf,"%d",variables.session_idle_ms);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"connect_retries_delay")) {
 		sprintf(intbuf,"%d",variables.connect_retries_delay);
 		return strdup(intbuf);
@@ -784,6 +858,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		return strdup((variables.sessions_sort ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"session_idle_show_processlist")) {
+		return strdup((variables.session_idle_show_processlist ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
@@ -1017,6 +1094,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 100) {
 			variables.free_connections_pct=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"session_idle_ms")) {
+		int intv=atoi(value);
+		if (intv >= 100 && intv <= 3600*1000) {
+			variables.session_idle_ms=intv;
 			return true;
 		} else {
 			return false;
@@ -1447,6 +1533,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"session_idle_show_processlist")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.session_idle_show_processlist=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.session_idle_show_processlist=false;
+			return true;
+		}
+		return false;
+	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.sessions_sort=true;
@@ -1523,10 +1620,15 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	int rc=pthread_attr_setstacksize(&attr, stacksize);
 	assert(rc==0);
 	mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
+	mysql_threads_idles=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
 }
 
-proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *)) {
-	pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
+proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
+	if (idles==false) {
+		pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
+	} else {
+		pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]);
+	}
 	return NULL;
 }
 
@@ -1538,10 +1640,16 @@ void MySQL_Threads_Handler::shutdown_threads() {
 			if (mysql_threads[i].worker)
 				mysql_threads[i].worker->shutdown=1;
 		}
+		for (i=0; i<num_threads; i++) {
+			if (mysql_threads_idles[i].worker)
+				mysql_threads_idles[i].worker->shutdown=1;
+		}
 		signal_all_threads(1);
 		for (i=0; i<num_threads; i++) {
 			if (mysql_threads[i].worker)
 				pthread_join(mysql_threads[i].thread_id,NULL);
+			if (mysql_threads_idles[i].worker)
+				pthread_join(mysql_threads_idles[i].thread_id,NULL);
 		}
 	}
 }
@@ -1583,7 +1691,9 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.ssl_p2s_key) free(variables.ssl_p2s_key);
 	if (variables.ssl_p2s_cipher) free(variables.ssl_p2s_cipher);
 	free(mysql_threads);
+	free(mysql_threads_idles);
 	mysql_threads=NULL;
+	mysql_threads_idles=NULL;
 	delete MLM;
 	MLM=NULL;
 }
@@ -1596,6 +1706,38 @@ MySQL_Thread::~MySQL_Thread() {
 				delete sess;
 			}
 		delete mysql_sessions;
+	}
+
+	if (idle_mysql_sessions) {
+		while(idle_mysql_sessions->len) {
+			MySQL_Session *sess=(MySQL_Session *)idle_mysql_sessions->remove_index_fast(0);
+				delete sess;
+			}
+		delete idle_mysql_sessions;
+	}
+
+	if (resume_mysql_sessions) {
+		while(resume_mysql_sessions->len) {
+			MySQL_Session *sess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
+				delete sess;
+			}
+		delete resume_mysql_sessions;
+	}
+
+	if (myexchange.idle_mysql_sessions) {
+		while(myexchange.idle_mysql_sessions->len) {
+			MySQL_Session *sess=(MySQL_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
+				delete sess;
+			}
+		delete myexchange.idle_mysql_sessions;
+	}
+
+	if (myexchange.resume_mysql_sessions) {
+		while(myexchange.resume_mysql_sessions->len) {
+			MySQL_Session *sess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
+				delete sess;
+			}
+		delete myexchange.resume_mysql_sessions;
 	}
 
 	if (cached_connections) {
@@ -1671,8 +1813,18 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 bool MySQL_Thread::init() {
 	int i;
 	mysql_sessions = new PtrArray();
+	idle_mysql_sessions = new PtrArray();
+	resume_mysql_sessions = new PtrArray();
 	cached_connections = new PtrArray();
+
+	myexchange.idle_mysql_sessions = new PtrArray();
+	myexchange.resume_mysql_sessions = new PtrArray();
+	pthread_mutex_init(&myexchange.mutex_idles,NULL);
+	pthread_mutex_init(&myexchange.mutex_resumes,NULL);
+
 	assert(mysql_sessions);
+	assert(idle_mysql_sessions);
+	assert(resume_mysql_sessions);
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
 	memset(my_idle_conns,0,sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
@@ -1710,13 +1862,14 @@ void MySQL_Thread::poll_listener_del(int sock) {
 	}
 }
 
-void MySQL_Thread::register_session(MySQL_Session *_sess) {
+void MySQL_Thread::register_session(MySQL_Session *_sess, bool up_start) {
 	if (mysql_sessions==NULL) {
 		mysql_sessions = new PtrArray();
 	}
 	mysql_sessions->add(_sess);
 	_sess->thread=this;
-	_sess->start_time=curtime;
+	if (up_start)
+		_sess->start_time=curtime;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
 }
 
@@ -1733,11 +1886,32 @@ void MySQL_Thread::run() {
 	int rc;
 	//int arg_on=1;
 
+	bool idle_maintenance_thread=epoll_thread;
+//	if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+//		idle_maintenance_thread=true;
+	if (idle_maintenance_thread) {
+		// we check if it is the first time we are called
+		if (efd==-1) {
+			efd = epoll_create1(0);
+			int fd=pipefd[0];
+			struct epoll_event event;
+			memset(&event,0,sizeof(event)); // let's make valgrind happy
+			event.events = EPOLLIN;
+			event.data.u32=0; // special value to point to the pipe
+			epoll_ctl(efd, EPOLL_CTL_ADD, fd, &event);
+		}
+	}
+
+
 	curtime=monotonic_time();
 
 	spin_wrlock(&thread_mutex);
 
 	while (shutdown==0) {
+
+	if (idle_maintenance_thread) {
+		goto __run_skip_1;
+	}
 
 	int num_idles;
 	if (processing_idles==true &&	(last_processing_idles < curtime-mysql_thread___ping_timeout_server*1000)) {
@@ -1785,12 +1959,76 @@ void MySQL_Thread::run() {
 		last_processing_idles=curtime;
 	}
 
+__run_skip_1:
 
+		if (idle_maintenance_thread) {
+			//spin_wrlock(&GloMTH->rwlock_idles);
+			pthread_mutex_lock(&myexchange.mutex_idles);
+			while (myexchange.idle_mysql_sessions->len) {
+				MySQL_Session *mysess=(MySQL_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
+				register_session(mysess, false);
+				MySQL_Data_Stream *myds=mysess->client_myds;
+				mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
+				// add in epoll()
+				struct epoll_event event;
+				memset(&event,0,sizeof(event)); // let's make valgrind happy
+				event.data.u32=mysess->thread_session_id;
+				event.events = EPOLLIN;
+				epoll_ctl (efd, EPOLL_CTL_ADD, myds->fd, &event);
+				// we map thread_id -> position in mysql_session (end of the list)
+				sessmap[mysess->thread_session_id]=mysql_sessions->len-1;
+				//fprintf(stderr,"Adding session %p idx, DS %p idx %d\n",mysess,myds,myds->poll_fds_idx);
+			}
+			//spin_wrunlock(&GloMTH->rwlock_idles);
+			pthread_mutex_unlock(&myexchange.mutex_idles);
+			goto __run_skip_1a;
+		}
 		for (n = 0; n < mypolls.len; n++) {
 			MySQL_Data_Stream *myds=NULL;
 			myds=mypolls.myds[n];
 			mypolls.fds[n].revents=0;
 			if (myds) {
+				//if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
+					// here we try to move it to the maintenance thread
+					if (mypolls.last_recv[n] < curtime - mysql_thread___session_idle_ms) {
+						if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
+							if (myds->sess->client_myds == myds) { // extra check
+								if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
+									unsigned int j;
+									int conns=0;
+									for (j=0;j<myds->sess->mybes->len;j++) {
+										MySQL_Backend *tmp_mybe=(MySQL_Backend *)myds->sess->mybes->index(j);
+										MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
+										if (__myds->myconn) {
+											conns++;
+										}
+									}
+									unsigned long long idle_since = curtime - myds->sess->IdleTime();
+									bool exit_cond=false;
+									if (conns==0) {
+										mypolls.remove_index_fast(n);
+										myds->mypolls=NULL;
+										unsigned int i;
+										for (i=0;i<mysql_sessions->len;i++) {
+											MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
+											if (mysess==myds->sess) {
+												mysess->thread=NULL;
+												unregister_session(i);
+												exit_cond=true;
+												mysess->idle_since = idle_since;
+												idle_mysql_sessions->add(mysess);
+												break;
+											}
+										}
+									}
+									if (exit_cond) {
+										continue;
+									}
+								}
+							}
+						}
+					}
+				//}
 				if (myds->wait_until) {
 					if (myds->wait_until > curtime) {
 						if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
@@ -1812,18 +2050,66 @@ void MySQL_Thread::run() {
 			}
 			if (myds) myds->revents=0;
 			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER) {
-				if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
+				if (myds && myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
 					mypolls.fds[n].events = POLLIN;
-					if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
-						mypolls.fds[n].events |= POLLOUT;
 				} else {
-					mypolls.myds[n]->set_pollout();
+					if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
+						mypolls.fds[n].events = POLLIN;
+						if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
+							mypolls.fds[n].events |= POLLOUT;
+					} else {
+						mypolls.myds[n]->set_pollout();
+					}
 				}
 			}
 			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 		}
 
-
+		//if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
+		if (idle_maintenance_thread==false) {
+			int r=rand()%(GloMTH->num_threads);
+			MySQL_Thread *thr=GloMTH->mysql_threads_idles[r].worker;
+			if (idle_mysql_sessions->len) {
+				unsigned int ims=0;
+				//spin_wrlock(&GloMTH->rwlock_idles);
+				pthread_mutex_lock(&thr->myexchange.mutex_idles);
+				bool empty_queue=true;
+				if (thr->myexchange.idle_mysql_sessions->len) {
+					// there are already sessions in the queues. We assume someone already notified worker 0
+					empty_queue=false;
+				}
+				for (ims=0; ims<idle_mysql_sessions->len; ims++) {
+					MySQL_Session *mysess=(MySQL_Session *)idle_mysql_sessions->remove_index_fast(0);
+					thr->myexchange.idle_mysql_sessions->add(mysess);
+				}
+				//spin_wrunlock(&GloMTH->rwlock_idles);
+				pthread_mutex_unlock(&thr->myexchange.mutex_idles);
+				if (empty_queue==true) {
+					unsigned char c=1;
+					int fd=thr->pipefd[1];
+					if (write(fd,&c,1)==-1) {
+						proxy_error("Error while signaling maintenance thread\n");
+					}
+				}
+			}
+			//spin_wrlock(&GloMTH->rwlock_resumes);
+			pthread_mutex_lock(&myexchange.mutex_resumes);
+			if (myexchange.resume_mysql_sessions->len) {
+				//unsigned int maxsess=GloMTH->resume_mysql_sessions->len;
+				//maxsess=maxsess/2+1;
+				//while (maxsess && GloMTH->resume_mysql_sessions->len) {
+				while (myexchange.resume_mysql_sessions->len) {
+					MySQL_Session *mysess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
+					register_session(mysess, false);
+					MySQL_Data_Stream *myds=mysess->client_myds;
+					mypolls.add(POLLIN, myds->fd, myds, monotonic_time());	
+					//maxsess--;
+				}
+			}
+			pthread_mutex_unlock(&myexchange.mutex_resumes);
+			//spin_wrunlock(&GloMTH->rwlock_resumes);
+		}
+__run_skip_1a:
 		spin_wrunlock(&thread_mutex);
 
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
@@ -1846,12 +2132,18 @@ void MySQL_Thread::run() {
 		GloMyLogger->flush();
 
 
+		if (idle_maintenance_thread) {
+			memset(events,0,sizeof(struct epoll_event)*MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
+			// we call epoll()
+			rc = epoll_wait (efd, events, MY_EPOLL_THREAD_MAXEVENTS, mysql_thread___poll_timeout);
+		} else {
 		//this is the only portion of code not protected by a global mutex
 		//proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? mypolls.poll_timeout : mysql_thread___poll_timeout )  );
 		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 > (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout )  );
 		// poll is called with a timeout of mypolls.poll_timeout if set , or mysql_thread___poll_timeout
 		rc=poll(mypolls.fds,mypolls.len, ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout ) );
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
+		}
 
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
 			poll_listener_del(n);
@@ -1864,7 +2156,11 @@ void MySQL_Thread::run() {
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
-		if (curtime > last_maintenance_time + 200000) { // hardcoded value for now
+		unsigned int maintenance_interval = 300000; // hardcoded value for now
+		if (idle_maintenance_thread) {
+			maintenance_interval=maintenance_interval*2;
+		}
+		if (curtime > last_maintenance_time + maintenance_interval) {
 			last_maintenance_time=curtime;
 			maintenance_loop=true;
 		} else {
@@ -1891,6 +2187,171 @@ void MySQL_Thread::run() {
 			refresh_variables();
 		}
 
+		if (idle_maintenance_thread==false) {
+			for (n=0; n<mysql_sessions->len; n++) {
+				MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
+				_sess->to_process=0;
+			}
+		}
+
+		// here we handle epoll_wait()
+		if (idle_maintenance_thread) {
+			if (rc) {
+/*
+				int epi=mysql_sessions->len;
+				int i=0;
+				while (epi) {
+					epi--;
+					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(epi);
+					for (i=0; i<rc; i++) {
+						uint32_t sess_thr_id=events[i].data.u32;
+						//memcpy(&mysess2,&events[epi].data.ptr,sizeof(MySQL_Session *));
+						//if (events[i].events == EPOLLIN && mysess->thread_session_id==sess_thr_id) { // found it!
+						// NOTE: not sure why, sometime events returns odd values. If set, we take it out as normal worker threads know how to handle it
+						if (events[i].events && mysess->thread_session_id==sess_thr_id) { // found it!
+							MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+							int dsidx=tmp_myds->poll_fds_idx;
+							//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+							mypolls.remove_index_fast(dsidx);
+							tmp_myds->mypolls=NULL;
+							mysess->thread=NULL;
+							// we first delete the association in sessmap
+							sessmap.erase(mysess->thread_session_id);
+							if (mysql_sessions->len-1 > 0) {
+								// take the last element and adjust the map
+								MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+								sessmap[mysess_last->thread_session_id]=epi;
+							}
+							unregister_session(epi);
+							resume_mysql_sessions->add(mysess);
+							epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+							i=rc;
+						}
+					}
+				}
+*/
+				int i;
+				for (i=0; i<rc; i++) {
+					if (events[i].data.u32) {
+						// NOTE: not sure why, sometime events returns odd values. If set, we take it out as normal worker threads know how to handle it
+						if (events[i].events) {
+							uint32_t sess_thr_id=events[i].data.u32;
+							uint32_t sess_pos=sessmap[sess_thr_id];
+							MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
+							MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+							int dsidx=tmp_myds->poll_fds_idx;
+							//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+							mypolls.remove_index_fast(dsidx);
+							tmp_myds->mypolls=NULL;
+							mysess->thread=NULL;
+							// we first delete the association in sessmap
+							sessmap.erase(mysess->thread_session_id);
+							if (mysql_sessions->len-1 > 0) {
+								// take the last element and adjust the map
+								MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+								sessmap[mysess_last->thread_session_id]=sess_pos;
+							}
+							unregister_session(sess_pos);
+							resume_mysql_sessions->add(mysess);
+							epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+						}
+					}
+				}
+				for (i=0; i<rc; i++) {
+					if (events[i].events == EPOLLIN && events[i].data.u32==0) {
+						unsigned char c;
+						int fd=pipefd[0];
+						if (read(fd, &c, 1)==-1) {
+						}
+						i=rc;
+						maintenance_loop=true;
+					}
+				}
+/*
+				int epi;
+				int sessindexes[MAXEVENTS];
+				for (epi=0; epi<rc; epi++) {
+					sessindexes[epi]=events[epi].data.fd; // is not really a fd! But an integer pointer of mysql_sessions
+				}
+				qsort(sessindexes, rc, sizeof(int), int_cmp);
+				epi=rc-1;
+				while(epi>-1) {
+					int sessidx=sessindexes[epi];
+					if (sessidx==-1) { // this is the pipe
+						unsigned char c;
+						int fd=pipefd[0];
+						if (read(fd, &c, 1)==-1) {
+						}
+						maintenance_loop=true;
+					} else {
+						MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sessidx);
+						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+						int dsidx=tmp_myds->poll_fds_idx;
+						mypolls.remove_index_fast(dsidx);
+						tmp_myds->mypolls=NULL;
+						mysess->thread=NULL;
+						unregister_session(sessidx);
+						resume_mysql_sessions->add(mysess);
+						epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+					}
+					epi--;
+				}
+*/
+/*
+				mypolls.remove_index_fast(n);
+				myds->mypolls=NULL;
+				unsigned int i;
+				for (i=0;i<mysql_sessions->len;i++) {
+					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
+					if (mysess==myds->sess) {
+					mysess->thread=NULL;
+					unregister_session(i);
+					//exit_cond=true;
+					resume_mysql_sessions->add(myds->sess);
+						return false;
+								}
+							}
+*/
+			}
+			if (mysql_sessions->len && maintenance_loop) {
+#define	SESS_TO_SCAN	128
+				if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
+					mysess_idx=0;
+				}
+				unsigned int i;
+				unsigned long long min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
+					uint32_t sess_pos=mysess_idx;
+					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
+
+					//unsigned long long sess_time = mysess->IdleTime();
+					//unsigned long long sess_time = curtime - mysess->idle_since;
+					//if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+					if (mysess->idle_since < min_idle) {
+						mysess->killed=true;
+						//uint32_t sess_thr_id=mysess->thread_session_id;
+						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+						int dsidx=tmp_myds->poll_fds_idx;
+						//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+						mypolls.remove_index_fast(dsidx);
+						tmp_myds->mypolls=NULL;
+						mysess->thread=NULL;
+						// we first delete the association in sessmap
+						sessmap.erase(mysess->thread_session_id);
+						if (mysql_sessions->len-1 > 0) {
+						// take the last element and adjust the map
+						MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+							sessmap[mysess_last->thread_session_id]=sess_pos;
+						}
+						unregister_session(sess_pos);
+						resume_mysql_sessions->add(mysess);
+						epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+					}
+					mysess_idx++;
+				}
+			}
+			goto __run_skip_2;
+		}
 
 		for (n = 0; n < mypolls.len; n++) {
 			proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
@@ -1912,6 +2373,9 @@ void MySQL_Thread::run() {
 						spin_wrunlock(&thread_mutex);
 						usleep(c*1000);
 						spin_wrlock(&thread_mutex);
+						// we enter in maintenance loop only if c is set
+						// when threads are signaling each other, there is no need to set maintenance_loop
+						maintenance_loop=true;
 					}
 				}
 			continue;
@@ -1955,19 +2419,82 @@ void MySQL_Thread::run() {
 						break;
 				}
 				// data on exiting connection
-				process_data_on_data_stream(myds, n);
+				bool rc=process_data_on_data_stream(myds, n);
+				if (rc==false) {
+					n--;
+				}
 		}
 		}
-		// iterate through all sessions and process the session logic
-		process_all_sessions();
 
-		return_local_connections();
+__run_skip_2:
+		if (idle_maintenance_thread) {
+			unsigned int w=rand()%(GloMTH->num_threads);
+			MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
+			if (resume_mysql_sessions->len) {
+				//spin_wrlock(&GloMTH->rwlock_resumes);
+				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
+				unsigned int ims;
+				for (ims=0; ims<resume_mysql_sessions->len; ims++) {
+					MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
+					thr->myexchange.resume_mysql_sessions->add(mysess);
+				}
+				//spin_wrunlock(&GloMTH->rwlock_resumes);
+				pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
+				{
+					//unsigned int w=rand()%(GloMTH->num_threads);
+					//w++;
+					unsigned char c=0;
+					//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
+					int fd=thr->pipefd[1];
+					if (write(fd,&c,1)==-1) {
+						proxy_error("Error while signaling maintenance thread\n");
+					}
+				}
+			} else {
+				//spin_wrlock(&GloMTH->rwlock_resumes);
+				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
+				if (thr->myexchange.resume_mysql_sessions->len) {
+					//unsigned int w=rand()%(GloMTH->num_threads);
+					//w++;
+					unsigned char c=0;
+					//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
+					int fd=thr->pipefd[1];
+					if (write(fd,&c,1)==-1) {
+						proxy_error("Error while signaling maintenance thread\n");
+					}
+				}
+				//spin_wrunlock(&GloMTH->rwlock_resumes);
+				pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
+			}
+		} else {
+			// iterate through all sessions and process the session logic
+			process_all_sessions();
 
+			return_local_connections();
+		}
 	}
 }
 
-void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
+bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 				if (mypolls.fds[n].revents) {
+					if (myds->myds_type==MYDS_FRONTEND) {
+						if (epoll_thread) {
+						//if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+							mypolls.remove_index_fast(n);
+							myds->mypolls=NULL;
+							unsigned int i;
+							for (i=0;i<mysql_sessions->len;i++) {
+								MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
+								if (mysess==myds->sess) {
+									mysess->thread=NULL;
+									unregister_session(i);
+									//exit_cond=true;
+									resume_mysql_sessions->add(myds->sess);
+									return false;
+								}
+							}
+						}
+					}
 					mypolls.last_recv[n]=curtime;
 					myds->revents=mypolls.fds[n].revents;
 					myds->sess->to_process=1;
@@ -1978,28 +2505,34 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 						// timeout
 						myds->sess->to_process=1;
 						assert(myds->sess->status!=NONE);
+					} else {
+						if (myds->sess->pause_until && curtime > myds->sess->pause_until) {
+							// timeout
+							myds->sess->to_process=1;
+						}
 					}
 				}
 				if (myds->myds_type==MYDS_BACKEND && myds->sess->status!=FAST_FORWARD) {
-					return;
+					return true;
 				}
-				if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
-					// only if we aren't using MariaDB Client Library
-					myds->read_from_net();
-					myds->read_pkts();
-				} else {
-					if (mypolls.fds[n].revents) {
-						myds->myconn->handler(mypolls.fds[n].revents);
+				if (mypolls.fds[n].revents) {
+					if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
+						// only if we aren't using MariaDB Client Library
+						myds->read_from_net();
+						myds->read_pkts();
+					} else {
+						if (mypolls.fds[n].revents) {
+							myds->myconn->handler(mypolls.fds[n].revents);
+						}
 					}
+					if ( (mypolls.fds[n].events & POLLOUT)
+							&&
+							( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) )
+					) {
+						myds->set_net_failure();
+					}
+					myds->check_data_flow();
 				}
-				if ( (mypolls.fds[n].events & POLLOUT)
-						&&
-						( (mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP) )
-				) {
-					myds->set_net_failure();
-				}
-
-				myds->check_data_flow();
 
 
 	      if (myds->active==FALSE) {
@@ -2016,14 +2549,22 @@ void MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 						}
 					}
 				}
+	return true;
 }
 
 
 void MySQL_Thread::process_all_sessions() {
 	unsigned int n;
 	unsigned int total_active_transactions_=0;
+	bool idle_maintenance_thread=epoll_thread;
+	//if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE  && this == GloMTH->mysql_threads[0].worker) {
+	//	idle_maintenance_thread=true;
+	//}
 	int rc;
 	bool sess_sort=mysql_thread___sessions_sort;
+	if (idle_maintenance_thread) {
+		sess_sort=false;
+	}
 	if (sess_sort && mysql_sessions->len > 3) {
 		unsigned int a=0;
 		for (n=0; n<mysql_sessions->len; n++) {
@@ -2061,14 +2602,22 @@ void MySQL_Thread::process_all_sessions() {
 		if (maintenance_loop) {
 			unsigned int numTrx=0;
 			unsigned long long sess_time = sess->IdleTime();
-			if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
-				numTrx = sess->NumActiveTransactions();
-				if (numTrx) {
-					// the session has idle transactions, kill it
-					if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
-				} else {
-					// the session is idle, kill it
-					if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+			if (idle_maintenance_thread==false) {
+				sess->to_process=1;
+				if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+					numTrx = sess->NumActiveTransactions();
+					if (numTrx) {
+						// the session has idle transactions, kill it
+						if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
+					} else {
+						// the session is idle, kill it
+						if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+					}
+				}
+			} else {
+				if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+					sess->killed=true;
+					sess->to_process=1;
 				}
 			}
 		}
@@ -2133,6 +2682,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
 	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");
 	mysql_thread___free_connections_pct=GloMTH->get_variable_int((char *)"free_connections_pct");
+	mysql_thread___session_idle_ms=GloMTH->get_variable_int((char *)"session_idle_ms");
 	mysql_thread___connect_retries_delay=GloMTH->get_variable_int((char *)"connect_retries_delay");
 
 	if (mysql_thread___monitor_username) free(mysql_thread___monitor_username);
@@ -2195,6 +2745,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
+	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 #ifdef DEBUG
@@ -2204,7 +2755,10 @@ void MySQL_Thread::refresh_variables() {
 }
 
 MySQL_Thread::MySQL_Thread() {
+	efd=-1;
+	epoll_thread=false;
 	spinlock_rwlock_init(&thread_mutex);
+	mysess_idx=0;
 //	mypolls.len=0;
 //	mypolls.size=0;
 //	mypolls.fds=NULL;
@@ -2213,6 +2767,10 @@ MySQL_Thread::MySQL_Thread() {
 	cached_connections=NULL;
 	//my_idle_myds=NULL;
 	mysql_sessions=NULL;
+	idle_mysql_sessions=NULL;
+	resume_mysql_sessions=NULL;
+	myexchange.idle_mysql_sessions=NULL;
+	myexchange.resume_mysql_sessions=NULL;
 	processing_idles=false;
 	last_processing_idles=0;
 	__thread_MySQL_Thread_Variables_version=0;
@@ -2267,7 +2825,13 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	memset(addr, 0, sizeof(struct sockaddr));
 	if (GloMTH->num_threads > 1) {
 		// there are more than 1 thread . We pause for a little bit to avoid all connections to be handled by the same thread
+#ifdef SO_REUSEPORT
+		if (GloVars.global.reuseport==false) { // only if reuseport is not enabled
+			usleep(10+rand()%50);
+		}
+#else
 		usleep(10+rand()%50);
+#endif /* SO_REUSEPORT */
 	}
 	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
@@ -2358,6 +2922,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		// Connections
 		pta[0]=(char *)"Server_Connections_created";
 		sprintf(buf,"%lu",MyHGM->status.server_connections_created);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Connections non idle
+		pta[0]=(char *)"Client_Connections_non_idle";
+		sprintf(buf,"%u",get_non_idle_client_connections());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -2515,16 +3085,29 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 void MySQL_Threads_Handler::Get_Memory_Stats() {
 	unsigned int i;
 	signal_all_threads(1);
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+	MySQL_Thread *thr=NULL;
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+		}
 		spin_wrlock(&thr->thread_mutex);
 	}
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+		}
 		thr->Get_Memory_Stats();
 	}
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+		}
 		spin_wrunlock(&thr->thread_mutex);
 	}
 }
@@ -2549,12 +3132,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"info");
 	unsigned int i;
 	signal_all_threads(1);
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-		spin_wrlock(&thr->thread_mutex);
+	MySQL_Thread *thr=NULL;
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+			spin_wrlock(&thr->thread_mutex);
+		} else {
+			if (mysql_thread___session_idle_show_processlist) {
+				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+				spin_wrlock(&thr->thread_mutex);
+			}
+		}
 	}
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+	for (i=0;i < ( mysql_thread___session_idle_show_processlist ? num_threads*2 : num_threads); i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+		}
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
@@ -2678,6 +3273,9 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					unsigned long long last_sent=sess->thread->mypolls.last_sent[idx];
 					unsigned long long last_recv=sess->thread->mypolls.last_recv[idx];
 					unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
+					if (last_time>sess->thread->curtime) {
+						last_time=sess->thread->curtime;
+					}
 					sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
 				} else {
 					// for mirror session we only consider the start time
@@ -2695,10 +3293,16 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 			}
 		}
 	}
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-		//if(thr!=sess->thread)
-		spin_wrunlock(&thr->thread_mutex);
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+			spin_wrunlock(&thr->thread_mutex);
+		} else {
+			if (mysql_thread___session_idle_show_processlist) {
+				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+				spin_wrunlock(&thr->thread_mutex);
+			}
+		}
 	}
 	return result;
 }
@@ -2709,6 +3313,13 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	if (mysql_threads==0) return;
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		int fd=thr->pipefd[1];
+		if (write(fd,&c,1)==-1) {
+			proxy_error("Error during write in signal_all_threads()\n");
+		}
+	}
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
 		int fd=thr->pipefd[1];
 		if (write(fd,&c,1)==-1) {
 			proxy_error("Error during write in signal_all_threads()\n");
@@ -2725,7 +3336,23 @@ bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 		spin_wrlock(&thr->thread_mutex);
 	}
 	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+		spin_wrlock(&thr->thread_mutex);
+	}
+	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		unsigned int j;
+		for (j=0; j<thr->mysql_sessions->len; j++) {
+			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
+			if (sess->thread_session_id==_thread_session_id) {
+				sess->killed=true;
+				ret=true;
+				goto __exit_kill_session;
+			}
+		}
+	}
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
@@ -2739,6 +3366,10 @@ bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 __exit_kill_session:
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		spin_wrunlock(&thr->thread_mutex);
+	}
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
 		spin_wrunlock(&thr->thread_mutex);
 	}
 	return ret;
@@ -2848,6 +3479,19 @@ unsigned int MySQL_Threads_Handler::get_active_transations() {
 	return q;
 }
 
+unsigned int MySQL_Threads_Handler::get_non_idle_client_connections() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->mysql_sessions->len,0);
+		}
+	}
+	return q;
+}
+
 unsigned long long MySQL_Threads_Handler::get_query_processor_time() {
 	unsigned long long q=0;
 	unsigned int i;
@@ -2897,6 +3541,13 @@ unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 				q+=__sync_fetch_and_add(&thr->status_variables.mysql_frontend_buffers_bytes,0);
 		}
 	}
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads_idles) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.mysql_frontend_buffers_bytes,0);
+		}
+	}
 	return q;
 }
 
@@ -2906,6 +3557,11 @@ unsigned long long MySQL_Threads_Handler::get_mysql_session_internal_bytes() {
 	for (i=0;i<num_threads;i++) {
 		if (mysql_threads) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.mysql_session_internal_bytes,0);
+		}
+		if (mysql_threads_idles) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.mysql_session_internal_bytes,0);
 		}
@@ -2920,9 +3576,15 @@ void MySQL_Thread::Get_Memory_Stats() {
 	status_variables.mysql_session_internal_bytes=sizeof(MySQL_Thread);
 	if (mysql_sessions) {
 		status_variables.mysql_session_internal_bytes+=(mysql_sessions->size)*sizeof(MySQL_Session *);
-		for (i=0; i<mysql_sessions->len; i++) {
-			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(i);
-			sess->Memory_Stats();
+		if (epoll_thread==false) {
+			for (i=0; i<mysql_sessions->len; i++) {
+				MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(i);
+				sess->Memory_Stats();
+			}
+		} else {
+			status_variables.mysql_frontend_buffers_bytes+=(mysql_sessions->len * QUEUE_T_DEFAULT_SIZE * 2);
+			status_variables.mysql_session_internal_bytes+=(mysql_sessions->len * sizeof(MySQL_Connection));
+			status_variables.mysql_session_internal_bytes+=((sizeof(int) + sizeof(int) + sizeof(std::_Rb_tree_node_base)) * mysql_sessions->len );
 		}
   }
 }

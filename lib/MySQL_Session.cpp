@@ -653,6 +653,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		newsess->client_myds->myds_type=MYDS_FRONTEND;
 		newsess->client_myds->PSarrayOUT= new PtrSizeArray();
 		newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
+		if (newsess->thread_session_id==0) {
+			newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
+		}
 		thread->register_session(newsess);
 		newsess->status=WAITING_CLIENT_DATA;
 		MySQL_Connection *myconn=new MySQL_Connection;
