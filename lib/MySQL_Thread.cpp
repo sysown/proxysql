@@ -2319,13 +2319,15 @@ __run_skip_1a:
 					mysess_idx=0;
 				}
 				unsigned int i;
+				unsigned long long min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
 				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
 					uint32_t sess_pos=mysess_idx;
 					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
 
 					//unsigned long long sess_time = mysess->IdleTime();
-					unsigned long long sess_time = curtime - mysess->idle_since;
-					if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+					//unsigned long long sess_time = curtime - mysess->idle_since;
+					//if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+					if (mysess->idle_since < min_idle) {
 						mysess->killed=true;
 						//uint32_t sess_thr_id=mysess->thread_session_id;
 						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
