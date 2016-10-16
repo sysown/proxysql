@@ -2920,6 +2920,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Connections non idle
+		pta[0]=(char *)"Client_Connections_non_idle";
+		sprintf(buf,"%u",get_non_idle_client_connections());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Queries bytes recv
 		pta[0]=(char *)"Queries_backends_bytes_recv";
 		sprintf(buf,"%llu",get_queries_backends_bytes_recv());
@@ -3074,16 +3080,29 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 void MySQL_Threads_Handler::Get_Memory_Stats() {
 	unsigned int i;
 	signal_all_threads(1);
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+	MySQL_Thread *thr=NULL;
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+		}
 		spin_wrlock(&thr->thread_mutex);
 	}
 	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+		}
 		thr->Get_Memory_Stats();
 	}
 	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+		}
 		spin_wrunlock(&thr->thread_mutex);
 	}
 }
@@ -3455,6 +3474,19 @@ unsigned int MySQL_Threads_Handler::get_active_transations() {
 	return q;
 }
 
+unsigned int MySQL_Threads_Handler::get_non_idle_client_connections() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->mysql_sessions->len,0);
+		}
+	}
+	return q;
+}
+
 unsigned long long MySQL_Threads_Handler::get_query_processor_time() {
 	unsigned long long q=0;
 	unsigned int i;
@@ -3539,9 +3571,15 @@ void MySQL_Thread::Get_Memory_Stats() {
 	status_variables.mysql_session_internal_bytes=sizeof(MySQL_Thread);
 	if (mysql_sessions) {
 		status_variables.mysql_session_internal_bytes+=(mysql_sessions->size)*sizeof(MySQL_Session *);
-		for (i=0; i<mysql_sessions->len; i++) {
-			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(i);
-			sess->Memory_Stats();
+		if (epoll_thread==false) {
+			for (i=0; i<mysql_sessions->len; i++) {
+				MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(i);
+				sess->Memory_Stats();
+			}
+		} else {
+			status_variables.mysql_frontend_buffers_bytes+=(mysql_sessions->len * QUEUE_T_DEFAULT_SIZE * 2);
+			status_variables.mysql_session_internal_bytes+=(mysql_sessions->len * sizeof(MySQL_Connection));
+			status_variables.mysql_session_internal_bytes+=((sizeof(int) + sizeof(int) + sizeof(std::_Rb_tree_node_base)) * mysql_sessions->len );
 		}
   }
 }

@@ -401,6 +401,7 @@ class MySQL_Threads_Handler
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
 	unsigned int get_active_transations();
+	unsigned int get_non_idle_client_connections();
 	unsigned long long get_query_processor_time();
 	unsigned long long get_backend_query_time();
 	unsigned long long get_mysql_backend_buffers_bytes();
