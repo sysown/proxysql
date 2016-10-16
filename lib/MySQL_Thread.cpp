@@ -254,6 +254,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"sessions_sort",
+	(char *)"session_idle_show_processlist",
 	(char *)"commands_stats",
 	(char *)"query_digests",
 	(char *)"servers_stats",
@@ -353,6 +354,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.enforce_autocommit_on_reads=false;
 	variables.query_digests=true;
 	variables.sessions_sort=true;
+	variables.session_idle_show_processlist=false;
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
 	variables.ssl_p2s_ca=NULL;
@@ -573,6 +575,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
+	if (!strcasecmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
 	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcasecmp(name,"default_reconnect")) return (int)variables.default_reconnect;
 	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
@@ -855,6 +858,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		return strdup((variables.sessions_sort ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"session_idle_show_processlist")) {
+		return strdup((variables.session_idle_show_processlist ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
@@ -1523,6 +1529,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_digests=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"session_idle_show_processlist")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.session_idle_show_processlist=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.session_idle_show_processlist=false;
 			return true;
 		}
 		return false;
@@ -2723,6 +2740,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
+	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 #ifdef DEBUG
@@ -3090,12 +3108,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"info");
 	unsigned int i;
 	signal_all_threads(1);
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-		spin_wrlock(&thr->thread_mutex);
+	MySQL_Thread *thr=NULL;
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+			spin_wrlock(&thr->thread_mutex);
+		} else {
+			if (mysql_thread___session_idle_show_processlist) {
+				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+				spin_wrlock(&thr->thread_mutex);
+			}
+		}
 	}
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+	for (i=0;i < ( mysql_thread___session_idle_show_processlist ? num_threads*2 : num_threads); i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+		} else {
+			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+		}
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
@@ -3239,10 +3269,16 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 			}
 		}
 	}
-	for (i=0;i<num_threads;i++) {
-		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-		//if(thr!=sess->thread)
-		spin_wrunlock(&thr->thread_mutex);
+	for (i=0;i<num_threads*2;i++) {
+		if (i<num_threads) {
+			thr=(MySQL_Thread *)mysql_threads[i].worker;
+			spin_wrunlock(&thr->thread_mutex);
+		} else {
+			if (mysql_thread___session_idle_show_processlist) {
+				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+				spin_wrunlock(&thr->thread_mutex);
+			}
+		}
 	}
 	return result;
 }

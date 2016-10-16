@@ -308,6 +308,7 @@ class MySQL_Threads_Handler
 		int connect_timeout_server_max;
 		int free_connections_pct;
 		int session_idle_ms;
+		bool session_idle_show_processlist;
 		bool sessions_sort;
 		char *default_schema;
 		char *interfaces;
