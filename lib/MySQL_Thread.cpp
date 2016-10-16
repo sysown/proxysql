@@ -2003,6 +2003,7 @@ __run_skip_1:
 											conns++;
 										}
 									}
+									unsigned long long idle_since = curtime - myds->sess->IdleTime();
 									bool exit_cond=false;
 									if (conns==0) {
 										mypolls.remove_index_fast(n);
@@ -2014,7 +2015,7 @@ __run_skip_1:
 												mysess->thread=NULL;
 												unregister_session(i);
 												exit_cond=true;
-												mysess->idle_since = curtime - mysess->IdleTime();
+												mysess->idle_since = idle_since;
 												idle_mysql_sessions->add(mysess);
 												break;
 											}
