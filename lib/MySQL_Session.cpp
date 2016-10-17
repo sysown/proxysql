@@ -10,6 +10,8 @@
 
 #define EXPMARIA
 
+#define BUFLEN 256
+
 extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 
 extern MySQL_Authentication *GloMyAuth;
@@ -1736,13 +1738,22 @@ __get_pkts_from_client:
 					default:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
 						{
-							char buf[256];
-							if (client_myds->client_addr->sa_family==AF_INET) {
-								struct sockaddr_in * ipv4addr=(struct sockaddr_in *)client_myds->client_addr;
-								sprintf(buf,"%s:%d", inet_ntoa(ipv4addr->sin_addr), htons(ipv4addr->sin_port));
-							} else {
-								sprintf(buf,"localhost");
-							}
+							char buf[BUFLEN];
+                                                        switch (client_myds->client_addr->sa_family) {
+                                                        case AF_INET: {
+                                                                struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
+                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                                                break;
+                                                                }
+                                                        case AF_INET6: {
+                                                                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
+                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                                                break;
+                                                        }
+                                                        default:
+                                                                sprintf(buf, "localhost");
+                                                                break;
+                                                        }
 						proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 						}
 						return -1;
