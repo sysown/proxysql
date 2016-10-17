@@ -142,6 +142,8 @@ Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH;
 
+MySQL_STMT_Manager *GloMyStmt;
+
 MySQL_Monitor *GloMyMon;
 std::thread *MyMon_thread;
 
@@ -154,6 +156,26 @@ void * mysql_worker_thread_func(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	worker->init();
+//	worker->poll_listener_add(listen_fd);
+//	worker->poll_listener_add(socket_fd);
+	__sync_fetch_and_sub(&load_,1);
+	do { usleep(50); } while (load_);
+
+	worker->run();
+	//delete worker;
+	delete worker;
+//	l_mem_destroy(__thr_sfp);
+	return NULL;
+}
+
+void * mysql_worker_thread_func_idles(void *arg) {
+
+//	__thr_sfp=l_mem_init();
+	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
+	MySQL_Thread *worker = new MySQL_Thread();
+	mysql_thread->worker=worker;
+	worker->epoll_thread=true;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
@@ -238,9 +260,11 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyAuth=NULL;
 	GloMyMon=NULL;
 	GloMyLogger=NULL;
+	GloMyStmt=NULL;
 	MyHGM=new MySQL_HostGroups_Manager();
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
+	GloMyStmt=new MySQL_STMT_Manager();
 }
 
 
@@ -266,9 +290,10 @@ void ProxySQL_Main_init_Query_module() {
 void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 	unsigned int i;
 	GloMTH->init();
-	load_ = GloMTH->num_threads + 1;
+	load_ = GloMTH->num_threads * 2 + 1;
 	for (i=0; i<GloMTH->num_threads; i++) {
-		GloMTH->create_thread(i,mysql_worker_thread_func);
+		GloMTH->create_thread(i,mysql_worker_thread_func, false);
+		GloMTH->create_thread(i,mysql_worker_thread_func_idles, true);
 	}
 }
 
@@ -388,6 +413,10 @@ void ProxySQL_Main_shutdown_all_modules() {
 #ifdef DEBUG
 		std::cerr << "GloHGM shutdown in ";
 #endif
+	}
+	if (GloMyStmt) {
+		delete GloMyStmt;
+		GloMyStmt=NULL;
 	}
 }
 

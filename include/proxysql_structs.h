@@ -61,6 +61,16 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_INITDB_END,
 	ASYNC_INITDB_SUCCESSFUL,
 	ASYNC_INITDB_FAILED,
+	ASYNC_STMT_PREPARE_START,
+	ASYNC_STMT_PREPARE_CONT,
+	ASYNC_STMT_PREPARE_END,
+	ASYNC_STMT_PREPARE_SUCCESSFUL,
+	ASYNC_STMT_PREPARE_FAILED,
+	ASYNC_STMT_EXECUTE_START,
+	ASYNC_STMT_EXECUTE_CONT,
+	ASYNC_STMT_EXECUTE_STORE_RESULT_START,
+	ASYNC_STMT_EXECUTE_STORE_RESULT_CONT,
+	ASYNC_STMT_EXECUTE_END,
 
 	ASYNC_IDLE
 };
@@ -121,6 +131,8 @@ enum session_status {
 	CHANGING_USER_SERVER,
 	SETTING_INIT_CONNECT,
 	FAST_FORWARD,
+	PROCESSING_STMT_PREPARE,
+	PROCESSING_STMT_EXECUTE,
 	NONE
 };
 
@@ -225,6 +237,61 @@ enum proxysql_server_status {
 	PROXYSQL_SERVER_STATUS_ONLINE = 3,
 };
 
+enum MYSQL_COM_QUERY_command {
+	MYSQL_COM_QUERY_ALTER_TABLE,
+	MYSQL_COM_QUERY_ALTER_VIEW,
+	MYSQL_COM_QUERY_ANALYZE_TABLE,
+	MYSQL_COM_QUERY_BEGIN,
+	MYSQL_COM_QUERY_CALL,
+	MYSQL_COM_QUERY_CHANGE_MASTER,
+	MYSQL_COM_QUERY_COMMIT,
+	MYSQL_COM_QUERY_CREATE_DATABASE,
+	MYSQL_COM_QUERY_CREATE_INDEX,
+	MYSQL_COM_QUERY_CREATE_TABLE,
+	MYSQL_COM_QUERY_CREATE_TEMPORARY,
+	MYSQL_COM_QUERY_CREATE_TRIGGER,
+	MYSQL_COM_QUERY_CREATE_USER,
+	MYSQL_COM_QUERY_CREATE_VIEW,
+	MYSQL_COM_QUERY_DEALLOCATE,
+	MYSQL_COM_QUERY_DELETE,
+	MYSQL_COM_QUERY_DESCRIBE,
+	MYSQL_COM_QUERY_DROP_DATABASE,
+	MYSQL_COM_QUERY_DROP_INDEX,
+	MYSQL_COM_QUERY_DROP_TABLE,
+	MYSQL_COM_QUERY_DROP_TRIGGER,
+	MYSQL_COM_QUERY_DROP_USER,
+	MYSQL_COM_QUERY_DROP_VIEW,
+	MYSQL_COM_QUERY_GRANT,
+	MYSQL_COM_QUERY_EXECUTE,
+	MYSQL_COM_QUERY_EXPLAIN,
+	MYSQL_COM_QUERY_FLUSH,
+	MYSQL_COM_QUERY_INSERT,
+	MYSQL_COM_QUERY_KILL,
+	MYSQL_COM_QUERY_LOAD,
+	MYSQL_COM_QUERY_LOCK_TABLE,
+	MYSQL_COM_QUERY_OPTIMIZE,
+	MYSQL_COM_QUERY_PREPARE,
+	MYSQL_COM_QUERY_PURGE,
+	MYSQL_COM_QUERY_RENAME_TABLE,
+	MYSQL_COM_QUERY_RESET_MASTER,
+	MYSQL_COM_QUERY_RESET_SLAVE,
+	MYSQL_COM_QUERY_REPLACE,
+	MYSQL_COM_QUERY_REVOKE,
+	MYSQL_COM_QUERY_ROLLBACK,
+	MYSQL_COM_QUERY_SAVEPOINT,
+	MYSQL_COM_QUERY_SELECT,
+	MYSQL_COM_QUERY_SELECT_FOR_UPDATE,
+	MYSQL_COM_QUERY_SET,
+	MYSQL_COM_QUERY_SHOW_TABLE_STATUS,
+	MYSQL_COM_QUERY_START_TRANSACTION,
+	MYSQL_COM_QUERY_TRUNCATE_TABLE,
+	MYSQL_COM_QUERY_UNLOCK_TABLES,
+	MYSQL_COM_QUERY_UPDATE,
+	MYSQL_COM_QUERY_USE,
+	MYSQL_COM_QUERY_SHOW,
+	MYSQL_COM_QUERY_UNKNOWN,
+	MYSQL_COM_QUERY___NONE // Special marker.
+};
 
 #endif /* PROXYSQL_ENUMS */
 
@@ -252,7 +319,7 @@ typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 typedef struct __SQP_query_parser_t SQP_par_t;
 //typedef struct _mysql_server_t mysql_server_t;
-
+//typedef struct _stmt_execute_metadata_t stmt_execute_metadata_t;
 #endif /* PROXYSQL_TYPEDEFS */
 
 //#ifdef __cplusplus
@@ -282,6 +349,8 @@ class ProxySQL_ConfigFile;
 class Query_Info;
 //class MySQL_Server;
 class SQLite3_result;
+class stmt_execute_metadata_t;
+class MySQL_STMTs_meta;
 //class MySQL_Servers;
 //class MySQL_Hostgroup_Entry;
 //class MySQL_Hostgroup;
@@ -546,7 +615,17 @@ struct _mysql_session_t {
 };
 
 
-
+/*
+struct _stmt_execute_metadata_t {
+	uint32_t stmt_id;
+	uint8_t flags;
+	uint16_t num_params;
+	MYSQL_BIND *binds;
+	my_bool *is_nulls;
+	unsigned long *lengths;
+	void *pkt;
+};
+*/
 
 
 #endif /* PROXYSQL_STRUCTS */
@@ -708,6 +787,8 @@ __thread int mysql_thread___threshold_query_length;
 __thread int mysql_thread___threshold_resultset_size;
 __thread int mysql_thread___wait_timeout;
 __thread int mysql_thread___max_connections;
+__thread int mysql_thread___max_stmts_per_connection;
+__thread int mysql_thread___max_stmts_cache;
 __thread int mysql_thread___default_max_latency_ms;
 __thread int mysql_thread___default_query_delay;
 __thread int mysql_thread___default_query_timeout;
@@ -731,12 +812,15 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___client_found_rows;
 __thread bool mysql_thread___multiplexing;
+// __thread bool mysql_thread___stmt_multiplexing;
 __thread bool mysql_thread___enforce_autocommit_on_reads;
 __thread bool mysql_thread___servers_stats;
 __thread bool mysql_thread___commands_stats;
 __thread bool mysql_thread___query_digests;
 __thread bool mysql_thread___default_reconnect;
+__thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
+__thread bool mysql_thread___session_idle_ms;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -773,6 +857,9 @@ __thread char * mysql_thread___monitor_password;
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
+
+__thread unsigned int g_seed;
+
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
 extern ProxySQL_GlobalVariables GloVars;
@@ -788,6 +875,8 @@ extern __thread int mysql_thread___threshold_query_length;
 extern __thread int mysql_thread___threshold_resultset_size;
 extern __thread int mysql_thread___wait_timeout;
 extern __thread int mysql_thread___max_connections;
+extern __thread int mysql_thread___max_stmts_per_connection;
+extern __thread int mysql_thread___max_stmts_cache;
 extern __thread int mysql_thread___default_max_latency_ms;
 extern __thread int mysql_thread___default_query_delay;
 extern __thread int mysql_thread___default_query_timeout;
@@ -811,12 +900,15 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___client_found_rows;
 extern __thread bool mysql_thread___multiplexing;
+// extern __thread bool mysql_thread___stmt_multiplexing;
 extern __thread bool mysql_thread___enforce_autocommit_on_reads;
 extern __thread bool mysql_thread___servers_stats;
 extern __thread bool mysql_thread___commands_stats;
 extern __thread bool mysql_thread___query_digests;
 extern __thread bool mysql_thread___default_reconnect;
+extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
+extern __thread bool mysql_thread___session_idle_ms;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
@@ -853,6 +945,7 @@ extern __thread char * mysql_thread___monitor_password;
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
+extern __thread unsigned int g_seed;
 #endif /* PROXYSQL_EXTERN */
 
 

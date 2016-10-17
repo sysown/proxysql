@@ -3,11 +3,11 @@
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
 #include "proxysql.h"
 #include "cpp.h"
-
+#include <sys/epoll.h>
 
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
-
+#define MY_EPOLL_THREAD_MAXEVENTS 128
 
 #define ADMIN_HOSTGROUP	-2
 #define STATS_HOSTGROUP	-3
@@ -18,6 +18,13 @@ static unsigned int near_pow_2 (unsigned int n) {
   while (i < n) i <<= 1;
   return i ? i : n;
 }
+
+typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) _conn_exchange_t {
+	pthread_mutex_t mutex_idles;
+	PtrArray *idle_mysql_sessions;
+	pthread_mutex_t mutex_resumes;
+	PtrArray *resume_mysql_sessions;
+} conn_exchange_t;
 
 class ProxySQL_Poll {
 
@@ -145,6 +152,11 @@ class MySQL_Thread
 
 	PtrArray *cached_connections;
 
+	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
+	int efd;
+	unsigned int mysess_idx;
+	std::map<unsigned int, unsigned int> sessmap;
+
 	protected:
 	int nfds;
 
@@ -155,13 +167,23 @@ class MySQL_Thread
 	unsigned long long curtime;
 	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
+	PtrArray *idle_mysql_sessions;
+	PtrArray *resume_mysql_sessions;
+
+	conn_exchange_t myexchange;
+
 	int pipefd[2];
 	int shutdown;
+
+	bool epoll_thread;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
 	struct {
+		unsigned long long stmt_prepare;
+		unsigned long long stmt_execute;
+		unsigned long long stmt_close;
 		unsigned long long queries;
 		unsigned long long queries_slow;
 		unsigned long long queries_backends_bytes_sent;
@@ -186,10 +208,10 @@ class MySQL_Thread
   void run();
   void poll_listener_add(int sock);
   void poll_listener_del(int sock);
-  void register_session(MySQL_Session*);
+  void register_session(MySQL_Session*, bool up_start=true);
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
-  void process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
+  bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
   void process_all_sessions();
   void refresh_variables();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
@@ -238,8 +260,8 @@ class MySQL_Listeners_Manager {
 	public:
   MySQL_Listeners_Manager();
 	~MySQL_Listeners_Manager();
-	int add(const char *iface);
-	int add(const char *address, int port);
+	int add(const char *iface, unsigned int num_threads, int **perthrsocks);
+	//int add(const char *address, int port);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
 	iface_info * find_iface_from_fd(int fd);
@@ -285,6 +307,8 @@ class MySQL_Threads_Handler
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
+		int session_idle_ms;
+		bool session_idle_show_processlist;
 		bool sessions_sort;
 		char *default_schema;
 		char *interfaces;
@@ -297,6 +321,7 @@ class MySQL_Threads_Handler
 		bool have_compress;
 		bool client_found_rows;
 		bool multiplexing;
+//		bool stmt_multiplexing;
 		bool enforce_autocommit_on_reads;
 		int max_allowed_packet;
 		int max_transaction_time;
@@ -304,6 +329,8 @@ class MySQL_Threads_Handler
 		int threshold_resultset_size;
 		int wait_timeout;
 		int max_connections;
+		int max_stmts_per_connection;
+		int max_stmts_cache;
 		int default_max_latency_ms;
 		int default_query_delay;
 		int default_query_timeout;
@@ -330,6 +357,11 @@ class MySQL_Threads_Handler
 	public:
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
+	proxysql_mysql_thread_t *mysql_threads_idles;
+	//rwlock_t rwlock_idles;
+	//rwlock_t rwlock_resumes;
+	//PtrArray *idle_mysql_sessions;
+	//PtrArray *resume_mysql_sessions;
 	//virtual const char *version() {return NULL;};
 	unsigned int get_global_version();
 	void wrlock();
@@ -349,7 +381,7 @@ class MySQL_Threads_Handler
 	int get_variable_int(char *name);
 	void print_version();
 	void init(unsigned int num=0, size_t stack=0);
-	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *));
+	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *), bool);
 	void shutdown_threads();
 	int listener_add(const char *iface);
 	int listener_add(const char *address, int port);
@@ -361,11 +393,15 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_Processlist();
 	SQLite3_result * SQL3_GlobalStatus();
 	bool kill_session(uint32_t _thread_session_id);
+	unsigned long long get_total_stmt_prepare();
+	unsigned long long get_total_stmt_execute();
+	unsigned long long get_total_stmt_close();
 	unsigned long long get_total_queries();
 	unsigned long long get_slow_queries();
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
 	unsigned int get_active_transations();
+	unsigned int get_non_idle_client_connections();
 	unsigned long long get_query_processor_time();
 	unsigned long long get_backend_query_time();
 	unsigned long long get_mysql_backend_buffers_bytes();

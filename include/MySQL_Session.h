@@ -23,6 +23,11 @@ class Query_Info {
 	unsigned long long start_time;
 	unsigned long long end_time;
 
+	MYSQL_STMT *mysql_stmt;
+	stmt_execute_metadata_t *stmt_meta;
+	uint32_t stmt_global_id;
+	MySQL_STMT_Global_info *stmt_info;
+
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
 
@@ -60,7 +65,7 @@ class MySQL_Session
 	void handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool ps=false);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
@@ -68,9 +73,31 @@ class MySQL_Session
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
 	void RequestEnd(MySQL_Data_Stream *);
+
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
+	int handler_again___status_PINGING_SERVER();
+	void handler_again___new_thread_to_kill_connection();
+
+	bool handler_again___verify_backend_charset();
+	bool handler_again___verify_init_connect();
+	bool handler_again___verify_backend_autocommit();
+	bool handler_again___verify_backend_user_schema();
+	bool handler_again___status_SETTING_INIT_CONNECT(int *);
+	bool handler_again___status_CHANGING_SCHEMA(int *);
+	bool handler_again___status_CONNECTING_SERVER(int *);
+	bool handler_again___status_CHANGING_USER_SERVER(int *);
+	bool handler_again___status_CHANGING_CHARSET(int *);
+	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
+
+
 //	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
 
 
+//	MySQL_STMT_Manager *Session_STMT_Manager;
+
+	//this pointer is always initialized inside handler().
+	// it is an attempt to start simplifying the complexing of handler()
+	PtrSize_t *pktH;
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
@@ -81,6 +108,8 @@ class MySQL_Session
 	// uint64_t
 	unsigned long long start_time;
 	unsigned long long pause_until;
+
+	unsigned long long idle_since;
 
 	// pointers
 	MySQL_Thread *thread;
@@ -120,6 +149,9 @@ class MySQL_Session
 	bool transaction_persistent;
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, of if proysql is still buffering everything
+
+	MySQL_STMTs_meta *sess_STMTs_meta;
+
 	MySQL_Session();
 //	MySQL_Session(int);
 	~MySQL_Session();
@@ -149,6 +181,7 @@ class MySQL_Session
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS);
+	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions();
 	int FindOneActiveTransaction();
 	unsigned long long IdleTime();

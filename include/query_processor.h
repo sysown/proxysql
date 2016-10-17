@@ -7,6 +7,7 @@
 //typedef btree::btree_map<uint64_t, void *> BtMap_query_digest;
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 
+/*
 enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_ALTER_TABLE,
 	MYSQL_COM_QUERY_ALTER_VIEW,
@@ -62,6 +63,8 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY_UNKNOWN,
 	MYSQL_COM_QUERY___NONE // Special marker.
 };
+
+*/
 
 struct _Query_Processor_rule_t {
 	int rule_id;
@@ -134,6 +137,12 @@ class Query_Processor_Output {
 		l_free(sizeof(Query_Processor_Output),ptr);
 	}
 	Query_Processor_Output() {
+		init();
+	}
+	~Query_Processor_Output() {
+		destroy();
+	}
+	void init() {
 		ptr=NULL;
 		size=0;
 		destination_hostgroup=-1;
@@ -149,9 +158,13 @@ class Query_Processor_Output {
 		error_msg=NULL;
 		comment=NULL; // #643
 	}
-	~Query_Processor_Output() {
+	void destroy() {
 		if (error_msg) {
 			free(error_msg);
+			error_msg=NULL;
+		}
+		if (comment) { // #643
+			free(comment);
 		}
 		if (comment) { // #643
 			free(comment);
@@ -258,7 +271,7 @@ class Query_Processor {
 	char * get_digest_text(SQP_par_t *qp);
 	uint64_t get_digest(SQP_par_t *qp);
 
-	void update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n);
+	void update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info);
 
 	unsigned long long query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t);
 

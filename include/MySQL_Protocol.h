@@ -6,6 +6,33 @@
 
 #define RESULTSET_BUFLEN 16300
 
+/*
+class stmt_execute_metadata_t {
+	public:
+	uint32_t stmt_id;
+	uint8_t flags;
+	uint16_t num_params;
+	MYSQL_BIND *binds;
+	my_bool *is_nulls;
+	unsigned long *lengths;
+	void *pkt;
+	stmt_execute_metadata_t() {
+		binds=NULL;
+		is_nulls=NULL;
+		lengths=NULL;
+		pkt=NULL;
+	}
+	~stmt_execute_metadata_t() {
+		if (binds)
+			free(binds);
+		if (is_nulls)
+			free(is_nulls);
+		if (lengths)
+			free(lengths);
+	}
+};
+*/
+
 class MySQL_ResultSet {
 	private:
 	public:
@@ -20,9 +47,10 @@ class MySQL_ResultSet {
 	unsigned int num_rows;
 	unsigned long long resultset_size;
 	PtrSizeArray *PSarrayOUT;
-	MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my);
+	MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROW row);
+	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	unsigned char *buffer;
@@ -100,5 +128,11 @@ class MySQL_Protocol {
 	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
+
+	// prepared statements
+	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info);
+
+	//stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, uint16_t num_params);
+	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */

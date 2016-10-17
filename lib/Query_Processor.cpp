@@ -54,8 +54,12 @@ class QP_rule_text {
 		//uint32_t d32[2];
 		//memcpy(&d32,&QPr->digest,sizeof(QPr->digest));
 		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
-		sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
-    pta[8]=strdup(buf);
+		if (QPr->digest) {
+			sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
+			pta[8]=strdup(buf);
+		} else {
+			pta[8]=NULL;
+		}
 
 		pta[9]=strdup_null(QPr->match_digest);
 		pta[10]=strdup_null(QPr->match_pattern);
@@ -612,8 +616,11 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 
 
 Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
-	Query_Processor_Output *ret=NULL;
-	ret=new Query_Processor_Output();
+	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
+	//Query_Processor_Output *ret=NULL;
+	//ret=new Query_Processor_Output();
+	Query_Processor_Output *ret=sess->qpo;
+	ret->init();
 	SQP_par_t *qp=NULL;
 	if (qi) {
 		qp=(SQP_par_t *)&qi->QueryParserArgs;
@@ -727,7 +734,15 @@ __internal_loop:
 			}
 		}
 
-
+		// match on digest
+		if (qp && qp->digest) {
+			if (qr->digest) {
+				if (qr->digest != qp->digest) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching digest\n", qr->rule_id);
+					continue;
+				}
+			}
+		}
 
 		// match on query digest
 		if (qp && qp->digest_text ) { // we call this only if we have a query digest
@@ -849,7 +864,8 @@ __exit_process_mysql_query:
 void Query_Processor::delete_QP_out(Query_Processor_Output *o) {
 	//l_free(sizeof(QP_out_t),o);
 	if (o) {
-		delete o;
+		//delete o; // do not deallocate, but "destroy" it
+		o->destroy();
 	}
 };
 
@@ -925,7 +941,7 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
 
-	if (qp->digest_text) {
+	if (sess->CurrentQuery.stmt_info==NULL && qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
 		uint64_t hash2;
 		SpookyHash myhash;
@@ -942,13 +958,32 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		myhash.Update(ui->schemaname,strlen(ui->schemaname));
 		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
 		myhash.Final(&qp->digest_total,&hash2);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, NULL);
+	}
+	if (sess->CurrentQuery.stmt_info && sess->CurrentQuery.stmt_info->digest_text) {
+		uint64_t hash2;
+		SpookyHash myhash;
+		myhash.Init(19,3);
+		assert(sess);
+		assert(sess->client_myds);
+		assert(sess->client_myds->myconn);
+		assert(sess->client_myds->myconn->userinfo);
+		MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+		assert(ui->username);
+		assert(ui->schemaname);
+		MySQL_STMT_Global_info *stmt_info=sess->CurrentQuery.stmt_info;
+		myhash.Update(ui->username,strlen(ui->username));
+		myhash.Update(&stmt_info->digest,sizeof(qp->digest));
+		myhash.Update(ui->schemaname,strlen(ui->schemaname));
+		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
+		myhash.Final(&qp->digest_total,&hash2);
 		//delete myhash;
-		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, stmt_info);
 	}
 	return ret;
 }
 
-void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n) {
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info) {
 	spin_wrlock(&digest_rwlock);
 
 	QP_query_digest_stats *qds;	
@@ -960,7 +995,11 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 		qds=(QP_query_digest_stats *)it->second;
 		qds->add_time(t,n);
 	} else {
-		qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
+		if (_stmt_info==NULL) {
+			qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
+		} else {
+			qds=new QP_query_digest_stats(ui->username, ui->schemaname, _stmt_info->digest, _stmt_info->digest_text, hid);
+		}
 		qds->add_time(t,n);
 		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
 	}

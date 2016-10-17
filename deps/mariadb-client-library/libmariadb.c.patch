@@ -1,21 +1,3 @@
-@@ -2192,6 +2192,17 @@
-     my_free(mysql->options.extension->ssl_crlpath, MYF(MY_ALLOW_ZERO_PTR));
-     if(hash_inited(&mysql->options.extension->connect_attrs))
-       hash_free(&mysql->options.extension->connect_attrs);
-+    {
-+			struct mysql_async_context *ctxt;
-+			if ((ctxt = mysql->options.extension->async_context) != 0) {
-+				//if (ctxt->active==0) {
-+					if (&ctxt->async_context)
-+						my_context_destroy(&ctxt->async_context);
-+					my_free((gptr)ctxt, MYF(0));
-+					mysql->options.extension->async_context=NULL;
-+				//}
-+			}
-+		}
-   }
-   my_free((gptr)mysql->options.extension, MYF(MY_ALLOW_ZERO_PTR));
-   /* clear all pointer */
 @@ -2257,6 +2268,44 @@
      /* reset the connection in all active statements 
         todo: check stmt->mysql in mysql_stmt* functions ! */
@@ -33,7 +15,7 @@
 +    bzero((char*) &mysql->options,sizeof(mysql->options));
 +    mysql->net.vio= 0;
 +    if (mysql->free_me)
-+      my_free((gptr) mysql,MYF(0));
++      my_free((gptr) mysql);
 +  }
 +  DBUG_VOID_RETURN;
 +}
