@@ -77,7 +77,7 @@ class stmt_execute_metadata_t {
 	uint16_t num_params;
 	MYSQL_BIND *binds;
 	my_bool *is_nulls;
-	MySQL_STMT_Global_info *stmt_info;
+	//MySQL_STMT_Global_info *stmt_info;
 	unsigned long *lengths;
 	void *pkt;
 	stmt_execute_metadata_t() {
