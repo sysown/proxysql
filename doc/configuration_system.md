@@ -30,7 +30,7 @@ The 3 layers of the configuration system are described in the picture below:
 
 ```
 
-__RUNTIME__ represents the in-memory data structures of ProxySQL used by the threads that are handling the requests. These contains the values of the global variables used, the list of backend servers grouped into hostgroups or the list of MySQL users that can connect to the proxy. Note that operators can never modify the contents of the __RUNTIME__ configuration section directly. They always have to go through the bottom layers.
+__RUNTIME__ represents the in-memory data structures of ProxySQL used by the threads that are handling the requests. These contain the values of the global variables used, the list of backend servers grouped into hostgroups or the list of MySQL users that can connect to the proxy. Note that operators can never modify the contents of the __RUNTIME__ configuration section directly. They always have to go through the bottom layers.
 
 __MEMORY__ (sometime also referred as *main*) represents an in-memory SQLite3 database which is exposed to the outside via a MySQL-compatible interface. Users can connect with a MySQL client to this interface and query different tables and databases. The configuration tables available through this interface are:
 * mysql_servers -- the list of backend servers
@@ -59,17 +59,17 @@ In the following sections, we'll describe the lifecycle of each of these layers 
 # Startup
 
 At a normal start-up, ProxySQL reads its config file (if present) to determine its datadir.
-What happen next depends from the presence or not of its database file (disk) in its datadir.
+What happens next depends from the presence or not of its database file (disk) in its datadir.
 
 If the database file is found, ProxySQL initializes its in-memory configuration from the persisted on-disk database. So, disk gets loaded into memory and then propagated towards the runtime configuration.
 If the database file is not found and a config file exists, the config file is parsed and its content is loaded into the in-memory database, to then be both saved on-disk database and loaded at runtime.
-If it important to note that **if a database file is found, the config file is not parsed** is not parsed** . That is, during a normal start-up, ProxySQL initializes its in-memory configuration from the persisted on-disk database ONLY. 
+It is important to note that **if a database file is found, the config file is not parsed**. That is, during a normal start-up, ProxySQL initializes its in-memory configuration from the persisted on-disk database ONLY. 
 
 
 # Initial startup (or --initial flag)
 
 At the initial start-up, the memory and runtime configuration gets populated from the config file and not from database file.
-It is possible to force an initial startup running proysql with --initial flag, which resets the database by renaming the old one.
+It is possible to force an initial startup running proxysql with --initial flag, which resets the database by renaming the old one.
 
 After this is done, the configuration is also persisted to the disk database, which will be used for the next restarts.
 
