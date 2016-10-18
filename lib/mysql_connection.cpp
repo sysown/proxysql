@@ -477,7 +477,7 @@ void MySQL_Connection::stmt_prepare_cont(short event) {
 void MySQL_Connection::stmt_execute_start() {
 	PROXY_TRACE();
 	int _rc=0;
-	query.stmt->mysql=mysql;
+	assert(query.stmt->mysql); // if we reached here, we hit bug #740
 	_rc=mysql_stmt_bind_param(query.stmt, query.stmt_meta->binds); // FIXME : add error handling
 	if (_rc) {
 	  fprintf(stderr, " mysql_stmt_bind_param() failed: %s\n", mysql_stmt_error(query.stmt));
