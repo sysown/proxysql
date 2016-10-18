@@ -262,6 +262,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"session_idle_show_processlist",
 	(char *)"commands_stats",
 	(char *)"query_digests",
+	(char *)"query_digests_lowercase",
 	(char *)"servers_stats",
 	(char *)"default_reconnect",
 	(char *)"session_debug",
@@ -358,6 +359,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 //	variables.stmt_multiplexing=false;
 	variables.enforce_autocommit_on_reads=false;
 	variables.query_digests=true;
+	variables.query_digests_lowercase=false;
 	variables.sessions_sort=true;
 	variables.session_idle_show_processlist=false;
 	variables.servers_stats=true;
@@ -579,6 +581,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"enforce_autocommit_on_reads")) return (int)variables.enforce_autocommit_on_reads;
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
+	if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
 	if (!strcasecmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
 	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
@@ -860,6 +863,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_digests")) {
 		return strdup((variables.query_digests ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"query_digests_lowercase")) {
+		return strdup((variables.query_digests_lowercase ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		return strdup((variables.sessions_sort ? "true" : "false"));
@@ -1534,6 +1540,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_digests=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"query_digests_lowercase")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.query_digests_lowercase=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.query_digests_lowercase=false;
 			return true;
 		}
 		return false;
@@ -2749,6 +2766,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
+	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
 	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");

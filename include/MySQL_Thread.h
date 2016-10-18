@@ -317,6 +317,7 @@ class MySQL_Threads_Handler
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
+		bool query_digests_lowercase;
 		bool default_reconnect;
 		bool have_compress;
 		bool client_found_rows;

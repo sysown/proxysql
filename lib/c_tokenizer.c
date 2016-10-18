@@ -6,6 +6,10 @@
 
 #include "c_tokenizer.h"
 
+#include <ctype.h>
+#define bool char
+extern __thread bool mysql_thread___query_digests_lowercase;
+
 tokenizer_t tokenizer( const char* s, const char* delimiters, int empties )
 {
 
@@ -184,6 +188,9 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	int fc_len=0;
 
 	char fns=0;
+
+	bool lowercase=0;
+	lowercase=mysql_thread___query_digests_lowercase;
 
 	while(i < len)
 	{
@@ -417,7 +424,11 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		// COPY CHAR
 		// =================================================
 		// convert every space char to ' '
-		*p_r++ = !is_space_char(*s) ? *s : ' ';
+		if (lowercase==0) {
+			*p_r++ = !is_space_char(*s) ? *s : ' ';
+		} else {
+			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+		}
 		prev_char = *s++;
 
 		i++;
