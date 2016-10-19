@@ -19,11 +19,10 @@ Release date: 2016-10-19
 
 * EXPERIMENTAL support for proepared statements
 * Connection Pool: each MySQL_Thread now has a pair thread, therefore the number of threads executed are mysql-threads x 2 . The second set of MySQL_Threads are responsible to only handle idle connections.  
-  It also introduced two new global variables:
-  * mysql-session_idle_ms (default 1000) : when a session is idle for that long, it is moved to a thread responsible to handle idle connections
-  * mysql-session_idle_show_processlist (default false) : specifies if idle connections are displayed on SHOW PROCESSLIST or on any query against stats_mysql_processlist
-  And a new global status:
-  * Client_Connections_non_idle : returns the number of client connections that are not idle, therefore handled by the main MySQL_Threads and not moved to the second set of MySQL_Threads responsible to only handle idle connections
+  It also introduced two new global variables and a new global status:
+  * `mysql-session_idle_ms` (default 1000) : when a session is idle for that long, it is moved to a thread responsible to handle idle connections
+  * `mysql-session_idle_show_processlist` (default false) : specifies if idle connections are displayed on SHOW PROCESSLIST or on any query against `stats_mysql_processlist`  
+  * `Client_Connections_non_idle` : returns the number of client connections that are not idle, therefore handled by the main MySQL_Threads and not moved to the second set of MySQL_Threads responsible to only handle idle connections
 * Network: add support for IPv6 [#726](../../../../issues/726) and [#460](../../../../issues/460), thanks to @ton31337
 * Connection Pool: support for SO_REUSEPORT, it can be only enabled on the command line with -r or --reuseport at startup
 * Query Processor: added new variable mysql-digests_lowercase to always set digest to lowercase [#725](../../../../issues/725)
