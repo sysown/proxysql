@@ -8,6 +8,8 @@
 
 #include "SpookyV2.h"
 
+#include <pcrecpp.h>
+
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else
@@ -219,8 +221,10 @@ class QP_query_digest_stats {
 
 
 struct __RE2_objects_t {
-	re2::RE2::Options *opt;
-	RE2 *re;
+	pcrecpp::RE_Options *opt1;
+	pcrecpp::RE *re1;
+	re2::RE2::Options *opt2;
+	RE2 *re2;
 };
 
 typedef struct __RE2_objects_t re2_t;
@@ -229,12 +233,26 @@ static bool rules_sort_comp_function (QP_rule_t * a, QP_rule_t * b) { return (a-
 
 static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
-	r->opt=new re2::RE2::Options(RE2::Quiet);
-	r->opt->set_case_sensitive(false);
-	if (i==1) {
-		r->re=new RE2(qr->match_digest, *r->opt);
-	} else if (i==2) {
-		r->re=new RE2(qr->match_pattern, *r->opt);
+	r->opt1=NULL;
+	r->re1=NULL;
+	r->opt2=NULL;
+	r->re2=NULL;
+	if (mysql_thread___query_processor_regex==2) {
+		r->opt2=new re2::RE2::Options(RE2::Quiet);
+		r->opt2->set_case_sensitive(false);
+		if (i==1) {
+			r->re2=new RE2(qr->match_digest, *r->opt2);
+		} else if (i==2) {
+			r->re2=new RE2(qr->match_pattern, *r->opt2);
+		}
+	} else {
+		r->opt1=new pcrecpp::RE_Options();
+		r->opt1->set_caseless(true);
+		if (i==1) {
+			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
+		} else if (i==2) {
+			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
+		}
 	}
 	return r;
 };
@@ -253,14 +271,18 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->error_msg);
 	if (qr->regex_engine1) {
 		re2_t *r=(re2_t *)qr->regex_engine1;
-		delete r->opt;
-		delete r->re;
+		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+		if (r->re1) { delete r->re1; r->re1=NULL; }
+		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
+		if (r->re2) { delete r->re2; r->re2=NULL; }
 		free(qr->regex_engine1);
 	}
 	if (qr->regex_engine2) {
 		re2_t *r=(re2_t *)qr->regex_engine2;
-		delete r->opt;
-		delete r->re;
+		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+		if (r->re1) { delete r->re1; r->re1=NULL; }
+		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
+		if (r->re2) { delete r->re2; r->re2=NULL; }
 		free(qr->regex_engine2);
 	}
 	free(qr);
@@ -750,7 +772,11 @@ __internal_loop:
 			if (qr->match_digest) {
 				bool rc;
 				// we always match on original query
-				rc=RE2::PartialMatch(qp->digest_text,*re2p->re);
+				if (re2p->re2) {
+					rc=RE2::PartialMatch(qp->digest_text,*re2p->re2);
+				} else {
+					rc=re2p->re1->PartialMatch(qp->digest_text);
+				}
 				if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
 					continue;
@@ -764,10 +790,18 @@ __internal_loop:
 			if (ret && ret->new_query) {
 				// if we already rewrote the query, process the new query
 				//std::string *s=ret->new_query;
-				rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re);
+				if (re2p->re2) {
+					rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re2);
+				} else {
+					rc=re2p->re1->PartialMatch(ret->new_query->c_str());
+				}
 			} else {
 				// we never rewrote the query
-				rc=RE2::PartialMatch(query,*re2p->re);
+				if (re2p->re2) {
+					rc=RE2::PartialMatch(query,*re2p->re2);
+				} else {
+					rc=re2p->re1->PartialMatch(query);
+				}
 			}
 			if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
@@ -833,7 +867,14 @@ __internal_loop:
 		if (qr->replace_pattern) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d on match_pattern \"%s\" has a replace_pattern \"%s\" to apply\n", qr->rule_id, qr->match_pattern, qr->replace_pattern);
 			if (ret->new_query==NULL) ret->new_query=new std::string(query);
-			RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+			re2_t *re2p=(re2_t *)qr->regex_engine2;
+			if (re2p->re2) {
+				//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+				re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+			} else {
+				//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
+				re2p->re1->Replace(qr->replace_pattern,ret->new_query);
+			}
 		}
 
 		if (qr->apply==true) {

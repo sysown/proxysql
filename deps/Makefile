@@ -1,6 +1,6 @@
 
 
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre
 .PHONY: default
 
 
@@ -61,6 +61,13 @@ re2/re2/obj/libre2.a:
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
 
 re2: re2/re2/obj/libre2.a
+
+pcre/pcre/.libs/libpcre.a:
+	cd pcre && rm -rf pcre-8.39
+	cd pcre && tar -zxf pcre-8.39.tar.gz
+	cd pcre/pcre && ./configure
+	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+pcre: pcre/pcre/.libs/libpcre.a
 
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14

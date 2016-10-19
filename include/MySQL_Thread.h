@@ -336,6 +336,7 @@ class MySQL_Threads_Handler
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		int query_processor_regex;
 		int long_query_time;
 		char *init_connect;
 #ifdef DEBUG

@@ -95,6 +95,8 @@ deps/libconfig/libconfig-1.4.9/
 
 #re2
 deps/re2/re2/
+deps/pcre/pcre-8.39/
+deps/pcre/pcre/
 
 #protobuf
 deps/protobuf/protobuf-2.6.1/
