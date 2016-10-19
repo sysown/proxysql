@@ -1,6 +1,6 @@
 
 
-GIT_VERSION := $(shell git describe --long)
+GIT_VERSION := $(shell git describe --long --tags)
 
 DEPS_PATH=../deps
 
