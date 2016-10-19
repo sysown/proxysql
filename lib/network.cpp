@@ -5,12 +5,11 @@
  * returns the socket
  */
 int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
-        int arg_on = 1;
-        struct addrinfo hints = {
-                .ai_flags = AI_PASSIVE,
-                .ai_family = AF_UNSPEC,
-                .ai_socktype = SOCK_STREAM
-        };
+	int arg_on = 1;
+	struct addrinfo hints;
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
         struct addrinfo *next, *ai;
         char port_string[NI_MAXSERV];
         int sd = -1;
