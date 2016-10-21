@@ -2075,6 +2075,20 @@ handler_again:
 					if (rc==-1) {
 						CurrentQuery.mysql_stmt=NULL; // immediately reset mysql_stmt
 						// the query failed
+						/* placeholder. This may be releant for #740
+						switch(status) {
+							case PROCESSING_STMT_EXECUTE:
+								myds->destroy_MySQL_Connection_From_Pool(false);
+								myds->fd=0;
+								break;
+							case PROCESSING_STMT_PREPARE:
+								myds->destroy_MySQL_Connection_From_Pool(false);
+								myds->fd=0;
+								break;
+							default:
+								break;
+						}
+						*/
 						if (
 							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
 							||
