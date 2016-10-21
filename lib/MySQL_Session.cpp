@@ -736,7 +736,15 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 			myds->killed_at=thread->curtime;
 			//fprintf(stderr,"Expired: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime);
 			MySQL_Connection_userinfo *ui=client_myds->myconn->userinfo;
-			KillArgs *ka = new KillArgs(ui->username, ui->password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id);
+			char *auth_password=NULL;
+			if (ui->password) {
+				if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
+					auth_password=ui->sha1_pass;
+				} else {
+					auth_password=ui->password;
+				}
+			}
+			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
