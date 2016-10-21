@@ -2341,7 +2341,10 @@ __run_skip_1a:
 					mysess_idx=0;
 				}
 				unsigned int i;
-				unsigned long long min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+				unsigned long long min_idle = 0;
+				if (curtime > (unsigned long long)mysql_thread___wait_timeout*1000) {
+					min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+				}
 				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
 					uint32_t sess_pos=mysess_idx;
 					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
