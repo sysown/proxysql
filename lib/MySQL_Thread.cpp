@@ -2178,9 +2178,9 @@ __run_skip_1a:
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
-		unsigned int maintenance_interval = 30000; // hardcoded value for now
+		unsigned int maintenance_interval = 1000000; // hardcoded value for now
 		if (idle_maintenance_thread) {
-			maintenance_interval=maintenance_interval*20;
+			maintenance_interval=maintenance_interval*2;
 		}
 		if (curtime > last_maintenance_time + maintenance_interval) {
 			last_maintenance_time=curtime;
