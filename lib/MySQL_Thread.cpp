@@ -2408,6 +2408,19 @@ __run_skip_1a:
 			if (mypolls.fds[n].revents==0) {
 			// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
 			// check for timeout
+				// no events. This section is copied from process_data_on_data_stream()
+				MySQL_Data_Stream *_myds=mypolls.myds[n];
+				if (_myds && _myds->sess) {
+					if (_myds->wait_until && curtime > _myds->wait_until) {
+						// timeout
+						_myds->sess->to_process=1;
+					} else {
+						if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
+							// timeout
+							_myds->sess->to_process=1;
+						}
+					}
+				}
 			} else {
 				// check if the FD is valid
 				if (mypolls.fds[n].revents==POLLNVAL) {
