@@ -2153,7 +2153,7 @@ __run_skip_1a:
 		// flush mysql log file
 		GloMyLogger->flush();
 
-
+		pre_poll_time=curtime;
 		if (idle_maintenance_thread) {
 			memset(events,0,sizeof(struct epoll_event)*MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
 			// we call epoll()
@@ -2178,6 +2178,11 @@ __run_skip_1a:
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
+		if (idle_maintenance_thread==false && (curtime >= pre_poll_time + mypolls.poll_timeout)) {
+			poll_timeout_bool=true;
+		} else {
+			poll_timeout_bool=false;
+		}
 		unsigned int maintenance_interval = 1000000; // hardcoded value for now
 		if (idle_maintenance_thread) {
 			maintenance_interval=maintenance_interval*2;
@@ -2409,6 +2414,7 @@ __run_skip_1a:
 			// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
 			// check for timeout
 				// no events. This section is copied from process_data_on_data_stream()
+				if (poll_timeout_bool) {
 				MySQL_Data_Stream *_myds=mypolls.myds[n];
 				if (_myds && _myds->sess) {
 					if (_myds->wait_until && curtime > _myds->wait_until) {
@@ -2420,6 +2426,7 @@ __run_skip_1a:
 							_myds->sess->to_process=1;
 						}
 					}
+				}
 				}
 			} else {
 				// check if the FD is valid

@@ -165,6 +165,7 @@ class MySQL_Thread
 	ProxySQL_Poll mypolls;
 	pthread_t thread_id;
 	unsigned long long curtime;
+	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
 	PtrArray *idle_mysql_sessions;
@@ -176,6 +177,7 @@ class MySQL_Thread
 	int shutdown;
 
 	bool epoll_thread;
+	bool poll_timeout_bool;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss
