@@ -1164,6 +1164,9 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
+	// we recreate local_stmts : see issue #752
+	delete myconn->local_stmts;
+	myconn->local_stmts=new MySQL_STMTs_local(false);
 	int rc=myconn->async_change_user(myds->revents);
 	if (rc==0) {
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
