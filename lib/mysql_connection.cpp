@@ -899,6 +899,16 @@ handler_again:
 						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
 					}
 				} else {
+					if (mysql) {
+						int _myerrno=mysql_errno(mysql);
+						if (_myerrno) {
+							if (myds) {
+								MyRS->add_err(myds);
+								NEXT_IMMEDIATE(ASYNC_QUERY_END);
+							}
+						}
+					}
+					// we reach here if there was no error
 					MyRS->add_eof();
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}

@@ -52,6 +52,7 @@ class MySQL_ResultSet {
 	unsigned int add_row(MYSQL_ROW row);
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
+	void add_err(MySQL_Data_Stream *_myds);
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	unsigned char *buffer;
 	unsigned int buffer_used;
