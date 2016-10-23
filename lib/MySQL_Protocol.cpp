@@ -1885,6 +1885,25 @@ void MySQL_ResultSet::add_eof() {
 	resultset_completed=true;
 }
 
+void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
+	PtrSize_t pkt;
+	if (myprot) {
+		MYSQL *_mysql=_myds->myconn->mysql;
+		buffer_to_PSarrayOut();
+		char sqlstate[10];
+		sprintf(sqlstate,"%s",mysql_sqlstate(_mysql));
+		if (_myds && _myds->killed_at) { // see case #750
+			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1907,sqlstate,"Query execution was interrupted, query_timeout exceeded");
+		} else {
+			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,mysql_errno(_mysql),sqlstate,mysql_error(_mysql));
+		}
+		PSarrayOUT->add(pkt.ptr,pkt.size);
+		sid++;
+		resultset_size+=pkt.size;
+	}
+	resultset_completed=true;
+}
+
 bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 	transfer_started=true;
 	if (myprot) {
