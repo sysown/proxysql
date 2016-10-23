@@ -736,7 +736,15 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 			myds->killed_at=thread->curtime;
 			//fprintf(stderr,"Expired: %llu, %llu\n", mybe->server_myds->wait_until, thread->curtime);
 			MySQL_Connection_userinfo *ui=client_myds->myconn->userinfo;
-			KillArgs *ka = new KillArgs(ui->username, ui->password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id);
+			char *auth_password=NULL;
+			if (ui->password) {
+				if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
+					auth_password=ui->sha1_pass;
+				} else {
+					auth_password=ui->password;
+				}
+			}
+			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -1156,6 +1164,9 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
+	// we recreate local_stmts : see issue #752
+	delete myconn->local_stmts;
+	myconn->local_stmts=new MySQL_STMTs_local(false);
 	int rc=myconn->async_change_user(myds->revents);
 	if (rc==0) {
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
@@ -2075,6 +2086,20 @@ handler_again:
 					if (rc==-1) {
 						CurrentQuery.mysql_stmt=NULL; // immediately reset mysql_stmt
 						// the query failed
+						/* placeholder. This may be releant for #740
+						switch(status) {
+							case PROCESSING_STMT_EXECUTE:
+								myds->destroy_MySQL_Connection_From_Pool(false);
+								myds->fd=0;
+								break;
+							case PROCESSING_STMT_PREPARE:
+								myds->destroy_MySQL_Connection_From_Pool(false);
+								myds->fd=0;
+								break;
+							default:
+								break;
+						}
+						*/
 						if (
 							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
 							||
@@ -2161,8 +2186,12 @@ handler_again:
 							bool retry_conn=false;
 							switch (myerr) {
 								case 1317:  // Query execution was interrupted
-									if (killed==true || myds->killed_at) {
+									if (killed==true) { // this session is being kiled
 										return -1;
+									}
+									if (myds->killed_at) {
+										// we intentionally killed the query
+										break;
 									}
 								case 1290: // read-only
 								case 1047: // WSREP has not yet prepared node for application use
@@ -2203,7 +2232,7 @@ handler_again:
 
 							switch (status) {
 								case PROCESSING_QUERY:
-									MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+									MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
 									break;
 								case PROCESSING_STMT_PREPARE:
 									//MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, true);
@@ -2890,7 +2919,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	}
 }
 
-void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS) {
+void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
 	if (MyRS) {
 		assert(MyRS->result);
 		bool transfer_started=MyRS->transfer_started;
@@ -2933,8 +2962,12 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		} else {
 			// error
 			char sqlstate[10];
-			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
+			sprintf(sqlstate,"%s",mysql_sqlstate(mysql));
+			if (_myds && _myds->killed_at) { // see case #750
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1907,sqlstate,"Query execution was interrupted, query_timeout exceeded");
+			} else {
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
+			}
 			client_myds->pkt_sid++;
 		}
 	}

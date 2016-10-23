@@ -480,7 +480,7 @@ void MySQL_Connection::stmt_execute_start() {
 	assert(query.stmt->mysql); // if we reached here, we hit bug #740
 	_rc=mysql_stmt_bind_param(query.stmt, query.stmt_meta->binds); // FIXME : add error handling
 	if (_rc) {
-	  fprintf(stderr, " mysql_stmt_bind_param() failed: %s\n", mysql_stmt_error(query.stmt));
+		proxy_error("mysql_stmt_bind_param() failed: %s", mysql_stmt_error(query.stmt));
 	}
 	//proxy_info("Calling mysql_stmt_execute_start, current state: %d\n", query.stmt->state);
 	async_exit_status = mysql_stmt_execute_start(&interr , query.stmt);
@@ -899,6 +899,16 @@ handler_again:
 						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
 					}
 				} else {
+					if (mysql) {
+						int _myerrno=mysql_errno(mysql);
+						if (_myerrno) {
+							if (myds) {
+								MyRS->add_err(myds);
+								NEXT_IMMEDIATE(ASYNC_QUERY_END);
+							}
+						}
+					}
+					// we reach here if there was no error
 					MyRS->add_eof();
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}

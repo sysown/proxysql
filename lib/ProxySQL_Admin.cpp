@@ -25,6 +25,8 @@
 #define SELECT_VERSION_COMMENT_LEN 32
 #define SELECT_DB_USER "select DATABASE(), USER() limit 1"
 #define SELECT_DB_USER_LEN 33
+#define SELECT_CHARSET_VARIOUS "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
+#define SELECT_CHARSET_VARIOUS_LEN 115
 
 #define READ_ONLY_OFF "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0e\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x03\x4f\x46\x46\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
@@ -1690,6 +1692,19 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		}
 	}
 
+	if (query_no_space_length==SELECT_CHARSET_VARIOUS_LEN) {
+		if (!strncasecmp(SELECT_CHARSET_VARIOUS, query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			char *query1=(char *)"select 'utf8' as '@@character_set_client', 'utf8' as '@@character_set_connection', 'utf8' as '@@character_set_server', 'utf8' as '@@character_set_database' limit 1";
+//			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
+//			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+			query=l_strdup(query1);
+			query_length=strlen(query1)+1;
+//			free(query2);
+			goto __run_query;
+		}
+	}
+
 	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS '@@version'";
@@ -3282,13 +3297,19 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_processlist");
-	char *a=(char *)"INSERT INTO stats_mysql_processlist VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	char *a=(char *)"INSERT INTO stats_mysql_processlist VALUES ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s')";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
-		for (int i=0; i<14; i++) {
+		char *o_info=NULL;
+		for (int i=0; i<13; i++) { // info (field 13) is left out! See #746
 			if (r->fields[i])
 				arg_len+=strlen(r->fields[i]);
+		}
+		if (r->fields[13]) { // this is just for info column (field 13) . See #746
+			o_info=escape_string_single_quotes(r->fields[13],false);
+			int l=strlen(o_info)+4;
+			arg_len+=l;
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,
@@ -3305,10 +3326,15 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 			(r->fields[10] ? r->fields[10] : ""),
 			(r->fields[11] ? r->fields[11] : ""),
 			(r->fields[12] ? r->fields[12] : ""),
-			(r->fields[13] ? r->fields[13] : "")
+			(r->fields[13] ? o_info : "")
 		);
 		statsdb->execute(query);
 		free(query);
+		if (o_info) {
+			if (o_info!=r->fields[13]) { // there was a copy
+				free(o_info);
+			}
+		}
 	}
 	statsdb->execute("COMMIT");
 	delete resultset;

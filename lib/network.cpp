@@ -5,21 +5,22 @@
  * returns the socket
  */
 int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
-        int arg_on = 1;
-        struct addrinfo hints = {
-                .ai_flags = AI_PASSIVE,
-                .ai_family = AF_UNSPEC,
-                .ai_socktype = SOCK_STREAM
-        };
+	int rc, arg_on = 1;
+	struct addrinfo hints;
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
         struct addrinfo *next, *ai;
         char port_string[NI_MAXSERV];
         int sd = -1;
 
         snprintf(port_string, sizeof(port_string), "%d", port);
-        if (getaddrinfo(ip, port_string, &hints, &ai) != 0) {
-                proxy_error("getaddrinfo(): %s\n", gai_strerror(errno));
-                return -1;
-  	}
+	rc = getaddrinfo(ip, port_string, &hints, &ai);
+	if (rc) {
+		proxy_error("getaddrinfo(): %s\n", gai_strerror(rc));
+		return -1;
+	}
 
         for (next = ai; next != NULL; next = next->ai_next) {
 	        if ((sd = socket(next->ai_family, next->ai_socktype, next->ai_protocol)) == -1) 

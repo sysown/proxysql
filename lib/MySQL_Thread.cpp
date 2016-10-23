@@ -2169,7 +2169,7 @@ __run_skip_1a:
 		// flush mysql log file
 		GloMyLogger->flush();
 
-
+		pre_poll_time=curtime;
 		if (idle_maintenance_thread) {
 			memset(events,0,sizeof(struct epoll_event)*MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
 			// we call epoll()
@@ -2194,7 +2194,12 @@ __run_skip_1a:
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
-		unsigned int maintenance_interval = 300000; // hardcoded value for now
+		if (idle_maintenance_thread==false && (curtime >= pre_poll_time + mypolls.poll_timeout)) {
+			poll_timeout_bool=true;
+		} else {
+			poll_timeout_bool=false;
+		}
+		unsigned int maintenance_interval = 1000000; // hardcoded value for now
 		if (idle_maintenance_thread) {
 			maintenance_interval=maintenance_interval*2;
 		}
@@ -2357,7 +2362,10 @@ __run_skip_1a:
 					mysess_idx=0;
 				}
 				unsigned int i;
-				unsigned long long min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+				unsigned long long min_idle = 0;
+				if (curtime > (unsigned long long)mysql_thread___wait_timeout*1000) {
+					min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+				}
 				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
 					uint32_t sess_pos=mysess_idx;
 					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
@@ -2421,6 +2429,21 @@ __run_skip_1a:
 			if (mypolls.fds[n].revents==0) {
 			// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
 			// check for timeout
+				// no events. This section is copied from process_data_on_data_stream()
+				if (poll_timeout_bool) {
+				MySQL_Data_Stream *_myds=mypolls.myds[n];
+				if (_myds && _myds->sess) {
+					if (_myds->wait_until && curtime > _myds->wait_until) {
+						// timeout
+						_myds->sess->to_process=1;
+					} else {
+						if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
+							// timeout
+							_myds->sess->to_process=1;
+						}
+					}
+				}
+				}
 			} else {
 				// check if the FD is valid
 				if (mypolls.fds[n].revents==POLLNVAL) {

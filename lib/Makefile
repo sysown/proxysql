@@ -1,6 +1,6 @@
 
 
-
+GIT_VERSION := $(shell git describe --long --tags)
 
 DEPS_PATH=../deps
 
@@ -41,7 +41,7 @@ ODIR= obj
 
 #CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
 #CPPFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
-MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall
+MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\"
 MYCPPFLAGS=-std=c++11 $(MYCFLAGS)
 
 default: libproxysql.a
