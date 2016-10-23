@@ -3297,13 +3297,19 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_processlist");
-	char *a=(char *)"INSERT INTO stats_mysql_processlist VALUES (\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\")";
+	char *a=(char *)"INSERT INTO stats_mysql_processlist VALUES ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s')";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
-		for (int i=0; i<14; i++) {
+		char *o_info=NULL;
+		for (int i=0; i<13; i++) { // info (field 13) is left out! See #746
 			if (r->fields[i])
 				arg_len+=strlen(r->fields[i]);
+		}
+		if (r->fields[13]) { // this is just for info column (field 13) . See #746
+			o_info=escape_string_single_quotes(r->fields[13],false);
+			int l=strlen(o_info)+4;
+			arg_len+=l;
 		}
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,
@@ -3320,10 +3326,15 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 			(r->fields[10] ? r->fields[10] : ""),
 			(r->fields[11] ? r->fields[11] : ""),
 			(r->fields[12] ? r->fields[12] : ""),
-			(r->fields[13] ? r->fields[13] : "")
+			(r->fields[13] ? o_info : "")
 		);
 		statsdb->execute(query);
 		free(query);
+		if (o_info) {
+			if (o_info!=r->fields[13]) { // there was a copy
+				free(o_info);
+			}
+		}
 	}
 	statsdb->execute("COMMIT");
 	delete resultset;
