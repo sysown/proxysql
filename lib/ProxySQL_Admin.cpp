@@ -3505,7 +3505,7 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 			buffs[9], // match_digest
 			buffs[10], // match_pattern
 			r->fields[11], // negate
-      buff[12], // re_modifiers
+      buffs[12], // re_modifiers
 			( strcmp(r->fields[13],"-1")==0 ? "NULL" : r->fields[13] ), // flagOUT
 			buffs[14], // replace_pattern
 			( strcmp(r->fields[15],"-1")==0 ? "NULL" : r->fields[15] ), // destination_hostgroup

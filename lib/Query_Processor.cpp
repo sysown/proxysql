@@ -8,7 +8,7 @@
 
 #include "SpookyV2.h"
 
-#include <pcrecpp.h>
+#include "pcrecpp.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -242,7 +242,7 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 	r->re2=NULL;
 	if (mysql_thread___query_processor_regex==2) {
 		r->opt2=new re2::RE2::Options(RE2::Quiet);
-		if (qr->re_modifiers & QP_RE_MOD_CASELESS == QP_RE_MOD_CASELESS) {
+		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
 			r->opt2->set_case_sensitive(false);
 		}
 		if (i==1) {
@@ -252,7 +252,7 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 		}
 	} else {
 		r->opt1=new pcrecpp::RE_Options();
-		if (qr->re_modifiers & QP_RE_MOD_CASELESS == QP_RE_MOD_CASELESS) {
+		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
 			r->opt1->set_caseless(true);
 		}
 		if (i==1) {
@@ -440,6 +440,7 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 			if (strncasecmp(token,(char *)"GLOBAL",strlen((char *)"GLOBAL"))==0) {
 				newQR->re_modifiers|=QP_RE_MOD_GLOBAL;
 			}
+		}
 		free_tokenizer( &tok );
 	}
 	newQR->flagOUT=flagOUT;
@@ -692,13 +693,22 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					//sprintf(buf,"0x%X%X", d32[0], d32[1]);
 					sprintf(buf,"0x%016llX", (long long unsigned int)qr1->digest);
 				}
+				std::string re_mod;
+				re_mod="";
+				if ((qr1->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) re_mod = "CASELESS";
+				if ((qr1->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+					if (re_mod.length()) {
+						re_mod = "," + re_mod;
+					}
+					re_mod = "GLOBAL";
+				}
 				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN,
 					qr1->client_addr, qr1->proxy_addr, qr1->proxy_port,
 					( qr1->digest ? buf : NULL ) ,
-					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern,
+					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern, (char *)re_mod.c_str(),
 					qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup,
 					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
-					qr1->error_msg, qr1->log, qr1->apply,
+					qr1->error_msg, qr1->sticky_conn, qr1->multiplex, qr1->log, qr1->apply,
 					qr1->comment);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
@@ -897,14 +907,14 @@ __internal_loop:
 			re2_t *re2p=(re2_t *)qr->regex_engine2;
 			if (re2p->re2) {
 				//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-				if (qr->re_modifiers & QP_GLOBAL == QP_RE_MOD_GLOBAL) {
+				if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
 					re2p->re2->GlobalReplace(ret->new_query,qr->match_pattern,qr->replace_pattern);
 				} else {
 					re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
 				}
 			} else {
 				//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
-				if (qr->re_modifiers & QP_GLOBAL == QP_RE_MOD_GLOBAL) {
+				if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
 					re2p->re1->GlobalReplace(qr->replace_pattern,ret->new_query);
 				} else {
 					re2p->re1->Replace(qr->replace_pattern,ret->new_query);
