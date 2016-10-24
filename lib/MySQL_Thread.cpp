@@ -2015,7 +2015,7 @@ __run_skip_1:
 					if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
 						if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
 							unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
-							if (_tmp_idle > curtime - mysql_thread___session_idle_ms) {
+							if (_tmp_idle < curtime - mysql_thread___session_idle_ms) {
 								if (myds->sess->client_myds == myds && myds->PSarrayOUT->len==0 && (myds->queueOUT.head - myds->queueOUT.tail)==0 ) { // extra check
 									unsigned int j;
 									int conns=0;
