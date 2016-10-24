@@ -2012,10 +2012,11 @@ __run_skip_1:
 			if (myds) {
 				//if (GloMTH->num_threads >= MIN_THREADS_FOR_MAINTENANCE && idle_maintenance_thread==false) {
 					// here we try to move it to the maintenance thread
-					if (mypolls.last_recv[n] < curtime - mysql_thread___session_idle_ms) {
-						if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
-							if (myds->sess->client_myds == myds) { // extra check
-								if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
+					if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
+						if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
+							unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
+							if (_tmp_idle > curtime - mysql_thread___session_idle_ms) {
+								if (myds->sess->client_myds == myds && myds->PSarrayOUT->len==0 && (myds->queueOUT.head - myds->queueOUT.tail)==0 ) { // extra check
 									unsigned int j;
 									int conns=0;
 									for (j=0;j<myds->sess->mybes->len;j++) {
@@ -2073,7 +2074,8 @@ __run_skip_1:
 			if (myds) myds->revents=0;
 			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER) {
 				if (myds && myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
-					mypolls.fds[n].events = POLLIN;
+					//mypolls.fds[n].events = POLLIN;
+					mypolls.myds[n]->set_pollout();
 				} else {
 					if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
 						mypolls.fds[n].events = POLLIN;
