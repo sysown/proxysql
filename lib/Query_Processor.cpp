@@ -17,6 +17,9 @@
 #endif /* DEBUG */
 #define QUERY_PROCESSOR_VERSION "0.2.0902" DEB
 
+#define QP_RE_MOD_CASELESS 1
+#define QP_RE_MOD_GLOBAL 2
+
 class QP_rule_text_hitsonly {
 	public:
 	char **pta;
@@ -239,7 +242,9 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 	r->re2=NULL;
 	if (mysql_thread___query_processor_regex==2) {
 		r->opt2=new re2::RE2::Options(RE2::Quiet);
-		r->opt2->set_case_sensitive(false);
+		if (qr->re_modifiers & QP_RE_MOD_CASELESS == QP_RE_MOD_CASELESS) {
+			r->opt2->set_case_sensitive(false);
+		}
 		if (i==1) {
 			r->re2=new RE2(qr->match_digest, *r->opt2);
 		} else if (i==2) {
@@ -247,7 +252,9 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 		}
 	} else {
 		r->opt1=new pcrecpp::RE_Options();
-		r->opt1->set_caseless(true);
+		if (qr->re_modifiers & QP_RE_MOD_CASELESS == QP_RE_MOD_CASELESS) {
+			r->opt1->set_caseless(true);
+		}
 		if (i==1) {
 			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
 		} else if (i==2) {
@@ -412,7 +419,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int log, bool apply, char *comment) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int sticky_conn, int multiplex, int log, bool apply, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -422,6 +429,19 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->match_digest=(match_digest ? strdup(match_digest) : NULL);
 	newQR->match_pattern=(match_pattern ? strdup(match_pattern) : NULL);
 	newQR->negate_match_pattern=negate_match_pattern;
+	newQR->re_modifiers=0;
+	{
+		tokenizer_t tok = tokenizer( re_modifiers, ",", TOKENIZER_NO_EMPTIES );
+		const char* token;
+		for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
+			if (strncasecmp(token,(char *)"CASELESS",strlen((char *)"CASELESS"))==0) {
+				newQR->re_modifiers|=QP_RE_MOD_CASELESS;
+			}
+			if (strncasecmp(token,(char *)"GLOBAL",strlen((char *)"GLOBAL"))==0) {
+				newQR->re_modifiers|=QP_RE_MOD_GLOBAL;
+			}
+		free_tokenizer( &tok );
+	}
 	newQR->flagOUT=flagOUT;
 	newQR->replace_pattern=(replace_pattern ? strdup(replace_pattern) : NULL);
 	newQR->destination_hostgroup=destination_hostgroup;
@@ -433,6 +453,8 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->mirror_flagOUT=mirror_flagOUT;
 	newQR->mirror_hostgroup=mirror_hostgroup;
 	newQR->error_msg=(error_msg ? strdup(error_msg) : NULL);
+	newQR->sticky_conn=sticky_conn;
+	newQR->multiplex=multiplex;
 	newQR->apply=apply;
 	newQR->comment=(comment ? strdup(comment) : NULL); // see issue #643
 	newQR->regex_engine1=NULL;
@@ -875,10 +897,18 @@ __internal_loop:
 			re2_t *re2p=(re2_t *)qr->regex_engine2;
 			if (re2p->re2) {
 				//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-				re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+				if (qr->re_modifiers & QP_GLOBAL == QP_RE_MOD_GLOBAL) {
+					re2p->re2->GlobalReplace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+				} else {
+					re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+				}
 			} else {
 				//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
-				re2p->re1->Replace(qr->replace_pattern,ret->new_query);
+				if (qr->re_modifiers & QP_GLOBAL == QP_RE_MOD_GLOBAL) {
+					re2p->re1->GlobalReplace(qr->replace_pattern,ret->new_query);
+				} else {
+					re2p->re1->Replace(qr->replace_pattern,ret->new_query);
+				}
 			}
 		}
 
