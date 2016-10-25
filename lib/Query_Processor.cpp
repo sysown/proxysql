@@ -698,9 +698,9 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				if ((qr1->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) re_mod = "CASELESS";
 				if ((qr1->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
 					if (re_mod.length()) {
-						re_mod = "," + re_mod;
+						re_mod = re_mod + ",";
 					}
-					re_mod = "GLOBAL";
+					re_mod = re_mod + "GLOBAL";
 				}
 				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN,
 					qr1->client_addr, qr1->proxy_addr, qr1->proxy_port,
