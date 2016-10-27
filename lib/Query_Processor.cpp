@@ -42,7 +42,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=27;
+		num_fields=30;
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -69,21 +69,33 @@ class QP_rule_text {
 		pta[9]=strdup_null(QPr->match_digest);
 		pta[10]=strdup_null(QPr->match_pattern);
 		itostr(pta[11], (long long)QPr->negate_match_pattern);
-		itostr(pta[12], (long long)QPr->flagOUT);
-		pta[13]=strdup_null(QPr->replace_pattern);
-		itostr(pta[14], (long long)QPr->destination_hostgroup);
-		itostr(pta[15], (long long)QPr->cache_ttl);
-		itostr(pta[16], (long long)QPr->reconnect);
-		itostr(pta[17], (long long)QPr->timeout);
-		itostr(pta[18], (long long)QPr->retries);
-		itostr(pta[19], (long long)QPr->delay);
-		itostr(pta[20], (long long)QPr->mirror_flagOUT);
-		itostr(pta[21], (long long)QPr->mirror_hostgroup);
-		pta[22]=strdup_null(QPr->error_msg);
-		itostr(pta[23], (long long)QPr->log);
-		itostr(pta[24], (long long)QPr->apply);
-		pta[25]=strdup_null(QPr->comment); // issue #643
-		itostr(pta[26], (long long)QPr->hits);
+		std::string re_mod;
+		re_mod="";
+		if ((QPr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) re_mod = "CASELESS";
+			if ((QPr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+				if (re_mod.length()) {
+					re_mod = re_mod + ",";
+				}
+			re_mod = re_mod + "GLOBAL";
+		}
+		pta[12]=strdup_null((char *)re_mod.c_str()); // re_modifiers
+		itostr(pta[13], (long long)QPr->flagOUT);
+		pta[14]=strdup_null(QPr->replace_pattern);
+		itostr(pta[15], (long long)QPr->destination_hostgroup);
+		itostr(pta[16], (long long)QPr->cache_ttl);
+		itostr(pta[17], (long long)QPr->reconnect);
+		itostr(pta[18], (long long)QPr->timeout);
+		itostr(pta[19], (long long)QPr->retries);
+		itostr(pta[20], (long long)QPr->delay);
+		itostr(pta[21], (long long)QPr->mirror_flagOUT);
+		itostr(pta[22], (long long)QPr->mirror_hostgroup);
+		pta[23]=strdup_null(QPr->error_msg);
+		itostr(pta[24], (long long)QPr->sticky_conn);
+		itostr(pta[25], (long long)QPr->multiplex);
+		itostr(pta[26], (long long)QPr->log);
+		itostr(pta[27], (long long)QPr->apply);
+		pta[28]=strdup_null(QPr->comment); // issue #643
+		itostr(pta[29], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -563,7 +575,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(27);
+	SQLite3_result *result=new SQLite3_result(30);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -578,6 +590,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"match_digest");
 	result->add_column_definition(SQLITE_TEXT,"match_pattern");
 	result->add_column_definition(SQLITE_TEXT,"negate_match_pattern");
+	result->add_column_definition(SQLITE_TEXT,"re_modifiers");
 	result->add_column_definition(SQLITE_TEXT,"flagOUT");
 	result->add_column_definition(SQLITE_TEXT,"replace_pattern");
 	result->add_column_definition(SQLITE_TEXT,"destination_hostgroup");
@@ -589,6 +602,8 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"mirror_flagOUT");
 	result->add_column_definition(SQLITE_TEXT,"mirror_hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"error_msg");
+	result->add_column_definition(SQLITE_TEXT,"sticky_conn");
+	result->add_column_definition(SQLITE_TEXT,"multiplex");
 	result->add_column_definition(SQLITE_TEXT,"log");
 	result->add_column_definition(SQLITE_TEXT,"apply");
 	result->add_column_definition(SQLITE_TEXT,"comment"); // issue #643
