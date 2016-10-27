@@ -55,8 +55,9 @@ libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
 re2/re2/obj/libre2.a:
 	cd re2 && rm -rf re2
-	cd re2 && tar -zxf re2-20140304.tgz
-	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
+#	cd re2 && tar -zxf re2-20140304.tgz
+	cd re2 && tar -zxf re2.tar.gz
+#	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2 && patch re2/util/mutex.h < mutex.h.patch
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
 
