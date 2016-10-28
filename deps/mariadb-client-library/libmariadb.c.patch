@@ -1,20 +1,7 @@
-@@ -2257,6 +2268,44 @@
-     /* reset the connection in all active statements 
-        todo: check stmt->mysql in mysql_stmt* functions ! */
-     for (;li_stmt;li_stmt= li_stmt->next)
-+    {
-+      stmt= (MYSQL_STMT *)li_stmt->data;
-+      stmt->mysql= NULL;
-+      SET_CLIENT_STMT_ERROR(stmt, CR_SERVER_LOST, SQLSTATE_UNKNOWN, 0);
-+    }
-+    mysql_close_memory(mysql);
-+    mysql_close_options(mysql);
-+    mysql->host_info=mysql->user=mysql->passwd=mysql->db=0;
-+   
-+    /* Clear pointers for better safety */
-+    bzero((char*) &mysql->options,sizeof(mysql->options));
-+    mysql->net.vio= 0;
-+    if (mysql->free_me)
+@@ -2396,6 +2396,36 @@
+     bzero((char*) &mysql->options,sizeof(mysql->options));
+     mysql->net.vio= 0;
+     if (mysql->free_me)
 +      my_free((gptr) mysql);
 +  }
 +  DBUG_VOID_RETURN;
@@ -37,9 +24,14 @@
 +				end_server(mysql);
 +			}
 +		}
-+    /* reset the connection in all active statements 
-+       todo: check stmt->mysql in mysql_stmt* functions ! */
-+    for (;li_stmt;li_stmt= li_stmt->next)
-     {
-       stmt= (MYSQL_STMT *)li_stmt->data;
-       stmt->mysql= NULL;
++    mysql_close_memory(mysql);
++    mysql_close_options(mysql);
++    mysql->host_info=mysql->user=mysql->passwd=mysql->db=0;
++
++    /* Clear pointers for better safety */
++    bzero((char*) &mysql->options,sizeof(mysql->options));
++    mysql->net.vio= 0;
++    if (mysql->free_me)
+       my_free(mysql);
+   }
+   DBUG_VOID_RETURN;
