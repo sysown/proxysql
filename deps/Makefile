@@ -1,6 +1,6 @@
 
 
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre
 .PHONY: default
 
 
@@ -40,7 +40,10 @@ mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
 
 
 sqlite3/sqlite3/sqlite3.o:
-	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c
+	cd sqlite3 && rm -rf sqlite-amalgamation-3150000
+	cd sqlite3 && tar -zxf sqlite-amalgamation-3150000.tar.gz
+	cd sqlite3/sqlite3 && patch sqlite3.c < ../from_unixtime.patch
+	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
@@ -55,12 +58,20 @@ libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
 re2/re2/obj/libre2.a:
 	cd re2 && rm -rf re2
-	cd re2 && tar -zxf re2-20140304.tgz
-	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
+#	cd re2 && tar -zxf re2-20140304.tgz
+	cd re2 && tar -zxf re2.tar.gz
+#	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2 && patch re2/util/mutex.h < mutex.h.patch
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
 
 re2: re2/re2/obj/libre2.a
+
+pcre/pcre/.libs/libpcre.a:
+	cd pcre && rm -rf pcre-8.39
+	cd pcre && tar -zxf pcre-8.39.tar.gz
+	cd pcre/pcre && ./configure
+	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+pcre: pcre/pcre/.libs/libpcre.a
 
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
@@ -68,6 +79,6 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
-	cd sqlite3/sqlite3 && rm -rf *.o
+	cd sqlite3/sqlite3 && rm -rf *
 .PHONY: cleanall
 

@@ -1,0 +1,38 @@
+--- sqlite-amalgamation-3150000/sqlite3.c	2016-10-14 18:48:16.000000000 +0000
++++ /tmp/sqlite3.c	2016-10-28 00:22:06.993102669 +0000
+@@ -19426,6 +19426,27 @@
+ }
+ 
+ /*
++**    from_unixtime( TIMESTRING)
++**
++** Return YYYY-MM-DD HH:MM:SS
++*/
++static void from_unixtimeFunc(
++  sqlite3_context *context,
++  int argc,
++  sqlite3_value **argv
++){
++  DateTime x;
++  if( isDate(context, 1, argv, &x)==0 ){
++		parseModifier(context, (char*)"unixepoch", &x);
++    char zBuf[100];
++    computeYMD_HMS(&x);
++    sqlite3_snprintf(sizeof(zBuf), zBuf, "%04d-%02d-%02d %02d:%02d:%02d",
++                     x.Y, x.M, x.D, x.h, x.m, (int)(x.s));
++    sqlite3_result_text(context, zBuf, -1, SQLITE_TRANSIENT);
++  }
++}
++
++/*
+ **    time( TIMESTRING, MOD, MOD, ...)
+ **
+ ** Return HH:MM:SS
+@@ -19715,6 +19736,7 @@
+     DFUNCTION(date,             -1, 0, 0, dateFunc      ),
+     DFUNCTION(time,             -1, 0, 0, timeFunc      ),
+     DFUNCTION(datetime,         -1, 0, 0, datetimeFunc  ),
++    DFUNCTION(from_unixtime,    -1, 0, 0, from_unixtimeFunc  ),
+     DFUNCTION(strftime,         -1, 0, 0, strftimeFunc  ),
+     DFUNCTION(current_time,      0, 0, 0, ctimeFunc     ),
+     DFUNCTION(current_timestamp, 0, 0, 0, ctimestampFunc),

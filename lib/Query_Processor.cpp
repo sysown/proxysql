@@ -8,12 +8,17 @@
 
 #include "SpookyV2.h"
 
+#include "pcrecpp.h"
+
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else
 #define DEB ""
 #endif /* DEBUG */
 #define QUERY_PROCESSOR_VERSION "0.2.0902" DEB
+
+#define QP_RE_MOD_CASELESS 1
+#define QP_RE_MOD_GLOBAL 2
 
 class QP_rule_text_hitsonly {
 	public:
@@ -37,7 +42,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=27;
+		num_fields=30;
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -64,21 +69,33 @@ class QP_rule_text {
 		pta[9]=strdup_null(QPr->match_digest);
 		pta[10]=strdup_null(QPr->match_pattern);
 		itostr(pta[11], (long long)QPr->negate_match_pattern);
-		itostr(pta[12], (long long)QPr->flagOUT);
-		pta[13]=strdup_null(QPr->replace_pattern);
-		itostr(pta[14], (long long)QPr->destination_hostgroup);
-		itostr(pta[15], (long long)QPr->cache_ttl);
-		itostr(pta[16], (long long)QPr->reconnect);
-		itostr(pta[17], (long long)QPr->timeout);
-		itostr(pta[18], (long long)QPr->retries);
-		itostr(pta[19], (long long)QPr->delay);
-		itostr(pta[20], (long long)QPr->mirror_flagOUT);
-		itostr(pta[21], (long long)QPr->mirror_hostgroup);
-		pta[22]=strdup_null(QPr->error_msg);
-		itostr(pta[23], (long long)QPr->log);
-		itostr(pta[24], (long long)QPr->apply);
-		pta[25]=strdup_null(QPr->comment); // issue #643
-		itostr(pta[26], (long long)QPr->hits);
+		std::string re_mod;
+		re_mod="";
+		if ((QPr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) re_mod = "CASELESS";
+			if ((QPr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+				if (re_mod.length()) {
+					re_mod = re_mod + ",";
+				}
+			re_mod = re_mod + "GLOBAL";
+		}
+		pta[12]=strdup_null((char *)re_mod.c_str()); // re_modifiers
+		itostr(pta[13], (long long)QPr->flagOUT);
+		pta[14]=strdup_null(QPr->replace_pattern);
+		itostr(pta[15], (long long)QPr->destination_hostgroup);
+		itostr(pta[16], (long long)QPr->cache_ttl);
+		itostr(pta[17], (long long)QPr->reconnect);
+		itostr(pta[18], (long long)QPr->timeout);
+		itostr(pta[19], (long long)QPr->retries);
+		itostr(pta[20], (long long)QPr->delay);
+		itostr(pta[21], (long long)QPr->mirror_flagOUT);
+		itostr(pta[22], (long long)QPr->mirror_hostgroup);
+		pta[23]=strdup_null(QPr->error_msg);
+		itostr(pta[24], (long long)QPr->sticky_conn);
+		itostr(pta[25], (long long)QPr->multiplex);
+		itostr(pta[26], (long long)QPr->log);
+		itostr(pta[27], (long long)QPr->apply);
+		pta[28]=strdup_null(QPr->comment); // issue #643
+		itostr(pta[29], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -219,8 +236,10 @@ class QP_query_digest_stats {
 
 
 struct __RE2_objects_t {
-	re2::RE2::Options *opt;
-	RE2 *re;
+	pcrecpp::RE_Options *opt1;
+	pcrecpp::RE *re1;
+	re2::RE2::Options *opt2;
+	RE2 *re2;
 };
 
 typedef struct __RE2_objects_t re2_t;
@@ -229,12 +248,30 @@ static bool rules_sort_comp_function (QP_rule_t * a, QP_rule_t * b) { return (a-
 
 static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
-	r->opt=new re2::RE2::Options(RE2::Quiet);
-	r->opt->set_case_sensitive(false);
-	if (i==1) {
-		r->re=new RE2(qr->match_digest, *r->opt);
-	} else if (i==2) {
-		r->re=new RE2(qr->match_pattern, *r->opt);
+	r->opt1=NULL;
+	r->re1=NULL;
+	r->opt2=NULL;
+	r->re2=NULL;
+	if (mysql_thread___query_processor_regex==2) {
+		r->opt2=new re2::RE2::Options(RE2::Quiet);
+		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
+			r->opt2->set_case_sensitive(false);
+		}
+		if (i==1) {
+			r->re2=new RE2(qr->match_digest, *r->opt2);
+		} else if (i==2) {
+			r->re2=new RE2(qr->match_pattern, *r->opt2);
+		}
+	} else {
+		r->opt1=new pcrecpp::RE_Options();
+		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
+			r->opt1->set_caseless(true);
+		}
+		if (i==1) {
+			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
+		} else if (i==2) {
+			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
+		}
 	}
 	return r;
 };
@@ -253,14 +290,18 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->error_msg);
 	if (qr->regex_engine1) {
 		re2_t *r=(re2_t *)qr->regex_engine1;
-		delete r->opt;
-		delete r->re;
+		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+		if (r->re1) { delete r->re1; r->re1=NULL; }
+		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
+		if (r->re2) { delete r->re2; r->re2=NULL; }
 		free(qr->regex_engine1);
 	}
 	if (qr->regex_engine2) {
 		re2_t *r=(re2_t *)qr->regex_engine2;
-		delete r->opt;
-		delete r->re;
+		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+		if (r->re1) { delete r->re1; r->re1=NULL; }
+		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
+		if (r->re2) { delete r->re2; r->re2=NULL; }
 		free(qr->regex_engine2);
 	}
 	free(qr);
@@ -390,7 +431,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int log, bool apply, char *comment) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int sticky_conn, int multiplex, int log, bool apply, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -400,6 +441,20 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->match_digest=(match_digest ? strdup(match_digest) : NULL);
 	newQR->match_pattern=(match_pattern ? strdup(match_pattern) : NULL);
 	newQR->negate_match_pattern=negate_match_pattern;
+	newQR->re_modifiers=0;
+	{
+		tokenizer_t tok = tokenizer( re_modifiers, ",", TOKENIZER_NO_EMPTIES );
+		const char* token;
+		for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
+			if (strncasecmp(token,(char *)"CASELESS",strlen((char *)"CASELESS"))==0) {
+				newQR->re_modifiers|=QP_RE_MOD_CASELESS;
+			}
+			if (strncasecmp(token,(char *)"GLOBAL",strlen((char *)"GLOBAL"))==0) {
+				newQR->re_modifiers|=QP_RE_MOD_GLOBAL;
+			}
+		}
+		free_tokenizer( &tok );
+	}
 	newQR->flagOUT=flagOUT;
 	newQR->replace_pattern=(replace_pattern ? strdup(replace_pattern) : NULL);
 	newQR->destination_hostgroup=destination_hostgroup;
@@ -411,6 +466,8 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->mirror_flagOUT=mirror_flagOUT;
 	newQR->mirror_hostgroup=mirror_hostgroup;
 	newQR->error_msg=(error_msg ? strdup(error_msg) : NULL);
+	newQR->sticky_conn=sticky_conn;
+	newQR->multiplex=multiplex;
 	newQR->apply=apply;
 	newQR->comment=(comment ? strdup(comment) : NULL); // see issue #643
 	newQR->regex_engine1=NULL;
@@ -518,7 +575,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(27);
+	SQLite3_result *result=new SQLite3_result(30);
 	spin_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -533,6 +590,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"match_digest");
 	result->add_column_definition(SQLITE_TEXT,"match_pattern");
 	result->add_column_definition(SQLITE_TEXT,"negate_match_pattern");
+	result->add_column_definition(SQLITE_TEXT,"re_modifiers");
 	result->add_column_definition(SQLITE_TEXT,"flagOUT");
 	result->add_column_definition(SQLITE_TEXT,"replace_pattern");
 	result->add_column_definition(SQLITE_TEXT,"destination_hostgroup");
@@ -544,6 +602,8 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"mirror_flagOUT");
 	result->add_column_definition(SQLITE_TEXT,"mirror_hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"error_msg");
+	result->add_column_definition(SQLITE_TEXT,"sticky_conn");
+	result->add_column_definition(SQLITE_TEXT,"multiplex");
 	result->add_column_definition(SQLITE_TEXT,"log");
 	result->add_column_definition(SQLITE_TEXT,"apply");
 	result->add_column_definition(SQLITE_TEXT,"comment"); // issue #643
@@ -648,13 +708,22 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					//sprintf(buf,"0x%X%X", d32[0], d32[1]);
 					sprintf(buf,"0x%016llX", (long long unsigned int)qr1->digest);
 				}
+				std::string re_mod;
+				re_mod="";
+				if ((qr1->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) re_mod = "CASELESS";
+				if ((qr1->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+					if (re_mod.length()) {
+						re_mod = re_mod + ",";
+					}
+					re_mod = re_mod + "GLOBAL";
+				}
 				qr2=new_query_rule(qr1->rule_id, qr1->active, qr1->username, qr1->schemaname, qr1->flagIN,
 					qr1->client_addr, qr1->proxy_addr, qr1->proxy_port,
 					( qr1->digest ? buf : NULL ) ,
-					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern,
+					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern, (char *)re_mod.c_str(),
 					qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup,
 					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
-					qr1->error_msg, qr1->log, qr1->apply,
+					qr1->error_msg, qr1->sticky_conn, qr1->multiplex, qr1->log, qr1->apply,
 					qr1->comment);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
@@ -750,7 +819,11 @@ __internal_loop:
 			if (qr->match_digest) {
 				bool rc;
 				// we always match on original query
-				rc=RE2::PartialMatch(qp->digest_text,*re2p->re);
+				if (re2p->re2) {
+					rc=RE2::PartialMatch(qp->digest_text,*re2p->re2);
+				} else {
+					rc=re2p->re1->PartialMatch(qp->digest_text);
+				}
 				if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
 					continue;
@@ -764,10 +837,18 @@ __internal_loop:
 			if (ret && ret->new_query) {
 				// if we already rewrote the query, process the new query
 				//std::string *s=ret->new_query;
-				rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re);
+				if (re2p->re2) {
+					rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re2);
+				} else {
+					rc=re2p->re1->PartialMatch(ret->new_query->c_str());
+				}
 			} else {
 				// we never rewrote the query
-				rc=RE2::PartialMatch(query,*re2p->re);
+				if (re2p->re2) {
+					rc=RE2::PartialMatch(query,*re2p->re2);
+				} else {
+					rc=re2p->re1->PartialMatch(query);
+				}
 			}
 			if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
@@ -838,7 +919,22 @@ __internal_loop:
 		if (qr->replace_pattern) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d on match_pattern \"%s\" has a replace_pattern \"%s\" to apply\n", qr->rule_id, qr->match_pattern, qr->replace_pattern);
 			if (ret->new_query==NULL) ret->new_query=new std::string(query);
-			RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+			re2_t *re2p=(re2_t *)qr->regex_engine2;
+			if (re2p->re2) {
+				//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+				if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+					re2p->re2->GlobalReplace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+				} else {
+					re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+				}
+			} else {
+				//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
+				if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+					re2p->re1->GlobalReplace(qr->replace_pattern,ret->new_query);
+				} else {
+					re2p->re1->Replace(qr->replace_pattern,ret->new_query);
+				}
+			}
 		}
 
 		if (qr->apply==true) {
