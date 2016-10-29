@@ -39,7 +39,7 @@ build_src: build_deps build_lib
 
 .PHONY: build_deps_debug
 build_deps_debug:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug
 build_lib_debug: build_deps_debug

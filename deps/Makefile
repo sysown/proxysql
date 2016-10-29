@@ -1,5 +1,16 @@
 
 
+PROXYDEBUG := $(shell echo $(PROXYDEBUG))
+ifeq ($(PROXYDEBUG),1)
+MYCFLAGS=-O0
+MYCMAKE=-DCMAKE_BUILD_TYPE=Debug
+MYJEOPT=--enable-xmalloc --enable-munmap --enable-fill --enable-debug
+else
+MYCFLAGS=-O2
+MYCMAKE=-DCMAKE_BUILD_TYPE=Release
+MYJEOPT=--enable-xmalloc --enable-munmap
+endif
+
 default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre
 .PHONY: default
 
@@ -15,7 +26,7 @@ libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-4.2.1
 	cd jemalloc && tar -jxf jemalloc-4.2.1.tar.bz2
-	cd jemalloc/jemalloc && ./configure --enable-xmalloc --enable-munmap
+	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
@@ -26,7 +37,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 #	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.1.0-src.tar.gz
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.3.1-src.tar.gz
-	cd mariadb-client-library/mariadb_client && cmake .
+	cd mariadb-client-library/mariadb_client && cmake . ${MYCMAKE}
 	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/mysql_async.c < ../mysql_async.c.patch
@@ -43,7 +54,7 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-3150000
 	cd sqlite3 && tar -zxf sqlite-amalgamation-3150000.tar.gz
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../from_unixtime.patch
-	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT
+	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
@@ -73,10 +84,16 @@ pcre/pcre/.libs/libpcre.a:
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
 pcre: pcre/pcre/.libs/libpcre.a
 
+cleanpart:
+	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
+	cd jemalloc && rm -rf jemalloc-4.1.0
+	cd sqlite3/sqlite3 && rm -rf *
+.PHONY: cleanpart
+
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
-	cd jemalloc && rm -rf jemalloc-3.6.0
-	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
+	cd jemalloc && rm -rf jemalloc-4.1.0
+	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
 	cd sqlite3/sqlite3 && rm -rf *
