@@ -96,6 +96,6 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
-	cd sqlite3/sqlite3 && rm -rf *
+	cd sqlite3/sqlite3 && rm -rf * || true
 .PHONY: cleanall
 
