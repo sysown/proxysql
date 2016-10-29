@@ -1026,7 +1026,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			}
 			char buf[256];
 			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf);
 //					CurrentQuery.end();
 //					mybe->server_myds->free_mysql_real_query();
 //					client_myds->DSS=STATE_SLEEP;
@@ -1131,7 +1131,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					} else {
 						char buf[256];
 						sprintf(buf,"Max connect failure while reaching hostgroup %d", current_hostgroup);
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000",buf);
 					}
 //							CurrentQuery.end();
 //							myds->free_mysql_real_query();
