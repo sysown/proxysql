@@ -3,11 +3,9 @@
 PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
 MYCFLAGS=-O0
-MYCMAKE=-DCMAKE_BUILD_TYPE=Debug
 MYJEOPT=--enable-xmalloc --enable-munmap --enable-fill --enable-debug
 else
 MYCFLAGS=-O2
-MYCMAKE=-DCMAKE_BUILD_TYPE=Release
 MYJEOPT=--enable-xmalloc --enable-munmap
 endif
 
@@ -37,7 +35,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 #	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.1.0-src.tar.gz
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.3.1-src.tar.gz
-	cd mariadb-client-library/mariadb_client && cmake . ${MYCMAKE}
+	cd mariadb-client-library/mariadb_client && cmake .
 	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/mysql_async.c < ../mysql_async.c.patch
