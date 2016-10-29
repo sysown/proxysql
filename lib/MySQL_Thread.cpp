@@ -338,7 +338,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
-	variables.query_processor_regex=2;
+	variables.query_processor_regex=1;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
