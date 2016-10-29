@@ -130,6 +130,8 @@ class Query_Processor_Output {
 	int retries;
 	int delay;
   char *error_msg;
+	int sticky_conn;
+	int multiplex;
 	int log;
   char *comment; // #643
 	std::string *new_query;
@@ -156,6 +158,8 @@ class Query_Processor_Output {
 		timeout=-1;
 		retries=-1;
 		delay=-1;
+		sticky_conn=-1;
+		multiplex=-1;
 		log=-1;
 		new_query=NULL;
 		error_msg=NULL;
