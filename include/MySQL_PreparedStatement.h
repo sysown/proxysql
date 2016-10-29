@@ -96,6 +96,26 @@ class stmt_execute_metadata_t {
 	}
 };
 
+
+typedef struct _stmt_long_data_t {
+	uint32_t stmt_id;
+	uint16_t param_id;
+	void *data;
+	unsigned long size;
+} stmt_long_data_t;
+
+
+class StmtLongDataHandler {
+	private:
+	PtrArray *long_datas;
+	public:
+	StmtLongDataHandler();
+	~StmtLongDataHandler();
+	unsigned int reset(uint32_t _stmt_id);
+	bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size);
+	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size);
+};
+
 // server side, metadata related to STMT_EXECUTE are stored in MYSQL_STMT itself
 // client side, they are stored in stmt_execute_metadata_t
 // MySQL_STMTs_meta maps stmt_execute_metadata_t with stmt_id

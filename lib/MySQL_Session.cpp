@@ -252,12 +252,14 @@ MySQL_Session::MySQL_Session() {
 	transaction_persistent=false;
 	active_transactions=0;
 	sess_STMTs_meta=new MySQL_STMTs_meta();
+	SLDH=new StmtLongDataHandler();
 }
 
 MySQL_Session::~MySQL_Session() {
 	if (sess_STMTs_meta) {
 		delete sess_STMTs_meta;
 	}
+	delete SLDH;
 	if (client_myds) {
 		if (client_authenticated) {
 			GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
@@ -1024,7 +1026,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			}
 			char buf[256];
 			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf);
 //					CurrentQuery.end();
 //					mybe->server_myds->free_mysql_real_query();
 //					client_myds->DSS=STATE_SLEEP;
@@ -1129,7 +1131,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					} else {
 						char buf[256];
 						sprintf(buf,"Max connect failure while reaching hostgroup %d", current_hostgroup);
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",buf);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000",buf);
 					}
 //							CurrentQuery.end();
 //							myds->free_mysql_real_query();
@@ -1533,8 +1535,11 @@ __get_pkts_from_client:
 							case _MYSQL_COM_CHANGE_USER:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
-							case _MYSQL_COM_STMT_RESET: // FIXME: not really implemented yet
+							case _MYSQL_COM_STMT_RESET:
 								{
+									uint32_t stmt_global_id=0;
+									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+									SLDH->reset(stmt_global_id);
 									l_free(pkt.size,pkt.ptr);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 									unsigned int nTrx=NumActiveTransactions();
@@ -1550,6 +1555,7 @@ __get_pkts_from_client:
 									uint32_t stmt_global_id=0;
 									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 									// FIXME: no input validation
+									SLDH->reset(stmt_global_id);
 									sess_STMTs_meta->erase(stmt_global_id);
 									client_myds->myconn->local_stmts->erase(stmt_global_id);
 								}
@@ -1561,6 +1567,19 @@ __get_pkts_from_client:
 								thread->status_variables.queries++;
 								client_myds->DSS=STATE_SLEEP;
 								status=WAITING_CLIENT_DATA;
+								break;
+							case _MYSQL_COM_STMT_SEND_LONG_DATA:
+								{
+									// FIXME: no input validation
+									uint32_t stmt_global_id=0;
+									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+									uint32_t stmt_param_id=0;
+									memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
+									SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
+								}
+								client_myds->DSS=STATE_SLEEP;
+								status=WAITING_CLIENT_DATA;
+								l_free(pkt.size,pkt.ptr);
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
 								if (admin==true) { // admin module will not support prepared statement!!
@@ -1688,6 +1707,16 @@ __get_pkts_from_client:
 										//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 										stmt_info=NULL;
 										break;
+									}
+									// handle cases in which data was sent via STMT_SEND_LONG_DATA
+									for (uint16_t ii=0; ii<stmt_meta->num_params; ii++) {
+										void *_data=NULL;
+										unsigned long *_l=0;
+										_data=SLDH->get(stmt_global_id,ii,&_l);
+										if (_data) { // data was sent via STMT_SEND_LONG_DATA
+											stmt_meta->binds[ii].length=_l;
+											stmt_meta->binds[ii].buffer=_data;
+										}
 									}
 									if (stmt_meta_found==false) {
 										// previously we didn't find any metadata
@@ -2049,6 +2078,9 @@ handler_again:
 								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 								if (CurrentQuery.stmt_meta)
 									if (CurrentQuery.stmt_meta->pkt) {
+										uint32_t stmt_global_id=0;
+										memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
+										SLDH->reset(stmt_global_id);
 										free(CurrentQuery.stmt_meta->pkt);
 										CurrentQuery.stmt_meta->pkt=NULL;
 									}

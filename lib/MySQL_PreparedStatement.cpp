@@ -394,3 +394,72 @@ MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
 		digest_text=NULL;
 	}
 }
+
+StmtLongDataHandler::StmtLongDataHandler() {
+	long_datas=new PtrArray();
+}
+
+StmtLongDataHandler::~StmtLongDataHandler() {
+	while (long_datas->len) {
+		stmt_long_data_t *sld=(stmt_long_data_t *)long_datas->remove_index_fast(0);
+		free(sld->data);
+		free(sld);
+	}
+	delete long_datas;
+}
+
+bool StmtLongDataHandler::add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size) {
+	stmt_long_data_t *sld=NULL;
+	unsigned int i;
+	for (i=0; i<long_datas->len; i++) {
+		sld=(stmt_long_data_t *)long_datas->index(i);
+		if (sld->stmt_id==_stmt_id && sld->param_id==_param_id) {
+			// we found it!
+			unsigned long _new_size=sld->size + _size;
+			sld->data=realloc(sld->data, _new_size);
+			memcpy((unsigned char *)sld->data+sld->size, _data, _size);
+			sld->size=_new_size;
+			return true;
+		}
+	}
+	// if we reached here, we didn't find it
+	sld=(stmt_long_data_t *)malloc(sizeof(stmt_long_data_t));
+	sld->stmt_id=_stmt_id;
+	sld->param_id=_param_id;
+	sld->size=_size;
+	sld->data=malloc(_size);
+	memcpy(sld->data,_data,_size);
+	long_datas->add(sld);
+	return false; // a new entry was created
+}
+
+unsigned int StmtLongDataHandler::reset(uint32_t _stmt_id) {
+	unsigned int cnt=0;
+	int i;
+	stmt_long_data_t *sld=NULL;
+	for (i=0; i < (int)long_datas->len; i++) { // we treat it as an int, so we can go to -1
+		sld=(stmt_long_data_t *)long_datas->index(i);
+		if (sld->stmt_id==_stmt_id) {
+			sld=(stmt_long_data_t *)long_datas->remove_index_fast(i);
+			free(sld->data);
+			free(sld);
+			i--;
+			cnt++;
+		}
+	}
+	return cnt;
+}
+
+void * StmtLongDataHandler::get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size) {
+	stmt_long_data_t *sld=NULL;
+	unsigned int i;
+	for (i=0; i<long_datas->len; i++) {
+		sld=(stmt_long_data_t *)long_datas->index(i);
+		if (sld->stmt_id==_stmt_id && sld->param_id==_param_id) {
+			// we found it!
+			*_size=&sld->size;
+			return sld->data;
+		}
+	}
+	return NULL;
+}

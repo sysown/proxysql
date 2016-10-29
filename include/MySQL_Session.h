@@ -151,6 +151,7 @@ class MySQL_Session
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, of if proysql is still buffering everything
 
 	MySQL_STMTs_meta *sess_STMTs_meta;
+	StmtLongDataHandler *SLDH;
 
 	MySQL_Session();
 //	MySQL_Session(int);
