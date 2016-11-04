@@ -10,8 +10,6 @@
 
 #define EXPMARIA
 
-#define BUFLEN 256
-
 extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 
 extern MySQL_Authentication *GloMyAuth;
@@ -1778,16 +1776,16 @@ __get_pkts_from_client:
 					default:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
 						{
-							char buf[BUFLEN];
+                                                        char buf[INET6_ADDRSTRLEN];
                                                         switch (client_myds->client_addr->sa_family) {
                                                         case AF_INET: {
                                                                 struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
-                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
                                                                 break;
                                                                 }
                                                         case AF_INET6: {
                                                                 struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
-                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
                                                                 break;
                                                         }
                                                         default:
