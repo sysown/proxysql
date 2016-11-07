@@ -1114,6 +1114,14 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				//wrong_pass=true;
 				if (myds->connect_retries_on_failure >0 ) {
 					myds->connect_retries_on_failure--;
+					int myerr=mysql_errno(myconn->mysql);
+					switch (myerr) {
+						case 1226: // ER_USER_LIMIT_REACHED , User '%s' has exceeded the '%s' resource (current value: %ld)
+							goto __exit_handler_again___status_CONNECTING_SERVER_with_err;
+							break;
+						default:
+							break;
+					}
 					//myds->destroy_MySQL_Connection();
 					if (mirror) {
 						PROXY_TRACE();
@@ -1121,6 +1129,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->destroy_MySQL_Connection_From_Pool(false);
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				} else {
+__exit_handler_again___status_CONNECTING_SERVER_with_err:
 					int myerr=mysql_errno(myconn->mysql);
 					if (myerr) {
 						char sqlstate[10];
