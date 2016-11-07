@@ -10,7 +10,6 @@ MySQL_Session *sess_stopat;
 
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
-#define BUFLEN 256
 
 extern Query_Processor *GloQPro;
 extern MySQL_Authentication *GloMyAuth;
@@ -2886,9 +2885,13 @@ void MySQL_Thread::unregister_session_connection_handler(int idx, bool _new) {
 
 void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n) {
 	int c;
-	struct sockaddr *addr=(struct sockaddr *)malloc(sizeof(struct sockaddr));
-	socklen_t addrlen=sizeof(struct sockaddr);
-	memset(addr, 0, sizeof(struct sockaddr));
+	union {
+        	struct sockaddr_in in;
+                struct sockaddr_in6 in6;
+        } custom_sockaddr;
+	struct sockaddr *addr=(struct sockaddr *)malloc(sizeof(custom_sockaddr));
+	socklen_t addrlen=sizeof(custom_sockaddr);
+	memset(addr, 0, sizeof(custom_sockaddr));
 	if (GloMTH->num_threads > 1) {
 		// there are more than 1 thread . We pause for a little bit to avoid all connections to be handled by the same thread
 #ifdef SO_REUSEPORT
@@ -2916,18 +2919,18 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
                 switch (sess->client_myds->client_addr->sa_family) {
                         case AF_INET: {
                                 struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
-                                char buf[BUFLEN];
-                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, BUFLEN);
-                                sess->client_myds->addr.addr = strdup(buf);
-                                sess->client_myds->addr.port = htons(ipv4->sin_port);
+                                char buf[INET_ADDRSTRLEN];
+	                        inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+		                sess->client_myds->addr.addr = strdup(buf);
+			        sess->client_myds->addr.port = htons(ipv4->sin_port);
                                 break;
                                 }
                         case AF_INET6: {
                                 struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
-                                char buf[BUFLEN];
-                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, BUFLEN);
-                                sess->client_myds->addr.addr = strdup(buf);
-                                sess->client_myds->addr.port = htons(ipv6->sin6_port);
+                                char buf[INET6_ADDRSTRLEN];
+	                        inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+		                sess->client_myds->addr.addr = strdup(buf);
+			        sess->client_myds->addr.port = htons(ipv6->sin6_port);
                                 break;
                         }
                         default:
@@ -3261,7 +3264,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
                                         switch (sess->client_myds->client_addr->sa_family) {
                                         case AF_INET: {
                                                 struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
-                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
                                                 pta[4] = strdup(buf);
                                                 sprintf(port, "%d", ntohs(ipv4->sin_port));
                                                 pta[5] = strdup(port);
@@ -3269,7 +3272,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
                                                 }
                                         case AF_INET6: {
                                                 struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
-                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                                inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
                                                 pta[4] = strdup(buf);
                                                 sprintf(port, "%d", ntohs(ipv6->sin6_port));
                                                 pta[5] = strdup(port);
@@ -3296,7 +3299,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
                                         switch (addr.sa_family) { 
                                                 case AF_INET: {
                                                         struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
-                                                        inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                                        inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
                                                         pta[7] = strdup(buf);
                                                         sprintf(port, "%d", ntohs(ipv4->sin_port));
                                                         pta[8] = strdup(port);
@@ -3304,7 +3307,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
                                                         }
                                                 case AF_INET6: {
                                                         struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
-                                                        inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                                        inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
                                                         pta[7] = strdup(buf);
                                                         sprintf(port, "%d", ntohs(ipv6->sin6_port));
                                                         pta[8] = strdup(port);

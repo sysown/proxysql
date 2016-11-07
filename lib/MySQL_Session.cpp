@@ -10,8 +10,6 @@
 
 #define EXPMARIA
 
-#define BUFLEN 256
-
 extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 
 extern MySQL_Authentication *GloMyAuth;
@@ -1116,6 +1114,14 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				//wrong_pass=true;
 				if (myds->connect_retries_on_failure >0 ) {
 					myds->connect_retries_on_failure--;
+					int myerr=mysql_errno(myconn->mysql);
+					switch (myerr) {
+						case 1226: // ER_USER_LIMIT_REACHED , User '%s' has exceeded the '%s' resource (current value: %ld)
+							goto __exit_handler_again___status_CONNECTING_SERVER_with_err;
+							break;
+						default:
+							break;
+					}
 					//myds->destroy_MySQL_Connection();
 					if (mirror) {
 						PROXY_TRACE();
@@ -1123,6 +1129,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->destroy_MySQL_Connection_From_Pool(false);
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				} else {
+__exit_handler_again___status_CONNECTING_SERVER_with_err:
 					int myerr=mysql_errno(myconn->mysql);
 					if (myerr) {
 						char sqlstate[10];
@@ -1778,16 +1785,16 @@ __get_pkts_from_client:
 					default:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
 						{
-							char buf[BUFLEN];
+                                                        char buf[INET6_ADDRSTRLEN];
                                                         switch (client_myds->client_addr->sa_family) {
                                                         case AF_INET: {
                                                                 struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
-                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, BUFLEN);
+                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
                                                                 break;
                                                                 }
                                                         case AF_INET6: {
                                                                 struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
-                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, BUFLEN);
+                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
                                                                 break;
                                                         }
                                                         default:
