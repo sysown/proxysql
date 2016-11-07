@@ -1377,7 +1377,9 @@ void MySQL_Connection::async_free_result() {
 		query.stmt_result=NULL;
 	}
 	if (query.stmt) {
-		mysql_stmt_free_result(query.stmt);
+		if (query.stmt->mysql) {
+			mysql_stmt_free_result(query.stmt);
+		}
 	}
 	if (mysql_result) {
 		mysql_free_result(mysql_result);
