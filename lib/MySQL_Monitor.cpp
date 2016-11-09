@@ -278,14 +278,14 @@ void * monitor_ping_pthread(void *arg) {
 
 void * monitor_read_only_pthread(void *arg) {
 	bool cache=false;
-//	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 	GloMyMon->monitor_read_only();
 	return NULL;
 }
 
 void * monitor_replication_lag_pthread(void *arg) {
 	bool cache=false;
-//	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 	GloMyMon->monitor_replication_lag();
 	return NULL;
 }
