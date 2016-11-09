@@ -1106,6 +1106,8 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
 		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		||
+		(parent->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
 	) {
 		return -1;
 	}
