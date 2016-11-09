@@ -262,6 +262,42 @@ MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 	}
 }
 
+void * monitor_connect_pthread(void *arg) {
+#ifndef NOJEM
+	bool cache=false;
+	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
+	GloMyMon->monitor_connect();
+	return NULL;
+}
+
+void * monitor_ping_pthread(void *arg) {
+#ifndef NOJEM
+	bool cache=false;
+	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
+	GloMyMon->monitor_ping();
+	return NULL;
+}
+
+void * monitor_read_only_pthread(void *arg) {
+#ifndef NOJEM
+	bool cache=false;
+	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
+	GloMyMon->monitor_read_only();
+	return NULL;
+}
+
+void * monitor_replication_lag_pthread(void *arg) {
+#ifndef NOJEM
+	bool cache=false;
+	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
+	GloMyMon->monitor_replication_lag();
+	return NULL;
+}
+
 MySQL_Monitor::MySQL_Monitor() {
 
 	GloMyMon = this;
@@ -1448,12 +1484,19 @@ __monitor_run:
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, 0);
-		threads[i]->start();
+		threads[i]->start(64,false);
 	}
-	std::thread * monitor_connect_thread = new std::thread(&MySQL_Monitor::monitor_connect,this);
-	std::thread * monitor_ping_thread = new std::thread(&MySQL_Monitor::monitor_ping,this);
-	std::thread * monitor_read_only_thread = new std::thread(&MySQL_Monitor::monitor_read_only,this);
-	std::thread * monitor_replication_lag_thread = new std::thread(&MySQL_Monitor::monitor_replication_lag,this);
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize (&attr, 64*1024);
+	pthread_t monitor_connect_thread;
+	pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL);
+	pthread_t monitor_ping_thread;
+	pthread_create(&monitor_ping_thread, &attr, &monitor_ping_pthread,NULL);
+	pthread_t monitor_read_only_thread;
+	pthread_create(&monitor_read_only_thread, &attr, &monitor_read_only_pthread,NULL);
+	pthread_t monitor_replication_lag_thread;
+	pthread_create(&monitor_replication_lag_thread, &attr, &monitor_replication_lag_pthread,NULL);
 	while (shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
 		if (GloMTH) {
@@ -1476,7 +1519,7 @@ __monitor_run:
 			ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
 			for (int i=0; i<qsize; i++) {
 				threads_aux[i] = new ConsumerThread(queue, 245);
-				threads_aux[i]->start();
+				threads_aux[i]->start(64,false);
 			}
 			for (int i=0; i<qsize; i++) {
 				threads_aux[i]->join();
@@ -1492,10 +1535,10 @@ __monitor_run:
 		threads[i]->join();
 	}
 	free(threads);
-	monitor_connect_thread->join();
-	monitor_ping_thread->join();
-	monitor_read_only_thread->join();
-	monitor_replication_lag_thread->join();
+	pthread_join(monitor_connect_thread,NULL);
+	pthread_join(monitor_ping_thread,NULL);
+	pthread_join(monitor_read_only_thread,NULL);
+	pthread_join(monitor_replication_lag_thread,NULL);
 	while (shutdown==false) {
 		unsigned int glover;
 		if (GloMTH) {

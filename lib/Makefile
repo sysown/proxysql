@@ -41,7 +41,13 @@ ODIR= obj
 
 #CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
 #CPPFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
-MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\"
+NOJEMALLOC := $(shell echo $(NOJEMALLOC))
+ifeq ($(NOJEMALLOC),1)
+NOJEM=-DNOJEM
+else
+NOJEM=
+endif
+MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
 MYCPPFLAGS=-std=c++11 $(MYCFLAGS)
 
 default: libproxysql.a
