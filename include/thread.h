@@ -24,6 +24,7 @@
 #define __thread_h__
 
 #include <pthread.h>
+#include "jemalloc.h"
 
 class Thread
 {
@@ -31,7 +32,7 @@ class Thread
     Thread();
     virtual ~Thread();
 
-    int start();
+    int start(bool jemalloc_tcache=true);
     int join();
     int detach();
     pthread_t self();
