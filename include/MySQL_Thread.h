@@ -280,6 +280,9 @@ class MySQL_Threads_Handler
 	size_t stacksize;
 	pthread_attr_t attr;
 	rwlock_t rwlock;
+	PtrArray *bind_fds;
+	MySQL_Listeners_Manager *MLM;
+	public:
 	struct {
 		int monitor_history;
 		int monitor_connect_interval;
@@ -356,9 +359,6 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
 	} variables;
-	PtrArray *bind_fds;
-	MySQL_Listeners_Manager *MLM;
-	public:
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 	proxysql_mysql_thread_t *mysql_threads_idles;
