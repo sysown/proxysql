@@ -66,6 +66,9 @@ architecture.txt
 
 ### DEPS
 
+deps/pcre/pcre-8.39/
+deps/sqlite3/sqlite-amalgamation-3150000/
+
 #jemalloc source
 deps/jemalloc/jemalloc-3.6.0/
 deps/jemalloc/jemalloc-4.1.0/
