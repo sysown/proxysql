@@ -978,7 +978,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit) {
+	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < 100) {
 		// overall, the backend seems healthy and so it is the connection. Try to reset it
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 		to_del=false;
