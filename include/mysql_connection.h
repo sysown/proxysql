@@ -154,5 +154,6 @@ class MySQL_Connection {
 
 	void set_is_client(); // used for local_stmts
 
+	void reset();
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

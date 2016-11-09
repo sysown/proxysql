@@ -3,6 +3,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include <thread>
+
+#include "thread.h"
+#include "wqueue.h"
 
 /*
 	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
@@ -139,6 +143,8 @@ class MySQL_HostGroups_Manager {
 	void generate_mysql_replication_hostgroups_table();
 	SQLite3_result *incoming_replication_hostgroups;
 
+	std::thread *HGCU_thread;
+
 	public:
 	struct {
 		unsigned int servers_table_version;
@@ -160,6 +166,7 @@ class MySQL_HostGroups_Manager {
 		unsigned long long commit_cnt_filtered;
 		unsigned long long rollback_cnt_filtered;
 	} status;
+	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 //	void rdlock();
