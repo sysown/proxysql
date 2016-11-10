@@ -907,7 +907,6 @@ void * MySQL_Monitor::monitor_connect() {
 	unsigned long long t1;
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
-	unsigned long long start_time;
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		char *error=NULL;
@@ -931,8 +930,6 @@ void * MySQL_Monitor::monitor_connect() {
 			goto __sleep_monitor_connect_loop;
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_connect_interval;
-
-		start_time=monotonic_time();
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1018,7 +1015,6 @@ void * MySQL_Monitor::monitor_ping() {
 
 	unsigned long long t1;
 	unsigned long long t2;
-	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
@@ -1043,8 +1039,6 @@ void * MySQL_Monitor::monitor_ping() {
 			goto __sleep_monitor_ping_loop;
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_ping_interval;
-
-		start_time=monotonic_time();
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1241,7 +1235,6 @@ void * MySQL_Monitor::monitor_read_only() {
 
 	unsigned long long t1;
 	unsigned long long t2;
-	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
@@ -1265,7 +1258,6 @@ void * MySQL_Monitor::monitor_read_only() {
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_read_only;
 		}
-		start_time=monotonic_time();
 		next_loop_at=t1+1000*mysql_thread___monitor_read_only_interval;
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 //		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -1359,7 +1351,6 @@ void * MySQL_Monitor::monitor_replication_lag() {
 
 	unsigned long long t1;
 	unsigned long long t2;
-	unsigned long long start_time;
 	unsigned long long next_loop_at=0;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
@@ -1384,7 +1375,6 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			goto __sleep_monitor_replication_lag;
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_replication_lag_interval;
-		start_time=t1;
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 //		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
