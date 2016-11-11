@@ -117,6 +117,7 @@ class ProxySQL_Admin {
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
+	void disk_upgrade_mysql_users();
 	void disk_upgrade_scheduler();
 
 #ifdef DEBUG
