@@ -4,7 +4,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#define RESULTSET_BUFLEN 16300
+#define RESULTSET_BUFLEN 1000
 
 class MySQL_ResultSet {
 	private:
