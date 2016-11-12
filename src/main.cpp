@@ -242,6 +242,7 @@ void ProxySQL_Main_init_main_modules() {
 	MyHGM=new MySQL_HostGroups_Manager();
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
+	GloNetBuffs=new NetBuffers();
 }
 
 
@@ -389,6 +390,10 @@ void ProxySQL_Main_shutdown_all_modules() {
 #ifdef DEBUG
 		std::cerr << "GloHGM shutdown in ";
 #endif
+	}
+	if (GloNetBuffs) {
+		delete GloNetBuffs;
+		GloNetBuffs=NULL;
 	}
 }
 

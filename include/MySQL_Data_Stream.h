@@ -63,6 +63,7 @@ class MySQL_Data_Stream
 	int array2buffer();
 	int buffer2array();
 	void generate_compressed_packet();
+	void *netbuff;
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
