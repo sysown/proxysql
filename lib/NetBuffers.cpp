@@ -50,3 +50,11 @@ void NetBuffers::put(void *b) {
 	buffers->add(b);
 	spin_wrunlock(&rwlock);
 }
+
+unsigned long long NetBuffers::total_mem() {
+	unsigned long long t=0;
+	spin_wrlock(&rwlock);
+	t=QUEUE_T_DEFAULT_SIZE*2*NBUF_PER_BLOCK*blocks->len;
+	spin_wrunlock(&rwlock);
+	return t;
+}
