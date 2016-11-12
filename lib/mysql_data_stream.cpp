@@ -39,10 +39,8 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 
 
 
-
 #define queue_init(_q,_s) { \
     _q.size=_s; \
-    _q.buffer=malloc(_q.size); \
     _q.head=0; \
     _q.tail=0; \
 	_q.partial=0; \
@@ -50,10 +48,14 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 	_q.pkt.size=0; \
 }
 
+/*
+    _q.buffer=malloc(_q.size); \
+
 #define queue_destroy(_q) { \
 	if (_q.buffer) free(_q.buffer); \
 	_q.buffer=NULL; \
 }
+*/
 
 #define queue_zero(_q) { \
   memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
@@ -97,6 +99,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	pkts_sent=0;
 	client_addr=NULL;
 
+	netbuff=NULL;
 	addr.addr=NULL;
 	addr.port=0;
 	proxy_addr.addr=NULL;
@@ -120,8 +123,11 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	PSarrayOUT=NULL;
 	//PSarrayOUTpending=NULL;
 	resultset=NULL;
+	netbuff=GloNetBuffs->get();
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
+	queueIN.buffer=netbuff;
+	queueOUT.buffer=(char *)netbuff+QUEUE_T_DEFAULT_SIZE;
 	//listener=0;
 	mybe=NULL;
 	active=TRUE;
@@ -148,8 +154,12 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 // Destructor
 MySQL_Data_Stream::~MySQL_Data_Stream() {
 
-	queue_destroy(queueIN);
-	queue_destroy(queueOUT);
+	if (netbuff) {
+		GloNetBuffs->put(netbuff);
+		netbuff=NULL;
+	}
+	//queue_destroy(queueIN);
+	//queue_destroy(queueOUT);
 	if (client_addr) {
 		free(client_addr);
 		client_addr=NULL;
@@ -246,8 +256,12 @@ void MySQL_Data_Stream::init() {
 		if (resultset==NULL) resultset = new PtrSizeArray();
 	}
 	if (myds_type!=MYDS_FRONTEND) {
-		queue_destroy(queueIN);
-		queue_destroy(queueOUT);
+		if (netbuff) {
+			GloNetBuffs->put(netbuff);
+			netbuff=NULL;
+		}
+		//queue_destroy(queueIN);
+		//queue_destroy(queueOUT);
 	}
 }
 

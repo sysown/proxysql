@@ -356,6 +356,7 @@ class MySQL_STMTs_meta;
 //class MySQL_Hostgroup;
 //class MySQL_HostGroups_Handler;
 class MySQL_HostGroups_Manager;
+class NetBuffers;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
@@ -778,6 +779,7 @@ GOptionEntry cmd_option_entries[] =
 #define GLOBAL_DEFINED_HOSTGROUP
 //MySQL_HostGroups_Handler *MyHGH;
 MySQL_HostGroups_Manager *MyHGM;
+NetBuffers *GloNetBuffs;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___init_connect;
@@ -867,6 +869,7 @@ __thread unsigned int g_seed;
 extern ProxySQL_GlobalVariables GloVars;
 //extern MySQL_HostGroups_Handler *MyHGH;
 extern MySQL_HostGroups_Manager *MyHGM;
+extern NetBuffers *GloNetBuffs;
 //extern GOptionEntry cmd_option_entries[];
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;

@@ -69,7 +69,6 @@ __thread unsigned int __thread_MySQL_Thread_Variables_version;
 
 volatile static unsigned int __global_MySQL_Thread_Variables_version;
 
-
 MySQL_Listeners_Manager::MySQL_Listeners_Manager() {
 	ifaces=new PtrArray();
 }

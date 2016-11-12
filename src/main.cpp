@@ -268,6 +268,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
 	GloMyStmt=new MySQL_STMT_Manager();
+	GloNetBuffs=new NetBuffers();
 }
 
 
@@ -420,6 +421,10 @@ void ProxySQL_Main_shutdown_all_modules() {
 	if (GloMyStmt) {
 		delete GloMyStmt;
 		GloMyStmt=NULL;
+	}
+	if (GloNetBuffs) {
+		delete GloNetBuffs;
+		GloNetBuffs=NULL;
 	}
 }
 

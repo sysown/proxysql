@@ -271,7 +271,17 @@ class MySQL_Listeners_Manager {
 	void del(unsigned int idx);
 };
 
-
+class Buffers_Stack {
+	private:
+	PtrArray *buffers;
+	PtrArray *blocks;
+	rwlock_t rwlock;
+	public:
+	Buffers_Stack();
+	~Buffers_Stack();
+	void * get();
+	void put(void *);
+};
 
 class MySQL_Threads_Handler
 {
