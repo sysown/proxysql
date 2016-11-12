@@ -13,6 +13,7 @@ class NetBuffers {
 	~NetBuffers();
 	void * get();
 	void put(void *);
+	unsigned long long total_mem();
 };
 
 #endif /* CLASS_NET_BUFFERS_H */
