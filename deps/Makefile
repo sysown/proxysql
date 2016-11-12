@@ -38,7 +38,7 @@ mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
 
 
 sqlite3/sqlite3/sqlite3.o:
-	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c
+	cd sqlite3/sqlite3 && ${CC} -O2 -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
