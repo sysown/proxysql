@@ -15,7 +15,7 @@ libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-4.2.1
 	cd jemalloc && tar -jxf jemalloc-4.2.1.tar.bz2
-	cd jemalloc/jemalloc && ./configure --enable-xmalloc --enable-munmap
+	cd jemalloc/jemalloc && ./configure --enable-xmalloc --enable-munmap --enable-prof
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
