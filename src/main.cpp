@@ -128,11 +128,11 @@ using namespace std;
 static volatile int load_;
 
 //__thread l_sfp *__thr_sfp=NULL;
-#ifdef DEBUG
-const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay,junk:true,tcache:false";
-#else
+//#ifdef DEBUG
+//const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay,junk:true,tcache:false";
+//#else
 const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay";
-#endif /* DEBUG */
+//#endif /* DEBUG */
 //const char *malloc_conf = "prof_leak:true,lg_prof_sample:0,prof_final:true,xmalloc:true,lg_tcache_max:16";
 
 int listen_fd;

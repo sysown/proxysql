@@ -2423,7 +2423,10 @@ __end_while_pool:
 		char *add=NULL; char *port=NULL;
 		close(fds[i].fd);
 		c_split_2(socket_names[i], ":" , &add, &port);
-		if (atoi(port)==0) { unlink(socket_names[i]); }
+		if (atoi(port)==0) {
+			if (socket_names[i])
+				unlink(socket_names[i]);
+		}
 	}
 	free(arg);
 	return NULL;
