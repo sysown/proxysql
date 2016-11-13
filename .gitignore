@@ -70,6 +70,7 @@ architecture.txt
 deps/jemalloc/jemalloc-3.6.0/
 deps/jemalloc/jemalloc-4.1.0/
 deps/jemalloc/jemalloc-4.2.1/
+deps/jemalloc/jemalloc-4.3.1/
 
 #libdaemon
 deps/libdaemon/libdaemon-0.14/
