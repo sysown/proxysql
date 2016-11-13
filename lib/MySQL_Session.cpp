@@ -2508,8 +2508,35 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 		*wrong_pass=true;
 		// FIXME: this should become close connection
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
-		sprintf(_s,"ProxySQL Error: Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+		char *client_addr=NULL;
+		if (client_myds->client_addr) {
+			char buf[512];
+			switch (client_myds->client_addr->sa_family) {
+				case AF_INET: {
+					struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
+					if (ipv4->sin_port) {
+						inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+						client_addr = strdup(buf);
+					} else {
+						client_addr = strdup((char *)"localhost");
+					}
+					break;
+				}
+				case AF_INET6: {
+					struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
+					inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+					client_addr = strdup(buf);
+					break;
+				}
+				default:
+					client_addr = strdup((char *)"localhost");
+					break;
+			}
+		} else {
+			client_addr = strdup((char *)"");
+		}
+		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
+		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
 		free(_s);
 	}
@@ -2582,8 +2609,35 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		*wrong_pass=true;
 		// FIXME: this should become close connection
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
-		sprintf(_s,"ProxySQL Error: Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+		char *client_addr=NULL;
+		if (client_myds->client_addr) {
+			char buf[512];
+			switch (client_myds->client_addr->sa_family) {
+				case AF_INET: {
+					struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
+					if (ipv4->sin_port) {
+						inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+						client_addr = strdup(buf);
+					} else {
+						client_addr = strdup((char *)"localhost");
+					}
+					break;
+				}
+				case AF_INET6: {
+					struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
+					inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+					client_addr = strdup(buf);
+					break;
+				}
+				default:
+					client_addr = strdup((char *)"localhost");
+					break;
+			}
+		} else {
+			client_addr = strdup((char *)"");
+		}
+		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
+		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 		free(_s);
@@ -2846,8 +2900,31 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			*wrong_pass=true;
 		// FIXME: this should become close connection
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
-			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100);
-			sprintf(_s,"ProxySQL Error: Access denied for user '%s' (using password: %s)", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			char *client_addr=NULL;
+			if (client_myds->client_addr) {
+				char buf[512];
+				switch (client_myds->client_addr->sa_family) {
+					case AF_INET: {
+						struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
+						inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+						client_addr = strdup(buf);
+						break;
+					}
+					case AF_INET6: {
+						struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
+						inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+						client_addr = strdup(buf);
+						break;
+					}
+					default:
+						client_addr = strdup((char *)"localhost");
+						break;
+				}
+			} else {
+				client_addr = strdup((char *)"");
+			}
+			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
+			sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
 			free(_s);
 		}
