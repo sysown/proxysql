@@ -13,8 +13,8 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
 jemalloc/jemalloc/lib/libjemalloc.a:
-	cd jemalloc && rm -rf jemalloc-4.2.1
-	cd jemalloc && tar -jxf jemalloc-4.2.1.tar.bz2
+	cd jemalloc && rm -rf jemalloc-4.3.1
+	cd jemalloc && tar -jxf jemalloc-4.3.1.tar.bz2
 	cd jemalloc/jemalloc && ./configure --enable-xmalloc --enable-munmap --enable-prof
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -64,7 +64,7 @@ re2: re2/re2/obj/libre2.a
 
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
-	cd jemalloc && rm -rf jemalloc-3.6.0
+	cd jemalloc && rm -rf jemalloc-4.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
