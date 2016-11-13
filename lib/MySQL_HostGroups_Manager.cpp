@@ -542,8 +542,8 @@ bool MySQL_HostGroups_Manager::commit() {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_latency_ms for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[9] , mysrvc->max_latency_us , atoi(r->fields[18]));
 					mysrvc->max_latency_us=1000*atoi(r->fields[18]);
 				}
-				if (atoi(r->fields[10])!=atoi(r->fields[19])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing comment for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[10] , mysrvc->max_latency_us , atoi(r->fields[19]));
+				if (strcmp(r->fields[10],r->fields[19])) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing comment for server %s:%d (%s:%d) from '%s' to '%s'\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[10], r->fields[19]);
 					free(mysrvc->comment);
 					mysrvc->comment=strdup(r->fields[19]);
 				}
