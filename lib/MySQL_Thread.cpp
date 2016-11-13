@@ -2499,8 +2499,10 @@ __run_skip_2:
 				}
 			} else {
 				//spin_wrlock(&GloMTH->rwlock_resumes);
+				VALGRIND_DISABLE_ERROR_REPORTING;
 				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
-				if (shutdown==0 && thr->shudown==0 && thr->myexchange.resume_mysql_sessions->len) {
+				VALGRIND_ENABLE_ERROR_REPORTING;
+				if (shutdown==0 && thr->shutdown==0 && thr->myexchange.resume_mysql_sessions->len) {
 					//unsigned int w=rand()%(GloMTH->num_threads);
 					//w++;
 					unsigned char c=0;
@@ -2511,7 +2513,9 @@ __run_skip_2:
 					}
 				}
 				//spin_wrunlock(&GloMTH->rwlock_resumes);
+				VALGRIND_DISABLE_ERROR_REPORTING;
 				pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
+				VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else {
 			// iterate through all sessions and process the session logic
