@@ -1172,6 +1172,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 //	}
 
 	delete resultset;
+	resultset=NULL;
 	if (admindb==NULL) { // we initialize admindb only if needed
 		admindb=new SQLite3DB();
 		admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
