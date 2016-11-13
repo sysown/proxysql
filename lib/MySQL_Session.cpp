@@ -2562,15 +2562,25 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_myds->myconn->userinfo->set_schemaname(default_schema,strlen(default_schema));
 			}
 			int free_users=0;
+			int used_users=0;
 			if (admin==false) {
 				client_authenticated=true;
-				free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username);
+				free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 			}
 			if (max_connections_reached==true || free_users<0) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Too many connections\n");
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
-				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"#HY000", (char *)"Too many connections");
+				if (max_connections_reached==true) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Too many connections\n");
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"08004", (char *)"Too many connections");
+				} else { // see issue #794
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", client_myds->myconn->userinfo->username, used_users);
+					char *a=(char *)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
+					char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username)+16);
+					sprintf(b,a,client_myds->myconn->userinfo->username,used_users);
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1226,(char *)"42000", b);
+					free(b);
+				}
 				__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 				client_myds->DSS=STATE_SLEEP;
 			} else {

@@ -84,13 +84,13 @@ pcre: pcre/pcre/.libs/libpcre.a
 
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
-	cd jemalloc && rm -rf jemalloc-4.1.0
+	cd jemalloc && rm -rf jemalloc-4.2.1
 	cd sqlite3/sqlite3 && rm -rf *
 .PHONY: cleanpart
 
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
-	cd jemalloc && rm -rf jemalloc-4.1.0
+	cd jemalloc && rm -rf jemalloc-4.2.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
