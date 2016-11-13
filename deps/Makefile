@@ -3,10 +3,10 @@
 PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
 MYCFLAGS=-O0
-MYJEOPT=--enable-xmalloc --enable-munmap --enable-fill --enable-debug
+MYJEOPT=--enable-xmalloc --enable-munmap --enable-prof --enable-fill --enable-debug
 else
 MYCFLAGS=-O2
-MYJEOPT=--enable-xmalloc --enable-munmap
+MYJEOPT=--enable-xmalloc --enable-munmap --enable-prof
 endif
 
 default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre
@@ -22,8 +22,8 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
 jemalloc/jemalloc/lib/libjemalloc.a:
-	cd jemalloc && rm -rf jemalloc-4.2.1
-	cd jemalloc && tar -jxf jemalloc-4.2.1.tar.bz2
+	cd jemalloc && rm -rf jemalloc-4.3.1
+	cd jemalloc && tar -jxf jemalloc-4.3.1.tar.bz2
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -91,7 +91,7 @@ cleanpart:
 
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
-	cd jemalloc && rm -rf jemalloc-4.2.1
+	cd jemalloc && rm -rf jemalloc-4.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2

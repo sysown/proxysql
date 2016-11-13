@@ -1200,6 +1200,13 @@ __end_monitor_ping_loop:
 				}
 				free(buff);
 			}
+			while (i) { // now free all the addresses/ports
+				i--;
+				free(addresses[i]);
+				free(ports[i]);
+			}
+			free(addresses);
+			free(ports);
 		}
 
 __sleep_monitor_ping_loop:
