@@ -787,19 +787,21 @@ __internal_loop:
 			}
 		}
 
-		// match on proxy_addr & proxy_port
+		// match on proxy_addr
 		if (qr->proxy_addr && strlen(qr->proxy_addr)) {
 			if (sess->client_myds->proxy_addr.addr) {
 				if (strcmp(qr->proxy_addr,sess->client_myds->proxy_addr.addr)!=0) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_addr\n", qr->rule_id);
 					continue;
 				}
-				if (qr->proxy_port>=0) {
-					if (qr->proxy_port!=sess->client_myds->proxy_addr.port) {
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_port\n", qr->rule_id);
-						continue;
-					}
-				}
+			}
+		}
+
+		// match on proxy_port
+		if (qr->proxy_port>=0) {
+			if (qr->proxy_port!=sess->client_myds->proxy_addr.port) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_port\n", qr->rule_id);
+				continue;
 			}
 		}
 
@@ -904,6 +906,16 @@ __internal_loop:
 			// Note: negative TTL means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
       ret->cache_ttl=qr->cache_ttl;
+    }
+    if (qr->sticky_conn >= 0) {
+			// Note: negative sticky_conn means this rule doesn't change
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set sticky_conn: %d. Connection will%s stick\n", qr->rule_id, qr->sticky_conn, (qr->sticky_conn == 0 ? " NOT" : "" ));
+      ret->sticky_conn=qr->sticky_conn;
+    }
+    if (qr->multiplex >= 0) {
+			// Note: negative multiplex means this rule doesn't change
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set multiplex: %d. Connection will%s multiplex\n", qr->rule_id, qr->multiplex, (qr->multiplex == 0 ? " NOT" : "" ));
+      ret->multiplex=qr->multiplex;
     }
     if (qr->log >= 0) {
 			// Note: negative log means this rule doesn't change

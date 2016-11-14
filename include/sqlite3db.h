@@ -74,7 +74,11 @@ class SQLite3_column {
 	char *name;
 	SQLite3_column(int a, const char *b) {
 		datatype=a;
-		name=strdup(b);
+		if (b) {
+			name=strdup(b);
+		} else {
+			name=strdup((char *)"");
+		}
 	};
 	~SQLite3_column() {
 		free(name);

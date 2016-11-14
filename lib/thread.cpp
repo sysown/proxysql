@@ -39,12 +39,21 @@ Thread::~Thread()
     }
 }
 
-int Thread::start()
+int Thread::start(unsigned int ss, bool jemalloc_tcache)
 {
-    int result = pthread_create(&m_tid, NULL, runThread, this);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize (&attr, ss*1024);
+    int result = pthread_create(&m_tid, &attr, runThread, this);
     if (result == 0) {
         m_running = 1;
     }
+		if (jemalloc_tcache==false) {
+#ifndef NOJEM
+			bool cache=false;
+			mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif /* NOJEM */
+		}
     return result;
 }
 

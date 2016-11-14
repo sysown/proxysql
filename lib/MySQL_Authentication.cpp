@@ -255,7 +255,7 @@ __exit_dump_all_users:
 }
 
 
-int MySQL_Authentication::increase_frontend_user_connections(char *username) {
+int MySQL_Authentication::increase_frontend_user_connections(char *username, int *mc) {
 	uint64_t hash1, hash2;
 	SpookyHash *myhash=new SpookyHash();
 	myhash->Init(1,2);
@@ -272,6 +272,9 @@ int MySQL_Authentication::increase_frontend_user_connections(char *username) {
 		account_details_t *ad=it->second;
 		ad->num_connections_used++;
 		ret=ad->max_connections-ad->num_connections_used;
+		if (mc) {
+			*mc=ad->max_connections;
+		}
 	}
 	spin_wrunlock(&cg.lock);
 	return ret;

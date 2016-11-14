@@ -294,6 +294,14 @@ void MySQL_Connection::set_status_prepared_statement(bool v) {
 	}
 }
 
+void MySQL_Connection::set_status_no_multiplex(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
+	}
+}
+
 bool MySQL_Connection::get_status_transaction() {
 	return status_flags & STATUS_MYSQL_CONNECTION_TRANSACTION;
 }
@@ -320,6 +328,10 @@ bool MySQL_Connection::get_status_temporary_table() {
 
 bool MySQL_Connection::get_status_prepared_statement() {
 	return status_flags & STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
+}
+
+bool MySQL_Connection::get_status_no_multiplex() {
+	return status_flags & STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
 }
 
 // non blocking API
@@ -1106,6 +1118,8 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
 		(parent->status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		||
+		(parent->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
 	) {
 		return -1;
 	}
@@ -1413,7 +1427,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX) ) {
 		ret=true;
 	}
 	return ret;
@@ -1465,6 +1479,20 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (get_status_get_lock()==false) { // we search for get_lock if not already set
 		if (strcasestr(query_digest_text,"GET_LOCK(")) {
 			set_status_get_lock(true);
+		}
+	}
+	if (myds) {
+		if (myds->sess) {
+			if (myds->sess->qpo) {
+				int mul=myds->sess->qpo->multiplex;
+				if (mul==0) {
+					set_status_no_multiplex(true);
+				} else {
+					if (mul==1) {
+						set_status_no_multiplex(false);
+					}
+				}
+			}
 		}
 	}
 }
@@ -1560,4 +1588,11 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 		return 3;
 	}
 	return 1;
+}
+
+void MySQL_Connection::reset() {
+	status_flags=0;
+	reusable=true;
+	delete local_stmts;
+	local_stmts=new MySQL_STMTs_local(false);
 }

@@ -337,7 +337,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
-	variables.query_processor_regex=2;
+	variables.query_processor_regex=1;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
@@ -2108,7 +2108,7 @@ __run_skip_1:
 		if (idle_maintenance_thread==false) {
 			int r=rand()%(GloMTH->num_threads);
 			MySQL_Thread *thr=GloMTH->mysql_threads_idles[r].worker;
-			if (idle_mysql_sessions->len) {
+			if (shutdown==0 && thr->shutdown==0 && idle_mysql_sessions->len) {
 				unsigned int ims=0;
 				//spin_wrlock(&GloMTH->rwlock_idles);
 				pthread_mutex_lock(&thr->myexchange.mutex_idles);
@@ -2496,6 +2496,7 @@ __run_skip_2:
 				//spin_wrlock(&GloMTH->rwlock_resumes);
 				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 				unsigned int ims;
+				if (shutdown==0 && thr->shutdown==0)
 				for (ims=0; ims<resume_mysql_sessions->len; ims++) {
 					MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
 					thr->myexchange.resume_mysql_sessions->add(mysess);
@@ -2514,8 +2515,10 @@ __run_skip_2:
 				}
 			} else {
 				//spin_wrlock(&GloMTH->rwlock_resumes);
+				VALGRIND_DISABLE_ERROR_REPORTING;
 				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
-				if (thr->myexchange.resume_mysql_sessions->len) {
+				VALGRIND_ENABLE_ERROR_REPORTING;
+				if (shutdown==0 && thr->shutdown==0 && thr->myexchange.resume_mysql_sessions->len) {
 					//unsigned int w=rand()%(GloMTH->num_threads);
 					//w++;
 					unsigned char c=0;
@@ -2526,7 +2529,9 @@ __run_skip_2:
 					}
 				}
 				//spin_wrunlock(&GloMTH->rwlock_resumes);
+				VALGRIND_DISABLE_ERROR_REPORTING;
 				pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
+				VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else {
 			// iterate through all sessions and process the session logic

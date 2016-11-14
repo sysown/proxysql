@@ -161,62 +161,7 @@ The field `comment` can be used to store any arbitrary data.
 
 ## mysql_query_rules
 
-Here is the statement used to create the `mysql_query_rules` table:
-
-```sql
-CREATE TABLE mysql_query_rules (
-    rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-    active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0,
-    username VARCHAR,
-    schemaname VARCHAR,
-    flagIN INT NOT NULL DEFAULT 0,
-    client_addr VARCHAR,
-    proxy_addr VARCHAR,
-    proxy_port INT,
-    digest VARCHAR,
-    match_digest VARCHAR,
-    match_pattern VARCHAR,
-    negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0,
-    flagOUT INT,
-    replace_pattern VARCHAR,
-    destination_hostgroup INT DEFAULT NULL,
-    cache_ttl INT CHECK(cache_ttl > 0),
-    reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL,
-    timeout INT UNSIGNED,
-    retries INT CHECK (retries>=0 AND retries <=1000),
-    delay INT UNSIGNED,
-    mirror_flagOUT INT UNSIGNED,
-    mirror_hostgroup INT UNSIGNED,
-    error_msg VARCHAR,
-    log INT CHECK (log IN (0,1)),
-    apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0,
-    comment VARCHAR)
-```
-
-The fields have the following semantics:
-* `rule_id` - the unique id of the rule. Rules are processed in rule_id order
-* `active` - only rules with active=1 will be considered by the query processing module
-* `username` - filtering criteria matching username. If is non-NULL, a query will match only if the connection is made with the correct username
-* `schemaname` - filtering criteria matching schemaname. If is non-NULL, a query will match only if the connection uses `schemaname` as default schema
-* `flagIN`, `flagOUT`, `apply` - these allow us to create "chains of rules" that get applied one after the other. An input flag value is set to 0, and only rules with flagIN=0 are considered at the beginning. When a matching rule is found for a specific query, flagOUT is evaluated and if NOT NULL the query will be flagged with the specified flag in flagOUT. If flagOUT differs from flagIN , the query will exit the current chain and enters a new chain of rules having flagIN as the new input flag. If flagOUT matches flagIN, the query will be re-evaluate again against the first rule with said flagIN. This happens until there are no more matching rules, or apply is set to 1 (which means this is the last rule to be applied)
-* `client_addr` - match traffic from a specific source
-* `proxy_addr` - match incoming traffic on a specific local IP
-* `proxy_port` - match incoming traffic on a specific local port
-* `digest` - match queries with a specific digest, as returned by `stats_mysql_query_digest`.`digest`
-* `match_digest` - regular expression that matches the query digest. The dialect of regular expressions used is that of re2 - https://github.com/google/re2
-* `match_pattern` - regular expression that matches the query text. The dialect of regular expressions used is that of re2 - https://github.com/google/re2
-* `negate_match_pattern` - if this is set to 1, only queries not matching the query text will be considered as a match. This acts as a NOT operator in front of the regular expression matching against match_pattern.
-* `replace_pattern` - this is the pattern with which to replace the matched pattern. It's done using RE2::Replace, so it's worth taking a look at the online documentation for that: https://github.com/google/re2/blob/master/re2/re2.h#L378. Note that this is optional, and when this is missing, the query processor will only cache, route, or set other parameters without rewriting.
-* `destination_hostgroup` - route matched queries to this hostgroup. This happens unless there is a started transaction and the logged in user has the transaction_persistent flag set to 1 (see `mysql_users` table).
-* `cache_ttl` - the number of milliseconds for which to cache the result of the query. Note: in ProxySQL 1.1 cache_ttl was in seconds
-* `reconnect` - feature not used
-* `timeout` - the maximum timeout in milliseconds with which the matched or rewritten query should be executed. If a query run for longer than the specific threshold, the query is automatically killed. If timeout is not specified, global variable `mysql-default_query_timeout` applies
-* `retries` - the maximum number of times a query needs to be re-executed in case of detected failure during the execution of the query. If retries is not specified, global variable `mysql-query_retries_on_failure` applies 
-* `delay` - number of milliseconds to delay the execution of the query. This is essentially a throttling mechanism and QoS, allowing to give priority to some queries instead of others. This value is added to the `mysql-default_query_delay` global variable that applies to all queries. Future version of ProxySQL will provide a more advanced throttling mechanism.
-* `mirror_flagOUT` and `mirror_hostgroup` - setting related to [mirroring](./mirroring.md) .
-* `error_msg` - query will be blocked, and the specified `error_msg` will be returned to the client.
-* `log` - query will be logged
-* `comment` - free form text field, usable for a descriptive comment of the query rule
+Documentation moved to the [wiki](../../../wiki/MySQL-Query-Rules)
 
 ## global_variables
 
