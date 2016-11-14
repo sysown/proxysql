@@ -88,8 +88,8 @@ fi
 if [ $NUMBER_WRITERS -gt 0 ]
 then
   CONT=0
-  # Only check online servers
-  $PROXYSQL_CMDLINE "SELECT hostname, port FROM mysql_servers WHERE hostgroup_id = $HOSTGROUP_WRITER_ID AND status = 'ONLINE' order by hostname, port" | while read server port
+  # Only check online servers, choosing the ones with highest weight first
+  $PROXYSQL_CMDLINE "SELECT hostname, port FROM mysql_servers WHERE hostgroup_id = $HOSTGROUP_WRITER_ID AND status = 'ONLINE' ORDER BY weight DESC, hostname, port" | while read server port
   do
     if [ $CONT -ge $NUMBER_WRITERS ]
     then
