@@ -2092,7 +2092,7 @@ __run_skip_1:
 		if (idle_maintenance_thread==false) {
 			int r=rand()%(GloMTH->num_threads);
 			MySQL_Thread *thr=GloMTH->mysql_threads_idles[r].worker;
-			if (shutdown==0 && thr->shudown==0 idle_mysql_sessions->len) {
+			if (shutdown==0 && thr->shutdown==0 && idle_mysql_sessions->len) {
 				unsigned int ims=0;
 				//spin_wrlock(&GloMTH->rwlock_idles);
 				pthread_mutex_lock(&thr->myexchange.mutex_idles);
@@ -2480,7 +2480,7 @@ __run_skip_2:
 				//spin_wrlock(&GloMTH->rwlock_resumes);
 				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 				unsigned int ims;
-				if (shutdown==0 && thr->shudown==0)
+				if (shutdown==0 && thr->shutdown==0)
 				for (ims=0; ims<resume_mysql_sessions->len; ims++) {
 					MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
 					thr->myexchange.resume_mysql_sessions->add(mysess);
