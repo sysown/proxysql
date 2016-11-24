@@ -67,6 +67,7 @@ class MySQL_Connection {
 	MySrvC *parent;
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
+	enum MySerStatus server_status; // this to solve a side effect of #774
 	unsigned long largest_query_length;
 	uint32_t status_flags;
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API

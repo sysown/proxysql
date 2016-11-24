@@ -2140,9 +2140,12 @@ handler_again:
 						}
 						*/
 						if (
-							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
+							// due to #774 , we now read myconn->server_status instead of myconn->parent->status
+							(myconn->server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
 							||
-							(myconn->parent->status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+							(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+							||
+							(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
 						) {
 							if (mysql_thread___connect_timeout_server_max) {
 								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
