@@ -592,7 +592,7 @@ handler_again:
 			break;
 		case ASYNC_CONNECT_TIMEOUT:
 			//proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
-			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime, myds->sess->thread->curtime - myds->wait_until);
+			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
 			parent->connect_error(mysql_errno(mysql));
 			break;
 		case ASYNC_CHANGE_USER_START:
