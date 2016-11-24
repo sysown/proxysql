@@ -1656,7 +1656,7 @@ __get_pkts_from_client:
 										mybe->server_myds->wait_until=0;
 										pause_until=0;
 										mybe->server_myds->killed_at=0;
-										//mybe->server_myds->mysql_real_query.init(&pkt);
+										mybe->server_myds->mysql_real_query.init(&pkt); // fix memory leak for PREPARE in prepared statements #796
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 									}
 								}
