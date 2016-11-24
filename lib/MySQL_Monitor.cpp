@@ -971,7 +971,7 @@ __end_monitor_connect_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
@@ -1079,7 +1079,7 @@ __end_monitor_ping_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
@@ -1304,7 +1304,7 @@ __end_monitor_read_only_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
@@ -1418,7 +1418,7 @@ __end_monitor_replication_lag_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
