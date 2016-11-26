@@ -1854,6 +1854,7 @@ bool MySQL_Thread::init() {
 	GloQPro->init_thread();
 	refresh_variables();
 	i=pipe(pipefd);
+	ioctl_FIONBIO(pipefd[1],1);
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
 	assert(i==0);
 	return true;
@@ -2111,7 +2112,7 @@ __run_skip_1:
 					unsigned char c=1;
 					int fd=thr->pipefd[1];
 					if (write(fd,&c,1)==-1) {
-						proxy_error("Error while signaling maintenance thread\n");
+						//proxy_error("Error while signaling maintenance thread\n");
 					}
 				}
 			}
@@ -2494,7 +2495,7 @@ __run_skip_2:
 					//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 					int fd=thr->pipefd[1];
 					if (write(fd,&c,1)==-1) {
-						proxy_error("Error while signaling maintenance thread\n");
+						//proxy_error("Error while signaling maintenance thread\n");
 					}
 				}
 			} else {
@@ -2509,7 +2510,7 @@ __run_skip_2:
 					//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 					int fd=thr->pipefd[1];
 					if (write(fd,&c,1)==-1) {
-						proxy_error("Error while signaling maintenance thread\n");
+						//proxy_error("Error while signaling maintenance thread\n");
 					}
 				}
 				//spin_wrunlock(&GloMTH->rwlock_resumes);
