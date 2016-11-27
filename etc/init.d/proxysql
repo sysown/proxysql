@@ -92,7 +92,6 @@ stop() {
   if [ "X$pid" = "X" ]
 	then
 		echo "ProxySQL was not running."
-		exit 1
 	else
 		# Note: we send a kill to all the processes, not just to the child
 		for i in `pgrep proxysql` ; do
