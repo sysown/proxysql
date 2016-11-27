@@ -2022,9 +2022,10 @@ handler_again:
 						case PROCESSING_STMT_PREPARE:
 							{
 								uint32_t stmid;
+								bool is_new;
 								MySQL_STMT_Global_info *stmt_info=NULL;
 //								if (mysql_thread___stmt_multiplexing) {
-									stmt_info=GloMyStmt->add_prepared_statement(current_hostgroup,
+									stmt_info=GloMyStmt->add_prepared_statement(&is_new, current_hostgroup,
 										(char *)client_myds->myconn->userinfo->username,
 										(char *)client_myds->myconn->userinfo->schemaname,
 										(char *)CurrentQuery.QueryPointer,
@@ -2077,6 +2078,7 @@ handler_again:
 								} else {
 									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
 									client_myds->myconn->local_stmts->insert(stmt_info->statement_id,NULL);
+									if (is_new) __sync_fetch_and_sub(&stmt_info->ref_count_client,1);
 								}
 							}
 							break;

@@ -161,8 +161,9 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, boo
 	if (s!=m.end()) {
 		MySQL_STMT_Global_info *a=s->second;
 		if (is_client) {
-			__sync_fetch_and_add(&a->ref_count_client,cnt);
-			ret=a->ref_count_client;
+			ret=__sync_add_and_fetch(&a->ref_count_client,cnt);
+			//__sync_fetch_and_add(&a->ref_count_client,cnt);
+			//ret=a->ref_count_client;
 			if (m.size() > (unsigned)mysql_thread___max_stmts_cache) {
 				int max_purge=m.size()/20; // purge up to 5%
 				int i=-1;
@@ -170,7 +171,7 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, boo
 				for (std::map<uint32_t, MySQL_STMT_Global_info *>::iterator it=m.begin(); it!=m.end(); ++it) {
 					if (i==(max_purge-1)) continue;
 					MySQL_STMT_Global_info *a=it->second;
-					if (a->ref_count_client == 0) {
+					if (__sync_add_and_fetch(&a->ref_count_client,0) == 0) {
 						uint64_t hash=a->hash;
 						auto s2=h.find(hash);
 						if (s2!=h.end()) {
@@ -206,11 +207,11 @@ int MySQL_STMT_Manager::ref_count(uint32_t statement_id, int cnt, bool lock, boo
 	return ret;
 }
 
-MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock) {
-	return add_prepared_statement(_h, u, s, q, ql, stmt, -1, -1, -1, lock);
+MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(bool *is_new, unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock) {
+	return add_prepared_statement(is_new, _h, u, s, q, ql, stmt, -1, -1, -1, lock);
 }
 
-MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock) {
+MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(bool *is_new, unsigned int _h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock) {
 	MySQL_STMT_Global_info *ret=NULL;
 	uint64_t hash=stmt_compute_hash(_h, u, s, q, ql); // this identifies the prepared statement
 	if (lock) {
@@ -223,6 +224,7 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int
 		//MySQL_STMT_Global_info *a=f->second;
 		//ret=a->statement_id;
 		ret=f->second;
+		*is_new=false;
 	} else {
 		// we need to create a new one
 		bool free_id_avail=false;
@@ -246,6 +248,8 @@ MySQL_STMT_Global_info * MySQL_STMT_Manager::add_prepared_statement(unsigned int
 		ret=a;
 		//next_statement_id++;	// increment it
 		//__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference count
+		__sync_fetch_and_add(&ret->ref_count_client,1); // increase reference count
+		*is_new=true;
 	}
 	__sync_fetch_and_add(&add_prepared_statement_calls,1);
 	__sync_fetch_and_add(&ret->ref_count_server,1); // increase reference count
