@@ -1656,7 +1656,7 @@ __get_pkts_from_client:
 										mybe->server_myds->wait_until=0;
 										pause_until=0;
 										mybe->server_myds->killed_at=0;
-										//mybe->server_myds->mysql_real_query.init(&pkt);
+										mybe->server_myds->mysql_real_query.init(&pkt); // fix memory leak for PREPARE in prepared statements #796
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 									}
 								}
@@ -2022,9 +2022,10 @@ handler_again:
 						case PROCESSING_STMT_PREPARE:
 							{
 								uint32_t stmid;
+								bool is_new;
 								MySQL_STMT_Global_info *stmt_info=NULL;
 //								if (mysql_thread___stmt_multiplexing) {
-									stmt_info=GloMyStmt->add_prepared_statement(current_hostgroup,
+									stmt_info=GloMyStmt->add_prepared_statement(&is_new, current_hostgroup,
 										(char *)client_myds->myconn->userinfo->username,
 										(char *)client_myds->myconn->userinfo->schemaname,
 										(char *)CurrentQuery.QueryPointer,
@@ -2077,6 +2078,7 @@ handler_again:
 								} else {
 									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
 									client_myds->myconn->local_stmts->insert(stmt_info->statement_id,NULL);
+									if (is_new) __sync_fetch_and_sub(&stmt_info->ref_count_client,1);
 								}
 							}
 							break;
@@ -2140,9 +2142,12 @@ handler_again:
 						}
 						*/
 						if (
-							(myconn->parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
+							// due to #774 , we now read myconn->server_status instead of myconn->parent->status
+							(myconn->server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
 							||
-							(myconn->parent->status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+							(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+							||
+							(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
 						) {
 							if (mysql_thread___connect_timeout_server_max) {
 								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;

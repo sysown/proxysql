@@ -615,9 +615,9 @@ void * monitor_read_only_thread(void *arg) {
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
-		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
+		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port);
+			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, now-mmsd->t1);
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -631,9 +631,9 @@ void * monitor_read_only_thread(void *arg) {
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
-		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
+		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port);
+			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, now-mmsd->t1);
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -979,7 +979,7 @@ __end_monitor_connect_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
@@ -1087,7 +1087,7 @@ __end_monitor_ping_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
@@ -1312,7 +1312,7 @@ __end_monitor_read_only_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
@@ -1426,7 +1426,7 @@ __end_monitor_replication_lag_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);

@@ -314,9 +314,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_connect_timeout=200;
 	variables.monitor_ping_interval=60000;
 	variables.monitor_ping_max_failures=3;
-	variables.monitor_ping_timeout=100;
+	variables.monitor_ping_timeout=1000;
 	variables.monitor_read_only_interval=1000;
-	variables.monitor_read_only_timeout=100;
+	variables.monitor_read_only_timeout=800;
 	variables.monitor_replication_lag_interval=10000;
 	variables.monitor_replication_lag_timeout=1000;
 	variables.monitor_query_interval=60000;
@@ -1870,6 +1870,7 @@ bool MySQL_Thread::init() {
 	GloQPro->init_thread();
 	refresh_variables();
 	i=pipe(pipefd);
+	ioctl_FIONBIO(pipefd[1],1);
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
 	assert(i==0);
 	return true;
@@ -2127,7 +2128,7 @@ __run_skip_1:
 					unsigned char c=1;
 					int fd=thr->pipefd[1];
 					if (write(fd,&c,1)==-1) {
-						proxy_error("Error while signaling maintenance thread\n");
+						//proxy_error("Error while signaling maintenance thread\n");
 					}
 				}
 			}
@@ -2510,7 +2511,7 @@ __run_skip_2:
 					//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 					int fd=thr->pipefd[1];
 					if (write(fd,&c,1)==-1) {
-						proxy_error("Error while signaling maintenance thread\n");
+						//proxy_error("Error while signaling maintenance thread\n");
 					}
 				}
 			} else {
@@ -2525,7 +2526,7 @@ __run_skip_2:
 					//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 					int fd=thr->pipefd[1];
 					if (write(fd,&c,1)==-1) {
-						proxy_error("Error while signaling maintenance thread\n");
+						//proxy_error("Error while signaling maintenance thread\n");
 					}
 				}
 				//spin_wrunlock(&GloMTH->rwlock_resumes);
