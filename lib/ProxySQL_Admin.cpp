@@ -4582,7 +4582,10 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 		std::string comment;
 
 		// validate arguments
-		if (rule.lookupValue("rule_id", rule_id)==false) continue;
+		if (rule.lookupValue("rule_id", rule_id)==false) {
+			proxy_error("Admin: detected a mysql_query_rules in config file without a mandatory rule_id\n");
+			continue;
+		}
 		rule.lookupValue("active", active);
 		if (rule.lookupValue("username", username)) username_exists=true;
 		if (rule.lookupValue("schemaname", schemaname)) schemaname_exists=true;
