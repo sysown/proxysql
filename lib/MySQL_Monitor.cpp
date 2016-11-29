@@ -161,6 +161,7 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 		std::list<MYSQL *> *lst=it->second;
 		totconn+=lst->size();
 	}
+__loop_purge_idle_connections:
 	//fprintf(stderr,"tot conn in pool: %d\n",totconn);
 	for(it = my_connections.begin(); it != my_connections.end(); it++) {
 		std::list<MYSQL *> *lst=it->second;
@@ -182,6 +183,7 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 			}
 		} else {
 			my_connections.erase(it);
+			goto __loop_purge_idle_connections;
 		}
 	}
 	pthread_mutex_unlock(&mutex);
