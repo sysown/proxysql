@@ -24,6 +24,7 @@
 
 
 class MySQL_Monitor_Connection_Pool;
+class MySQL_Monitor_Ping_Log;
 
 enum MySQL_Monitor_State_Data_Task_Type {
 	MON_CONNECT,
@@ -82,6 +83,7 @@ class MySQL_Monitor {
 	unsigned int num_threads;
 	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
+	MySQL_Monitor_Ping_Log *Monitor_Ping_Log;
 	bool shutdown;
 	bool monitor_enabled;
 	SQLite3DB *admindb;	// internal database

@@ -22,7 +22,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define MYSQL_MONITOR_VERSION "1.2.0723" DEB
+#define MYSQL_MONITOR_VERSION "1.4.1130" DEB
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
@@ -128,6 +128,59 @@ struct cmp_str {
 		return strcmp(a, b) < 0;
 	}
 };
+
+
+class MySQL_Monitor_Ping_Log_entry {
+	public:
+	unsigned long long ping_success_time_us;
+	char *error;
+	MySQL_Monitor_Ping_Log_entry(unsigned long long _ping_success_time_us, char *_error) {
+		ping_success_time_us=_ping_success_time_us;
+		if (_error) {
+			error=strdup(_error);
+		} else {
+			error=NULL;
+		}
+	}
+	~MySQL_Monitor_Ping_Log_entry() {
+		if (error) {
+			free(error);
+		}
+	}
+};
+
+class MySQL_Monitor_Ping_Log {
+	private:
+	pthread_mutex_t mutex;
+	public:
+	std::map<char *, void *> Servers;
+	MySQL_Monitor_Ping_Log() {
+		pthread_mutex_init(&mutex,NULL);
+	}
+	~MySQL_Monitor_Ping_Log() {
+	}
+	void insert(char *hostname, int port, unsigned long long _time_start_us, unsigned long long _ping_success_time_us, char *_error) {
+		std::map<char *, void * , cmp_str >::iterator it;
+		std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *> *ServerEntries=NULL;
+
+		char * buf=(char *)malloc(16+strlen(hostname));
+		sprintf(buf,"%s:%d",hostname,port);
+		pthread_mutex_lock(&mutex);
+		it = Servers.find(buf);
+		if (it == Servers.end()) {
+			ServerEntries = new std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *>;
+			Servers.insert(std::pair<char *, void *>(buf,(void *)ServerEntries));
+		} else {
+			free(buf);
+			ServerEntries = (std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *> *)it->second;
+		}
+		MySQL_Monitor_Ping_Log_entry *new_entry= new MySQL_Monitor_Ping_Log_entry(_ping_success_time_us,_error);
+		ServerEntries->insert(std::pair<unsigned long long, MySQL_Monitor_Ping_Log_entry *>(_time_start_us,new_entry));
+		pthread_mutex_unlock(&mutex);
+	}
+};
+
+
 
 class MySQL_Monitor_Connection_Pool {
 	private:
@@ -318,6 +371,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	GloMyMon = this;
 
 	My_Conn_Pool=new MySQL_Monitor_Connection_Pool();
+	Monitor_Ping_Log=new MySQL_Monitor_Ping_Log();
 
 	shutdown=false;
 	monitor_enabled=true;	// default
