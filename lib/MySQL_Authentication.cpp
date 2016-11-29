@@ -436,13 +436,16 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 		lookup = cg.bt_map.begin();
 		if ( lookup != cg.bt_map.end() ) {
 			account_details_t *ad=lookup->second;
-			cg.cred_array->remove_fast(ad);
      	cg.bt_map.erase(lookup);
 			free(ad->username);
 			free(ad->password);
 			if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
+			free(ad->default_schema);
 			free(ad);
 		}
+	}
+	while (cg.cred_array->len) {
+		cg.cred_array->remove_index_fast(0);
 	}
 	spin_wrunlock(&cg.lock);
 
