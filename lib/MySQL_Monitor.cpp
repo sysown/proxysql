@@ -9,7 +9,7 @@
 */
 
 #include <map>
-#include <list>
+//#include <list>
 #include <thread>
 #include "proxysql.h"
 #include "cpp.h"
@@ -133,7 +133,7 @@ class MySQL_Monitor_Connection_Pool {
 	private:
 	pthread_mutex_t mutex;
 	int size;
-	std::map<char *, std::list<MYSQL *>* , cmp_str> my_connections;
+	std::map<char *, PtrArray *, cmp_str> my_connections;
 	public:
 	MySQL_Monitor_Connection_Pool();
 	~MySQL_Monitor_Connection_Pool();
@@ -153,22 +153,27 @@ MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
 void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 	unsigned long long now=monotonic_time();
 	pthread_mutex_lock(&mutex);
-	std::map<char *, std::list<MYSQL *>*>::iterator it;
+	std::map<char *, PtrArray *>::iterator it;
 	//fprintf(stderr,"conn pool size: %d\n",my_connections.size());
 	unsigned int totconn;
 	totconn=0;
 	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		std::list<MYSQL *> *lst=it->second;
-		totconn+=lst->size();
+		//std::list<MYSQL *> *lst=it->second;
+		PtrArray *lst=it->second;
+		totconn+=lst->len;
 	}
 	//fprintf(stderr,"tot conn in pool: %d\n",totconn);
 	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		std::list<MYSQL *> *lst=it->second;
-		if (!lst->empty()) {
-			std::list<MYSQL *>::const_iterator it3;
-			for(it3 = lst->begin(); it3 != lst->end(); it3++) {
+		//std::list<MYSQL *> *lst=it->second;
+		//if (!lst->empty()) {
+		PtrArray *lst=it->second;
+		if (lst->len) {
+			//std::list<MYSQL *>::const_iterator it3;
+			unsigned int it3;
+			//for(it3 = lst->begin(); it3 != lst->end(); it3++) {
+			for(it3 = 0; it3 < lst->len; it3++) {
 				//it3=lst->begin();
-				MYSQL *my=*it3;
+				MYSQL *my=(MYSQL *)(lst->index(it3));
 				unsigned long long then=0;
 				memcpy(&then,my->net.buff,sizeof(unsigned long long));
 				if (now > (then + mysql_thread___monitor_ping_interval*1000 * 3)) {
@@ -177,7 +182,8 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 					WorkItem *item;
 					item=new WorkItem(mmsd,NULL);
 					GloMyMon->queue.add(item);
-					lst->remove(*it3);
+					lst->remove_index_fast(it3);
+					it3--;
 				}
 			}
 		} else {
@@ -189,7 +195,8 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 
 
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) {
-	std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
+	//std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
+	std::map<char *, PtrArray * , cmp_str >::iterator it;
 	//it = my_connections.find(std::make_pair(hostname,port));
 	char *buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
@@ -197,10 +204,13 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 	it = my_connections.find(buf);
 	free(buf);
 	if (it != my_connections.end()) {
-		std::list<MYSQL *> *lst=it->second;
-		if (!lst->empty()) {
-			MYSQL *ret=lst->front();
-			lst->pop_front();
+		//std::list<MYSQL *> *lst=it->second;
+		PtrArray *lst=it->second;
+		//if (!lst->empty()) {
+		if (lst->len) {
+			//MYSQL *ret=lst->front();
+			//lst->pop_front();
+			MYSQL *ret=(MYSQL *)lst->remove_index_fast(0);
 			size--;
 			pthread_mutex_unlock(&mutex);
 			memset(ret->net.buff,0,sizeof(unsigned long long)); // reset what was polluted
@@ -213,22 +223,27 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 
 void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYSQL *my) {
 	size++;
-	std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
+	//std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
+	std::map<char *, PtrArray * , cmp_str >::iterator it;
 	char * buf=(char *)malloc(16+strlen(hostname));
 	sprintf(buf,"%s:%d",hostname,port);
 	unsigned long long now=monotonic_time();
 	memcpy(my->net.buff,&now,sizeof(unsigned long long));	//mark insert time
 	pthread_mutex_lock(&mutex);
 	it = my_connections.find(buf);
-	std::list<MYSQL *> *lst=NULL;
+	//std::list<MYSQL *> *lst=NULL;
+	PtrArray *lst=NULL;
 	if (it==my_connections.end()) {
-		lst=new std::list<MYSQL *>;
-		my_connections.insert(my_connections.begin(), std::pair<char *,std::list<MYSQL *>*>(buf,lst));
+		//lst=new std::list<MYSQL *>;
+		//my_connections.insert(my_connections.begin(), std::pair<char *,std::list<MYSQL *>*>(buf,lst));
+		lst=new PtrArray();
+		my_connections.insert(my_connections.begin(), std::pair<char *, PtrArray *>(buf,lst));
 	} else {
 		free(buf);
 		lst=it->second;
 	}
-	lst->push_back(my);
+	//lst->push_back(my);
+	lst->add(my);
 	pthread_mutex_unlock(&mutex);
 }
 
