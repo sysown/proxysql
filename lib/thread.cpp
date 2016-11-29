@@ -49,8 +49,10 @@ int Thread::start(bool jemalloc_tcache)
         m_running = 1;
     }
 		if (jemalloc_tcache==false) {
+#ifndef NOJEM
 			bool cache=false;
 			mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif /* NOJEM */
 		}
     return result;
 }

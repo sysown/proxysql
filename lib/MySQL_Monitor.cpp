@@ -280,29 +280,37 @@ MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 }
 
 void * monitor_connect_pthread(void *arg) {
+#ifndef NOJEM
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
 	GloMyMon->monitor_connect();
 	return NULL;
 }
 
 void * monitor_ping_pthread(void *arg) {
+#ifndef NOJEM
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
 	GloMyMon->monitor_ping();
 	return NULL;
 }
 
 void * monitor_read_only_pthread(void *arg) {
+#ifndef NOJEM
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
 	GloMyMon->monitor_read_only();
 	return NULL;
 }
 
 void * monitor_replication_lag_pthread(void *arg) {
+#ifndef NOJEM
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+#endif
 	GloMyMon->monitor_replication_lag();
 	return NULL;
 }
