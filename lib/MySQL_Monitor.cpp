@@ -149,11 +149,13 @@ class MySQL_Monitor_Ping_Log_entry {
 	}
 };
 
+typedef std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *> type_ServerEntries;
+
 class MySQL_Monitor_Ping_Log {
 	private:
 	pthread_mutex_t mutex;
 	public:
-	std::map<char *, void *> Servers;
+	std::map<char *, void *, cmp_str> Servers;
 	MySQL_Monitor_Ping_Log() {
 		pthread_mutex_init(&mutex,NULL);
 	}
@@ -162,21 +164,47 @@ class MySQL_Monitor_Ping_Log {
 	void insert(char *hostname, int port, unsigned long long _time_start_us, unsigned long long _ping_success_time_us, char *_error) {
 		std::map<char *, void * , cmp_str >::iterator it;
 		std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *> *ServerEntries=NULL;
-
 		char * buf=(char *)malloc(16+strlen(hostname));
 		sprintf(buf,"%s:%d",hostname,port);
 		pthread_mutex_lock(&mutex);
 		it = Servers.find(buf);
 		if (it == Servers.end()) {
-			ServerEntries = new std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *>;
+			//ServerEntries = new std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *>;
+			ServerEntries = new type_ServerEntries;
 			Servers.insert(std::pair<char *, void *>(buf,(void *)ServerEntries));
 		} else {
 			free(buf);
-			ServerEntries = (std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *> *)it->second;
+			ServerEntries = (type_ServerEntries *)it->second;
 		}
 		MySQL_Monitor_Ping_Log_entry *new_entry= new MySQL_Monitor_Ping_Log_entry(_ping_success_time_us,_error);
 		ServerEntries->insert(std::pair<unsigned long long, MySQL_Monitor_Ping_Log_entry *>(_time_start_us,new_entry));
 		pthread_mutex_unlock(&mutex);
+	}
+	void delete_sync_all(unsigned long long _time_start_us_max) {
+		std::map<char *, void * , cmp_str >::iterator it;
+		pthread_mutex_lock(&mutex);
+		for(it = Servers.begin(); it != Servers.end(); it++) {
+			if (it!=Servers.end()) {
+				type_ServerEntries *ServerEntries = (type_ServerEntries *)it->second;
+				delete_sync_unlocked(ServerEntries, _time_start_us_max);
+			}
+		}
+		pthread_mutex_unlock(&mutex);
+		//free(buf);
+	}
+	void delete_sync_unlocked(type_ServerEntries *SE,  unsigned long long _time_start_us_max) {
+	std::map<unsigned long long, MySQL_Monitor_Ping_Log_entry *>::iterator it;
+__loop_delete_sync_unlocked:
+		if (SE->size()) {
+			it=SE->begin();
+			unsigned long long t=it->first;
+			if (t < _time_start_us_max) {
+				MySQL_Monitor_Ping_Log_entry *PLE=it->second;
+				delete (PLE);
+				SE->erase(it);
+				goto __loop_delete_sync_unlocked;
+			}
+		}
 	}
 };
 
@@ -562,6 +590,7 @@ __exit_monitor_ping_thread:
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
+		GloMyMon->Monitor_Ping_Log->insert(mmsd->hostname, mmsd->port, time_now, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
 	}
 __fast_exit_monitor_ping_thread:
 	if (mmsd->mysql) {
@@ -1163,6 +1192,7 @@ __end_monitor_ping_loop:
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
+			GloMyMon->Monitor_Ping_Log->delete_sync_all(time_now-(unsigned long long)mysql_thread___monitor_history*1000);
 		}
 
 		if (resultset) {
