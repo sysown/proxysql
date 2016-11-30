@@ -2,6 +2,9 @@
 #include <fstream>
 #include <string>
 #include <stdlib.h>
+#ifndef __STDC_LIMIT_MACROS
+#define __STDC_LIMIT_MACROS
+#endif /* __STDC_LIMIT_MACROS */
 #include <stdint.h>
 #include <string.h>
 using namespace std;
