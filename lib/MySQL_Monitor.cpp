@@ -572,17 +572,20 @@ void * monitor_ping_thread(void *arg) {
 __exit_monitor_ping_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement=NULL;
-		sqlite3 *mondb=mmsd->mondb->get_db();
+//		sqlite3_stmt *statement=NULL;
+//		sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 		char *query=NULL;
+/*
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
 		rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 		assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
+*/
 		unsigned long long time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
+/*
 		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
@@ -590,6 +593,7 @@ __exit_monitor_ping_thread:
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
+*/
 		GloMyMon->Monitor_Ping_Log->insert(mmsd->hostname, mmsd->port, time_now, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
 	}
 __fast_exit_monitor_ping_thread:
@@ -1175,23 +1179,23 @@ void * MySQL_Monitor::monitor_ping() {
 
 __end_monitor_ping_loop:
 		if (mysql_thread___monitor_enabled==true) {
-			sqlite3_stmt *statement=NULL;
-			sqlite3 *mondb=monitordb->get_db();
+//			sqlite3_stmt *statement=NULL;
+//			sqlite3 *mondb=monitordb->get_db();
 			int rc;
-			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start_us < ?1";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
-			assert(rc==SQLITE_OK);
+//			char *query=NULL;
+//			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start_us < ?1";
+//			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+//			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement);
-			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
-			sqlite3_finalize(statement);
+//			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
+//			SAFE_SQLITE3_STEP(statement);
+//			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+//			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+//			sqlite3_finalize(statement);
 			GloMyMon->Monitor_Ping_Log->delete_sync_all(time_now-(unsigned long long)mysql_thread___monitor_history*1000);
 		}
 
