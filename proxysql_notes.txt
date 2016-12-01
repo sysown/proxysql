@@ -1,10 +1,8 @@
 Directories structure:
 deps        : external dependencies, that can be redistributed thanks to their license
 include     : header files
-include_old : old header files , will be removed in future
-lib         : directory where there is all the C++ code to generate libproxysql.a (archive file with all objects) and the various modules implemented as plugin compiled as shared libraries  
-lib_old     : old code that was previously in lib , will be removed in future
-oldcode     : old ProxySQL in C , will be removed in future
+lib         : directory where there is all the C++ code to generate libproxysql.a (archive file with all objects) and
+              the various modules implemented as plugin compiled as shared libraries
 src         : here there are only 2 C++ files: main.cpp and proxysql_global.cpp (used for global variables)
 test        : used for various testing, nothing interesting here , will be removed in future
 trash       : like "test"
@@ -17,7 +15,6 @@ ProxySQL relies on the following libraries that are compilied as dependancies:
 - libconfig (http://www.hyperrealm.com/libconfig/) : a simple library for processing structured configuration files
 - libdaemon : a lightweight C library that eases the process of writing UNIX daemons
 - mariadb-client-library : The MariaDB Native Client library (C driver) ; this is currently used only for headers
-- memcached : high-performance, distributed memory object caching system ; it has important changes implemented: a) compiled as shared library and not daemon, b) pthread_key_t item_lock_type_key is configured as __thread variable instead of a static variables . Memcached integration into ProxySQL is currently a simple proof of concept
 - re2 (https://code.google.com/p/re2/) : a fast, safe, thread-friendly alternative to backtracking regular expression engines like those used in PCRE, Perl, and Python . Important note:  re2 supports submatch extraction, but not backreferences . Because ProxySQL will process regular expression in an already thread-safe environment, re2 is patches to remove locking
 - sqlite3 (http://www.sqlite.org/) : software library that implements a self-contained, serverless, zero-configuration, transactional SQL database engine 
 
