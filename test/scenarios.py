@@ -21,7 +21,7 @@ import sys
 from docopt import docopt
 import nose
 
-from test.docker_fleet import DockerFleet
+from docker_fleet import DockerFleet
 
 PROXYSQL_SCENARIO_FILE = '/tmp/proxysql-scenario.txt'
 

@@ -21,3 +21,6 @@ db=information_schema
 connect_timeout=30
 ping_interval=60
 failed_connections_before_alert=3
+
+[Scenarios]
+default_scenarios=1backend,5backends-replication,repl1

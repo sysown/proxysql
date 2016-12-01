@@ -1,8 +1,10 @@
+import os.path
+
 from ConfigParser import ConfigParser
 
 class ProxySQL_Tests_Config(object):
 
-	DEFAULT_PROXYSQL_TESTS_LOCATION = 'proxysql-tests.ini'
+	DEFAULT_PROXYSQL_TESTS_LOCATION = os.path.join(os.path.dirname(__file__), 'proxysql-tests.ini')
 
 	def __init__(self, location=DEFAULT_PROXYSQL_TESTS_LOCATION, overrides={}):
 		self.location = location
