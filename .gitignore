@@ -110,3 +110,4 @@ proxysql-tests.ini
 
 #heaptrack
 heaptrack.*
+/.idea/
