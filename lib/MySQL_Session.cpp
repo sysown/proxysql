@@ -525,13 +525,14 @@ __ret_autocommit_OK:
 
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 
-	if (handler_SetAutocommit(pkt) == true) {
-		return true;
+	if (mysql_thread___forward_autocommit == false) {
+		if (handler_SetAutocommit(pkt) == true) {
+			return true;
+		}
+		if (handler_CommitRollback(pkt) == true) {
+			return true;
+		}
 	}
-	if (handler_CommitRollback(pkt) == true) {
-		return true;
-	}
-
 	if (pkt->size>(5+4) && strncmp((char *)"USE ",(char *)pkt->ptr+5,4)==0) {
 		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(pkt);
 		return true;
