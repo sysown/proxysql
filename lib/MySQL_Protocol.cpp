@@ -1280,6 +1280,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	max_pkt  = CPY4(pkt);
 	pkt     += sizeof(uint32_t);
 	charset  = *(uint8_t *)pkt;
+	// see bug #810
+	if (charset==0) {
+		charset=mysql_thread___default_charset;
+	}
 	pkt     += 24;
 	if (len==sizeof(mysql_hdr)+32) {
 		(*myds)->encrypted=true;
