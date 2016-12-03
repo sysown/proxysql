@@ -541,7 +541,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return true;
 	}
 
-	if (pkt->size>(5+4) && strncmp((char *)"USE ",(char *)pkt->ptr+5,4)==0) {
+	if (pkt->size>(5+4) && strncasecmp((char *)"USE ",(char *)pkt->ptr+5,4)==0) {
 		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(pkt);
 		return true;
 	}
