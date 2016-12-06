@@ -3181,6 +3181,42 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Queries backend CHANGE_USER
+		pta[0]=(char *)"Com_backend_change_user";
+		sprintf(buf,"%llu",MyHGM->status.backend_change_user);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries backend INIT DB
+		pta[0]=(char *)"Com_backend_init_db";
+		sprintf(buf,"%llu",MyHGM->status.backend_init_db);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries backend SET NAMES
+		pta[0]=(char *)"Com_backend_set_names";
+		sprintf(buf,"%llu",MyHGM->status.backend_set_names);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries frontend INIT DB
+		pta[0]=(char *)"Com_frontend_init_db";
+		sprintf(buf,"%llu",MyHGM->status.frontend_init_db);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries frontend SET NAMES
+		pta[0]=(char *)"Com_frontend_set_names";
+		sprintf(buf,"%llu",MyHGM->status.frontend_set_names);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries frontend USE DB
+		pta[0]=(char *)"Com_frontend_use_db";
+		sprintf(buf,"%llu",MyHGM->status.frontend_use_db);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// stmt prepare
 		pta[0]=(char *)"Com_stmt_prepare";
 		sprintf(buf,"%llu",get_total_stmt_prepare());

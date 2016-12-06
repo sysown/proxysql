@@ -359,6 +359,12 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.autocommit_cnt_filtered=0;
 	status.commit_cnt_filtered=0;
 	status.rollback_cnt_filtered=0;
+	status.backend_change_user=0;
+	status.backend_init_db=0;
+	status.backend_set_names=0;
+	status.frontend_init_db=0;
+	status.frontend_set_names=0;
+	status.frontend_use_db=0;
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_init(&lock, NULL);
 #else

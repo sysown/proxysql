@@ -165,6 +165,12 @@ class MySQL_HostGroups_Manager {
 		unsigned long long autocommit_cnt_filtered;
 		unsigned long long commit_cnt_filtered;
 		unsigned long long rollback_cnt_filtered;
+		unsigned long long backend_change_user;
+		unsigned long long backend_init_db;
+		unsigned long long backend_set_names;
+		unsigned long long frontend_init_db;
+		unsigned long long frontend_set_names;
+		unsigned long long frontend_use_db;
 	} status;
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();

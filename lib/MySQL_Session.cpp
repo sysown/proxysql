@@ -687,6 +687,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		status=WAITING_CLIENT_DATA;
 		l_free(pkt->size,pkt->ptr);
 		free(unstripped);
+		__sync_fetch_and_add(&MyHGM->status.frontend_set_names, 1);
 		return true;
 	}
 	if ( (pkt->size == 18) && (strncasecmp((char *)"SHOW WARNINGS",(char *)pkt->ptr+5,13)==0) ) {
@@ -1346,6 +1347,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	}
 	int rc=myconn->async_select_db(myds->revents);
 	if (rc==0) {
+		__sync_fetch_and_add(&MyHGM->status.backend_init_db, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		st=previous_status.top();
 		previous_status.pop();
@@ -1563,6 +1565,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	myconn->local_stmts=new MySQL_STMTs_local(false);
 	int rc=myconn->async_change_user(myds->revents);
 	if (rc==0) {
+		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		st=previous_status.top();
 		previous_status.pop();
@@ -1618,6 +1621,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	}
 	int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
 	if (rc==0) {
+		__sync_fetch_and_add(&MyHGM->status.backend_set_names, 1);
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -3182,6 +3186,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (admin==false) {
+		__sync_fetch_and_add(&MyHGM->status.frontend_init_db, 1);
 		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3207,6 +3212,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (admin==false) {
+		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
 		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
