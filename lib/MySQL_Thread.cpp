@@ -274,6 +274,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stacksize",
 	(char *)"threads",
 	(char *)"init_connect",
+	(char *)"default_sql_mode",
+	(char *)"default_time_zone",
 	NULL
 };
 
@@ -342,6 +344,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
+	variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
+	variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
@@ -509,6 +513,20 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			return strdup(variables.init_connect);
 		}
 	}
+	if (!strcasecmp(name,"default_sql_mode")) {
+		//if (variables.default_sql_mode==NULL || strlen(variables.default_sql_mode)==0) {
+		if (variables.default_sql_mode==NULL) {
+			variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
+		}
+		return strdup(variables.default_sql_mode);
+	}
+	if (!strcasecmp(name,"default_time_zone")) {
+		//if (variables.default_time_zone==NULL || strlen(variables.default_time_zone)==0) {
+		if (variables.default_time_zone==NULL) {
+			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
+		}
+		return strdup(variables.default_time_zone);
+	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
@@ -607,6 +625,18 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		} else {
 			return strdup(variables.init_connect);
 		}
+	}
+	if (!strcasecmp(name,"default_sql_mode")) {
+		if (variables.default_sql_mode==NULL) {
+			variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
+		}
+		return strdup(variables.default_sql_mode);
+	}
+	if (!strcasecmp(name,"default_time_zone")) {
+		if (variables.default_time_zone==NULL) {
+			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
+		}
+		return strdup(variables.default_time_zone);
 	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
@@ -1366,6 +1396,32 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
+	if (!strcasecmp(name,"default_sql_mode")) {
+		if (variables.default_sql_mode) free(variables.default_sql_mode);
+		variables.default_sql_mode=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_sql_mode=strdup(value);
+		}
+		if (variables.default_sql_mode==NULL) {
+			variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_time_zone")) {
+		if (variables.default_time_zone) free(variables.default_time_zone);
+		variables.default_time_zone=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_time_zone=strdup(value);
+		}
+		if (variables.default_time_zone==NULL) {
+			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE); // default
+		}
+		return true;
+	}
+
 	// SSL proxy to server variables
 	if (!strcasecmp(name,"ssl_p2s_ca")) {
 		if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
@@ -1739,6 +1795,8 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
 	if (variables.init_connect) free(variables.init_connect);
+	if (variables.default_sql_mode) free(variables.default_sql_mode);
+	if (variables.default_time_zone) free(variables.default_time_zone);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
 	if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
@@ -1820,6 +1878,8 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
+	if (mysql_thread___default_sql_mode) { free(mysql_thread___default_sql_mode); mysql_thread___default_sql_mode=NULL; }
+	if (mysql_thread___default_time_zone) { free(mysql_thread___default_time_zone); mysql_thread___default_time_zone=NULL; }
 	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
 	if (mysql_thread___ssl_p2s_ca) { free(mysql_thread___ssl_p2s_ca); mysql_thread___ssl_p2s_ca=NULL; }
 	if (mysql_thread___ssl_p2s_cert) { free(mysql_thread___ssl_p2s_cert); mysql_thread___ssl_p2s_cert=NULL; }
@@ -2811,6 +2871,10 @@ void MySQL_Thread::refresh_variables() {
 
 	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
 	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");
+	if (mysql_thread___default_sql_mode) free(mysql_thread___default_sql_mode);
+	mysql_thread___default_sql_mode=GloMTH->get_variable_string((char *)"default_sql_mode");
+	if (mysql_thread___default_time_zone) free(mysql_thread___default_time_zone);
+	mysql_thread___default_time_zone=GloMTH->get_variable_string((char *)"default_time_zone");
 	if (mysql_thread___server_version) free(mysql_thread___server_version);
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);

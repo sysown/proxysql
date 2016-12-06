@@ -167,6 +167,11 @@ MySQL_Connection::MySQL_Connection() {
 	options.autocommit=true;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.sql_log_bin=1;	// default #818
+	options.sql_mode=NULL;	// #509
+	options.sql_mode_int=0;	// #509
+	options.time_zone=NULL;	// #819
+	options.time_zone_int=0;	// #819
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -217,6 +222,14 @@ MySQL_Connection::~MySQL_Connection() {
 		// we don't run mysql_stmt_close() : should be already destroyed
 //		mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
+	}
+	if (options.sql_mode) {
+		free(options.sql_mode);
+		options.sql_mode=NULL;
+	}
+	if (options.time_zone) {
+		free(options.time_zone);
+		options.time_zone=NULL;
 	}
 };
 
@@ -302,6 +315,17 @@ void MySQL_Connection::set_status_no_multiplex(bool v) {
 	}
 }
 
+// pay attention here. set_status_sql_log_bin0 sets it sql_log_bin is ZERO
+// sql_log_bin=0 => true
+// sql_log_bin=1 => false
+void MySQL_Connection::set_status_sql_log_bin0(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
+	}
+}
+
 bool MySQL_Connection::get_status_transaction() {
 	return status_flags & STATUS_MYSQL_CONNECTION_TRANSACTION;
 }
@@ -332,6 +356,10 @@ bool MySQL_Connection::get_status_prepared_statement() {
 
 bool MySQL_Connection::get_status_no_multiplex() {
 	return status_flags & STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
+}
+
+bool MySQL_Connection::get_status_sql_log_bin0() {
+	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
 // non blocking API
@@ -1428,7 +1456,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0) ) {
 		ret=true;
 	}
 	return ret;

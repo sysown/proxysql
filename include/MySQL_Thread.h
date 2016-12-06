@@ -13,6 +13,9 @@
 #define STATS_HOSTGROUP	-3
 
 
+#define MYSQL_DEFAULT_SQL_MODE	""
+#define MYSQL_DEFAULT_TIME_ZONE	"SYSTEM"
+
 static unsigned int near_pow_2 (unsigned int n) {
   unsigned int i = 1;
   while (i < n) i <<= 1;
@@ -345,6 +348,8 @@ class MySQL_Threads_Handler
 		int query_processor_regex;
 		int long_query_time;
 		char *init_connect;
+		char *default_sql_mode;
+		char *default_time_zone;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */

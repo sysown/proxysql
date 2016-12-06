@@ -1,5 +1,8 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "re2/re2.h"
+#include "re2/regexp.h"
+#include "SpookyV2.h"
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -16,6 +19,38 @@ extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager *GloMyStmt;
+
+
+/*
+class Session_Regex {
+  private:
+  void *opt;
+  void *re;
+  public:
+  Session_Regex(char *p);
+  ~Session_Regex();
+  bool match(char *m);
+};
+*/
+Session_Regex::Session_Regex(char *p) {
+	s=strdup(p);
+	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+	opt2->set_case_sensitive(false);
+	opt=(void *)opt2;
+	re=(RE2 *)new RE2(s, *opt2);
+}
+
+Session_Regex::~Session_Regex() {
+	free(s);
+	delete (RE2 *)re;
+	delete (re2::RE2::Options *)opt;
+}
+
+bool Session_Regex::match(char *m) {
+	bool rc=false;
+	rc=RE2::PartialMatch(m,*(RE2 *)re);
+	return rc;
+}
 
 class KillArgs {
 	public:
@@ -251,6 +286,12 @@ MySQL_Session::MySQL_Session() {
 	active_transactions=0;
 	sess_STMTs_meta=new MySQL_STMTs_meta();
 	SLDH=new StmtLongDataHandler();
+
+	match_regexes=NULL;
+	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
+	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
+	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_MODE( *)(:|)=( *)");
+	match_regexes[2]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)TIME_ZONE( *)(:|)=( *)");
 }
 
 MySQL_Session::~MySQL_Session() {
@@ -284,6 +325,17 @@ MySQL_Session::~MySQL_Session() {
 //	if (Session_STMT_Manager) {
 //		delete Session_STMT_Manager;
 //	}
+	{
+		Session_Regex *sr=NULL;
+		sr=match_regexes[0];
+		delete sr;
+		sr=match_regexes[1];
+		delete sr;
+		sr=match_regexes[2];
+		delete sr;
+	free(match_regexes);
+	match_regexes=NULL;
+	}
 }
 
 
@@ -792,6 +844,114 @@ bool MySQL_Session::handler_again___verify_backend_charset() {
 	return false;
 }
 
+bool MySQL_Session::handler_again___verify_backend_sql_log_bin() {
+	if (client_myds->myconn->options.sql_log_bin != mybe->server_myds->myconn->options.sql_log_bin) {
+		mybe->server_myds->myconn->options.sql_log_bin = client_myds->myconn->options.sql_log_bin;
+		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				previous_status.push(PROCESSING_QUERY);
+				break;
+				case PROCESSING_STMT_PREPARE:
+			previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+				case PROCESSING_STMT_EXECUTE:
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		NEXT_IMMEDIATE_NEW(SETTING_SQL_LOG_BIN);
+	}
+	return false;
+}
+
+bool MySQL_Session::handler_again___verify_backend_sql_mode() {
+	if (mybe->server_myds->myconn->options.sql_mode_int==0) {
+		// it is the first time we use this backend. Set sql_mode to default
+		if (mybe->server_myds->myconn->options.sql_mode==NULL) {
+			free(mybe->server_myds->myconn->options.sql_mode);
+			mybe->server_myds->myconn->options.sql_mode=NULL;
+		}
+		mybe->server_myds->myconn->options.sql_mode=strdup(mysql_thread___default_sql_mode);
+		uint32_t sql_mode_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.sql_mode,strlen(mybe->server_myds->myconn->options.sql_mode),10);
+		mybe->server_myds->myconn->options.sql_mode_int=sql_mode_int;
+	}
+	if (client_myds->myconn->options.sql_mode_int) {
+		if (client_myds->myconn->options.sql_mode_int != mybe->server_myds->myconn->options.sql_mode_int) {
+			{
+				mybe->server_myds->myconn->options.sql_mode_int = client_myds->myconn->options.sql_mode_int;
+				if (mybe->server_myds->myconn->options.sql_mode) {
+					free(mybe->server_myds->myconn->options.sql_mode);
+					mybe->server_myds->myconn->options.sql_mode=NULL;
+					if (client_myds->myconn->options.sql_mode) {
+						mybe->server_myds->myconn->options.sql_mode=strdup(client_myds->myconn->options.sql_mode);
+					}
+				}
+			}
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_SQL_MODE);
+		}
+	}
+	return false;
+}
+
+bool MySQL_Session::handler_again___verify_backend_time_zone() {
+	if (mybe->server_myds->myconn->options.time_zone_int==0) {
+		// it is the first time we use this backend. Set time_zone to default
+		if (mybe->server_myds->myconn->options.time_zone==NULL) {
+			free(mybe->server_myds->myconn->options.time_zone);
+			mybe->server_myds->myconn->options.time_zone=NULL;
+		}
+		mybe->server_myds->myconn->options.time_zone=strdup(mysql_thread___default_time_zone);
+		uint32_t time_zone_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.time_zone,strlen(mybe->server_myds->myconn->options.time_zone),10);
+		mybe->server_myds->myconn->options.time_zone_int=time_zone_int;
+	}
+	if (client_myds->myconn->options.time_zone_int) {
+		if (client_myds->myconn->options.time_zone_int != mybe->server_myds->myconn->options.time_zone_int) {
+			{
+				mybe->server_myds->myconn->options.time_zone_int = client_myds->myconn->options.time_zone_int;
+				if (mybe->server_myds->myconn->options.time_zone) {
+					free(mybe->server_myds->myconn->options.time_zone);
+					mybe->server_myds->myconn->options.time_zone=NULL;
+					if (client_myds->myconn->options.time_zone) {
+						mybe->server_myds->myconn->options.time_zone=strdup(client_myds->myconn->options.time_zone);
+					}
+				}
+			}
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_TIME_ZONE);
+		}
+	}
+	return false;
+}
+
 
 bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
@@ -946,6 +1106,224 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 					myds->fd=0;
 				status=WAITING_CLIENT_DATA;
 				client_myds->DSS=STATE_SLEEP;
+			}
+		} else {
+			// rc==1 , nothing to do for now
+		}
+	}
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	myds->DSS=STATE_MARIADB_QUERY;
+	enum session_status st=status;
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	char *query=NULL;
+	unsigned long query_length=0;
+	if (myconn->async_state_machine==ASYNC_IDLE) {
+		char *q=(char *)"SET SQL_LOG_BIN=%d";
+		query=(char *)malloc(strlen(q)+8);
+		sprintf(query,q,myconn->options.sql_log_bin);
+		query_length=strlen(query);
+	}
+	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
+	if (query) {
+		free(query);
+		query=NULL;
+	}
+	if (rc==0) {
+		if (myconn->options.sql_log_bin==0) {
+			// pay attention here. set_status_sql_log_bin0 sets it sql_log_bin is ZERO
+			// sql_log_bin=0 => true
+			// sql_log_bin=1 => false
+			myconn->set_status_sql_log_bin0(true);
+		} else {
+			myconn->set_status_sql_log_bin0(false);
+		}
+		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		if (rc==-1) {
+			// the command failed
+			int myerr=mysql_errno(myconn->mysql);
+			if (myerr > 2000) {
+				bool retry_conn=false;
+				// client error, serious
+				proxy_error("Detected a broken connection while setting SQL_LOG_BIN on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+								retry_conn=true;
+				}
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				if (retry_conn) {
+					myds->DSS=STATE_NOT_INITIALIZED;
+					//previous_status.push(PROCESSING_QUERY);
+					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+				}
+				*_rc=-1;	// an error happened, we should destroy the Session
+				return ret;
+			} else {
+				proxy_warning("Error while setting SQL_LOG_BIN: %d, %s\n", myerr, mysql_error(myconn->mysql));
+					// we won't go back to PROCESSING_QUERY
+				st=previous_status.top();
+				previous_status.pop();
+				char sqlstate[10];
+				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->fd=0;
+				//status=WAITING_CLIENT_DATA;
+				//client_myds->DSS=STATE_SLEEP;
+				RequestEnd(myds);
+			}
+		} else {
+			// rc==1 , nothing to do for now
+		}
+	}
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	myds->DSS=STATE_MARIADB_QUERY;
+	enum session_status st=status;
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	char *query=NULL;
+	unsigned long query_length=0;
+	if (myconn->async_state_machine==ASYNC_IDLE) {
+		char *q=(char *)"SET SQL_MODE='%s'";
+		query=(char *)malloc(strlen(q)+strlen(myconn->options.sql_mode));
+		sprintf(query,q,myconn->options.sql_mode);
+		query_length=strlen(query);
+	}
+	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
+	if (query) {
+		free(query);
+		query=NULL;
+	}
+	if (rc==0) {
+		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		if (rc==-1) {
+			// the command failed
+			int myerr=mysql_errno(myconn->mysql);
+			if (myerr > 2000) {
+				bool retry_conn=false;
+				// client error, serious
+				proxy_error("Detected a broken connection while setting SQL_MODE on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+								retry_conn=true;
+				}
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				if (retry_conn) {
+					myds->DSS=STATE_NOT_INITIALIZED;
+					//previous_status.push(PROCESSING_QUERY);
+					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+				}
+				*_rc=-1;	// an error happened, we should destroy the Session
+				return ret;
+			} else {
+				proxy_warning("Error while setting SQL_MODE: %d, %s\n", myerr, mysql_error(myconn->mysql));
+					// we won't go back to PROCESSING_QUERY
+				st=previous_status.top();
+				previous_status.pop();
+				char sqlstate[10];
+				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->fd=0;
+				//status=WAITING_CLIENT_DATA;
+				//client_myds->DSS=STATE_SLEEP;
+				RequestEnd(myds);
+			}
+		} else {
+			// rc==1 , nothing to do for now
+		}
+	}
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	myds->DSS=STATE_MARIADB_QUERY;
+	enum session_status st=status;
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	char *query=NULL;
+	unsigned long query_length=0;
+	if (myconn->async_state_machine==ASYNC_IDLE) {
+		char *q=(char *)"SET TIME_ZONE='%s'";
+		query=(char *)malloc(strlen(q)+strlen(myconn->options.time_zone));
+		sprintf(query,q,myconn->options.time_zone);
+		query_length=strlen(query);
+	}
+	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
+	if (query) {
+		free(query);
+		query=NULL;
+	}
+	if (rc==0) {
+		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		if (rc==-1) {
+			// the command failed
+			int myerr=mysql_errno(myconn->mysql);
+			if (myerr > 2000) {
+				bool retry_conn=false;
+				// client error, serious
+				proxy_error("Detected a broken connection while setting TIME_ZONE on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+								retry_conn=true;
+				}
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				if (retry_conn) {
+					myds->DSS=STATE_NOT_INITIALIZED;
+					//previous_status.push(PROCESSING_QUERY);
+					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+				}
+				*_rc=-1;	// an error happened, we should destroy the Session
+				return ret;
+			} else {
+				proxy_warning("Error while setting TIME_ZONE: %d, %s\n", myerr, mysql_error(myconn->mysql));
+					// we won't go back to PROCESSING_QUERY
+				st=previous_status.top();
+				previous_status.pop();
+				char sqlstate[10];
+				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->fd=0;
+				//status=WAITING_CLIENT_DATA;
+				//client_myds->DSS=STATE_SLEEP;
+				RequestEnd(myds);
 			}
 		} else {
 			// rc==1 , nothing to do for now
@@ -1917,6 +2295,15 @@ handler_again:
 						if (handler_again___verify_backend_autocommit()) {
 							goto handler_again;
 						}
+						if (handler_again___verify_backend_sql_log_bin()) {
+							goto handler_again;
+						}
+						if (handler_again___verify_backend_sql_mode()) {
+							goto handler_again;
+						}
+						if (handler_again___verify_backend_time_zone()) {
+							goto handler_again;
+						}
 					if (status==PROCESSING_STMT_EXECUTE) {
 						CurrentQuery.mysql_stmt=myconn->local_stmts->find(CurrentQuery.stmt_global_id);
 						if (CurrentQuery.mysql_stmt==NULL) {
@@ -2393,6 +2780,36 @@ handler_again:
 			}
 			break;
 
+		case SETTING_SQL_LOG_BIN:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_SQL_LOG_BIN(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) // we have an error we can't handle
+					return -1;
+			}
+			break;
+
+		case SETTING_SQL_MODE:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_SQL_MODE(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) // we have an error we can't handle
+					return -1;
+			}
+			break;
+
+		case SETTING_TIME_ZONE:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_TIME_ZONE(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) // we have an error we can't handle
+					return -1;
+			}
+			break;
+
 		case SETTING_INIT_CONNECT:
 			{
 				int rc=0;
@@ -2860,6 +3277,125 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	if (prepared) {	// for prepared statement we exit here
 		goto __exit_set_destination_hostgroup;
+	}
+
+	// handle here #509, #815 and #816
+	if (CurrentQuery.QueryParserArgs.digest_text) {
+		char *dig=CurrentQuery.QueryParserArgs.digest_text;
+		unsigned int nTrx=NumActiveTransactions();
+		if (strncasecmp(dig,(char *)"SET ",4)==0) {
+			// it is a SET command, let's see if we understand it
+			//char *query=(char *)malloc(CurrentQuery.QueryLength+1);
+			//memcpy(query,CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+			//query[CurrentQuery.QueryLength]='\0';
+			int rc;
+			//string *nq= new string(query);
+			//string *nq= new string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
+			if (match_regexes[0]->match(dig)) {
+				// set sql_log_bin
+				//RE2::GlobalReplace(nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
+				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+				opt2->set_case_sensitive(false);
+				//char *pattern=(char *)"SET *(|SESSION +|@@|@@session.)SQL_LOG_BIN *(:|)= *(\\d+) *(?:(--|#))$";
+				char *pattern=(char *)"(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_LOG_BIN *(?:|:)= *(\\d+) *(?:(|-- .*|#.*))$";
+				re2::RE2 *re=new RE2(pattern, *opt2);
+				//string s0;
+				int i;
+				//rc=RE2::PartialMatch(query, *re, &s[0], &s[1], &i);
+				//rc=RE2::PartialMatch(nq, *re, &s[0], &s[1], &i);
+				rc=RE2::PartialMatch(nq, *re, &i);
+				delete re;
+				delete opt2;
+				if (rc && ( i==0 || i==1) ) {
+					//fprintf(stderr,"sql_log_bin=%d\n", i);
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+					if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					l_free(pkt->size,pkt->ptr);
+					RequestEnd(NULL);
+					client_myds->myconn->options.sql_log_bin=i;
+					return true;
+				} else {
+					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
+					return false;
+				}
+			}
+			if (match_regexes[1]->match(dig)) {
+				// set sql_mode
+				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+				opt2->set_case_sensitive(false);
+				char *pattern=(char *)"^(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_MODE *(?:|:)= *(?:'||\")((\\w|,)*)(?:'||\") *(?:(|-- .*|#.*))$";
+				re2::RE2 *re=new RE2(pattern, *opt2);
+				string s;
+				rc=RE2::PartialMatch(nq, *re, &s);
+				delete re;
+				delete opt2;
+				if (rc) {
+					//fprintf(stderr,"sql_mode='%s'\n", s.c_str());
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+					if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					l_free(pkt->size,pkt->ptr);
+					RequestEnd(NULL);
+					uint32_t sql_mode_int=SpookyHash::Hash32(s.c_str(),s.length(),10);
+					if (client_myds->myconn->options.sql_mode_int != sql_mode_int) {
+						//fprintf(stderr,"sql_mode_int='%u'\n", sql_mode_int);
+						client_myds->myconn->options.sql_mode_int = sql_mode_int;
+						if (client_myds->myconn->options.sql_mode) {
+							free(client_myds->myconn->options.sql_mode);
+						}
+						client_myds->myconn->options.sql_mode=strdup(s.c_str());
+					}
+					return true;
+				} else {
+					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
+					return false;
+				}
+			}
+			if (match_regexes[2]->match(dig)) {
+				// set time_zone
+				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+				opt2->set_case_sensitive(false);
+				char *pattern=(char *)"^(?: *)SET *(?:|SESSION +|@@|@@session.)TIME_ZONE *(?:|:)= *(?:'||\")((\\w|/|:|\\d|\\+|-)*)(?:'||\") *(?:(|-- .*|#.*))$";
+				re2::RE2 *re=new RE2(pattern, *opt2);
+				string s;
+				rc=RE2::PartialMatch(nq, *re, &s);
+				delete re;
+				delete opt2;
+				if (rc) {
+					//fprintf(stderr,"time_zone='%s'\n", s.c_str());
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+					if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					l_free(pkt->size,pkt->ptr);
+					RequestEnd(NULL);
+					uint32_t time_zone_int=SpookyHash::Hash32(s.c_str(),s.length(),10);
+					if (client_myds->myconn->options.time_zone_int != time_zone_int) {
+						//fprintf(stderr,"time_zone_int='%u'\n", time_zone_int);
+						client_myds->myconn->options.time_zone_int = time_zone_int;
+						if (client_myds->myconn->options.time_zone) {
+							free(client_myds->myconn->options.time_zone);
+						}
+						client_myds->myconn->options.time_zone=strdup(s.c_str());
+					}
+					return true;
+				} else {
+					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
+					return false;
+				}
+			}
+		}
 	}
 
 	if (mirror==true) { // for mirror session we exit here
