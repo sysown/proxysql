@@ -159,6 +159,15 @@ void Query_Info::end() {
 		//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
 		stmt_info=NULL;
 	}
+	if (stmt_meta) { // fix bug #796: memory is not freed in case of error during STMT_EXECUTE
+		if (stmt_meta->pkt) {
+			uint32_t stmt_global_id=0;
+			memcpy(&stmt_global_id,(char *)(stmt_meta->pkt)+5,sizeof(uint32_t));
+			sess->SLDH->reset(stmt_global_id);
+			free(stmt_meta->pkt);
+			stmt_meta->pkt=NULL;
+		}
+	}
 }
 
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
