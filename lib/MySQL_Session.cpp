@@ -244,6 +244,8 @@ MySQL_Session::MySQL_Session() {
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
+	sticky_flag=false;
+	sticky_flag_value=0;
 	mirror_hostgroup=-1;
 	mirror_flagOUT=-1;
 	transaction_persistent_hostgroup=-1;

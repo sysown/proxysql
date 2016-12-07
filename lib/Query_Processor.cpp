@@ -42,7 +42,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=30;
+		num_fields=31;
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -87,15 +87,16 @@ class QP_rule_text {
 		itostr(pta[18], (long long)QPr->timeout);
 		itostr(pta[19], (long long)QPr->retries);
 		itostr(pta[20], (long long)QPr->delay);
-		itostr(pta[21], (long long)QPr->mirror_flagOUT);
-		itostr(pta[22], (long long)QPr->mirror_hostgroup);
-		pta[23]=strdup_null(QPr->error_msg);
-		itostr(pta[24], (long long)QPr->sticky_conn);
-		itostr(pta[25], (long long)QPr->multiplex);
-		itostr(pta[26], (long long)QPr->log);
-		itostr(pta[27], (long long)QPr->apply);
-		pta[28]=strdup_null(QPr->comment); // issue #643
-		itostr(pta[29], (long long)QPr->hits);
+                itostr(pta[21], (long long)QPr->sticky_flag);
+		itostr(pta[22], (long long)QPr->mirror_flagOUT);
+		itostr(pta[23], (long long)QPr->mirror_hostgroup);
+		pta[24]=strdup_null(QPr->error_msg);
+		itostr(pta[25], (long long)QPr->sticky_conn);
+		itostr(pta[26], (long long)QPr->multiplex);
+		itostr(pta[27], (long long)QPr->log);
+		itostr(pta[28], (long long)QPr->apply);
+		pta[29]=strdup_null(QPr->comment); // issue #643
+		itostr(pta[30], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -431,7 +432,7 @@ void Query_Processor::wrunlock() {
 
 
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int sticky_conn, int multiplex, int log, bool apply, char *comment) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, bool sticky_flag, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int sticky_conn, int multiplex, int log, bool apply, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -463,6 +464,7 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->timeout=timeout;
 	newQR->retries=retries;
 	newQR->delay=delay;
+	newQR->sticky_flag=sticky_flag;
 	newQR->mirror_flagOUT=mirror_flagOUT;
 	newQR->mirror_hostgroup=mirror_hostgroup;
 	newQR->error_msg=(error_msg ? strdup(error_msg) : NULL);
@@ -599,6 +601,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"timeout");
 	result->add_column_definition(SQLITE_TEXT,"retries");
 	result->add_column_definition(SQLITE_TEXT,"delay");
+	result->add_column_definition(SQLITE_TEXT,"sticky_flag");
 	result->add_column_definition(SQLITE_TEXT,"mirror_flagOUT");
 	result->add_column_definition(SQLITE_TEXT,"mirror_hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"error_msg");
@@ -722,7 +725,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					( qr1->digest ? buf : NULL ) ,
 					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern, (char *)re_mod.c_str(),
 					qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup,
-					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
+					qr1->cache_ttl, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay, qr1->sticky_flag, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
 					qr1->error_msg, qr1->sticky_conn, qr1->multiplex, qr1->log, qr1->apply,
 					qr1->comment);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
@@ -742,6 +745,9 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	QP_rule_t *qr;
 	re2_t *re2p;
 	int flagIN=0;
+	if (sess->sticky_flag) {
+		flagIN=sess->sticky_flag_value;
+	}
 	int reiterate=mysql_thread___query_processor_iterations;
 	if (sess->mirror==true) {
 		// we are into a mirror session
@@ -886,6 +892,15 @@ __internal_loop:
 			// Note: negative delay means this rule doesn't change 
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
       ret->delay=qr->delay;
+    }
+    if (qr->sticky_flag==true) {
+        proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set sticky flag: %d\n", qr->rule_id, flagIn);
+        sess->sticky_flag = true;
+        sess->sticky_flag_value = flagIN;
+    } else {
+        proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has reset sticky flag\n", qr->rule_id);
+        sess->sticky_flag = false;
+        sess->sticky_flag_value = 0;
     }
     if (qr->mirror_flagOUT >= 0) {
 			// Note: negative mirror_flagOUT means this rule doesn't change the mirror flagOUT
