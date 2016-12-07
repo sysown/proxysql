@@ -13,6 +13,8 @@
 #include <libdaemon/dpid.h>
 #include <libdaemon/dexec.h>
 
+using namespace proxysql;
+
 // MariaDB client library redefines dlerror(), see https://mariadb.atlassian.net/browse/CONC-101
 #ifdef dlerror
 #undef dlerror
@@ -141,7 +143,7 @@ int socket_fd;
 
 
 Query_Cache *GloQC;
-MySQL_Authentication *GloMyAuth;
+auth::Auth *GloMyAuth;
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH;
@@ -280,7 +282,7 @@ void ProxySQL_Main_init_Admin_module() {
 }
 
 void ProxySQL_Main_init_Auth_module() {
-	GloMyAuth = new MySQL_Authentication();
+	GloMyAuth = new auth::Auth();
 	GloMyAuth->print_version();
 	GloAdmin->init_users();
 }
