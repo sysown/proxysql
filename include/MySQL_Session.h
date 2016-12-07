@@ -129,8 +129,7 @@ class MySQL_Session
 	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
-	bool sticky_flag;
-	int sticky_flag_value;
+	int next_query_flagIN;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
 	int active_transactions;
