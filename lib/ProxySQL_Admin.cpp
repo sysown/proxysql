@@ -2153,8 +2153,8 @@ void *child_mysql(void *arg) {
 //	__thr_sfp=l_mem_init();
 
 	GloMTH->wrlock();
-	mysql_thread___server_version=GloMTH->get_variable((char *)"server_version");
-	mysql_thread___default_schema=GloMTH->get_variable((char *)"default_schema");
+	//mysql_thread___server_version=GloMTH->get_variable((char *)"server_version");
+	//mysql_thread___default_schema=GloMTH->get_variable((char *)"default_schema");
 	{
 		char *s=GloMTH->get_variable((char *)"server_capabilities");
 		mysql_thread___server_capabilities=atoi(s);
@@ -2181,7 +2181,7 @@ void *child_mysql(void *arg) {
 	fds[0].fd=client;
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
-
+	free(arg);
 	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
 	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 
@@ -2230,8 +2230,8 @@ void *child_mysql(void *arg) {
 
 __exit_child_mysql:
 	//delete sess;
-	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
-	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
+	//if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
+	//if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	delete mysql_thr;
 //	l_mem_destroy(__thr_sfp);
 	return NULL;
@@ -2415,6 +2415,8 @@ __end_while_pool:
 
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
+				if (add) free(add);
+				if (port) free(port);
 			}
 //	FIXME: disabling this part until telnet modules will be implemented
 //			for (j=0; j<S_amll.ifaces_telnet_admin->ifaces->len; j++) {
@@ -2439,9 +2441,13 @@ __end_while_pool:
 		close(fds[i].fd);
 		c_split_2(socket_names[i], ":" , &add, &port);
 		if (atoi(port)==0) {
-			if (socket_names[i])
+			if (socket_names[i]) {
 				unlink(socket_names[i]);
+			}
 		}
+		if (socket_names[i]) free(socket_names[i]);
+		if (add) free(add);
+		if (port) free(port);
 	}
 	free(arg);
 	return NULL;
@@ -2740,6 +2746,21 @@ void ProxySQL_Admin::admin_shutdown() {
 	// delete the scheduler
 	delete scheduler;
 	scheduler=NULL;
+	if (variables.mysql_ifaces) {
+		free(variables.mysql_ifaces);
+	}
+	if (variables.admin_credentials) {
+		free(variables.admin_credentials);
+	}
+	if (variables.stats_credentials) {
+		free(variables.stats_credentials);
+	}
+	if (variables.telnet_admin_ifaces) {
+		free(variables.telnet_admin_ifaces);
+	}
+	if (variables.telnet_stats_ifaces) {
+		free(variables.telnet_stats_ifaces);
+	}
 };
 
 ProxySQL_Admin::~ProxySQL_Admin() {
@@ -3142,10 +3163,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
 			if (variables.mysql_ifaces)
 				free(variables.mysql_ifaces);
-			variables.mysql_ifaces=strdup(value);
-			if (update_creds && variables.mysql_ifaces) {
-				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
-			}
+				variables.mysql_ifaces=strdup(value);
+				if (update_creds && variables.mysql_ifaces) {
+					S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
+				}
 			return true;
 		} else {
 			return false;

@@ -148,6 +148,15 @@ MySQL_Monitor_Connection_Pool::MySQL_Monitor_Connection_Pool() {
 }
 
 MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
+	// FIXME: destructor is yet not completed
+	std::map<char *, PtrArray *>::iterator it;
+	for(it = my_connections.begin(); it != my_connections.end(); it++) {
+		PtrArray *lst=it->second;
+		delete lst;
+		char *host=it->first;
+		free(host);
+	}
+	my_connections.erase(my_connections.begin(),my_connections.end());
 }
 
 void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
@@ -1537,6 +1546,7 @@ __monitor_run:
 			}
 			for (int i=0; i<qsize; i++) {
 				threads_aux[i]->join();
+				delete threads_aux[i];
 			}
 			free(threads_aux);
 		}
@@ -1547,6 +1557,7 @@ __monitor_run:
 	}
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i]->join();
+		delete threads[i];
 	}
 	free(threads);
 	pthread_join(monitor_connect_thread,NULL);

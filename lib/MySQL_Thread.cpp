@@ -1791,6 +1791,8 @@ void MySQL_Threads_Handler::stop_listeners() {
 }
 
 MySQL_Threads_Handler::~MySQL_Threads_Handler() {
+	if (variables.monitor_username) { free(variables.monitor_username); variables.monitor_username=NULL; }
+	if (variables.monitor_password) { free(variables.monitor_password); variables.monitor_password=NULL; }
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
@@ -1875,6 +1877,8 @@ MySQL_Thread::~MySQL_Thread() {
 	//	free(my_idle_myds);
 	GloQPro->end_thread();
 
+	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username=NULL; }
+	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password=NULL; }
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }

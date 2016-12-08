@@ -399,6 +399,11 @@ Query_Processor::Query_Processor() {
 Query_Processor::~Query_Processor() {
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete commands_counters[i];
 	__reset_rules(&rules);
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+		delete qds;
+	}
+	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 };
 
 // This function is called by each thread when it starts. It create a Query Processor Table for each thread
