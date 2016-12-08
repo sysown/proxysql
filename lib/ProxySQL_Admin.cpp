@@ -4245,6 +4245,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+		MyHGM->servers_add(resultset);
+/*
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			MySerStatus status=MYSQL_SERVER_STATUS_ONLINE;
@@ -4273,6 +4275,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 			);
 			//MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
 		}
+*/
 	}
 	if (resultset) delete resultset;
 	resultset=NULL;

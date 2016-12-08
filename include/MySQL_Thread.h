@@ -347,6 +347,7 @@ class MySQL_Threads_Handler
 		int query_processor_iterations;
 		int query_processor_regex;
 		int long_query_time;
+		int hostgroup_manager_verbose;
 		char *init_connect;
 		char *default_sql_mode;
 		char *default_time_zone;

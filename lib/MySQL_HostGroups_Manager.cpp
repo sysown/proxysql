@@ -12,6 +12,16 @@
 //#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0, hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306, weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3)) NOT NULL DEFAULT 0, PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 
+#define SAFE_SQLITE3_STEP(_stmt) do {\
+  do {\
+    rc=sqlite3_step(_stmt);\
+    if (rc!=SQLITE_DONE) {\
+      assert(rc==SQLITE_LOCKED);\
+      usleep(100);\
+    }\
+  } while (rc!=SQLITE_DONE);\
+} while (0)
+
 extern ProxySQL_Admin *GloAdmin;
 
 extern MySQL_Threads_Handler *GloMTH;
@@ -372,7 +382,11 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 #endif
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
+#ifdef DEBUG
 	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+#else
+	mydb->open((char *)"file:mem_mydb?mode=memory", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+#endif /* DEBUG */
 	mydb->execute(MYHGM_MYSQL_SERVERS);
 	mydb->execute(MYHGM_MYSQL_SERVERS_INCOMING);
 	mydb->execute(MYHGM_MYSQL_REPLICATION_HOSTGROUPS);
@@ -432,20 +446,119 @@ unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 // add a new row in mysql_servers_incoming
 // we always assume that the calling thread has acquired a rdlock()
 bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t p, unsigned int _weight, enum MySerStatus status, unsigned int _comp /*, uint8_t _charset */, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms , char *comment) {
-	bool ret;
+	bool ret=true;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u , status %u, %s compression, max_connections %d, max_replication_lag %u, use_ssl=%u, max_latency_ms=%u\n", add,p,hid,_weight,status, (_comp ? "with" : "without") /*, _charset */ , _max_connections, _max_replication_lag, _use_ssl, _max_latency_ms);
-	char *q=(char *)"INSERT INTO mysql_servers_incoming VALUES (%u, \"%s\", %u, %u, %u, %u, %u, %u, %u, %u, '%s')";
-	char *o=escape_string_single_quotes(comment,false);
-	char *query=(char *)malloc(strlen(q)+strlen(add)+128+strlen(o));
-	sprintf(query,q,hid,add,p,_weight,status,_comp /*,_charset */, _max_connections, _max_replication_lag, _use_ssl, _max_latency_ms,o);
-	ret=mydb->execute(query);
-	free(query);
-	if (o!=comment) { // there was a copy
-		free(o);
-	}
+//	char *q=(char *)"INSERT INTO mysql_servers_incoming VALUES (%u, \"%s\", %u, %u, %u, %u, %u, %u, %u, %u, '%s')";
+//	char *o=escape_string_single_quotes(comment,false);
+//	char *query=(char *)malloc(strlen(q)+strlen(add)+128+strlen(o));
+//	sprintf(query,q,hid,add,p,_weight,status,_comp /*,_charset */, _max_connections, _max_replication_lag, _use_ssl, _max_latency_ms,o);
+//	ret=mydb->execute(query);
+//	free(query);
+//	if (o!=comment) { // there was a copy
+//		free(o);
+//	}
+
+	int rc;
+	sqlite3_stmt *statement=NULL;
+	sqlite3 *mydb3=mydb->get_db();
+	//query=(char *)"INSERT OR REPLACE INTO mysql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
+	char *query=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 1, hid); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement, 2, add, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 3, p); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 4, _weight); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 5, status); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 6, _comp); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 7, _max_connections); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 8, _max_replication_lag); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 9, _use_ssl); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 10, _max_latency_ms); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement, 11, comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+
+	SAFE_SQLITE3_STEP(statement);
+	rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+	rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+	sqlite3_finalize(statement);
+
 	return ret;
 }
 
+int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
+	if (resultset==NULL) {
+		return 0;
+	}
+	int rc;
+	sqlite3_stmt *statement1=NULL;
+	sqlite3_stmt *statement32=NULL;
+	sqlite3 *mydb3=mydb->get_db();
+	char *query1=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+	char *query32=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11), (?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22), (?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33), (?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44), (?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55),(?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66),(?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77),(?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88),(?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99), (?100, ?101, ?102, ?103, ?104, ?105, ?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120, ?121), (?122, ?123, ?124, ?125, ?126, ?127, ?128, ?129, ?130, ?131, ?132), (?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140, ?141, ?142, ?143), (?144, ?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165), (?166, ?167, ?168, ?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176), (?177, ?178, ?179, ?180, ?181, ?182, ?183, ?184, ?185, ?186, ?187), (?188, ?189, ?190, ?191, ?192, ?193, ?194, ?195, ?196, ?197, ?198), (?199, ?200, ?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208, ?209), (?210, ?211, ?212, ?213, ?214, ?215, ?216, ?217, ?218, ?219, ?220), (?221, ?222, ?223, ?224, ?225, ?226, ?227, ?228, ?229, ?230, ?231), (?232, ?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240, ?241, ?242), (?243, ?244, ?245, ?246, ?247, ?248, ?249, ?250, ?251, ?252, ?253), (?254, ?255, ?256, ?257, ?258, ?259, ?260, ?261, ?262, ?263, ?264), (?265, ?266, ?267, ?268, ?269, ?270, ?271, ?272, ?273, ?274, ?275), (?276, ?277, ?278, ?279, ?280, ?281, ?282, ?283, ?284, ?285, ?286), (?287, ?288, ?289, ?290, ?291, ?292, ?293, ?294, ?295, ?296, ?297), (?298, ?299, ?300, ?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308), (?309, ?310, ?311, ?312, ?313, ?314, ?315, ?316, ?317, ?318, ?319), (?320, ?321, ?322, ?323, ?324, ?325, ?326, ?327, ?328, ?329, ?330), (?331, ?332, ?333, ?334, ?335, ?336, ?337, ?338, ?339, ?340, ?341), (?342, ?343, ?344, ?345, ?346, ?347, ?348, ?349, ?350, ?351, ?352)";
+	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	assert(rc==SQLITE_OK);
+	rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+	assert(rc==SQLITE_OK);
+	MySerStatus status1=MYSQL_SERVER_STATUS_ONLINE;
+	int row_idx=0;
+	int max_bulk_row_idx=resultset->rows_count/32;
+	max_bulk_row_idx=max_bulk_row_idx*32;
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r1=*it;
+		status1=MYSQL_SERVER_STATUS_ONLINE;
+		if (strcasecmp(r1->fields[3],"ONLINE")) {
+			if (!strcasecmp(r1->fields[3],"SHUNNED")) {
+				status1=MYSQL_SERVER_STATUS_SHUNNED;
+			} else {
+				if (!strcasecmp(r1->fields[3],"OFFLINE_SOFT")) {
+					status1=MYSQL_SERVER_STATUS_OFFLINE_SOFT;
+				} else {
+					if (!strcasecmp(r1->fields[3],"OFFLINE_HARD")) {
+						status1=MYSQL_SERVER_STATUS_OFFLINE_HARD;
+					}
+				}
+			}
+		}
+		int idx=row_idx%32;
+		if (row_idx<max_bulk_row_idx) { // bulk
+			rc=sqlite3_bind_int64(statement32, (idx*11)+1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement32, (idx*11)+2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+4, atoi(r1->fields[4])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+5, status1); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+6, atoi(r1->fields[5])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement32, (idx*11)+11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			if (idx==31) {
+				SAFE_SQLITE3_STEP(statement32);
+				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+			}
+		} else { // single row
+			rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 4, atoi(r1->fields[4])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 5, status1); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 6, atoi(r1->fields[5])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			SAFE_SQLITE3_STEP(statement1);
+			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+		}
+		row_idx++;
+	}
+	sqlite3_finalize(statement1);
+	sqlite3_finalize(statement32);
+	return 0;
+}
 
 SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
 	int cols=0;
@@ -489,8 +602,9 @@ bool MySQL_HostGroups_Manager::commit() {
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 
-	mydb->execute("DELETE FROM mysql_servers");
-	generate_mysql_servers_table();
+	// This seems unnecessary. Removed as part of issue #829
+	//mydb->execute("DELETE FROM mysql_servers");
+	//generate_mysql_servers_table();
 
 // INSERT OR IGNORE INTO mysql_servers SELECT ... FROM mysql_servers_incoming
 //	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status, compression, max_connections) SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections FROM mysql_servers_incoming\n");
@@ -504,6 +618,20 @@ bool MySQL_HostGroups_Manager::commit() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+
+		// optimization #829
+		int rc;
+		sqlite3_stmt *statement1=NULL;
+		sqlite3_stmt *statement2=NULL;
+		sqlite3 *mydb3=mydb->get_db();
+		//char *query=(char *)"INSERT INTO mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+		char *query1=(char *)"UPDATE mysql_servers SET mem_pointer = ?1 WHERE hostgroup_id = ?2 AND hostname = ?3 AND port = ?4";
+		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		assert(rc==SQLITE_OK);
+		char *query2=(char *)"UPDATE mysql_servers SET weight = ?1 , status = ?2 , compression = ?3 , max_connections = ?4 , max_replication_lag = ?5 , use_ssl = ?6 , max_latency_ms = ?7 , comment = ?8 WHERE hostgroup_id = ?9 AND hostname = ?10 AND port = ?11";
+		rc=sqlite3_prepare_v2(mydb3, query2, -1, &statement2, 0);
+		assert(rc==SQLITE_OK);
+
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[11]); // increase this index every time a new column is added
@@ -514,7 +642,16 @@ bool MySQL_HostGroups_Manager::commit() {
 				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]), atoi(r->fields[8]), atoi(r->fields[9]), r->fields[10]); // add new fields here if adding more columns in mysql_servers
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), mysrvc, atoi(r->fields[0]));
 				add(mysrvc,atoi(r->fields[0]));
+				ptr=(uintptr_t)mysrvc;
+				rc=sqlite3_bind_int64(statement1, 1, ptr); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 2, atoi(r->fields[0])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 3,  r->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 4, atoi(r->fields[2])); assert(rc==SQLITE_OK);
+				SAFE_SQLITE3_STEP(statement1);
+				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 			} else {
+				bool run_update=false;
 				MySrvC *mysrvc=(MySrvC *)ptr;
 				// carefully increase the 2nd index by 1 for every new column added
 				if (atoi(r->fields[3])!=atoi(r->fields[12])) {
@@ -553,20 +690,41 @@ bool MySQL_HostGroups_Manager::commit() {
 					free(mysrvc->comment);
 					mysrvc->comment=strdup(r->fields[19]);
 				}
+				if (run_update) {
+					rc=sqlite3_bind_int64(statement2, 1, mysrvc->weight); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 2, mysrvc->status); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 3, mysrvc->compression); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 4, mysrvc->max_connections); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 5, mysrvc->max_replication_lag); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 6, mysrvc->use_ssl); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 7, mysrvc->max_latency_us/1000); assert(rc==SQLITE_OK);
+
+					rc=sqlite3_bind_text(statement2, 8,  mysrvc->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 9, mysrvc->myhgc->hid); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_text(statement2, 10,  mysrvc->address, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 11, mysrvc->port); assert(rc==SQLITE_OK);
+					SAFE_SQLITE3_STEP(statement2);
+					rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
+					rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
+				}
 			}
 		}
+		sqlite3_finalize(statement1);
+		sqlite3_finalize(statement2);
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
 	mydb->execute("DELETE FROM mysql_servers_incoming");	
 
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
-	mydb->execute("DELETE FROM mysql_servers");
+	// this was optimized running UPDATE statements when appropriate , #829
+	//proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+	//mydb->execute("DELETE FROM mysql_servers");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_replication_hostgroups\n");
 	mydb->execute("DELETE FROM mysql_replication_hostgroups");
 
-	generate_mysql_servers_table();
+	// this was optimized running UPDATE statements when appropriate , #829
+	//generate_mysql_servers_table();
 	generate_mysql_replication_hostgroups_table();
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
@@ -596,12 +754,19 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
+	int rc;
+	sqlite3_stmt *statement=NULL;
+	sqlite3 *mydb3=mydb->get_db();
+	char *query=(char *)"INSERT INTO mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	assert(rc==SQLITE_OK);
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
 			uintptr_t ptr=(uintptr_t)mysrvc;
+/*
 			char *q=(char *)"INSERT INTO mysql_servers VALUES(%d,\"%s\",%d,%d,%d,%u,%u,%u,%u,%u,'%s',%llu)";
 			char *o=escape_string_single_quotes(mysrvc->comment, false);
 			char *query=(char *)malloc(strlen(q)+8+strlen(mysrvc->address)+8+8+8+8+8+16+8+16+32+strlen(o));
@@ -609,30 +774,54 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 			if (o!=mysrvc->comment) { // there was a copy
 				free(o);
 			}
-			char *st;
-			switch (mysrvc->status) {
-				case 0:
-					st=(char *)"ONLINE";
-					break;
-				case 2:
-					st=(char *)"OFFLINE_SOFT";
-					break;
-				case 3:
-					st=(char *)"OFFLINE_HARD";
-					break;
-				default:
-				case 1:
-				case 4:
-					st=(char *)"SHUNNED";
-					break;
+*/
+			if (GloMTH->variables.hostgroup_manager_verbose) {
+				char *st;
+				switch (mysrvc->status) {
+					case 0:
+						st=(char *)"ONLINE";
+						break;
+					case 2:
+						st=(char *)"OFFLINE_SOFT";
+						break;
+					case 3:
+						st=(char *)"OFFLINE_HARD";
+						break;
+					default:
+					case 1:
+					case 4:
+						st=(char *)"SHUNNED";
+						break;
+				}
+				fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
-			fprintf(stderr,"HID: %d , address: %s , port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
+/*
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-			//fprintf(stderr,"%s\n",query);
+			fprintf(stderr,"%s\n",query);
 			mydb->execute(query);
 			free(query);
+*/
+	//query=(char *)"INSERT OR REPLACE INTO mysql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
+	rc=sqlite3_bind_int64(statement, 1, mysrvc->myhgc->hid); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement, 2, mysrvc->address, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 3, mysrvc->port); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 4, mysrvc->weight); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 5, mysrvc->status); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 6, mysrvc->compression); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 7, mysrvc->max_connections); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 8, mysrvc->max_replication_lag); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 9, mysrvc->use_ssl); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 10, mysrvc->max_latency_us/1000); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement, 11, mysrvc->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_int64(statement, 12, ptr); assert(rc==SQLITE_OK);
+
+	SAFE_SQLITE3_STEP(statement);
+	rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+	rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+
 		}
 	}
+	sqlite3_finalize(statement);
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
