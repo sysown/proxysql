@@ -54,7 +54,7 @@ class MySQL_Connection {
 		MYSQL_RES *stmt_result;
 		stmt_execute_metadata_t *stmt_meta;
 	} query;
-	char scramble_buff[40];
+	uint8_t scramble_buff[40];
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
