@@ -153,20 +153,15 @@ MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
 void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 	unsigned long long now=monotonic_time();
 	pthread_mutex_lock(&mutex);
-	std::map<char *, std::list<MYSQL *>*>::iterator it;
 	//fprintf(stderr,"conn pool size: %d\n",my_connections.size());
-	unsigned int totconn;
-	totconn=0;
-	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		std::list<MYSQL *> *lst=it->second;
-		totconn+=lst->size();
-	}
+	unsigned int totconn = 0;
+	for(auto& it : my_connections)
+		totconn+=it.second->size();
 	//fprintf(stderr,"tot conn in pool: %d\n",totconn);
-	for(it = my_connections.begin(); it != my_connections.end(); it++) {
+	for(auto it = my_connections.begin(); it != my_connections.end();) {
 		std::list<MYSQL *> *lst=it->second;
 		if (!lst->empty()) {
-			std::list<MYSQL *>::const_iterator it3;
-			for(it3 = lst->begin(); it3 != lst->end(); it3++) {
+			for(auto it3 = lst->begin(); it3 != lst->end();) {
 				//it3=lst->begin();
 				MYSQL *my=*it3;
 				unsigned long long then=0;
@@ -177,11 +172,13 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 					WorkItem *item;
 					item=new WorkItem(mmsd,NULL);
 					GloMyMon->queue.add(item);
-					lst->remove(*it3);
-				}
+					it3 = lst->erase(it3);
+				} else
+					++it3;
 			}
+			++it;
 		} else {
-			my_connections.erase(it);
+			it = my_connections.erase(it);
 		}
 	}
 	pthread_mutex_unlock(&mutex);
