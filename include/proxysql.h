@@ -67,7 +67,6 @@
 #include "my_global.h"
 #include "my_pthread.h"
 #include "mysql.h"
-#include "mysql_com.h"
 
 #include "proxysql_mem.h"
 
