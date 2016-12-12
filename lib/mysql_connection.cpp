@@ -1191,9 +1191,15 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				set_status_user_variable(true);
 			}
 		}
-		// For issue #555 , multiplexing is disabled if --safe-updates is used
-		if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
+		if (strncasecmp(query_digest_text,"SET ",4)==0) {
+			// For issue #555 , multiplexing is disabled if --safe-updates is used
+			if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
 				set_status_user_variable(true);
+			} else if (strcasecmp(query_digest_text,"SET FOREIGN_KEY_CHECKS=?")==0) { // see #835
+				set_status_user_variable(true);
+			} else if (strcasecmp(query_digest_text,"SET UNIQUE_CHECKS=?")==0) { // see #835
+				set_status_user_variable(true);
+			}
 		}
 	}
 	if (get_status_prepared_statement()==false) { // we search if prepared was already executed
