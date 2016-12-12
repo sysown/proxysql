@@ -239,6 +239,7 @@ static char * mysql_thread_variables_names[]= {
 //	(char *)"stmt_multiplexing",
 	(char *)"forward_autocommit",
 	(char *)"enforce_autocommit_on_reads",
+	(char *)"hostgroup_manager_verbose",
 	(char *)"threshold_query_length",
 	(char *)"threshold_resultset_size",
 	(char *)"wait_timeout",
@@ -330,6 +331,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_writer_is_also_reader=true;
 	variables.max_allowed_packet=4*1024*1024;
 	variables.max_transaction_time=4*3600*1000;
+	variables.hostgroup_manager_verbose=1;
 	variables.threshold_query_length=512*1024;
 	variables.threshold_resultset_size=4*1024*1024;
 	variables.wait_timeout=8*3600*1000;
@@ -579,6 +581,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 	if (!strcasecmp(name,"max_allowed_packet")) return (int)variables.max_allowed_packet;
 	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
+	if (!strcasecmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
 	if (!strcasecmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
 	if (!strcasecmp(name,"threshold_resultset_size")) return (int)variables.threshold_resultset_size;
 	if (!strcasecmp(name,"wait_timeout")) return (int)variables.wait_timeout;
@@ -799,6 +802,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"max_transaction_time")) {
 		sprintf(intbuf,"%d",variables.max_transaction_time);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"hostgroup_manager_verbose")) {
+		sprintf(intbuf,"%d",variables.hostgroup_manager_verbose);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"threshold_query_length")) {
@@ -1111,6 +1118,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 20*24*3600*1000) {
 			variables.max_transaction_time=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"hostgroup_manager_verbose")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1) {
+			variables.hostgroup_manager_verbose=intv;
 			return true;
 		} else {
 			return false;
