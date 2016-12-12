@@ -10,7 +10,7 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
-CURVER=1.3.0g
+CURVER=1.3.1
 MAKEOPT="-j 8"
 DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 ifeq ($(wildcard /usr/lib/systemd/systemd), /usr/lib/systemd/systemd)
