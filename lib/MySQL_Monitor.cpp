@@ -611,7 +611,7 @@ void * monitor_read_only_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, now-mmsd->t1);
+			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -627,7 +627,7 @@ void * monitor_read_only_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, now-mmsd->t1);
+			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
