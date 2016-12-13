@@ -390,8 +390,10 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_SERVERS);
 	mydb->execute(MYHGM_MYSQL_SERVERS_INCOMING);
 	mydb->execute(MYHGM_MYSQL_REPLICATION_HOSTGROUPS);
+	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	MyHostGroups=new PtrArray();
 	incoming_replication_hostgroups=NULL;
+	incoming_group_replication_hostgroups=NULL;
 	HGCU_thread = new std::thread(&HGCU_thread_run);
 }
 
@@ -907,6 +909,14 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 	incoming_replication_hostgroups=NULL;
 }
 
+
+void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table() {
+	if (incoming_group_replication_hostgroups==NULL) {
+		return;
+	}
+	proxy_info("New mysql_group_replication_hostgroups table\n");
+}
+
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	wrlock();
 
@@ -1390,6 +1400,10 @@ __exit_get_multiple_idle_connections:
 
 void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_result *s) {
 	incoming_replication_hostgroups=s;
+}
+
+void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3_result *s) {
+	incoming_group_replication_hostgroups=s;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {

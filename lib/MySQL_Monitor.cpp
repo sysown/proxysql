@@ -121,13 +121,14 @@ static void close_mysql(MYSQL *my) {
 }
 
 
-
+/*
 struct cmp_str {
 	bool operator()(char const *a, char const *b) const
 	{
 		return strcmp(a, b) < 0;
 	}
 };
+*/
 
 class MySQL_Monitor_Connection_Pool {
 	private:
@@ -1585,3 +1586,44 @@ __monitor_run:
 	}
 	return NULL;
 };
+
+
+MyGR_monitor_node::MyGR_monitor_node(char *_a, int _p, int _whg) {
+	addr=NULL;
+	if (_a) {
+		addr=strdup(_a);
+	}
+	port=_p;
+	idx_last_entry=-1;
+	writer_hostgroup=_whg;
+}
+
+MyGR_monitor_node::~MyGR_monitor_node() {
+	if (addr) {
+		free(addr);
+	}
+}
+
+// return true if status changed
+bool MyGR_monitor_node::add_entry(unsigned long long _ct, long long _tb, bool _pp, bool _ro) {
+	bool ret=false;
+	if (idx_last_entry==-1) ret=true;
+	int prev_last_entry=idx_last_entry;
+	idx_last_entry++;
+	if (idx_last_entry>=MyGR_Nentries) {
+		idx_last_entry=0;
+	}
+	last_entries[idx_last_entry].check_time=_ct;
+	last_entries[idx_last_entry].transactions_behind=_tb;
+	last_entries[idx_last_entry].primary_partition=_pp;
+	last_entries[idx_last_entry].read_only=_ro;
+	if (ret==false) {
+		if (last_entries[idx_last_entry].primary_partition != last_entries[prev_last_entry].primary_partition) {
+			ret=true;
+		}
+		if (last_entries[idx_last_entry].read_only != last_entries[prev_last_entry].read_only) {
+			ret=true;
+		}
+	}
+	return ret;
+}

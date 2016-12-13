@@ -23,6 +23,38 @@
 
 
 
+struct cmp_str {
+  bool operator()(char const *a, char const *b) const
+  {
+    return strcmp(a, b) < 0;
+  }
+};
+
+#define MyGR_Nentries	10
+
+typedef struct _MyGR_status_entry_t {
+	char *address;
+	int port;
+	unsigned long long check_time;
+	long long transactions_behind;
+	bool primary_partition;
+	bool read_only;
+} MyGR_status_entry_t;
+
+
+class MyGR_monitor_node {
+	public:
+	char *addr;
+	int port;
+	unsigned int writer_hostgroup;
+	int idx_last_entry;
+	MyGR_status_entry_t last_entries[MyGR_Nentries];
+	MyGR_monitor_node(char *_a, int _p, int _whg);
+	~MyGR_monitor_node();
+	bool add_entry(unsigned long long _ct, long long _tb, bool _pp, bool _ro); // return true if status changed
+};
+
+
 class MySQL_Monitor_Connection_Pool;
 
 enum MySQL_Monitor_State_Data_Task_Type {
@@ -79,6 +111,7 @@ class MySQL_Monitor {
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	public:
+	std::map<char *, MyGR_monitor_node *, cmp_str> group_replication_hosts;
 	unsigned int num_threads;
 	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
