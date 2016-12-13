@@ -4,6 +4,8 @@
 #include "re2/regexp.h"
 #include "SpookyV2.h"
 
+using namespace proxysql;
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
@@ -15,7 +17,7 @@
 
 extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 
-extern MySQL_Authentication *GloMyAuth;
+extern auth::Auth *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager *GloMyStmt;
@@ -310,7 +312,7 @@ MySQL_Session::~MySQL_Session() {
 	delete SLDH;
 	if (client_myds) {
 		if (client_authenticated) {
-			GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+			GloMyAuth->get_group<auth::GroupType::FRONTEND>()->decrease_connections(client_myds->myconn->userinfo->username);
 		}
 		delete client_myds;
 	}
@@ -3007,7 +3009,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			int used_users=0;
 			if (admin==false) {
 				client_authenticated=true;
-				free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+				free_users = GloMyAuth->get_group<auth::GroupType::FRONTEND>()->increase_connections(client_myds->myconn->userinfo->username, &used_users);
 			}
 			if (max_connections_reached==true || free_users<0) {
 				*wrong_pass=true;

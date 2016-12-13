@@ -3,7 +3,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-extern MySQL_Authentication *GloMyAuth;
+using namespace proxysql;
+
+extern auth::Auth *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
 
 #ifdef max_allowed_packet
@@ -1118,55 +1120,37 @@ bool MySQL_Protocol::process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len)
 
 bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
-	char *password=NULL;
 
 	if (len!=sizeof(mysql_hdr)+20) {
 		return ret;
 	}
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	int default_hostgroup=-1;
-	bool transaction_persistent;
-	bool _ret_use_ssl=false;
 	unsigned char pass[128];
 	memset(pass,0,128);
 	pkt+=sizeof(mysql_hdr);
 	memcpy(pass, pkt, 20);
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	void *sha1_pass=NULL;
-	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+	auto details = GloMyAuth->get_group<auth::GroupType::FRONTEND>()->lookup(userinfo->username);
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
-	if (password==NULL) {
-		ret=false;
-	} else {
-//		if (pass_len==0 && strlen(password)==0) {
-//			ret=true;
-//		} else {
-			if (password[0]!='*') { // clear text password
-				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-					ret=true;
-				}
-			} else {
-				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
-				if (ret) {
-					if (sha1_pass==NULL) {
-						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-						GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
-					}
-					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-					userinfo->sha1_pass=sha1_pass_hex(reply);
-				}
-			}
-//		}
-//		if (_ret_use_ssl==true) {
-//			ret=false;
-//		}
+	if (!details) {
+		return false;
 	}
-	if (sha1_pass) {
-		free(sha1_pass);
-		sha1_pass=NULL;
+	if (details->password.front() != '*') {
+		proxy_scramble(reply, (*myds)->myconn->scramble_buff, details->password.c_str());
+		if (memcmp(reply, pass, SHA_DIGEST_LENGTH) == 0) {
+			ret = true;
+		}
+	} else {
+		ret = proxy_scramble_sha1((char *)pass, (*myds)->myconn->scramble_buff, details->password.c_str() + 1, reply);
+		if (ret) {
+			if (details->sha1_pass.empty()) {
+				GloMyAuth->get_group<auth::GroupType::FRONTEND>()->set_SHA1((char *)userinfo->username, reply);
+			}
+			if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+			userinfo->sha1_pass = sha1_pass_hex(reply);
+		}
 	}
 	return ret;
 }
@@ -1177,13 +1161,9 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	bool ret=false;
   int cur=sizeof(mysql_hdr);
 	unsigned char *user=NULL;
-	char *password=NULL;
 	char *db=NULL;
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	int default_hostgroup=-1;
-	bool transaction_persistent;
-	bool _ret_use_ssl=false;
 	cur++;
 	user=pkt+cur;
 	cur+=strlen((const char *)user);
@@ -1198,40 +1178,41 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
-	void *sha1_pass=NULL;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+
+	auto details = GloMyAuth->get_group<auth::GroupType::FRONTEND>()->lookup((char *)user);
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
-	(*myds)->sess->default_hostgroup=default_hostgroup;
-	(*myds)->sess->transaction_persistent=transaction_persistent;
-	if (password==NULL) {
-		ret=false;
+	if (!details) {
+		ret = false;
 	} else {
-		if (pass_len==0 && strlen(password)==0) {
-			ret=true;
+		(*myds)->sess->default_hostgroup = details->default_hostgroup;
+		(*myds)->sess->transaction_persistent = details->transaction_persistent;
+		if (pass_len == 0 && details->password.size() == 0) {
+			ret = true;
 		} else {
-			if (password[0]!='*') { // clear text password
-				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-					ret=true;
+			if (details->password.front() != '*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, details->password.c_str());
+				if (memcmp(reply, pass, SHA_DIGEST_LENGTH) == 0) {
+					ret = true;
 				} else {
-					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+					ret = proxy_scramble_sha1((char *)pass, (*myds)->myconn->scramble_buff, details->password.c_str() + 1, reply);
 					if (ret) {
-						if (sha1_pass==NULL) {
-							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						if (details->sha1_pass.empty()) {
+							// Currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+							GloMyAuth->get_group<auth::GroupType::FRONTEND>()->set_SHA1((char *)user, reply);
 						}
 						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-						userinfo->sha1_pass=sha1_pass_hex(reply);
+						userinfo->sha1_pass = sha1_pass_hex(reply);
 					}
 				}
 			}
 		}
-		if (_ret_use_ssl==true) {
-			// if we reached here, use_ssl is false , but _ret_use_ssl is true
-			// it means that a client is required to use SSL , but it is not
-			ret=false;
+		if (details->use_ssl) {
+			// if we reached here, use_ssl is false, but use_ssl is true
+			// it means that a client is required to use SSL, but it is not
+			ret = false;
 		}
 	}
+
 	if (userinfo->username) free(userinfo->username);
 	if (userinfo->password) free(userinfo->password);
 	if (ret==true) {
@@ -1239,21 +1220,12 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
 		userinfo->username=strdup((const char *)user);
-		userinfo->password=strdup((const char *)password);
+		userinfo->password=strdup((const char *)details->password.c_str());
 		if (db) userinfo->set_schemaname(db,strlen(db));
 	} else {
 		// we always duplicate username and password, or crashes happen
 		userinfo->username=strdup((const char *)user);
 		/*if (pass_len) */ userinfo->password=strdup((const char *)"");
-	}
-	//if (password) free(password);
-	if (password) {
-		free(password);
-		password=NULL;
-	}
-	if (sha1_pass) {
-		free(sha1_pass);
-		sha1_pass=NULL;
 	}
 
 	return ret;
@@ -1274,7 +1246,6 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	bool _ret_use_ssl=false;
 
 	memset(pass,0,128);
-	void *sha1_pass=NULL;
 #ifdef DEBUG
 	unsigned char *_ptr=pkt;
 #endif
@@ -1308,21 +1279,8 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	int default_hostgroup=-1;
-	char *default_schema=NULL;
-	bool schema_locked;
-	bool transaction_persistent;
-	bool fast_forward;
-	int max_connections;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
-	//assert(default_hostgroup>=0);
-	(*myds)->sess->default_hostgroup=default_hostgroup;
-	(*myds)->sess->default_schema=default_schema; // just the pointer is passed
-	(*myds)->sess->schema_locked=schema_locked;
-	(*myds)->sess->transaction_persistent=transaction_persistent;
-	(*myds)->sess->session_fast_forward=fast_forward;
-	(*myds)->sess->user_max_connections=max_connections;
-	if (password==NULL) {
+	auto details = GloMyAuth->get_group<auth::GroupType::FRONTEND>()->lookup((char *)user);
+	if (!details) {
 		// this is a workaround for bug #603
 		if ((*myds)->sess->admin==true) {
 			if (strcmp((const char *)user,mysql_thread___monitor_username)==0) {
@@ -1335,7 +1293,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 					(*myds)->sess->session_fast_forward=false;
 					(*myds)->sess->user_max_connections=0;
 					password=l_strdup(mysql_thread___monitor_password);
-				ret=true;
+					ret = true;
 				}
 			} else {
 				ret=false;
@@ -1344,34 +1302,45 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			ret=false;
 		}
 	} else {
-		if (pass_len==0 && strlen(password)==0) {
+		_ret_use_ssl = details->use_ssl;
+		password = strdup(details->password.c_str());
+		(*myds)->sess->default_hostgroup = details->default_hostgroup;
+		(*myds)->sess->default_schema = strdup(details->default_schema.c_str());
+		(*myds)->sess->schema_locked = details->schema_locked;
+		(*myds)->sess->transaction_persistent = details->transaction_persistent;
+		(*myds)->sess->session_fast_forward = details->fast_forward;
+		(*myds)->sess->user_max_connections = details->max_connections;
+
+		if (pass_len == 0 && details->password.size() == 0) {
 			ret=true;
 		} else {
-			if (password[0]!='*') { // clear text password
-				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+			if (details->password.front() != '*') { // clear text password
+				proxy_scramble(reply, (*myds)->myconn->scramble_buff, details->password.c_str());
 				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 					ret=true;
 				}
 			} else {
-				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+				ret=proxy_scramble_sha1((char *)pass, (*myds)->myconn->scramble_buff, details->password.c_str() + 1, reply);
 				if (ret) {
-					if (sha1_pass==NULL) {
+					if (details->sha1_pass.empty()) {
 						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						GloMyAuth->get_group<auth::GroupType::FRONTEND>()->set_SHA1((char *)user, reply);
 					}
 					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-					userinfo->sha1_pass=sha1_pass_hex(reply);
-					}
+					userinfo->sha1_pass = sha1_pass_hex(reply);
 				}
 			}
 		}
-		if (_ret_use_ssl==true) {
+	}
+
+		if(_ret_use_ssl==true) {
 			// if we reached here, use_ssl is false , but _ret_use_ssl is true
 			// it means that a client is required to use SSL , but it is not
 			ret=false;
 		}
 	}
-  proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
+
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
             (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
 	assert(sess);
 	assert(sess->client_myds);
@@ -1413,10 +1382,6 @@ __exit_process_pkt_handshake_response:
 	if (password) {
 		free(password);
 		password=NULL;
-	}
-	if (sha1_pass) {
-		free(sha1_pass);
-		sha1_pass=NULL;
 	}
 
 	//l_free(len,pkt);

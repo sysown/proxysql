@@ -16,8 +16,6 @@ enum log_event_type {
 	PROXYSQL_QUERY
 };
 
-enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
-
 enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CONNECT_START,
 	ASYNC_CONNECT_CONT,
@@ -342,7 +340,6 @@ class AdvancedKV;
 class ProxySQL_Poll;
 class Query_Cache;
 //class Shared_Query_Cache;
-class MySQL_Authentication;
 class MySQL_Connection;
 class MySQL_Protocol;
 class PtrArray;
@@ -960,6 +957,3 @@ extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
 extern __thread unsigned int g_seed;
 #endif /* PROXYSQL_EXTERN */
-
-
-

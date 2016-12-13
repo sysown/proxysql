@@ -11,7 +11,6 @@
 #include "StatCounters.h"
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Protocol.h"
-#include "MySQL_Authentication.hpp"
 #include "fileutils.hpp"
 #include "configfile.hpp"
 #include "query_processor.h"

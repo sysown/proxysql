@@ -21,6 +21,8 @@
 #include "SpookyV2.h"
 //#define MYSQL_THREAD_IMPLEMENTATION
 
+using namespace proxysql;
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 #define SELECT_DB_USER "select DATABASE(), USER() limit 1"
@@ -91,7 +93,7 @@ static bool proxysql_mysql_paused=false;
 static int old_wait_timeout;
 
 extern Query_Cache *GloQC;
-extern MySQL_Authentication *GloMyAuth;
+extern auth::Auth *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
@@ -3078,7 +3080,13 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		c_split_2(token, ":", &user, &pass);
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
 		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,1000);
+			auto details = std::make_shared<auth::AccountDetails>();
+			details->username = user;
+			details->password = pass;
+			details->default_hostgroup = hostgroup_id;
+			details->default_schema = "main";
+			details->max_connections = 1000;
+			GloMyAuth->get_group<auth::GroupType::FRONTEND>()->add(details);
 		}
 		free(user);
 		free(pass);
@@ -3100,7 +3108,7 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 		c_split_2(token, ":", &user, &pass);
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Removing %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
 		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-			GloMyAuth->del(user,USERNAME_FRONTEND);
+			GloMyAuth->get_group<auth::GroupType::FRONTEND>()->del(user);
 		}
 		free(user);
 		free(pass);
@@ -3112,13 +3120,6 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	size_t vallen=strlen(value);
 
 	if (!strcasecmp(name,"admin_credentials")) {
-		// Removing this code due to bug #603
-//		// always (re)add monitor user
-//		if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
-//			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-//				GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
-//			}
-//		}
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
@@ -3873,16 +3874,16 @@ void ProxySQL_Admin::add_admin_users() {
 }
 
 void ProxySQL_Admin::__refresh_users() {
-	__delete_inactive_users(USERNAME_BACKEND);
-	__delete_inactive_users(USERNAME_FRONTEND);
+	__delete_inactive_users<auth::GroupType::BACKEND>();
+	__delete_inactive_users<auth::GroupType::FRONTEND>();
 	//add_default_user((char *)"admin",(char *)"admin");
-	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
-	GloMyAuth->set_all_inactive(USERNAME_FRONTEND);
+	GloMyAuth->get_group<auth::GroupType::BACKEND>()->set_all_inactive();
+	GloMyAuth->get_group<auth::GroupType::FRONTEND>()->set_all_inactive();
 	add_admin_users();
-	__add_active_users(USERNAME_BACKEND);
-	__add_active_users(USERNAME_FRONTEND);
-	GloMyAuth->remove_inactives(USERNAME_BACKEND);
-	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
+	__add_active_users<auth::GroupType::BACKEND>();
+	__add_active_users<auth::GroupType::FRONTEND>();
+	GloMyAuth->get_group<auth::GroupType::BACKEND>()->remove_inactives();
+	GloMyAuth->get_group<auth::GroupType::FRONTEND>()->remove_inactives();
 	set_variable((char *)"admin_credentials",(char *)"");
 }
 
@@ -3902,21 +3903,22 @@ void ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	myds->DSS=STATE_SLEEP;
 }
 
-void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
+template<auth::GroupType usertype>
+void ProxySQL_Admin::__delete_inactive_users() {
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	char *str=(char *)"SELECT username FROM main.mysql_users WHERE %s=1 AND active=0";
 	char *query=(char *)malloc(strlen(str)+15);
-	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
+	sprintf(query,str,(usertype==auth::GroupType::BACKEND ? "backend" : "frontend"));
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
       SQLite3_row *r=*it;
-			GloMyAuth->del(r->fields[0], usertype);
+			GloMyAuth->get_group<usertype>()->del(r->fields[0]);
 		}
 	}
 //	if (error) free(error);
@@ -3924,14 +3926,15 @@ void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
 	free(query);
 }
 
-void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
+template<auth::GroupType usertype>
+void ProxySQL_Admin::__add_active_users() {
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0";
 	char *query=(char *)malloc(strlen(str)+15);
-	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
+	sprintf(query,str,(usertype==auth::GroupType::BACKEND ? "backend" : "frontend"));
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -3966,20 +3969,18 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 					password=(char *)"";
 				}
 			}
-			GloMyAuth->add(
-				r->fields[0], // username
-				//(r->fields[1]==NULL ? (char *)"" : r->fields[1]), //password
-				password, // before #676, wewere always passing the password. Now it is possible that the password can be hashed
-				usertype, // backend/frontend
-				(strcmp(r->fields[2],"1")==0 ? true : false) , // use_ssl
-				atoi(r->fields[3]), // default_hostgroup
-				//(r->fields[4]==NULL ? (char *)mysql_thread___default_schema : r->fields[4]), //default_schema
-				(r->fields[4]==NULL ? (char *)"" : r->fields[4]), //default_schema
-				(strcmp(r->fields[5],"1")==0 ? true : false) , // schema_locked
-				(strcmp(r->fields[6],"1")==0 ? true : false) , // transaction_persistent
-				(strcmp(r->fields[7],"1")==0 ? true : false), // fast_forward
-				( atoi(r->fields[8])>0 ? atoi(r->fields[8]) : 0)  // max_connections
-			);
+			auto details = std::make_shared<auth::AccountDetails>();
+			details->username = r->fields[0];
+			details->password = password;
+			details->use_ssl = (strcmp(r->fields[2], "1") == 0);
+			details->default_hostgroup = atoi(r->fields[3]);
+			details->default_schema = (r->fields[4] == NULL ? "" : r->fields[4]);
+			details->schema_locked = (strcmp(r->fields[5], "1") == 0);
+			details->transaction_persistent = (strcmp(r->fields[6], "1") == 0);
+			details->fast_forward = (strcmp(r->fields[7], "1") == 0);
+			details->max_connections = (atoi(r->fields[8]) > 0 ? atoi(r->fields[8]) : 0);
+
+			GloMyAuth->get_group<usertype>()->add(details);
 			if (variables.hash_passwords) {
 				free(password); // because we always generate a new string
 			}
@@ -3992,20 +3993,6 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 
 
 void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
-/*
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query;
-	query=(char *)"SELECT username, backend, frontend FROM mysql_users WHERE active=1";
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (!resultset) return;
-	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
-	}	
-	if(resultset) delete resultset;
-*/
 	char *query=NULL;
 	if (_runtime) {
 		query=(char *)"DELETE FROM main.runtime_mysql_users";
@@ -4015,46 +4002,31 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", qd);
 		admindb->execute(qd);
 	}
-	account_details_t **ads=NULL;
-	int num_users;
-	int i;
-	char *qf=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,COALESCE((SELECT backend FROM mysql_users WHERE username=\"%s\" AND frontend=1),0),1,%d)";
-	char *qb=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,1,COALESCE((SELECT frontend FROM mysql_users WHERE username=\"%s\" AND backend=1),0),%d)";
-	char *qfr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username=\"%s\" AND frontend=1),0),1,%d)";
-	char *qbr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username=\"%s\" AND backend=1),0),%d)";
-	num_users=GloMyAuth->dump_all_users(&ads);
-	if (num_users==0) return;
-	for (i=0; i<num_users; i++) {
-	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
-		account_details_t *ad=ads[i];
-		if (ads[i]->default_hostgroup >= 0) {
-			char *q=NULL;
-			if (_runtime==false) {
-				if (ad->__frontend) {
-					q=qf;
-				} else {
-					q=qb;
-				}
-			} else { // _runtime==true
-				if (ad->__frontend) {
-					q=qfr;
-				} else {
-					q=qbr;
-				}
+	const char *qf = "REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,COALESCE((SELECT backend FROM mysql_users WHERE username=\"%s\" AND frontend=1),0),1,%d)";
+	const char *qb = "REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,1,COALESCE((SELECT frontend FROM mysql_users WHERE username=\"%s\" AND backend=1),0),%d)";
+	const char *qfr = "REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username=\"%s\" AND frontend=1),0),1,%d)";
+	const char *qbr = "REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(\"%s\",\"%s\",1,%d,%d,\"%s\",%d,%d,%d,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username=\"%s\" AND backend=1),0),%d)";
+	auto users = GloMyAuth->dump_all_users();
+	if (users.empty()) return;
+
+	for (auto& it: users) {
+		auto& t = it.first;
+		auto& ad = it.second;
+		if (ad->default_hostgroup >= 0) {
+			const char *q = NULL;
+			if (!_runtime) {
+				q = (t == auth::GroupType::FRONTEND ? qf : qb);
+			} else {
+				q = (t == auth::GroupType::FRONTEND ? qfr : qbr);
 			}
-			query=(char *)malloc(strlen(q)+strlen(ad->username)*2+strlen(ad->password)+strlen(ad->default_schema)+256);
-			sprintf(query, q, ad->username, ad->password, ad->use_ssl, ad->default_hostgroup, ad->default_schema, ad->schema_locked, ad->transaction_persistent, ad->fast_forward, ad->username, ad->max_connections);
-			//fprintf(stderr,"%s\n",query);
+
+			query = (char *)malloc(strlen(q) + ad->username.size() * 2 + ad->password.size() + ad->default_schema.size() + 256);
+			sprintf(query, q, ad->username.c_str(), ad->password.c_str(), ad->use_ssl, ad->default_hostgroup, ad->default_schema.c_str(), ad->schema_locked, ad->transaction_persistent, ad->fast_forward, ad->username.c_str(), ad->max_connections);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 			admindb->execute(query);
 			free(query);
 		}
-		free(ad->username);
-		free(ad->password);
-		free(ad->default_schema);
-		free(ad);
 	}
-	free(ads);
 }
 
 void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {

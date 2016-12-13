@@ -4,6 +4,10 @@
 #include "cpp.h"
 #include <vector>
 
+#include "auth.h"
+
+using namespace proxysql;
+
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 
 
@@ -100,8 +104,8 @@ class ProxySQL_Admin {
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
 
-	void __add_active_users(enum cred_username_type usertype);
-	void __delete_inactive_users(enum cred_username_type usertype);
+	template<auth::GroupType usertype> void __add_active_users();
+	template<auth::GroupType usertype> void __delete_inactive_users();
 //	void add_default_user(char *, char *);
 	void add_admin_users();
 	void __refresh_users();
