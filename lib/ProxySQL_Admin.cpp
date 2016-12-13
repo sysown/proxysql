@@ -4308,6 +4308,49 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
+
+	// dump mysql_group_replication_hostgroups
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_group_replication_hostgroups";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_group_replication_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset=MyHGM->dump_table_mysql_group_replication_hostgroups();
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement=NULL;
+		sqlite3 *mydb3=admindb->get_db();
+		char *query=NULL;
+		if (_runtime) {
+			query=(char *)"INSERT INTO runtime_mysql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		} else {
+			query=(char *)"INSERT INTO mysql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		}
+		rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+		assert(rc==SQLITE_OK);
+		//proxy_info("New mysql_group_replication_hostgroups table\n");
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 5, atoi(r->fields[4])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+
+			SAFE_SQLITE3_STEP(statement);
+			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		}
+		sqlite3_finalize(statement);
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
 }
 
 
@@ -4333,6 +4376,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
+	SQLite3_result *resultset_replication=NULL;
+	SQLite3_result *resultset_group_replication=NULL;
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -4391,16 +4436,57 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 
 	query=(char *)"SELECT a.* FROM mysql_replication_hostgroups a LEFT JOIN mysql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL";	
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_replication);
 
 	//MyHGH->wrlock();
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		MyHGM->set_incoming_replication_hostgroups(resultset);
+		MyHGM->set_incoming_replication_hostgroups(resultset_replication);
 	}
-	MyHGM->commit();
 	if (resultset) delete resultset;
+	resultset=NULL;
+
+	// support for Group Replication, table mysql_group_replication_hostgroups
+
+	// look for invalid combinations
+	query=(char *)"SELECT a.* FROM mysql_group_replication_hostgroups a JOIN mysql_group_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup UNION ALL SELECT a.* FROM mysql_group_replication_hostgroups a JOIN mysql_group_replication_hostgroups b ON a.writer_hostgroup=b.backup_writer_hostgroup WHERE b.backup_writer_hostgroup UNION ALL SELECT a.* FROM mysql_group_replication_hostgroups a JOIN mysql_group_replication_hostgroups b ON a.writer_hostgroup=b.offline_hostgroup WHERE b.offline_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			proxy_error("Incompatible entry in mysql_group_replication_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
+		}
+	}
+	if (resultset) delete resultset;
+	resultset=NULL;
+
+	query=(char *)"SELECT a.* FROM mysql_group_replication_hostgroups a LEFT JOIN mysql_group_replication_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL";	
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_group_replication);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		MyHGM->set_incoming_group_replication_hostgroups(resultset_group_replication);
+	}
+
+	// commit all the changes
+	MyHGM->commit();
+
+	// clean up
+	if (resultset) delete resultset;
+	resultset=NULL;
+	if (resultset_replication) {
+		delete resultset_replication;
+		resultset_replication=NULL;
+	}
+	if (resultset_group_replication) {
+		delete resultset_replication;
+		resultset_group_replication=NULL;
+	}
 }
 
 

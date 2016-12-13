@@ -331,6 +331,8 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	My_Conn_Pool=new MySQL_Monitor_Connection_Pool();
 
+	pthread_mutex_init(&group_replication_mutex,NULL);
+
 	shutdown=false;
 	monitor_enabled=true;	// default
 	// create new SQLite datatabase

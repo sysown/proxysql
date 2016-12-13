@@ -132,6 +132,27 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvC *get_random_MySrvC();
 };
 
+class Group_Replication_Info {
+	public:
+	int writer_hostgroup;
+	int backup_writer_hostgroup;
+	int reader_hostgroup;
+	int offline_hostgroup;
+	int max_writers;
+	int max_transactions_behind;
+	char *comment;
+	bool active;
+	bool writer_is_also_reader;
+	bool __active;
+	int current_num_writers;
+	int current_num_backup_writers;
+	int current_num_readers;
+	int current_num_offline;
+	Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
+	bool update(int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
+	~Group_Replication_Info();
+};
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -153,6 +174,9 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *incoming_replication_hostgroups;
 	void generate_mysql_group_replication_hostgroups_table();
 	SQLite3_result *incoming_group_replication_hostgroups;
+
+	pthread_mutex_t Group_Replication_Info_mutex;
+	std::map<int , Group_Replication_Info *> Group_Replication_Info_Map;
 
 	std::thread *HGCU_thread;
 
@@ -199,6 +223,7 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
+	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);

@@ -111,6 +111,7 @@ class MySQL_Monitor {
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	public:
+	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	std::map<char *, MyGR_monitor_node *, cmp_str> group_replication_hosts;
 	unsigned int num_threads;
 	wqueue<WorkItem*> queue;
