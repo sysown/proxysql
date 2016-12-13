@@ -2129,7 +2129,11 @@ handler_again:
 						myconn->async_state_machine=ASYNC_IDLE;
 						myds->DSS=STATE_MARIADB_GENERIC;
 						if (transaction_persistent==true) {
-							transaction_persistent_hostgroup=current_hostgroup;
+							if (transaction_persistent_hostgroup==-1) { // change only if not set already, do not allow to change it again
+								if (myds->myconn->IsActiveTransaction()==true) { // only active transaction is important here. Ignore other criterias
+									transaction_persistent_hostgroup=current_hostgroup;
+								}
+							}
 						}
 					}
 				} else {
