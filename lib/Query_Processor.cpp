@@ -56,9 +56,6 @@ class QP_rule_text {
 		itostr(pta[7], (long long)QPr->proxy_port);
 
 		char buf[20];
-		//uint32_t d32[2];
-		//memcpy(&d32,&QPr->digest,sizeof(QPr->digest));
-		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
 		if (QPr->digest) {
 			sprintf(buf,"0x%016llX", (long long unsigned int)QPr->digest);
 			pta[8]=strdup(buf);
@@ -105,17 +102,6 @@ class QP_rule_text {
 	}
 };
 
-/*
-struct __SQP_query_parser_t {
-	sfilter sf;
-	uint64_t digest;
-	char *digest_text;
-	char *first_comment;
-	uint64_t digest_total;
-};
-
-typedef struct __SQP_query_parser_t SQP_par_t;
-*/
 class QP_query_digest_stats {
 	public:
 	uint64_t digest;
@@ -178,9 +164,6 @@ class QP_query_digest_stats {
 		assert(username);
 		pta[1]=strdup(username);
 
-		//uint32_t d32[2];
-		//memcpy(&d32,&digest,sizeof(digest));
-		//sprintf(buf,"0x%X%X", d32[0], d32[1]);
 		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
 		pta[2]=strdup(buf);
 
@@ -190,8 +173,6 @@ class QP_query_digest_stats {
 		pta[4]=strdup(buf);
 
 		time_t __now;
-    //char __buffer[25];
-//    struct tm *__tm_info;
     time(&__now);
 		
 		unsigned long long curtime=monotonic_time();
@@ -199,14 +180,10 @@ class QP_query_digest_stats {
 		time_t seen_time;
 
 		seen_time= __now - curtime/1000000 + first_seen/1000000;
-//    __tm_info = localtime(&seen_time);
-//    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
 		sprintf(buf,"%ld", seen_time);
 		pta[5]=strdup(buf);
 
 		seen_time= __now - curtime/1000000 + last_seen/1000000;
-//    __tm_info = localtime(&seen_time);
-//    strftime(buf, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
 		sprintf(buf,"%ld", seen_time);
 		pta[6]=strdup(buf);
 
@@ -229,10 +206,6 @@ class QP_query_digest_stats {
 		free(pta);
 	}
 };
-
-
-//static char *commands_counters_desc[MYSQL_COM_QUERY___NONE];
-
 
 
 struct __RE2_objects_t {
@@ -324,7 +297,6 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
-//__thread unsigned int _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 __thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 
 Query_Processor::Query_Processor() {
@@ -434,8 +406,6 @@ void Query_Processor::wrunlock() {
 	spin_wrunlock(&rwlock);
 };
 
-
-
 QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int reconnect, int timeout, int retries, int delay, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, int sticky_conn, int multiplex, int log, bool apply, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
@@ -515,7 +485,6 @@ bool Query_Processor::insert(QP_rule_t *qr, bool lock) {
 	return ret;
 };
 
-
 void Query_Processor::sort(bool lock) {
 	if (lock) spin_wrlock(&rwlock);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Sorting rules\n");
@@ -531,7 +500,6 @@ void Query_Processor::commit() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Increasing version number to %d - all threads will notice this and refresh their rules\n", version);
 	spin_wrunlock(&rwlock);
 };
-
 
 SQLite3_result * Query_Processor::get_stats_commands_counters() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping commands counters\n");
@@ -639,7 +607,6 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
-	//for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row();
@@ -664,7 +631,6 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
-	//for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row();
@@ -672,7 +638,6 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 		qds->free_row(pta);
 		delete qds;
 	}
-	//digest_bt_map.erase(digest_bt_map.begin(),digest_bt_map.end());
 	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 	spin_wrunlock(&digest_rwlock);
 	return result;
@@ -682,8 +647,6 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 
 Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
 	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
-	//Query_Processor_Output *ret=NULL;
-	//ret=new Query_Processor_Output();
 	Query_Processor_Output *ret=sess->qpo;
 	ret->init();
 	SQP_par_t *qp=NULL;
@@ -708,9 +671,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
 				char buf[20];
 				if (qr1->digest) { // not 0
-					//uint32_t d32[2];
-					//memcpy(&d32,&qr1->digest,sizeof(qr1->digest));
-					//sprintf(buf,"0x%X%X", d32[0], d32[1]);
 					sprintf(buf,"0x%016llX", (long long unsigned int)qr1->digest);
 				}
 				std::string re_mod;
@@ -1026,13 +986,9 @@ void Query_Processor::update_query_processor_stats() {
 void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags) {
 	// trying to get rid of libinjection
 	// instead of initializing qp->sf , we copy query info later in this function
-//	if (mysql_thread___commands_stats)
-//		libinjection_sqli_init(&qp->sf, query, query_length, FLAG_SQL_MYSQL);
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
-	//qp->first_comment=(char *)l_alloc(FIRST_COMMENT_MAX_LENGTH);
-	//qp->first_comment[0]=0; // initialize it to 0 . Useful to determine if there is any string or not
 	if (mysql_thread___query_digests) {
 		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment);
 		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
@@ -1042,7 +998,6 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 		}
 #endif /* DEBUG */
 	} else {
-		// if mysql_thread___query_digests==false but we still want command statistics, we copy the prefix of the query
 		if (mysql_thread___commands_stats) {
 			qp->query_prefix=strndup(query,32);
 		}
@@ -1127,25 +1082,21 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 
 char * Query_Processor::get_digest_text(SQP_par_t *qp) {
 	if (qp==NULL) return NULL;
-	//SQP_par_t *qp=(SQP_par_t *)p;
 	return qp->digest_text;
 }
 
 uint64_t Query_Processor::get_digest(SQP_par_t *qp) {
 	if (qp==NULL) return 0;
-	//SQP_par_t *qp=(SQP_par_t *)args;
 	return qp->digest;
 }
 
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_par_t *qp) {
-	//SQP_par_t *qp=(SQP_par_t *)args;
 	char *text=NULL; // this new variable is a pointer to either qp->digest_text , or to the query
 	if (qp->digest_text) {
 		text=qp->digest_text;
 	} else {
 		text=qp->query_prefix;
 	}
-
 
 	enum MYSQL_COM_QUERY_command ret=MYSQL_COM_QUERY_UNKNOWN;
 	char c1;
@@ -1157,7 +1108,6 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 		goto __exit__query_parser_command_type;
 	}
 
-	//c1=toupper(token[0]);
 	c1=token[0];
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", token, c1);
 	switch (c1) {
@@ -1550,7 +1500,6 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 	free_tokenizer( &tok );
 	return ret;
 }
-
 
 void Query_Processor::query_parser_free(SQP_par_t *qp) {
 	if (qp->digest_text) {

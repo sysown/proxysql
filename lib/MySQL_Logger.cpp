@@ -218,9 +218,7 @@ void MySQL_Logger::open_log_unlocked() {
 		delete logfile;
 		logfile=NULL;
 	}
-	//int fd=open(filen, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 	free(filen);
-	//close(fd);
 };
 
 void MySQL_Logger::set_base_filename() {
@@ -259,7 +257,6 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 
 	uint64_t curtime_real=realtime_time();
 	uint64_t curtime_mono=sess->thread->curtime;
-	//std::cout << " " << curtime_real << " " << curtime_mono << " " << sess->CurrentQuery.end_time << std::endl;
 	int cl=0;
 	char *ca=(char *)""; // default
 	if (sess->client_myds->addr.addr) {
@@ -302,10 +299,6 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		hid=myds->myconn->parent->myhgc->hid;
 		me.set_server(hid,sa,sl);
 	}
-/*
-	ev.set_server("");
-	ev.set_client("");
-*/
 
 	wrlock();
 

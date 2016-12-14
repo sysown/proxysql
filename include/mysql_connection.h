@@ -30,8 +30,6 @@ class MySQL_Connection_userinfo {
 	bool set_schemaname(char *, int);
 };
 
-
-
 class MySQL_Connection {
 	private:
 	bool is_expired(unsigned long long timeout);
@@ -92,9 +90,6 @@ class MySQL_Connection {
 	bool processing_multi_statement;
 	MySQL_Connection();
 	~MySQL_Connection();
-//	int assign_mshge(unsigned int);
-	//void set_mshge(MySQL_Hostgroup_Entry *);
-//	void free_mshge();
 	bool set_autocommit(bool);
 	uint8_t set_charset(uint8_t);
 

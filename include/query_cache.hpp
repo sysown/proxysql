@@ -3,7 +3,6 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-
 #define EXPIRE_DROPIT   0
 #define SHARED_QUERY_CACHE_HASH_TABLES  32
 #define HASH_EXPIRE_MAX 3600*24*365*10
@@ -28,35 +27,10 @@ struct __QC_entry_t {
 	unsigned long long access_ms; // when the entry was read last , monotonic , millisecond granularity
 	uint32_t ref_count; // reference counter
 };
-/*
-typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
 
-
-class KV_BtreeArray {
-  private:
-  rwlock_t lock;
-  BtMap_cache bt_map;
-  PtrArray *ptrArray;
-  uint64_t purgeChunkSize;
-  uint64_t purgeIdx;
-  bool __insert(uint64_t, void *);
-  uint64_t freeable_memory;
-  public:
-  uint64_t tottopurge;
-  KV_BtreeArray();
-  ~KV_BtreeArray();
-	uint64_t get_data_size();
-	void purge_some(unsigned long long);
-	int cnt();
-	bool replace(uint64_t key, QC_entry_t *entry);
-	QC_entry_t *lookup(uint64_t key);
-	void empty();
-};
-*/
 class KV_BtreeArray;
 class Query_Cache {
 	private:
-	//KV_BtreeArray KVs[SHARED_QUERY_CACHE_HASH_TABLES];
 	KV_BtreeArray * KVs[SHARED_QUERY_CACHE_HASH_TABLES];
 	uint64_t get_data_size_total();
 	unsigned int current_used_memory_pct();

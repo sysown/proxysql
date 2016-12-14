@@ -1,8 +1,5 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
-//#include <thread>
-//#include <list>
-//#include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "thread.h"
@@ -72,8 +69,6 @@ class WorkItem {
 
 class MySQL_Monitor {
 	private:
-	//unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	//MySQL_Thread *mysql_thr;
 	std::vector<table_def_t *> *tables_defs_monitor;
 	void insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);

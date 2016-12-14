@@ -40,8 +40,6 @@ enum MySerStatus {
 	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG
 };
 
-
-
 class MySrvConnList {
 	private:
 	PtrArray *conns;
@@ -97,7 +95,6 @@ class MySrvC {	// MySQL Server Container
 	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
 	bool use_ssl;
 	char *comment;
-	//uint8_t charset;
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
@@ -110,7 +107,6 @@ class MySrvList {	// MySQL Server List
 	private:
 	MyHGC *myhgc;
 	int find_idx(MySrvC *);
-//	int find_idx(MySQL_Connection *);
 	public:
 	PtrArray *servers;
 	unsigned int cnt();
@@ -182,8 +178,6 @@ class MySQL_HostGroups_Manager {
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
-//	void rdlock();
-//	void rdunlock();
 	void wrlock();
 	void wrunlock();
 	bool server_add(unsigned int hid, char *add, uint16_t p=3306, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0, unsigned int _use_ssl=0, unsigned int _max_latency_ms=0, char *comment=NULL);

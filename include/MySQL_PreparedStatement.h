@@ -77,7 +77,6 @@ class stmt_execute_metadata_t {
 	uint16_t num_params;
 	MYSQL_BIND *binds;
 	my_bool *is_nulls;
-	//MySQL_STMT_Global_info *stmt_info;
 	unsigned long *lengths;
 	void *pkt;
 	stmt_execute_metadata_t() {
@@ -155,14 +154,11 @@ class MySQL_STMTs_meta {
 		auto s=m.find(global_statement_id);
 		if (s!=m.end()) { // found
 			stmt_execute_metadata_t *sem=s->second;
-			//__sync_fetch_and_sub(&sem->stmt_info->ref_count,1); // decrease reference count
 			delete sem;
 			num_entries--;
 			m.erase(s);
 		}
 	}
-
-	//bool erase(uint32_t global_statement_id);
 };
 
 // class MySQL_STMTs_local associates a global statement ID with a local statement ID for a specific connection
@@ -185,16 +181,7 @@ class MySQL_STMTs_local {
 	}
 	~MySQL_STMTs_local();
 	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt);
-/*
-	// we declare it here to be inline
-	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt) {
-		std::pair<std::map<uint32_t, MYSQL_STMT *>::iterator,bool> ret;
-		ret=m.insert(std::make_pair(global_statement_id, stmt));
-		if (ret.second==true) {
-			num_entries++;
-		}
-	}
-*/
+
 	// we declare it here to be inline
 	MYSQL_STMT * find(uint32_t global_statement_id) {
 		auto s=m.find(global_statement_id);

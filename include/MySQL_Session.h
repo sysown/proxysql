@@ -3,20 +3,6 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-/*
-class MySQL_Session_userinfo {
-	public:
-  char *username;
-  char *password;
-  char *schemaname;
-	MySQL_Session_userinfo();
-	~MySQL_Session_userinfo();
-	void set(char *, char *, char *);
-	void set(MySQL_Session_userinfo *);
-	bool set_schemaname(char *, int);
-};
-*/
-
 // these structs will be used for various regex hardcoded
 // their initial use will be for sql_log_bin , sql_mode and time_zone
 // issues #509 , #815 and #816
@@ -30,8 +16,6 @@ class Session_Regex {
 	~Session_Regex();
 	bool match(char *m);
 };
-
-
 
 class Query_Info {
 	public:
@@ -115,11 +99,6 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 
 
-//	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
-
-
-//	MySQL_STMT_Manager *Session_STMT_Manager;
-
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
 	PtrSize_t *pktH;
@@ -182,7 +161,6 @@ class MySQL_Session
 	StmtLongDataHandler *SLDH;
 
 	MySQL_Session();
-//	MySQL_Session(int);
 	~MySQL_Session();
 
 	void set_unhealthy();
@@ -199,8 +177,6 @@ class MySQL_Session
 		}
 		status=e;
 	}
-	//MySQL_Protocol myprot_client;
-	//MySQL_Protocol myprot_server;
 	int handler();
 
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);

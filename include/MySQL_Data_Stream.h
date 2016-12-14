@@ -13,23 +13,10 @@ typedef struct _queue_t {
 	unsigned int head;
 	unsigned int tail;
 	unsigned int partial;
-	//unsigned char *pkt;
 	PtrSize_t pkt;
 	mysql_hdr hdr;
 } queue_t;
 
-
-/*
-typedef struct _mysql_data_buffer_t {
-  unsigned char *buffer;
-  unsigned int size;
-  unsigned int head;
-  unsigned int tail;
-	mysql_hdr hdr;
-	unsigned int partial;
-	unsigned char *pkt;
-} mysql_data_buffer_t;
-*/
 
 // this class avoid copying data
 class MyDS_real_query {
@@ -59,7 +46,6 @@ class MyDS_real_query {
 class MySQL_Data_Stream
 {
 	private:
-	//mysql_data_buffer_t bufferOUT;
 	int array2buffer();
 	int buffer2array();
 	void generate_compressed_packet();
@@ -137,12 +123,6 @@ class MySQL_Data_Stream
 
 	uint8_t pkt_sid;
 
-//	struct {
-//		char *ptr;
-//		unsigned int size;
-//	} mysql_real_query;
-
-
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
 
@@ -171,13 +151,11 @@ class MySQL_Data_Stream
 
 	void unplug_backend();
 
-	//int assign_mshge(unsigned int);
 	int myds_connect(char *, int, int *); // the data stream MUST be initialized
 
 	void check_data_flow();
 	int assign_fd_from_mysql_conn();
 
-	//void move_from_OUT_to_OUTpending();
 	unsigned char * resultset2buffer(bool);
 	void buffer2resultset(unsigned char *, unsigned int);
 
@@ -205,12 +183,5 @@ class MySQL_Data_Stream
 	}
 	void free_mysql_real_query();	
 	void reinit_queues();
-//	void destroy_MySQL_Connection() {
-//		MySQL_Connection *mc=myconn;
-//		detach_connection();
-//		unplug_backend();
-//		delete mc;
-//	}
-
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */
