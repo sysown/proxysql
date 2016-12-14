@@ -1,9 +1,9 @@
-#include "btree_map.h"
-#include "proxysql.h"
-#include "cpp.h"
 #include "query_cache.hpp"
-#include "proxysql_atomic.h"
+
+#include "btree_map.h"
+#include "MySQL_Thread.h"
 #include "SpookyV2.h"
+#include "proxysql_debug.h"
 
 #define THR_UPDATE_CNT(__a, __b, __c, __d) \
 	do {\

@@ -1,5 +1,7 @@
-#include "proxysql.h"
-#include "cpp.h"
+#include "mysql_backend.h"
+
+#include "MySQL_Session.h"
+#include "MySQL_Thread.h"
 
 void * MySQL_Backend::operator new(size_t size) {
 	return l_alloc(size);

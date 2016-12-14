@@ -1,14 +1,10 @@
-#include "proxysql.h"
-#include "cpp.h"
+#include "configfile.hpp"
 
+#include <cassert>
+#include <cstring>
 #include <iostream>
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
-
-#include <libconfig.h++>
+#include "fileutils.hpp"
 
 using namespace std;
 using namespace libconfig;
