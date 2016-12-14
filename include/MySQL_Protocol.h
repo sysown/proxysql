@@ -6,33 +6,6 @@
 
 #define RESULTSET_BUFLEN 16300
 
-/*
-class stmt_execute_metadata_t {
-	public:
-	uint32_t stmt_id;
-	uint8_t flags;
-	uint16_t num_params;
-	MYSQL_BIND *binds;
-	my_bool *is_nulls;
-	unsigned long *lengths;
-	void *pkt;
-	stmt_execute_metadata_t() {
-		binds=NULL;
-		is_nulls=NULL;
-		lengths=NULL;
-		pkt=NULL;
-	}
-	~stmt_execute_metadata_t() {
-		if (binds)
-			free(binds);
-		if (is_nulls)
-			free(is_nulls);
-		if (lengths)
-			free(lengths);
-	}
-};
-*/
-
 class MySQL_ResultSet {
 	private:
 	public:
@@ -59,7 +32,6 @@ class MySQL_ResultSet {
 	void buffer_to_PSarrayOut();
 	unsigned long long current_size();
 };
-
 
 class MySQL_Prepared_Stmt_info {
 	public:
@@ -90,8 +62,6 @@ class MySQL_Protocol {
 	}
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
 	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);
-//	void generate_server_handshake();
-//	void generate_server_handshake(MySQL_Data_Stream *);
 
 	// members get as arguments:
 	// - a data stream (optionally NULL for some)
@@ -133,7 +103,6 @@ class MySQL_Protocol {
 	// prepared statements
 	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info);
 
-	//stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, uint16_t num_params);
 	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */

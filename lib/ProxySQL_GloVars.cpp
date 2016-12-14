@@ -25,15 +25,9 @@ void crash_handler(int sig) {
 	fprintf(stderr, "Error: signal %d:\n", sig);
 	backtrace_symbols_fd(arr, s, STDERR_FILENO);
 #endif /* __GLIBC__ */
-//#ifdef SYS_gettid
 	// try to generate a core dump signaling again the thread
 	signal(sig, SIG_DFL);
-//	pid_t tid;
-//	tid = syscall(SYS_gettid);
 	pthread_kill(pthread_self(), sig);
-	//kill(tid, sig);
-//#endif /* SYS_gettid */
-//	exit(EXIT_FAILURE);
 }
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
@@ -86,7 +80,6 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #endif /* SO_REUSEPORT */
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
-	//opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
@@ -107,8 +100,6 @@ void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
 };
 
 void ProxySQL_GlobalVariables::process_opts_pre() {
-
-
 	if (opt->isSet("-h")) {
 		std::string usage;
 		opt->getUsage(usage);
@@ -146,10 +137,6 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		GloVars.__cmd_proxysql_datadir=strdup(datadir.c_str());
 	}
 
-//	if (opt->isSet("-m")) {
-//		global.use_proxysql_mem=true;
-//	}
-
 	if (opt->isSet("--initial")) {
 		__cmd_proxysql_initial=true;
 	}
@@ -157,7 +144,6 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	if (opt->isSet("--reload")) {
 		__cmd_proxysql_reload=true;
 	}
-
 	
 	config_file=GloVars.__cmd_proxysql_config_file;
 
@@ -210,16 +196,11 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 4, "processing opts\n");
 
-  //gchar *config_file=*config_file_ptr;
-
-
   // apply settings from cmdline, that have priority over config file
 #ifdef DEBUG
-//	if (GloVars.__cmd_proxysql_gdbg>0) { GloVars.global.gdbg=true; }
 	init_debug_struct_from_cmdline();
 #endif
 
-//	if (GloVars.__cmd_proxysql_foreground>=0) { foreground=GloVars.__cmd_proxysql_foreground; }
 	if (GloVars.__cmd_proxysql_nostart>=0) { glovars.nostart=GloVars.__cmd_proxysql_nostart; }
 	if (GloVars.__cmd_proxysql_datadir) {
 		free(glovars.proxy_datadir);
