@@ -178,6 +178,8 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 			}
 			++it;
 		} else {
+			free(it->first);
+			free(it->second);
 			it = my_connections.erase(it);
 		}
 	}
