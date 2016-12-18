@@ -77,30 +77,6 @@ static uint64_t Glo_cntPurge=0;
 static uint64_t Glo_size_values=0;
 static uint64_t Glo_total_freed_memory;
 
-
-/*
-class KV_BtreeArray;
-
-typedef struct __QC_entry_t QC_entry_t;
-
-struct __QC_entry_t {
-    uint64_t key;
-    char *value;
-    KV_BtreeArray *kv;
-    QC_entry_t *self;
-    uint32_t klen;
-    uint32_t length;
-    time_t expire;
-    time_t access;
-    uint32_t ref_count;
-};
-
-typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap;
-*/
-
-
-
-
 KV_BtreeArray::KV_BtreeArray() {
 	freeable_memory=0;
 	tottopurge=0;
@@ -211,8 +187,6 @@ void KV_BtreeArray::purge_some(unsigned long long QCnow_ms, bool aggressive) {
 			__sync_fetch_and_add(&Glo_total_freed_memory,freed_memory);
 			__sync_fetch_and_sub(&Glo_size_values,freed_memory);
 			__sync_fetch_and_add(&Glo_cntPurge,removed_entries);
-//				if (removed_entries) fprintf(stderr,"Removed: %lu, total: %lu, arraylen: %d\n", removed_entries, __sync_fetch_and_sub(&Glo_num_entries,0), ptrArray.len);
-//				if (removed_entries) firintf(stderr,"Size of  KVBtreeArray:%d , freed_memory:%lu, Glo_cntGet:%lu, Glo_cntGetOK:%lu, Glo_cntSet:%lu, cntPurge:%lu, dataIN:%lu, dataOUT:%lu\n", cnt() , Glo_total_freed_memory, Glo_cntGet, Glo_cntGetOK, Glo_cntSet, Glo_cntPurge, Glo_dataIN, Glo_dataOUT);
 		}
 	}
 };
@@ -223,9 +197,6 @@ int KV_BtreeArray::cnt() {
 
 bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
   spin_wrlock(&lock);
-	//THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,100);
-	//THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,100);
-	//THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,100);
 	THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,1);
 	THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,1);
 	THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,1);
@@ -248,15 +219,12 @@ bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
 QC_entry_t * KV_BtreeArray::lookup(uint64_t key) {
 	QC_entry_t *entry=NULL;
 	spin_rdlock(&lock);
-	//THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,100);
 	THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,1);
   btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
   lookup = bt_map.find(key);
   if (lookup != bt_map.end()) {
 		entry=lookup->second;
 		__sync_fetch_and_add(&entry->ref_count,1);
-		//THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,100);
-		//THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,10000);
  	}	
 	spin_rdunlock(&lock);
 	return entry;
@@ -271,15 +239,11 @@ void KV_BtreeArray::empty() {
 		lookup = bt_map.begin();
 		if ( lookup != bt_map.end() ) {
 			lookup->second->expire_ms=EXPIRE_DROPIT;
-			//const char *f=lookup->first;
 			bt_map.erase(lookup);
 		}
 	}
 	spin_wrunlock(&lock);
 };
-
-
-
 
 uint64_t Query_Cache::get_data_size_total() {
 	int r=0;
@@ -291,8 +255,6 @@ uint64_t Query_Cache::get_data_size_total() {
 	return r;
 };
 
-
-
 unsigned int Query_Cache::current_used_memory_pct() {
 	uint64_t cur_size=get_data_size_total();
 	float pctf = (float) cur_size*100/max_memory_size;
@@ -300,8 +262,6 @@ unsigned int Query_Cache::current_used_memory_pct() {
 	int pct=pctf;
 	return pct;
 }
-
-
 
 Query_Cache::Query_Cache() {
 #ifdef DEBUG
@@ -335,8 +295,6 @@ Query_Cache::~Query_Cache() {
 		delete KVs[i];
 	}
 };
-
-
 
 unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, const uint32_t kl, uint32_t *lv, unsigned long long curtime_ms) {
 	unsigned char *result=NULL;
@@ -389,7 +347,6 @@ uint64_t Query_Cache::flush() {
 	}
 	return total_count;
 };
-
 
 void * Query_Cache::purgeHash_thread(void *) {
 	unsigned int i;

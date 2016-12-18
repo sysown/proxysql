@@ -32,6 +32,17 @@
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 
 
+#define SAFE_SQLITE3_STEP(_stmt) do {\
+  do {\
+    rc=sqlite3_step(_stmt);\
+    if (rc!=SQLITE_DONE) {\
+      assert(rc==SQLITE_LOCKED);\
+      usleep(100);\
+    }\
+  } while (rc!=SQLITE_DONE);\
+} while (0)
+
+
 struct cpu_timer
 {
 	cpu_timer() {
@@ -86,7 +97,6 @@ extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager *GloMyStmt;
-//#define PANIC(msg)  { perror(msg); return -1; }
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 int rc, arg_on=1, arg_off=0;
@@ -180,14 +190,6 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
 #endif /* DEBUG */
 
-/*
-#define CMD1	1
-#define CMD2	2
-#define CMD3	3
-#define CMD4	4
-#define CMD5	5
-*/
-
 static char * admin_variables_names[]= {
   (char *)"admin_credentials",
   (char *)"stats_credentials",
@@ -204,28 +206,6 @@ static char * admin_variables_names[]= {
   NULL
 };
 
-/*
-static t_symstruct lookuptable[] = {
-    { SpookyHash::Hash32("SHOW",4,0), CMD1 },
-    { SpookyHash::Hash32("SET",3,0), CMD2 },
-    { SpookyHash::Hash32("FLUSH",5,0), CMD3 },
-};
-#define NKEYS (sizeof(lookuptable)/sizeof(t_symstruct))
-
-static uint32_t keyfromhash(uint32_t hash) {
-	uint32_t i;
-	for (i=0; i < NKEYS; i++) {
-		//t_symstruct *sym = lookuptable + i*sizeof(t_symstruct);
-		t_symstruct *sym = lookuptable + i;
-		if (sym->hash==hash) {
-			return sym->key;
-		}
-	}
-	return -1;
-}
-*/
-
-
 static ProxySQL_Admin *SPA=NULL;
 
 static void * (*child_func[3]) (void *arg);
@@ -237,25 +217,11 @@ typedef struct _main_args {
 	volatile int *shutdown;
 } main_args;
 
-/*
-struct _admin_main_loop_listeners_t {
-	int nfds;
-	struct pollfd *fds;
-	int *callback_func;
-	char **descriptor;
-};
-typedef struct _admin_main_loop_listeners_t admin_main_loop_listeners_t;
-
-static _admin_main_loop_listeners_t admin_main_loop_listeners;
-*/
-
 typedef struct _ifaces_desc_t {
 		char **mysql_ifaces;
 		char **telnet_admin_ifaces;
 		char **telnet_stats_ifaces;
 } ifaces_desc_t;
-
-
 
 #define MAX_IFACES	8
 #define MAX_ADMIN_LISTENERS 16
@@ -278,9 +244,6 @@ class ifaces_desc {
 	~ifaces_desc() {
 		while(ifaces->len) {
 			char *d=(char *)ifaces->remove_index_fast(0);
-//			char *add=NULL; char *port=NULL;
-//      c_split_2(d, ":" , &add, &port);
-//      if (atoi(port)==0) { unlink(add); }
 			free(d);
 		}
 		delete ifaces;
@@ -315,8 +278,6 @@ class admin_main_loop_listeners {
 	int get_version() { return version; }
 	void wrlock() { spin_wrlock(&rwlock); }
 	void wrunlock() { spin_wrunlock(&rwlock); }
-//	ifaces_desc_t descriptor_old;
-//	ifaces_desc_t descriptor_new_copy;
 	ifaces_desc *ifaces_mysql;
 	ifaces_desc *ifaces_telnet_admin;
 	ifaces_desc *ifaces_telnet_stats;
@@ -418,7 +379,6 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
 		}
 		if (rc) {
-			//nostart_=false;
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Starting ProxySQL following PROXYSQL START command\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		} else {
@@ -519,6 +479,21 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
+
+#ifndef NOJEM
+	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE START") && !strncasecmp("PROXYSQL MEMPROFILE START",query_no_space, query_no_space_length)) {
+		bool en=true;
+		mallctl("prof.active", NULL, NULL, &en, sizeof(bool));
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE STOP") && !strncasecmp("PROXYSQL MEMPROFILE STOP",query_no_space, query_no_space_length)) {
+		bool en=false;
+		mallctl("prof.active", NULL, NULL, &en, sizeof(bool));
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+#endif
 
 	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL KILL command\n");
@@ -1340,21 +1315,6 @@ SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename
 		i++;
 	}
 	tn[j]=0;
-/*
-	if (!strcmp(tablename,"global_variables`") || !strcmp(tablename,"global\\_variables`")) tn=(char *)"global_variables";
-	else if (!strcmp(tablename,"debug_levels`") || !strcmp(tablename,"debug_levels`")) tn=(char *)"debug_levels";
-	else if (!strcmp(tablename,"mysql_collations`") || !strcmp(tablename,"mysql\\_collations`")) tn=(char *)"mysql_collations";
-	else if (!strcmp(tablename,"mysql_query_rules`") || !strcmp(tablename,"mysql\\_query\\_rules`")) tn=(char *)"mysql_query_rules";
-	else if (!strcmp(tablename,"mysql_servers`") || !strcmp(tablename,"mysql\\_servers`")) tn=(char *)"mysql_servers";
-	else if (!strcmp(tablename,"mysql_users`") || !strcmp(tablename,"mysql\\_users`")) tn=(char *)"mysql_users";
-*/
-/*
-	if (tn==NULL) {
-		*err=strdup((char *)"Table does not exist");
-		free(tn);
-		return NULL;
-	}
-*/
 	SQLite3_result *resultset=NULL;
 	char *q1=(char *)"PRAGMA table_info(%s)";
 	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
@@ -1424,21 +1384,6 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 		i++;
 	}
 	tn[j]=0;
-/*
-	if (!strcmp(tablename,"global_variables'") || !strcmp(tablename,"global\\_variables'")) pta[0]=(char *)"global_variables";
-	else if (!strcmp(tablename,"debug_levels'") || !strcmp(tablename,"debug\\_levels'")) pta[0]=(char *)"debug_levels";
-	else if (!strcmp(tablename,"mysql_collations'") || !strcmp(tablename,"mysql\\_collations'")) pta[0]=(char *)"mysql_collations";
-	else if (!strcmp(tablename,"mysql_query_rules'") || !strcmp(tablename,"mysql\\_query\\_rules'")) pta[0]=(char *)"mysql_query_rules";
-	else if (!strcmp(tablename,"mysql_servers'") || !strcmp(tablename,"mysql\\_servers'")) pta[0]=(char *)"mysql_servers";
-	else if (!strcmp(tablename,"mysql_users'") || !strcmp(tablename,"mysql\\_users'")) pta[0]=(char *)"mysql_users";
-*/
-/*
-	if (tn==NULL) {
-		*err=strdup((char *)"Table does not exist");
-		free(tn);
-		return NULL;
-	}
-*/
 	SQLite3_result *resultset=NULL;
 	char *q1=(char *)"PRAGMA table_info(%s)";
 	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
@@ -1521,7 +1466,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	char *strA=NULL;
 	char *strB=NULL;
 	int strAl, strBl;
-	//char *query=(char *)"SELECT 1, 2, 3";
 	char *query=NULL;
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
 	query=(char *)l_alloc(query_length);
@@ -1705,11 +1649,8 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_CHARSET_VARIOUS, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 			char *query1=(char *)"select 'utf8' as '@@character_set_client', 'utf8' as '@@character_set_connection', 'utf8' as '@@character_set_server', 'utf8' as '@@character_set_database' limit 1";
-//			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-//			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
 			query=l_strdup(query1);
 			query_length=strlen(query1)+1;
-//			free(query2);
 			goto __run_query;
 		}
 	}
@@ -1747,11 +1688,9 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 	{
 		bool rc;
-		//RE2 *re=(RE2 *)pa->match_regexes.re;
 		rc=RE2::PartialMatch(query_no_space,*(RE2 *)(pa->match_regexes.re[1]));
 		if (rc) {
 			string *new_query=new std::string(query_no_space);
-			//RE2::Replace(new_query,(char *)"-",(char *)"_");
 			RE2::Replace(new_query,(char *)"^(\\w+)  *@@([0-9A-Za-z_-]+) *",(char *)"SELECT variable_value AS '@@\\2' FROM global_variables WHERE variable_name='\\2'");
 			free(query);
 			query_length=new_query->length()+1;
@@ -2034,7 +1973,6 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		strBl=strlen(strB);
 		char *dbh=NULL;
 		char *tbh=NULL;
-		//int tblnamelen=query_no_space_length-strAl;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
 		if (strlen(tbh)==0) {
@@ -2138,11 +2076,8 @@ __run_query:
 void *child_mysql(void *arg) {
 
 	int client = *(int *)arg;
-//	__thr_sfp=l_mem_init();
 
 	GloMTH->wrlock();
-	mysql_thread___server_version=GloMTH->get_variable((char *)"server_version");
-	mysql_thread___default_schema=GloMTH->get_variable((char *)"default_schema");
 	{
 		char *s=GloMTH->get_variable((char *)"server_capabilities");
 		mysql_thread___server_capabilities=atoi(s);
@@ -2154,9 +2089,7 @@ void *child_mysql(void *arg) {
 	nfds_t nfds=1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
-//	MySQL_Thread *mysql_thr=create_MySQL_Thread_func();
 	MySQL_Thread *mysql_thr=new MySQL_Thread();
-	//mysql_thr->mysql_sessions = new PtrArray();
 	mysql_thr->curtime=monotonic_time();
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
@@ -2169,12 +2102,8 @@ void *child_mysql(void *arg) {
 	fds[0].fd=client;
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
-
-	//sess->myprot_client.generate_pkt_initial_handshake(sess->client_myds,true,NULL,NULL);
+	free(arg);
 	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
-
-//	unsigned long oldtime=monotonic_time(); // removed due to #608
-//	unsigned long curtime=monotonic_time(); // removed due to #608
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -2183,23 +2112,7 @@ void *child_mysql(void *arg) {
 			fds[0].events=POLLIN;
 		}
 		fds[0].revents=0;
-		//rc=poll(fds,nfds,2000);
 		rc=poll(fds,nfds,__sync_fetch_and_add(&__admin_refresh_interval,0));
-		{
-/* code removed from here. See #608
-			//FIXME: cleanup this block
-			curtime=monotonic_time();
-			if (curtime>oldtime+__admin_refresh_interval) {
-				oldtime=curtime;
-				ProxySQL_Admin *SPA=(ProxySQL_Admin *)GloAdmin;
-				pthread_mutex_lock(&admin_mutex);
-				SPA->stats___mysql_query_rules();
-				//SPA->stats___mysql_query_digests();
-				SPA->stats___mysql_commands_counters();
-				pthread_mutex_unlock(&admin_mutex);
-			}
-*/
-		}
 		if (rc == -1) {
 			if (errno == EINTR) {
 				continue;
@@ -2217,25 +2130,17 @@ void *child_mysql(void *arg) {
 	}
 
 __exit_child_mysql:
-	//delete sess;
-	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
-	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	delete mysql_thr;
-//	l_mem_destroy(__thr_sfp);
 	return NULL;
 }
 
 void* child_telnet(void* arg)
 {
 	int bytes_read;
-	//int i;
-//	struct timeval tv;
 	char line[LINESIZE+1];
 	int client = *(int *)arg;
 	free(arg);
 	pthread_mutex_unlock(&sock_mutex);
-//	gettimeofday(&tv, NULL);
-//	printf("Client %d connected at %d.%d\n", client, (int)tv.tv_sec, (int)tv.tv_usec);
 	memset(line,0,LINESIZE+1);
 	while ((strncmp(line, "quit", 4) != 0) && glovars.shutdown==0) {
 		bytes_read = recv(client, line, LINESIZE, 0);
@@ -2249,8 +2154,6 @@ void* child_telnet(void* arg)
 		  if (send(client, line, strlen(line), MSG_NOSIGNAL)==-1) break;
 		  if (send(client, "\nOK\n", 4, MSG_NOSIGNAL)==-1) break;
 	}
-//	gettimeofday(&tv, NULL);
-//	printf("Client %d disconnected at %d.%d\n", client, (int)tv.tv_sec, (int)tv.tv_usec);
 	shutdown(client,SHUT_RDWR);
 	close(client);
 	return arg;
@@ -2259,14 +2162,10 @@ void* child_telnet(void* arg)
 void* child_telnet_also(void* arg)
 {
 	int bytes_read;
-	//int i;
-//	struct timeval tv;
 	char line[LINESIZE+1];
 	int client = *(int *)arg;
 	free(arg);
 	pthread_mutex_unlock(&sock_mutex);
-//	gettimeofday(&tv, NULL);
-//	printf("Client %d connected at %d.%d\n", client, (int)tv.tv_sec, (int)tv.tv_usec);
 	memset(line,0,LINESIZE+1);
 	while ((strncmp(line, "quit", 4) != 0) && glovars.shutdown==0) {
 		bytes_read = recv(client, line, LINESIZE, 0);
@@ -2279,25 +2178,16 @@ void* child_telnet_also(void* arg)
 		  if (send(client, line, strlen(line), MSG_NOSIGNAL)==-1) break;
 		  if (send(client, "\nNOT OK\n", 8, MSG_NOSIGNAL)==-1) break;
 	}
-//	gettimeofday(&tv, NULL);
-//	printf("Client %d disconnected at %d.%d\n", client, (int)tv.tv_sec, (int)tv.tv_usec);
 	shutdown(client,SHUT_RDWR);
 	close(client);
 	return arg;
 }
 
-
-
-
-
 static void * admin_main_loop(void *arg)
 {
 	int i;
 	int version=0;
-	//size_t c;
-	//int sd;
 	struct sockaddr_in addr;
-	//size_t mystacksize=256*1024;
 	struct pollfd *fds=((struct _main_args *)arg)->fds;
 	int nfds=((struct _main_args *)arg)->nfds;
 	int *callback_func=((struct _main_args *)arg)->callback_func;
@@ -2332,24 +2222,13 @@ static void * admin_main_loop(void *arg)
 		}
 		poll_wait=poll_wait/1000;	// conversion to millisecond
 		rc=poll(fds,nfds,poll_wait);
-		//if (__sync_fetch_and_add(&GloVars.global.nostart,0)==0) {
-		//	__sync_fetch_and_add(&GloVars.global.nostart,1);
 		if ((nostart_ && __sync_val_compare_and_swap(&GloVars.global.nostart,0,1)==0) || __sync_fetch_and_add(&glovars.shutdown,0)==1) {
 			nostart_=false;
 			pthread_mutex_unlock(&GloVars.global.start_mutex);
-//			if (glovars.reload) {
-//				nostart_=true;
-//				pthread_mutex_lock(&GloVars.global.start_mutex);
-//			}
 		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
         // poll() timeout, try again
 			goto __end_while_pool;
-//        continue;
-		}
-		if (fds[0].revents==POLLIN) {
-			// if we are here, we have been signaled
-			// we will soon exit
 		}
 		for (i=1;i<nfds;i++) {
 			if (fds[i].revents==POLLIN) {
@@ -2369,7 +2248,6 @@ __end_while_pool:
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
 			version=S_amll.get_version();
-			//S_amll.copy_new_descriptors(&S_amll.descriptor_new, &S_amll.descriptor_new_copy, false);
 			for (i=0; i<nfds; i++) {
 				char *add=NULL; char *port=NULL;
 				close(fds[i].fd);
@@ -2403,20 +2281,9 @@ __end_while_pool:
 
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
+				if (add) free(add);
+				if (port) free(port);
 			}
-//	FIXME: disabling this part until telnet modules will be implemented
-//			for (j=0; j<S_amll.ifaces_telnet_admin->ifaces->len; j++) {
-//				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_admin->ifaces->index(j);
-//				c_split_2(sn, ":" , &add, &port);
-//				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
-//				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=1; socket_names[nfds]=strdup(sn); nfds++; }
-//			}
-//			for (j=0; j<S_amll.ifaces_telnet_stats->ifaces->len; j++) {
-//				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_telnet_stats->ifaces->index(j);
-//				c_split_2(sn, ":" , &add, &port);
-//				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 50) : listen_on_unix(add, 50));
-//				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=2; socket_names[nfds]=strdup(sn); nfds++; }
-//			}
 			S_amll.wrunlock();
 		}
 
@@ -2427,9 +2294,13 @@ __end_while_pool:
 		close(fds[i].fd);
 		c_split_2(socket_names[i], ":" , &add, &port);
 		if (atoi(port)==0) {
-			if (socket_names[i])
+			if (socket_names[i]) {
 				unlink(socket_names[i]);
+			}
 		}
+		if (socket_names[i]) free(socket_names[i]);
+		if (add) free(add);
+		if (port) free(port);
 	}
 	free(arg);
 	return NULL;
@@ -2464,8 +2335,6 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	}
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;
-	//variables.telnet_admin_ifaces=strdup("127.0.0.1:6030");
-	//variables.telnet_stats_ifaces=strdup("127.0.0.1:6031");
 	variables.refresh_interval=2000;
 	variables.hash_passwords=true;	// issue #676
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
@@ -2479,7 +2348,6 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	match_regexes.opt=(re2::RE2::Options *)new re2::RE2::Options(RE2::Quiet);
 	re2::RE2::Options *opt2=(re2::RE2::Options *)match_regexes.opt;
 	opt2->set_case_sensitive(false);
-	//match_regexes.re1=(RE2 *)new RE2("^SELECT @@\\w+ *", *opt2);
 	match_regexes.re=(void **)malloc(sizeof(void *)*10);
 	match_regexes.re[0]=(RE2 *)new RE2("^SELECT\\s+@@max_allowed_packet\\s*", *opt2);
 	match_regexes.re[1]=(RE2 *)new RE2("^SELECT\\s+@@[0-9A-Za-z_-]+\\s*", *opt2);
@@ -2508,9 +2376,7 @@ void ProxySQL_Admin::print_version() {
 };
 
 bool ProxySQL_Admin::init() {
-	//int i;
 	cpu_timer cpt;
-	//size_t mystacksize=256*1024;
 
 	child_func[0]=child_mysql;
 	child_func[1]=child_telnet;
@@ -2728,6 +2594,21 @@ void ProxySQL_Admin::admin_shutdown() {
 	// delete the scheduler
 	delete scheduler;
 	scheduler=NULL;
+	if (variables.mysql_ifaces) {
+		free(variables.mysql_ifaces);
+	}
+	if (variables.admin_credentials) {
+		free(variables.admin_credentials);
+	}
+	if (variables.stats_credentials) {
+		free(variables.stats_credentials);
+	}
+	if (variables.telnet_admin_ifaces) {
+		free(variables.telnet_admin_ifaces);
+	}
+	if (variables.telnet_stats_ifaces) {
+		free(variables.telnet_stats_ifaces);
+	}
 };
 
 ProxySQL_Admin::~ProxySQL_Admin() {
@@ -2739,36 +2620,6 @@ ProxySQL_Admin::~ProxySQL_Admin() {
 	free(match_regexes.re);
 	delete (re2::RE2::Options *)match_regexes.opt;
 };
-
-/*
-bool ProxySQL_Admin::is_command(std::string s) {
-	std::string cps;
-	std::size_t found = s.find_first_of("\n\r\t ");
-	if (found!=std::string::npos) {
-		cps=s.substr(0,found);
-	} else {
-		cps=s;
-	}
-	std::transform(cps.begin(), cps.end(), cps.begin(), std::toupper);
-	uint32 cmd_hash=SpookyHash::Hash32(cps.c_str(),cps.length(),0);
-	std::cout<<cps<<"  "<<cmd_hash<<"  "<<std::endl;
-	switch (keyfromhash(cmd_hash)) {
-		case CMD1:
-			std::cout<<"This is a SHOW command"<<std::endl;
-			break;
-		case CMD2:
-			std::cout<<"This is a SET command"<<std::endl;
-			break;
-		case CMD3:
-			std::cout<<"This is a FLUSH command"<<std::endl;
-			break;
-		default:
-			return false;
-			break;
-	}
-	return true;
-};
-*/
 
 void ProxySQL_Admin::dump_mysql_collations() {
 	const CHARSET_INFO * c = compiled_charsets;
@@ -3068,13 +2919,6 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	size_t vallen=strlen(value);
 
 	if (!strcasecmp(name,"admin_credentials")) {
-		// Removing this code due to bug #603
-//		// always (re)add monitor user
-//		if (mysql_thread___monitor_username && mysql_thread___monitor_password) {
-//			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-//				GloMyAuth->add(mysql_thread___monitor_username,mysql_thread___monitor_password,USERNAME_FRONTEND,0,STATS_HOSTGROUP,(char *)"main",0,0,0,1000);
-//			}
-//		}
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
@@ -3130,10 +2974,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
 			if (variables.mysql_ifaces)
 				free(variables.mysql_ifaces);
-			variables.mysql_ifaces=strdup(value);
-			if (update_creds && variables.mysql_ifaces) {
-				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
-			}
+				variables.mysql_ifaces=strdup(value);
+				if (update_creds && variables.mysql_ifaces) {
+					S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
+				}
 			return true;
 		} else {
 			return false;
@@ -3225,9 +3069,6 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 #endif /* DEBUG */
 	return false;
 }
-
-
-
 
 void ProxySQL_Admin::stats___mysql_global() {
 	if (!GloMTH) return;
@@ -3618,7 +3459,6 @@ void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, 
 
 }
 
-
 #ifdef DEBUG
 void ProxySQL_Admin::flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace) {
 	int i;
@@ -3832,7 +3672,6 @@ void ProxySQL_Admin::add_admin_users() {
 void ProxySQL_Admin::__refresh_users() {
 	__delete_inactive_users(USERNAME_BACKEND);
 	__delete_inactive_users(USERNAME_FRONTEND);
-	//add_default_user((char *)"admin",(char *)"admin");
 	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
 	GloMyAuth->set_all_inactive(USERNAME_FRONTEND);
 	add_admin_users();
@@ -3876,7 +3715,6 @@ void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
 			GloMyAuth->del(r->fields[0], usertype);
 		}
 	}
-//	if (error) free(error);
 	if (resultset) delete resultset;
 	free(query);
 }
@@ -3925,12 +3763,10 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 			}
 			GloMyAuth->add(
 				r->fields[0], // username
-				//(r->fields[1]==NULL ? (char *)"" : r->fields[1]), //password
 				password, // before #676, wewere always passing the password. Now it is possible that the password can be hashed
 				usertype, // backend/frontend
 				(strcmp(r->fields[2],"1")==0 ? true : false) , // use_ssl
 				atoi(r->fields[3]), // default_hostgroup
-				//(r->fields[4]==NULL ? (char *)mysql_thread___default_schema : r->fields[4]), //default_schema
 				(r->fields[4]==NULL ? (char *)"" : r->fields[4]), //default_schema
 				(strcmp(r->fields[5],"1")==0 ? true : false) , // schema_locked
 				(strcmp(r->fields[6],"1")==0 ? true : false) , // transaction_persistent
@@ -3942,27 +3778,12 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 			}
 		}
 	}
-//	if (error) free(error);
 	if (resultset) delete resultset;
 	free(query);
 }
 
 
 void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
-/*
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query;
-	query=(char *)"SELECT username, backend, frontend FROM mysql_users WHERE active=1";
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (!resultset) return;
-	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
-	}	
-	if(resultset) delete resultset;
-*/
 	char *query=NULL;
 	if (_runtime) {
 		query=(char *)"DELETE FROM main.runtime_mysql_users";
@@ -4090,8 +3911,6 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	free(args);
 }
 
-
-
 void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
@@ -4106,32 +3925,66 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	admindb->execute(query);
 	resultset=MyHGM->dump_table_mysql_servers();
 	if (resultset) {
-		char *q=NULL;
+		int rc;
+		sqlite3_stmt *statement1=NULL;
+		sqlite3_stmt *statement32=NULL;
+		sqlite3 *mydb3=admindb->get_db();
+		char *query1=NULL;
+		char *query32=NULL;
 		if (_runtime) {
-			q=(char *)"INSERT INTO runtime_mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s,%s,%s,'%s')";
+			query1=(char *)"INSERT INTO runtime_mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+			query32=(char *)"INSERT INTO runtime_mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11), (?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22), (?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33), (?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44), (?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55),(?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66),(?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77),(?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88),(?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99), (?100, ?101, ?102, ?103, ?104, ?105, ?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120, ?121), (?122, ?123, ?124, ?125, ?126, ?127, ?128, ?129, ?130, ?131, ?132), (?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140, ?141, ?142, ?143), (?144, ?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165), (?166, ?167, ?168, ?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176), (?177, ?178, ?179, ?180, ?181, ?182, ?183, ?184, ?185, ?186, ?187), (?188, ?189, ?190, ?191, ?192, ?193, ?194, ?195, ?196, ?197, ?198), (?199, ?200, ?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208, ?209), (?210, ?211, ?212, ?213, ?214, ?215, ?216, ?217, ?218, ?219, ?220), (?221, ?222, ?223, ?224, ?225, ?226, ?227, ?228, ?229, ?230, ?231), (?232, ?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240, ?241, ?242), (?243, ?244, ?245, ?246, ?247, ?248, ?249, ?250, ?251, ?252, ?253), (?254, ?255, ?256, ?257, ?258, ?259, ?260, ?261, ?262, ?263, ?264), (?265, ?266, ?267, ?268, ?269, ?270, ?271, ?272, ?273, ?274, ?275), (?276, ?277, ?278, ?279, ?280, ?281, ?282, ?283, ?284, ?285, ?286), (?287, ?288, ?289, ?290, ?291, ?292, ?293, ?294, ?295, ?296, ?297), (?298, ?299, ?300, ?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308), (?309, ?310, ?311, ?312, ?313, ?314, ?315, ?316, ?317, ?318, ?319), (?320, ?321, ?322, ?323, ?324, ?325, ?326, ?327, ?328, ?329, ?330), (?331, ?332, ?333, ?334, ?335, ?336, ?337, ?338, ?339, ?340, ?341), (?342, ?343, ?344, ?345, ?346, ?347, ?348, ?349, ?350, ?351, ?352)";
 		} else {
-			q=(char *)"INSERT INTO mysql_servers VALUES(%s,\"%s\",%s,\"%s\",%s,%s,%s,%s,%s,%s,'%s')";
+			query1=(char *)"INSERT INTO mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+			query32=(char *)"INSERT INTO mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11), (?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22), (?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33), (?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44), (?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55),(?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66),(?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77),(?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88),(?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99), (?100, ?101, ?102, ?103, ?104, ?105, ?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120, ?121), (?122, ?123, ?124, ?125, ?126, ?127, ?128, ?129, ?130, ?131, ?132), (?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140, ?141, ?142, ?143), (?144, ?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165), (?166, ?167, ?168, ?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176), (?177, ?178, ?179, ?180, ?181, ?182, ?183, ?184, ?185, ?186, ?187), (?188, ?189, ?190, ?191, ?192, ?193, ?194, ?195, ?196, ?197, ?198), (?199, ?200, ?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208, ?209), (?210, ?211, ?212, ?213, ?214, ?215, ?216, ?217, ?218, ?219, ?220), (?221, ?222, ?223, ?224, ?225, ?226, ?227, ?228, ?229, ?230, ?231), (?232, ?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240, ?241, ?242), (?243, ?244, ?245, ?246, ?247, ?248, ?249, ?250, ?251, ?252, ?253), (?254, ?255, ?256, ?257, ?258, ?259, ?260, ?261, ?262, ?263, ?264), (?265, ?266, ?267, ?268, ?269, ?270, ?271, ?272, ?273, ?274, ?275), (?276, ?277, ?278, ?279, ?280, ?281, ?282, ?283, ?284, ?285, ?286), (?287, ?288, ?289, ?290, ?291, ?292, ?293, ?294, ?295, ?296, ?297), (?298, ?299, ?300, ?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308), (?309, ?310, ?311, ?312, ?313, ?314, ?315, ?316, ?317, ?318, ?319), (?320, ?321, ?322, ?323, ?324, ?325, ?326, ?327, ?328, ?329, ?330), (?331, ?332, ?333, ?334, ?335, ?336, ?337, ?338, ?339, ?340, ?341), (?342, ?343, ?344, ?345, ?346, ?347, ?348, ?349, ?350, ?351, ?352)";
 		}
+		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		assert(rc==SQLITE_OK);
+		rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+		assert(rc==SQLITE_OK);
+		int row_idx=0;
+		int max_bulk_row_idx=resultset->rows_count/32;
+		max_bulk_row_idx=max_bulk_row_idx*32;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			char *o=escape_string_single_quotes(r->fields[10],false);
-			char *query=(char *)malloc(strlen(q)+strlen(r->fields[0])+strlen(r->fields[1])+strlen(r->fields[2])+strlen(r->fields[3])+strlen(r->fields[4])+strlen(r->fields[5])+strlen(r->fields[6])+strlen(r->fields[7])+
-				strlen(r->fields[8])+ // use_ssl
-				strlen(r->fields[9])+ // max_latency_ms
-				strlen(o)+ // comment
-			16); // padding
-			// if the backend is shunned, save_mysql_servers_runtime_to_database() should set to ONLINE if _runtime==false
-			sprintf(query, q, r->fields[0], r->fields[1], r->fields[2], ( _runtime ? r->fields[4] : ( strcmp(r->fields[4],"SHUNNED")==0 ? "ONLINE" : r->fields[4] ) ), r->fields[3], r->fields[5], r->fields[6], r->fields[7],
-				r->fields[8], // use_ssl
-				r->fields[9], // max_latency_ms
-				o); // comment
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-			admindb->execute(query);
-			free(query);
-			if (o!=r->fields[10]) {
-				free(o);
+			SQLite3_row *r1=*it;
+			int idx=row_idx%32;
+			if (row_idx<max_bulk_row_idx) { // bulk
+				rc=sqlite3_bind_int64(statement32, (idx*11)+1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement32, (idx*11)+2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*11)+3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement32, (idx*11)+4, ( _runtime ? r1->fields[4] : ( strcmp(r1->fields[4],"SHUNNED")==0 ? "ONLINE" : r1->fields[4] ) ), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*11)+5, atoi(r1->fields[3])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*11)+6, atoi(r1->fields[5])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*11)+7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*11)+8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*11)+9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*11)+10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement32, (idx*11)+11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				if (idx==31) {
+					SAFE_SQLITE3_STEP(statement32);
+					rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
+					rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+				}
+			} else { // single row
+				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 4, ( _runtime ? r1->fields[4] : ( strcmp(r1->fields[4],"SHUNNED")==0 ? "ONLINE" : r1->fields[4] ) ), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 5, atoi(r1->fields[3])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 6, atoi(r1->fields[5])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				SAFE_SQLITE3_STEP(statement1);
+				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 			}
+			row_idx++;
 		}
+		sqlite3_finalize(statement1);
+		sqlite3_finalize(statement32);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
@@ -4213,34 +4066,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			MySerStatus status=MYSQL_SERVER_STATUS_ONLINE;
-			if (strcasecmp(r->fields[3],"ONLINE")) {
-				if (!strcasecmp(r->fields[3],"SHUNNED")) {
-					status=MYSQL_SERVER_STATUS_SHUNNED;
-				}	else {
-					if (!strcasecmp(r->fields[3],"OFFLINE_SOFT")) {
-						status=MYSQL_SERVER_STATUS_OFFLINE_SOFT;
-					} else {
-						if (!strcasecmp(r->fields[3],"OFFLINE_HARD")) {
-							status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
-						}
-					}
-				}
-			}
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "hid=%d , hostname=%s , port=%d , status=%s , weight=%d , compression=%d , max_connections=%d , max_replication_lag=%d, use_ssl=%d, max_latency_ms=%d\n",
-				atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), r->fields[3], atoi(r->fields[4]), atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]),
-				atoi(r->fields[8]), // use_ssl
-				atoi(r->fields[9])  // max_latency_ms
-			);
-			MyHGM->server_add(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), status, atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]),
-				atoi(r->fields[8]), // use_ssl
-				atoi(r->fields[9]),  // max_latency_ms
-				r->fields[10]  // comment
-			);
-			//MyHGH->server_add_hg(atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]));
-		}
+		MyHGM->servers_add(resultset);
 	}
 	if (resultset) delete resultset;
 	resultset=NULL;
@@ -4328,7 +4154,6 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		GloQPro->wrunlock();
 		GloQPro->commit();
 	}
-//	if (error) free(error);
 	if (resultset) delete resultset;
 	return NULL;
 }
@@ -4445,7 +4270,6 @@ int ProxySQL_Admin::Read_Scheduler_from_configfile() {
 
 		// variable for parsing interval_ms
 		int interval_ms=0;
-
 
 		std::string comment="";
 
@@ -5098,7 +4922,6 @@ Scheduler_Row::Scheduler_Row(unsigned int _id, bool _is_active, unsigned int _in
 	comment=strdup(_comment);
 }
 
-
 Scheduler_Row::~Scheduler_Row() {
 	int i;
 	for (i=0;i<6;i++) {
@@ -5111,7 +4934,6 @@ Scheduler_Row::~Scheduler_Row() {
 	free(comment);
 	args=NULL;
 }
-
 
 ProxySQL_External_Scheduler::ProxySQL_External_Scheduler() {
 	spinlock_rwlock_init(&rwlock);

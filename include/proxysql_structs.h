@@ -1,5 +1,3 @@
-
-
 #define PKT_PARSED 0
 #define PKT_ERROR 1
 
@@ -130,6 +128,9 @@ enum session_status {
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
 	SETTING_INIT_CONNECT,
+	SETTING_SQL_LOG_BIN,
+	SETTING_SQL_MODE,
+	SETTING_TIME_ZONE,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
@@ -303,12 +304,10 @@ typedef struct _debug_level debug_level;
 #endif /* DEBUG */
 typedef struct _global_variables_t global_variables;
 typedef struct _global_variable_entry_t global_variable_entry_t;
-//typedef struct _mysql_backend_t mysql_backend_t;
 typedef struct _mysql_data_stream_t mysql_data_stream_t;
 typedef struct _mysql_session_t mysql_session_t;
 typedef struct _bytes_stats_t bytes_stats_t;
 typedef struct _mysql_hdr mysql_hdr;
-//typedef struct _mysql_cp_entry_t mysql_cp_entry_t;
 typedef int (*PKT_HANDLER)(u_char *pkt, u_int len);
 typedef struct __fdb_hash_t fdb_hash_t;
 typedef struct __fdb_hash_entry fdb_hash_entry;
@@ -318,15 +317,12 @@ typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 typedef struct __SQP_query_parser_t SQP_par_t;
-//typedef struct _mysql_server_t mysql_server_t;
-//typedef struct _stmt_execute_metadata_t stmt_execute_metadata_t;
 #endif /* PROXYSQL_TYPEDEFS */
 
 //#ifdef __cplusplus
 #ifndef PROXYSQL_CLASSES
 #define PROXYSQL_CLASSES
 class MySQL_Data_Stream;
-//class MySQL_Session_userinfo;
 class MySQL_Connection_userinfo;
 class MySQL_Session;
 class MySQL_Backend;
@@ -338,7 +334,6 @@ class SimpleKV;
 class AdvancedKV;
 class ProxySQL_Poll;
 class Query_Cache;
-//class Shared_Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
 class MySQL_Protocol;
@@ -347,44 +342,24 @@ class PtrSizeArray;
 class StatCounters;
 class ProxySQL_ConfigFile;
 class Query_Info;
-//class MySQL_Server;
 class SQLite3_result;
 class stmt_execute_metadata_t;
 class MySQL_STMTs_meta;
-//class MySQL_Servers;
-//class MySQL_Hostgroup_Entry;
-//class MySQL_Hostgroup;
-//class MySQL_HostGroups_Handler;
 class MySQL_HostGroups_Manager;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
 
-
-
 #ifndef PROXYSQL_STRUCTS
 #define PROXYSQL_STRUCTS
-/*
-struct _mysql_server_t {
-	char *address;
-	uint16_t port;
-	uint16_t flags;
-	unsigned int connections;
-	unsigned char alive;
-	enum proxysql_server_status status;
-};
-*/
 
 struct __SQP_query_parser_t {
-//	sfilter sf;
 	uint64_t digest;
 	uint64_t digest_total;
 	char *digest_text;
 	char *first_comment;
 	char *query_prefix;
 };
-
-
 
 struct _PtrSize_t {
   void *ptr;
@@ -399,7 +374,6 @@ struct _debug_level {
 };
 #endif /* DEBUG */
 
-
 struct _rwlock_t {
     spinlock lock;
     unsigned readers;
@@ -411,19 +385,12 @@ struct _bytes_stats_t {
 	uint64_t bytes_sent;
 };
 
-
 struct __fdb_hash_t {
-	//pthread_rwlock_t lock;
 	rwlock_t lock;
-	//GHashTable *hash;
-	//PtrArray *ptrArray;
 	uint64_t dataSize;
 	uint64_t purgeChunkSize;
 	uint64_t purgeIdx;
 };
-
-
-
 
 struct __fdb_hash_entry {
 	unsigned char *key;
@@ -445,30 +412,6 @@ struct mysql_protocol_events {
 	uint8_t event[MAX_EVENTS_PER_STATE];
 	uint8_t next_state[MAX_EVENTS_PER_STATE];
 };
-
-
-/*
-// mysql backend
-struct _mysql_backend_t {
-  // attributes
-  //int fd;
-  //MSHGE *mshge;
-  //mysql_connpool *last_mysql_connpool;
-	int hostgroup_id;
-	MySQL_Data_Stream *server_myds;
-	mysql_cp_entry_t *server_mycpe;
-	bytes_stats_t server_bytes_at_cmd;
-};
-*/
-
-/*
-// mysql connection pool entry
-struct _mysql_cp_entry_t {
-	MYSQL *conn;
-	unsigned long long expire;
-	int reusable;
-};
-*/
 
 // this struct define global variable entries, and how these are configured during startup
 struct _global_variable_entry_t {
@@ -499,29 +442,23 @@ struct _proxysql_mysql_thread_t {
 };
 
 
-
 /* Every communication between client and proxysql, and between proxysql and mysql server is
  * performed within a mysql_data_stream_t
  */
 struct _mysql_data_stream_t {
 	mysql_session_t *sess;	// pointer to the session using this data stream
-	//MySQL_Backend *mybe;	// if this is a connection to a mysql server, this points to a backend structure
 	uint64_t pkts_recv;	// counter of received packets
 	uint64_t pkts_sent;	// counter of sent packets
 	bytes_stats_t bytes_info;	// bytes statistics
 	int fd;	// file descriptor
 	struct evbuffer *evbIN;
 	struct evbuffer *evbOUT;
-	//mysql_uni_ds_t input;
-	//mysql_uni_ds_t output;
 	int active_transaction;	// 1 if there is an active transaction
 	int active;	// data stream is active. If not, shutdown+close needs to be called
 	int status;	// status . FIXME: make it a ORable variable
 };
 
-
 struct _global_variables_t {
-	//pthread_rwlock_t rwlock_global;
 	pthread_rwlock_t rwlock_usernames;
 
 	bool has_debug;
@@ -552,9 +489,7 @@ struct _global_variables_t {
 	int proxy_stats_port;	// FIXME: to remove
 	int proxy_admin_refresh_status_interval; // FIXME: to remove
 	int proxy_stats_refresh_status_interval; // FIXME: to remove
-	//int proxy_flush_status_interval;
 	int backlog;
-	//int print_statistics_interval;
 
 	int admin_sync_disk_on_flush;
 	int admin_sync_disk_on_shutdown;
@@ -576,7 +511,6 @@ struct _global_variables_t {
 
 	unsigned int mysql_query_cache_default_timeout;
 	unsigned long long mysql_wait_timeout;
-	//unsigned long long mysql_query_cache_size;
 	unsigned long long mysql_max_resultset_size;
 	int mysql_max_query_size;
 
@@ -605,33 +539,13 @@ struct _global_variables_t {
 	bool proxy_restart_on_error;
 	int proxy_restart_delay;
 	int http_start;
-	//GHashTable *usernames;
-	//GPtrArray *mysql_users_name;
-	//GPtrArray *mysql_users_pass;
 };
 
 struct _mysql_session_t {
 	int net_failure;
 };
 
-
-/*
-struct _stmt_execute_metadata_t {
-	uint32_t stmt_id;
-	uint8_t flags;
-	uint16_t num_params;
-	MYSQL_BIND *binds;
-	my_bool *is_nulls;
-	unsigned long *lengths;
-	void *pkt;
-};
-*/
-
-
 #endif /* PROXYSQL_STRUCTS */
-
-
-
 
 #ifndef EXTERN
 #ifndef PROXYSQL_EXTERN
@@ -642,145 +556,35 @@ struct _stmt_execute_metadata_t {
 #endif /* EXTERN */
 
 //#ifdef __cplusplus
-//#include "cpp.h"
 #include "proxysql_glovars.hpp"
 //#endif
 
 
 #ifndef GLOBAL_DEFINED
 #define GLOBAL_DEFINED
-#ifdef DEBUG
-//EXTERN debug_level *gdbg_lvl;
-//EXTERN int gdbg;
-#endif /* DEBUG */
-//EXTERN int foreground;
 EXTERN global_variables glovars;
-
-/*
-EXTERN gchar *__cmd_proxysql_config_file;
-EXTERN gchar *__cmd_proxysql_datadir;
-EXTERN gchar *__cmd_proxysql_admin_pathdb;
-EXTERN gboolean __cmd_proxysql_print_version;
-EXTERN int __cmd_proxysql_nostart;
-EXTERN int __cmd_proxysql_foreground;
-EXTERN int __cmd_proxysql_gdbg;
-EXTERN gchar *__cmd_proxysql_admin_socket;
-*/
-//EXTERN MySQL_Authentication *GMA;
-//#ifdef __cplusplus
-//class ProxySQL_GlobalVariables;
-
-/*
-#ifndef __CLASS_PROXYSQL_GLOVARS_H
-#define __CLASS_PROXYSQL_GLOVARS_H
-class ProxySQL_GlobalVariables {
-  public:
-  ProxySQL_ConfigFile *confFile;
-  gchar *__cmd_proxysql_config_file;
-  gchar *__cmd_proxysql_datadir;
-  gchar *__cmd_proxysql_admin_pathdb;
-  gboolean __cmd_proxysql_print_version;
-  int __cmd_proxysql_nostart;
-  int __cmd_proxysql_foreground;
-  int __cmd_proxysql_gdbg;
-  gchar *__cmd_proxysql_admin_socket;
-  struct  {
-    bool gdbg=false;
-    bool nostart=false;
-    int gdb=0;
-    int backlog;
-    int stack_size;
-    char *pidfile;
-    bool restart_on_error;
-    int restart_delay;
-  } global;
-  struct mysql {
-    char *server_version;
-    int poll_timeout;
-  };
-};
-#endif
-*/
-//#endif /* __cplusplus */
 #endif /* GLOBAL_DEFINED */
 
 //#ifdef __cplusplus
 #ifndef GLOVARS
 #define GLOVARS
 //#include "proxysql_glovars.hpp"
-#ifdef PROXYSQL_EXTERN
-#else
-//extern ProxySQL_GlobalVariables GloVars;
-#endif
 #endif
 //#endif
 
-//class ProxySQL_GlobalVariables;
-
 #ifdef PROXYSQL_EXTERN
-//ProxySQL_GlobalVariables GloVars;
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
 #define GLOBAL_DEFINED_OPTS_ENTRIES
-//#include "proxysql_glovars.hpp"
-/*
-#ifndef __CLASS_PROXYSQL_GLOVARS_H
-#define __CLASS_PROXYSQL_GLOVARS_H
-class ProxySQL_GlobalVariables {
-  public:
-  ProxySQL_ConfigFile *confFile;
-  gchar *__cmd_proxysql_config_file;
-  gchar *__cmd_proxysql_datadir;
-  gchar *__cmd_proxysql_admin_pathdb;
-  gboolean __cmd_proxysql_print_version;
-  int __cmd_proxysql_nostart;
-  int __cmd_proxysql_foreground;
-  int __cmd_proxysql_gdbg;
-  gchar *__cmd_proxysql_admin_socket;
-  struct  {
-    bool gdbg=false;
-    bool nostart=false;
-    int gdb=0;
-    int backlog;
-    int stack_size;
-    char *pidfile;
-    bool restart_on_error;
-    int restart_delay;
-  } global;
-  struct mysql {
-    char *server_version;
-    int poll_timeout;
-  };
-};
-#endif
-*/
 ProxySQL_GlobalVariables GloVars;
-
-/*
-GOptionEntry cmd_option_entries[] =
-{
-//	{ "mysql-port", 0, 0, G_OPTION_ARG_INT, &__cmd_proxysql_mysql_port, "MySQL proxy port", NULL },
-//	{ "admin-socket", 'S', 0, G_OPTION_ARG_FILENAME, &__cmd_proxysql_admin_socket, "Administration Unix Socket", NULL },
-//	{ "admin-socket", 'S', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_admin_socket, "Administration Unix Socket", NULL },
-//	{ "no-start", 'n', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_nostart, "Starts only the admin service", NULL },
-//	{ "foreground", 'f', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_foreground, "Run in foreground", NULL },
-//	{ "version", 'V', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_print_version, "Print version", NULL },
-//#ifdef DEBUG
-//	{ "debug", 'd', 0, G_OPTION_ARG_NONE, &GloVars.__cmd_proxysql_gdbg, "debug", NULL },
-//#endif // DEBUG
-//	{ "datadir", 'D', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_datadir, "Datadir", NULL },
-//	{ "admin-pathdb", 'a', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_admin_pathdb, "Configuration DB path", NULL },
-//	{ "config", 'c', 0, G_OPTION_ARG_FILENAME, &GloVars.__cmd_proxysql_config_file, "Configuration text file", NULL },
-	{ NULL }
-};
-*/
 #endif // GLOBAL_DEFINED_OPTS_ENTRIES 
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
-//MySQL_HostGroups_Handler *MyHGH;
 MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___init_connect;
+__thread char *mysql_thread___default_sql_mode;
+__thread char *mysql_thread___default_time_zone;
 __thread int mysql_thread___max_allowed_packet;
 __thread int mysql_thread___max_transaction_time;
 __thread int mysql_thread___threshold_query_length;
@@ -813,7 +617,6 @@ __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___client_found_rows;
 __thread bool mysql_thread___multiplexing;
-// __thread bool mysql_thread___stmt_multiplexing;
 __thread bool mysql_thread___forward_autocommit;
 __thread bool mysql_thread___enforce_autocommit_on_reads;
 __thread bool mysql_thread___servers_stats;
@@ -866,12 +669,12 @@ __thread unsigned int g_seed;
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
 extern ProxySQL_GlobalVariables GloVars;
-//extern MySQL_HostGroups_Handler *MyHGH;
 extern MySQL_HostGroups_Manager *MyHGM;
-//extern GOptionEntry cmd_option_entries[];
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___init_connect;
+extern __thread char *mysql_thread___default_sql_mode;
+extern __thread char *mysql_thread___default_time_zone;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread int mysql_thread___max_transaction_time;
 extern __thread int mysql_thread___threshold_query_length;
@@ -904,7 +707,6 @@ extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___client_found_rows;
 extern __thread bool mysql_thread___multiplexing;
-// extern __thread bool mysql_thread___stmt_multiplexing;
 extern __thread bool mysql_thread___forward_autocommit;
 extern __thread bool mysql_thread___enforce_autocommit_on_reads;
 extern __thread bool mysql_thread___servers_stats;
