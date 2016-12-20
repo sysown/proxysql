@@ -309,7 +309,7 @@ void ProxySQL_Main_init_Query_Cache_module() {
 
 void ProxySQL_Main_init_MySQL_Monitor_module() {
 	// start MySQL_Monitor
-	GloMyMon = new MySQL_Monitor();
+//	GloMyMon = new MySQL_Monitor();
 	MyMon_thread = new std::thread(&MySQL_Monitor::run,GloMyMon);
 	GloMyMon->print_version();
 }
@@ -475,6 +475,8 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : GloMyLogger initialized in ";
 #endif
 	}
+	// Initialized monitor, no matter if it will be started or not
+	GloMyMon = new MySQL_Monitor();
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;

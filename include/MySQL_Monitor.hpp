@@ -39,6 +39,7 @@ typedef struct _MyGR_status_entry_t {
 	long long transactions_behind;
 	bool primary_partition;
 	bool read_only;
+	char *error;
 } MyGR_status_entry_t;
 
 
@@ -51,7 +52,7 @@ class MyGR_monitor_node {
 	MyGR_status_entry_t last_entries[MyGR_Nentries];
 	MyGR_monitor_node(char *_a, int _p, int _whg);
 	~MyGR_monitor_node();
-	bool add_entry(unsigned long long _ct, long long _tb, bool _pp, bool _ro); // return true if status changed
+	bool add_entry(unsigned long long _ct, long long _tb, bool _pp, bool _ro, char *_error); // return true if status changed
 };
 
 
@@ -112,7 +113,8 @@ class MySQL_Monitor {
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
-	std::map<char *, MyGR_monitor_node *, cmp_str> group_replication_hosts;
+	std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
+	SQLite3_result *Group_Replication_Hosts_resultset;
 	unsigned int num_threads;
 	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
@@ -126,6 +128,7 @@ class MySQL_Monitor {
 	void * monitor_connect();
 	void * monitor_ping();
 	void * monitor_read_only();
+	void * monitor_group_replication();
 	void * monitor_replication_lag();
 	void * run();
 };

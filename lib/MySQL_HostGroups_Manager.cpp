@@ -26,6 +26,7 @@ extern ProxySQL_Admin *GloAdmin;
 
 extern MySQL_Threads_Handler *GloMTH;
 
+extern MySQL_Monitor *GloMyMon;
 
 class MySrvConnList;
 class MySrvC;
@@ -984,6 +985,26 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		}
 	}
 	// TODO: it is now time to compute all the changes
+
+
+	// it is now time to build a new structure in Monitor
+	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
+	{
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
+		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (resultset) {
+			if (GloMyMon->Group_Replication_Hosts_resultset) {
+				delete GloMyMon->Group_Replication_Hosts_resultset;
+				GloMyMon->Group_Replication_Hosts_resultset=resultset;
+			}
+		}
+	}
+	pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
+
 	pthread_mutex_unlock(&Group_Replication_Info_mutex);
 }
 
