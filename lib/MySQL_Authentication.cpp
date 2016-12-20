@@ -4,37 +4,6 @@
 #include "proxysql_atomic.h"
 #include "SpookyV2.h"
 
-/*
-typedef struct _account_details_t {
-	char *username;
-	char *password;
-	bool use_ssl;
-	int default_hostgroup;
-	char *default_schema;
-	bool schema_locked;
-	bool transaction_persistent;
-	bool fast_forward;
-} account_details_t;
-*/
-
-//#ifdef DEBUG
-//#define DEB "_DEBUG"
-//#else
-//#define DEB ""
-//#endif /* DEBUG */
-//#define MYSQL_AUTHENTICATION_VERSION "0.1.0706" DEB
-
-/*
-typedef btree::btree_map<uint64_t, account_details_t *> BtMap;
-
-typedef struct _creds_group_t {
-	rwlock_t lock;
-	BtMap bt_map;
-	PtrArray cred_array;
-} creds_group_t;
-*/
-
-
 MySQL_Authentication::MySQL_Authentication() {
 #ifdef DEBUG
 	if (glovars.has_debug==false) {
@@ -48,54 +17,17 @@ MySQL_Authentication::MySQL_Authentication() {
 	spinlock_rwlock_init(&creds_frontends.lock);
 	creds_backends.cred_array = new PtrArray();
 	creds_frontends.cred_array = new PtrArray();
-
-//	spinlock_rwlock_init(&rwlock);
-//	authdb=new SQLite3DB();
-//	authdb->open((char *)"file:mem_authdb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-//	authdb->execute(AUTH_TABLE_MYSQL_USERS);
-//	authdb->execute(AUTH_TABLE_MYSQL_USERS_INCOMING);
-
 };
 
 MySQL_Authentication::~MySQL_Authentication() {
 	reset();
 	delete creds_backends.cred_array;
 	delete creds_frontends.cred_array;
-//	delete authdb;
 };
 
 void MySQL_Authentication::print_version() {
 		fprintf(stderr,"Standard MySQL Authentication rev. %s -- %s -- %s\n", MYSQL_AUTHENTICATION_VERSION, __FILE__, __TIMESTAMP__);
 	};
-
-
-//void MySQL_Authentication::rdlock() {
-//	spin_wrlock(&rwlock);
-//}
-//
-//void MySQL_Authentication::rdunlock() {
-//	spin_wrunlock(&rwlock);
-//}
-//
-//void MySQL_Authentication::wrlock() {
-//	spin_wrlock(&rwlock);
-//}
-//
-//void MySQL_Authentication::wrunlock() {
-//	spin_wrunlock(&rwlock);
-//}
-
-
-//bool MySQL_Authentication::user_add(unsigned int hid, char *add, uint16_t p, unsigned int _weight, enum MySerStatus status, unsigned int _comp /*, uint8_t _charset */, unsigned int _max_connections) {
-//  bool ret;
-//  proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u , status %u, %s compression, max_connections %d\n", add,p,hid,_weight,status, (_comp ? "with" : "without") /*, _charset */ , _max_connections);
-//  char *q=(char *)"INSERT INTO mysql_servers_incoming VALUES (%u, \"%s\", %u, %u, %u, %u, %u)";
-//  char *query=(char *)malloc(strlen(q)+strlen(add)+100);
-//  sprintf(query,q,hid,add,p,_weight,status,_comp /*,_charset */, _max_connections);
-//  ret=mydb->execute(query);
-//  free(query);
-//  return ret;
-//}
 
 void MySQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
@@ -125,11 +57,6 @@ __loop_remove_inactives:
 
 bool MySQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections) {
 	uint64_t hash1, hash2;
-//	SpookyHash *myhash=new SpookyHash();
-//	myhash->Init(1,2);
-//	myhash->Update(username,strlen(username));
-//	myhash->Final(&hash1,&hash2);
-//	delete myhash;
 	SpookyHash myhash;
 	myhash.Init(1,2);
 	myhash.Update(username,strlen(username));
@@ -137,10 +64,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 	
-//	void *sha1_pass=NULL;
-//	char *oldpass=NULL;
 	spin_wrlock(&cg.lock);
-	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	// few changes will follow, due to issue #802
@@ -148,16 +72,6 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	bool new_ad=false;
 	if (lookup != cg.bt_map.end()) {
 		ad=lookup->second;
-//		cg.cred_array->remove_fast(ad);
-//     cg.bt_map.erase(lookup);
-		//free(ad->username);
-/*
-		if (ad->sha1_pass) {
-			oldpass=strdup(ad->password);
-			sha1_pass=malloc(SHA_DIGEST_LENGTH);
-			memcpy(sha1_pass,ad->sha1_pass,SHA_DIGEST_LENGTH);
-		}
-*/
 		if (strcmp(ad->password,password)) {
 			free(ad->password);
 			ad->password=strdup(password);
@@ -165,13 +79,11 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				free(ad->sha1_pass);
 				ad->sha1_pass=NULL;
 			}
-		} else {
 		}
 		if (strcmp(ad->default_schema,default_schema)) {
 			free(ad->default_schema);
 			ad->default_schema=strdup(default_schema);
 		}
-//		free(ad);
   } else {
 		ad=(account_details_t *)malloc(sizeof(account_details_t));
 		ad->username=strdup(username);
@@ -180,19 +92,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		new_ad=true;
 		ad->sha1_pass=NULL;
 	}
-/*
-	ad->sha1_pass=NULL;
-	if (strlen(password)) {
-		if (password[0]=='*') { // password is sha1(sha1(real_password))
-			if (oldpass) {
-				if (strcmp(password,oldpass)==0) { // pass is unchanged
-					ad->sha1_pass=malloc(SHA_DIGEST_LENGTH);
-					memcpy(ad->sha1_pass,sha1_pass,SHA_DIGEST_LENGTH);
-				}
-			}
-		}
-	}
-*/
+
 	ad->use_ssl=use_ssl;
 	ad->default_hostgroup=default_hostgroup;
 	ad->schema_locked=schema_locked;
@@ -206,16 +106,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		cg.cred_array->add(ad);
 	}
 	spin_wrunlock(&cg.lock);
-/*
-	if (oldpass) {
-		free(oldpass);
-		oldpass=NULL;
-	}
-	if (sha1_pass) {
-		free(sha1_pass);
-		sha1_pass=NULL;
-	}
-*/
+
 	return true;
 };
 
@@ -226,15 +117,9 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads) {
 	int idx_=0;
 	unsigned i=0;
 	account_details_t **_ads;
-	//total_size=creds_frontends.bt_map.size()+creds_backends.bt_map.size();
 	total_size=creds_frontends.cred_array->len+creds_backends.cred_array->len;
 	if (!total_size) goto __exit_dump_all_users;
 	_ads=(account_details_t **)malloc(sizeof(account_details_t *)*total_size);
-//	btree::btree_map<uint64_t, account_details_t *>::iterator it;
-//	for (it=creds_frontends.bt_map.begin(); it!=creds_frontends.bt_map.end(); it++) {
-//		account_details_t *ad=lookup->second;
-//		ads[idx]=(account_details_t *)malloc(sizeof(account_details_t));	
-//	}
 	for (i=0; i<creds_frontends.cred_array->len; i++) {
 		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
 		account_details_t *ado=(account_details_t *)creds_frontends.cred_array->index(i);
@@ -289,7 +174,6 @@ int MySQL_Authentication::increase_frontend_user_connections(char *username, int
 	creds_group_t &cg=creds_frontends;
 	int ret=0;
 	spin_wrlock(&cg.lock);
-	//btree::btree_map<uint64_t, account_details_t *>::iterator it;
 	std::unordered_map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
@@ -313,7 +197,6 @@ void MySQL_Authentication::decrease_frontend_user_connections(char *username) {
 	delete myhash;
 	creds_group_t &cg=creds_frontends;
 	spin_wrlock(&cg.lock);
-	//btree::btree_map<uint64_t, account_details_t *>::iterator it;
 	std::unordered_map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
@@ -338,7 +221,6 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 
 	if (set_lock)
 		spin_wrlock(&cg.lock);
-	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
@@ -370,7 +252,6 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	spin_wrlock(&cg.lock);
-	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
@@ -387,8 +268,6 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 	return ret;
 };
 
-
-
 char * MySQL_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass) {
 	char *ret=NULL;
 	uint64_t hash1, hash2;
@@ -400,7 +279,6 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	spin_rdlock(&cg.lock);
-	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
@@ -429,7 +307,6 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	spin_wrlock(&cg.lock);
-	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 
 	while (cg.bt_map.size()) {

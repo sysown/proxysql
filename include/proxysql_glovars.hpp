@@ -1,9 +1,6 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
-//#include "proxysql.h"
-//#include "cpp.h"
 
-//#include "ezOptionParser.hpp"
 #include "configfile.hpp"
 
 namespace ez {
@@ -13,13 +10,10 @@ class ezOptionParser;
 class ProxySQL_GlobalVariables {
 	public:
 	ez::ezOptionParser *opt;
-	//ezOptionParser *opt;
 	ProxySQL_ConfigFile *confFile;
 	bool configfile_open;
 	char *__cmd_proxysql_config_file;
 	char *__cmd_proxysql_datadir;
-	//char *__cmd_proxysql_admin_pathdb;
-//	bool __cmd_proxysql_print_version=false;
 	int __cmd_proxysql_nostart;
 	int __cmd_proxysql_foreground;
 	int __cmd_proxysql_gdbg;
@@ -39,7 +33,6 @@ class ProxySQL_GlobalVariables {
 #ifdef SO_REUSEPORT
 		bool reuseport;
 #endif /* SO_REUSEPORT */
-//		bool use_proxysql_mem;
 		pthread_mutex_t start_mutex;
 		bool foreground;
 #ifdef DEBUG
@@ -57,8 +50,6 @@ class ProxySQL_GlobalVariables {
 		char *server_version;
 		int poll_timeout;
 	};
-	//MySQL_HostGroups *MyHostGroups;
-	//std::vector<MySQL_Hostgroup *> MyHostGroups;
 	ProxySQL_GlobalVariables();
 	~ProxySQL_GlobalVariables();
 	void process_opts_pre();

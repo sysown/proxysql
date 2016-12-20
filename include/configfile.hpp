@@ -1,9 +1,6 @@
 #ifndef __CLASS_PROXYSQL_CONFIGFILE_H
 #define __CLASS_PROXYSQL_CONFIGFILE_H
 
-//#include "proxysql.h"
-//#include "cpp.h"
-
 #include "libconfig.h++"
 
 using namespace libconfig;
