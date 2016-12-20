@@ -552,7 +552,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		myds->DSS=STATE_QUERY_SENT_DS;
 		int sid=1;
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
-		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",client_myds->myconn->options.charset,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL); sid++;
 		myds->DSS=STATE_COLUMN_DEFINITION;
 		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
 		char **p=(char **)malloc(sizeof(char*)*1);
@@ -3116,7 +3116,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 //	sess->myprot_client.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,result->columns); sid++;
 		for (int i=0; i<result->columns; i++) {
-			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",result->column_definition[i]->name,(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL);
+			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",result->column_definition[i]->name,(char *)"",client_myds->myconn->options.charset,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL);
 			sid++;
 		}
 		myds->DSS=STATE_COLUMN_DEFINITION;
