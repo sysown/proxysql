@@ -1,8 +1,9 @@
 #ifndef __CLASS_MYSQL_DATA_STREAM_H
 #define __CLASS_MYSQL_DATA_STREAM_H
 
-#include "mysql_connection.h"
-#include "proxysql_mem.h"
+#include "proxysql.h"
+#include "cpp.h"
+
 
 #define QUEUE_T_DEFAULT_SIZE	32768
 

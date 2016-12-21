@@ -1,8 +1,8 @@
 #ifndef __CLASS_MYSQL_CONNECTION_H
 #define __CLASS_MYSQL_CONNECTION_H
 
-#include "MySQL_HostGroups_Manager.h"
-#include "MySQL_Protocol.h"
+#include "proxysql.h"
+#include "cpp.h"
 
 #define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001
 #define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002

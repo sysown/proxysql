@@ -1,7 +1,3 @@
-#ifndef PROXYSQL_MACROS_H__
-#define PROXYSQL_MACROS_H__
-
-#include <sys/ioctl.h>
 
 #define strdup_null(__c) ( __c ? strdup(__c) : __c )
 #define char_malloc (char *)malloc
@@ -62,5 +58,3 @@
 		uint32_t *a=(uint32_t *)x; \
 		*a=*((uint32_t *)y); \
 	} while(0)
-
-#endif // PROXYSQL_MACROS_H__

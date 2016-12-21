@@ -1,9 +1,8 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
-
-#include "mysql_client.h"
 #include "proxysql.h"
-#include "sqlite3db.h"
+#include "cpp.h"
+#include "thread.h"
 #include "wqueue.h"
 
 

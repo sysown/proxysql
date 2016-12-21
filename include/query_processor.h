@@ -1,11 +1,7 @@
 #ifndef __CLASS_QUERY_PROCESSOR_H
 #define __CLASS_QUERY_PROCESSOR_H
-
-#include <unordered_map>
-#include <vector>
-
-#include "MySQL_PreparedStatement.h"
-#include "proxysql_mem.h"
+#include "proxysql.h"
+#include "cpp.h"
 
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;

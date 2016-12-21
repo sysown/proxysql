@@ -1,11 +1,9 @@
 #ifndef __CLASS_MYSQL_AUTHENTICATION_H
 #define __CLASS_MYSQL_AUTHENTICATION_H
 
-#include <unordered_map>
-
 #include "proxysql.h"
-#include "proxysql_atomic.h"
-#include "proxysql_mem.h"
+#include "cpp.h"
+
 
 typedef struct _account_details_t {
 	char *username;

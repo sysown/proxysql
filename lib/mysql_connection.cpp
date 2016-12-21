@@ -1,12 +1,6 @@
-#include "mysql_connection.h"
-
-#include <fcntl.h>
-#include <sys/socket.h>
-
-#include "MySQL_Session.h"
-#include "MySQL_Thread.h"
+#include "proxysql.h"
+#include "cpp.h"
 #include "SpookyV2.h"
-#include "proxysql_debug.h"
 
 extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
