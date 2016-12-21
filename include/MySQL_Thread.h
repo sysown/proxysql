@@ -1,10 +1,14 @@
 #ifndef __CLASS_MYSQL_THREAD_H
 #define __CLASS_MYSQL_THREAD_H
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
-#include "proxysql.h"
-#include "cpp.h"
+
+#include <poll.h>
 #include <sys/epoll.h>
 
+#include "MySQL_Data_Stream.h"
+#include "StatCounters.h"
+
+#define CACHE_LINE_SIZE 64
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
 #define MY_EPOLL_THREAD_MAXEVENTS 128

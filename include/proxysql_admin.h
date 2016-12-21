@@ -1,8 +1,8 @@
 #ifndef __CLASS_PROXYSQL_ADMIN_H
 #define __CLASS_PROXYSQL_ADMIN_H
+
 #include "proxysql.h"
-#include "cpp.h"
-#include <vector>
+#include "sqlite3db.h"
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 

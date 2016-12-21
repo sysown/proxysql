@@ -1,6 +1,6 @@
-#include "proxysql.h"
-#include "cpp.h"
+#include "gen_utils.h"
 
+#include "proxysql_mem.h"
 
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;

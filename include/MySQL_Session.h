@@ -1,7 +1,11 @@
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
 #include "proxysql.h"
-#include "cpp.h"
+
+#include "mysql_backend.h"
+#include "proxysql_admin.h"
+#include "query_processor.h"
+
 
 // these structs will be used for various regex hardcoded
 // their initial use will be for sql_log_bin , sql_mode and time_zone

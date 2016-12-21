@@ -1,13 +1,10 @@
+#ifndef PROXYSQL_DEBUG_H__
+#define PROXYSQL_DEBUG_H__
 
-/*
-#ifdef DEBUG
-#ifndef DEBUG_EXTERN
-#define DEBUG_EXTERN
-extern debug_level *gdbg_lvl;
-extern int gdbg;
-#endif 
-#endif 
-*/
+#include <ctime>
+
+void proxy_error_func(const char *, ...);
+
 #ifdef DEBUG
 #define PROXY_TRACE() { proxy_debug(PROXY_DEBUG_GENERIC,10,"TRACE\n"); }
 #else
@@ -108,3 +105,4 @@ extern int gdbg;
 #ifdef DEBUG
 //void *debug_logger();
 #endif
+#endif //PROXYSQL_DEBUG_H__

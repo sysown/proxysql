@@ -1,8 +1,15 @@
-//#define __CLASS_STANDARD_MYSQL_THREAD_H
 #define MYSQL_THREAD_IMPLEMENTATION
-#include "proxysql.h"
-#include "cpp.h"
 #include "MySQL_Thread.h"
+
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/tcp.h>
+
+#include "c_tokenizer.h"
+#include "MySQL_Logger.hpp"
+#include "MySQL_Monitor.hpp"
+#include "network.h"
+#include "proxysql_debug.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -1680,8 +1687,6 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	} else {
 		if (num_threads==0) num_threads=DEFAULT_NUM_THREADS; //default
 	}
-	int rc=pthread_attr_setstacksize(&attr, stacksize);
-	assert(rc==0);
 	mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
 	mysql_threads_idles=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
 }
@@ -2475,7 +2480,7 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 				}
 
 
-	      if (myds->active==FALSE) {
+	      if (myds->active==false) {
 					if (myds->sess->client_myds==myds) {
 						proxy_debug(PROXY_DEBUG_NET,1, "Session=%p, DataStream=%p -- Deleting FD %d\n", myds->sess, myds, myds->fd);
 						myds->sess->set_unhealthy();
