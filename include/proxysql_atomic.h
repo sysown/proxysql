@@ -1,16 +1,13 @@
 #ifndef PROXYSQL_ATOMIC
 #define PROXYSQL_ATOMIC 
-
-#include <cstring>
-#include <unistd.h>
-
+/*
 typedef unsigned spinlock;
 typedef struct _rwlock_t rwlock_t;
 struct _rwlock_t {
     spinlock lock;
     unsigned readers;
 };
-
+*/
 #define atomic_inc(P) __sync_add_and_fetch((P), 1)
 #define atomic_dec(P) __sync_add_and_fetch((P), -1)
 

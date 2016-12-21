@@ -1,14 +1,10 @@
-#ifndef PROXYSQL_STRUCTS_H__
-#define PROXYSQL_STRUCTS_H__
-
-#include <cstdint>
-#include <ctime>
-
-#include <pthread.h>
-#include <unistd.h>
-
 #define PKT_PARSED 0
 #define PKT_ERROR 1
+
+#ifdef max_allowed_packet
+#undef max_allowed_packet
+#endif
+
 
 
 #ifndef PROXYSQL_ENUMS
@@ -312,7 +308,11 @@ typedef struct _mysql_data_stream_t mysql_data_stream_t;
 typedef struct _mysql_session_t mysql_session_t;
 typedef struct _bytes_stats_t bytes_stats_t;
 typedef struct _mysql_hdr mysql_hdr;
-typedef int (*PKT_HANDLER)(uint8_t *pkt, uint32_t len);
+typedef int (*PKT_HANDLER)(u_char *pkt, u_int len);
+typedef struct __fdb_hash_t fdb_hash_t;
+typedef struct __fdb_hash_entry fdb_hash_entry;
+typedef unsigned spinlock;
+typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
@@ -374,11 +374,36 @@ struct _debug_level {
 };
 #endif /* DEBUG */
 
+struct _rwlock_t {
+    spinlock lock;
+    unsigned readers;
+};
+
 // counters for number of bytes received and sent
 struct _bytes_stats_t {
 	uint64_t bytes_recv;
 	uint64_t bytes_sent;
 };
+
+struct __fdb_hash_t {
+	rwlock_t lock;
+	uint64_t dataSize;
+	uint64_t purgeChunkSize;
+	uint64_t purgeIdx;
+};
+
+struct __fdb_hash_entry {
+	unsigned char *key;
+	unsigned char *value;
+	fdb_hash_t *hash;
+	struct __fdb_hash_entry *self;
+	uint32_t klen;
+	uint32_t length;
+	time_t expire;
+	time_t access;
+	uint32_t ref_count;
+};
+
 
 #define MAX_EVENTS_PER_STATE 15
 struct mysql_protocol_events {
@@ -408,7 +433,7 @@ struct _global_variable_entry_t {
 
 // structure that defines mysql protocol header
 struct _mysql_hdr {
-	uint32_t pkt_length:24, pkt_id:8;
+	u_int pkt_length:24, pkt_id:8;
 };
 
 struct _proxysql_mysql_thread_t {
@@ -534,10 +559,18 @@ struct _mysql_session_t {
 #include "proxysql_glovars.hpp"
 //#endif
 
+
 #ifndef GLOBAL_DEFINED
 #define GLOBAL_DEFINED
 EXTERN global_variables glovars;
 #endif /* GLOBAL_DEFINED */
+
+//#ifdef __cplusplus
+#ifndef GLOVARS
+#define GLOVARS
+//#include "proxysql_glovars.hpp"
+#endif
+//#endif
 
 #ifdef PROXYSQL_EXTERN
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
@@ -723,4 +756,5 @@ extern __thread bool mysql_thread___session_debug;
 extern __thread unsigned int g_seed;
 #endif /* PROXYSQL_EXTERN */
 
-#endif // PROXYSQL_STRUCTS_H__
+
+

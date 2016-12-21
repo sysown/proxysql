@@ -1,11 +1,11 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
 
-#include <openssl/ssl.h>
-
 #include "configfile.hpp"
 
-namespace ez { class ezOptionParser; }
+namespace ez {
+class ezOptionParser;
+};
 
 class ProxySQL_GlobalVariables {
 	public:

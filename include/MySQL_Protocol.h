@@ -2,8 +2,7 @@
 #define __CLASS_MYSQL_PROTOCOL_H
 
 #include "proxysql.h"
-
-#include "MySQL_PreparedStatement.h"
+#include "cpp.h"
 
 #define RESULTSET_BUFLEN 16300
 

@@ -1,6 +1,5 @@
 #ifndef __CLASS_PTR_ARRAY_H
 #define __CLASS_PTR_ARRAY_H
-
 #include "proxysql.h"
 
 #define MIN_ARRAY_LEN 8

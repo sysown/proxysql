@@ -1,18 +1,4 @@
-#include "network.h"
-
-#include <cerrno>
-#include <cstdio>
-
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/un.h>
-#include <unistd.h>
-
-#include "proxysql_debug.h"
+#include "proxysql.h"
 
 /*
  * create a socket and listen on a specified IP and port

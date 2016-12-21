@@ -1,11 +1,11 @@
-#include "MySQL_HostGroups_Manager.h"
-
-#include "MySQL_Thread.h"
-#include "proxysql_admin.h"
-#include "proxysql_debug.h"
+#include "proxysql.h"
+#include "cpp.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
+
+#include "thread.h"
+#include "wqueue.h"
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\

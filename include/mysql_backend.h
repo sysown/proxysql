@@ -1,7 +1,8 @@
 #ifndef __CLASS_MYSQL_BACKEND_H
 #define __CLASS_MYSQL_BACKEND_H
+#include "proxysql.h"
+#include "cpp.h"
 
-#include "MySQL_Data_Stream.h"
 
 class MySQL_Backend
 {

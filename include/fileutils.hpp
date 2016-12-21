@@ -1,8 +1,7 @@
-#ifndef __CLASS_FILEUTILS_H
-#define __CLASS_FILEUTILS_H
-
 #include <unistd.h>
 
+#ifndef __CLASS_FILEUTILS_H
+#define __CLASS_FILEUTILS_H
 class FileUtils {
 	public:
 	static bool isReadable(const char *pathname) {
@@ -14,5 +13,4 @@ class FileUtils {
 		return false;
 	};
 };
-
 #endif /* __CLASS_FILEUTILS_H */

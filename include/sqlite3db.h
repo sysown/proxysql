@@ -1,13 +1,8 @@
 #ifndef __CLASS_SQLITE3DB_H
 #define __CLASS_SQLITE3DB_H
+#include "proxysql.h"
+#include "cpp.h"
 
-#include <cstdlib>
-#include <cstring>
-#include <vector>
-
-#include "sqlite3.h"
-
-#include "proxysql_atomic.h"
 
 class SQLite3_row {
 	public:

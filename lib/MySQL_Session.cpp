@@ -1,16 +1,7 @@
-#include "MySQL_Session.h"
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-
-#include <openssl/err.h>
-
-#include "MySQL_Authentication.hpp"
-#include "MySQL_Logger.hpp"
-#include "MySQL_Thread.h"
-#include "proxysql_debug.h"
-#include "query_cache.hpp"
+#include "proxysql.h"
+#include "cpp.h"
 #include "re2/re2.h"
+#include "re2/regexp.h"
 #include "SpookyV2.h"
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -752,6 +743,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+			pthread_attr_setstacksize (&attr, 256*1024);
 			pthread_t pt;
 			pthread_create(&pt, &attr, &kill_query_thread, ka);
 		}
