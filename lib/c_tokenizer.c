@@ -6,6 +6,8 @@
 
 #include "c_tokenizer.h"
 
+extern __thread int mysql_thread___query_digests_max_query_length;
+
 #include <ctype.h>
 #define bool char
 extern __thread bool mysql_thread___query_digests_lowercase;
@@ -172,8 +174,8 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	int cmd=0;
 
 	int len = _len;
-	if (_len > QUERY_DIGEST_MAX_LENGTH) {
-		len = QUERY_DIGEST_MAX_LENGTH;
+	if (_len > mysql_thread___query_digests_max_query_length) {
+		len = mysql_thread___query_digests_max_query_length;
 	}
 	char *r = (char *) malloc(len + SIZECHAR);
 
