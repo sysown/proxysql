@@ -323,6 +323,8 @@ class MySQL_Threads_Handler
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
+		int query_digests_max_digest_length;
+		int query_digests_max_query_length;
 		int wait_timeout;
 		int max_connections;
 		int max_stmts_per_connection;

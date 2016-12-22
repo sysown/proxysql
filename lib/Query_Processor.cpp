@@ -117,7 +117,7 @@ class QP_query_digest_stats {
 	int hid;
 	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h) {
 		digest=d;
-		digest_text=strdup(dt);
+		digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
 		username=strdup(u);
 		schemaname=strdup(s);
 		count_star=0;
@@ -991,7 +991,9 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 	qp->query_prefix=NULL;
 	if (mysql_thread___query_digests) {
 		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment);
-		qp->digest=SpookyHash::Hash64(qp->digest_text,strlen(qp->digest_text),0);
+		// the hash is computed only up to query_digests_max_digest_length bytes
+		int digest_text_length=strnlen(qp->digest_text, mysql_thread___query_digests_max_digest_length);
+		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
 #ifdef DEBUG
 		if (qp->first_comment && strlen(qp->first_comment)) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
