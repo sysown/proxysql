@@ -1,6 +1,18 @@
-#include "proxysql.h"
-#include "cpp.h"
+#include "MySQL_Data_Stream.h"
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+
 #include <zlib.h>
+
+#include "MySQL_Session.h"
+#include "MySQL_Thread.h"
+#include "proxysql_debug.h"
+
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX    108
 #endif 
@@ -113,7 +125,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
 	mybe=NULL;
-	active=TRUE;
+	active=true;
 	mypolls=NULL;
 	myconn=NULL;	// 20141011
 	DSS=STATE_NOT_CONNECTED;
@@ -245,7 +257,7 @@ void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int
 // TODO: should check the status of the data stream, and identify if it is safe to reconnect or if the session should be destroyed
 void MySQL_Data_Stream::shut_soft() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown soft fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
-	active=FALSE;
+	active=false;
 	set_net_failure();
 	//if (sess) sess->net_failure=1;
 }
@@ -363,7 +375,7 @@ void MySQL_Data_Stream::set_pollout() {
 
 int MySQL_Data_Stream::write_to_net_poll() {
 	int rc=0;
-	if (active==FALSE) return rc;	
+	if (active==false) return rc;
 	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p --\n", sess, this);
 	if (queue_data(queueOUT)) {
 		if ((sess->admin==false)) {

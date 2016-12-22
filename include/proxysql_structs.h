@@ -1,10 +1,14 @@
+#ifndef PROXYSQL_STRUCTS_H__
+#define PROXYSQL_STRUCTS_H__
+
+#include <cstdint>
+#include <ctime>
+
+#include <pthread.h>
+#include <unistd.h>
+
 #define PKT_PARSED 0
 #define PKT_ERROR 1
-
-#ifdef max_allowed_packet
-#undef max_allowed_packet
-#endif
-
 
 
 #ifndef PROXYSQL_ENUMS
@@ -73,37 +77,12 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_IDLE
 };
 
-// list of possible debugging modules
-enum debug_module {
-	PROXY_DEBUG_GENERIC,
-	PROXY_DEBUG_NET,
-	PROXY_DEBUG_PKT_ARRAY,
-	PROXY_DEBUG_POLL,
-	PROXY_DEBUG_MYSQL_COM,
-	PROXY_DEBUG_MYSQL_SERVER,
-	PROXY_DEBUG_MYSQL_CONNECTION,
-	PROXY_DEBUG_MYSQL_CONNPOOL,
-	PROXY_DEBUG_MYSQL_RW_SPLIT,
-	PROXY_DEBUG_MYSQL_AUTH,
-	PROXY_DEBUG_MYSQL_PROTOCOL,
-	PROXY_DEBUG_MYSQL_QUERY_PROCESSOR,
-	PROXY_DEBUG_MEMORY,
-	PROXY_DEBUG_ADMIN,
-	PROXY_DEBUG_SQLITE,
-	PROXY_DEBUG_IPC,
-	PROXY_DEBUG_QUERY_CACHE,
-	PROXY_DEBUG_QUERY_STATISTICS,
-	PROXY_DEBUG_UNKNOWN // this module doesn't exist. It is used only to define the last possible module
-};
-
-
 enum MySQL_response_type {
 	OK_Packet,
 	ERR_Packet,
 	EOF_Packet,
 	UNKNOWN_Packet,
 };
-
 
 enum MySQL_DS_type {
 	MYDS_LISTENER,
@@ -296,23 +275,15 @@ enum MYSQL_COM_QUERY_command {
 
 #endif /* PROXYSQL_ENUMS */
 
-
 #ifndef PROXYSQL_TYPEDEFS
 #define PROXYSQL_TYPEDEFS
-#ifdef DEBUG
-typedef struct _debug_level debug_level;
-#endif /* DEBUG */
 typedef struct _global_variables_t global_variables;
 typedef struct _global_variable_entry_t global_variable_entry_t;
 typedef struct _mysql_data_stream_t mysql_data_stream_t;
 typedef struct _mysql_session_t mysql_session_t;
 typedef struct _bytes_stats_t bytes_stats_t;
 typedef struct _mysql_hdr mysql_hdr;
-typedef int (*PKT_HANDLER)(u_char *pkt, u_int len);
-typedef struct __fdb_hash_t fdb_hash_t;
-typedef struct __fdb_hash_entry fdb_hash_entry;
-typedef unsigned spinlock;
-typedef struct _rwlock_t rwlock_t;
+typedef int (*PKT_HANDLER)(uint8_t *pkt, uint32_t len);
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
@@ -365,45 +336,12 @@ struct _PtrSize_t {
   void *ptr;
   unsigned int size;
 }; 
-// struct for debugging module
-#ifdef DEBUG
-struct _debug_level {
-	enum debug_module module;
-	int verbosity;
-	char *name;
-};
-#endif /* DEBUG */
-
-struct _rwlock_t {
-    spinlock lock;
-    unsigned readers;
-};
 
 // counters for number of bytes received and sent
 struct _bytes_stats_t {
 	uint64_t bytes_recv;
 	uint64_t bytes_sent;
 };
-
-struct __fdb_hash_t {
-	rwlock_t lock;
-	uint64_t dataSize;
-	uint64_t purgeChunkSize;
-	uint64_t purgeIdx;
-};
-
-struct __fdb_hash_entry {
-	unsigned char *key;
-	unsigned char *value;
-	fdb_hash_t *hash;
-	struct __fdb_hash_entry *self;
-	uint32_t klen;
-	uint32_t length;
-	time_t expire;
-	time_t access;
-	uint32_t ref_count;
-};
-
 
 #define MAX_EVENTS_PER_STATE 15
 struct mysql_protocol_events {
@@ -433,7 +371,7 @@ struct _global_variable_entry_t {
 
 // structure that defines mysql protocol header
 struct _mysql_hdr {
-	u_int pkt_length:24, pkt_id:8;
+	uint32_t pkt_length:24, pkt_id:8;
 };
 
 struct _proxysql_mysql_thread_t {
@@ -559,18 +497,10 @@ struct _mysql_session_t {
 #include "proxysql_glovars.hpp"
 //#endif
 
-
 #ifndef GLOBAL_DEFINED
 #define GLOBAL_DEFINED
 EXTERN global_variables glovars;
 #endif /* GLOBAL_DEFINED */
-
-//#ifdef __cplusplus
-#ifndef GLOVARS
-#define GLOVARS
-//#include "proxysql_glovars.hpp"
-#endif
-//#endif
 
 #ifdef PROXYSQL_EXTERN
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
@@ -756,5 +686,4 @@ extern __thread bool mysql_thread___session_debug;
 extern __thread unsigned int g_seed;
 #endif /* PROXYSQL_EXTERN */
 
-
-
+#endif // PROXYSQL_STRUCTS_H__

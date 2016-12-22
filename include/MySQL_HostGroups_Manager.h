@@ -1,11 +1,10 @@
 #ifndef __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
 #define __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
-#include "proxysql.h"
-#include "cpp.h"
 
+#include <cassert>
 #include <thread>
 
-#include "thread.h"
+#include "gen_utils.h"
 #include "wqueue.h"
 
 /*

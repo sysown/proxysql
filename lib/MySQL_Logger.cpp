@@ -1,7 +1,11 @@
+#include "MySQL_Logger.hpp"
+
 #include <fstream>
-#include "proxysql.h"
-#include "cpp.h"
 #include <dirent.h>
+
+#include "MySQL_Session.h"
+#include "MySQL_Thread.h"
+#include "proxysql_debug.h"
 
 
 static uint8_t mysql_encode_length(uint64_t len, unsigned char *hd) {

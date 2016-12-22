@@ -1,3 +1,6 @@
+#ifndef PROXYSQL_MEM_H__
+#define PROXYSQL_MEM_H__
+
 #define L_SFC_MIN_ELEM_SIZE 8
 #define L_SFC_MID_ELEM_SIZE 128
 #define L_SFC_MAX_ELEM_SIZE 2048
@@ -89,3 +92,4 @@ static inline char * l_strdup(const char *s) {
 
 
 #endif /* L_STACK */
+#endif // PROXYSQL_MEM_H__

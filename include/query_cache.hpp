@@ -1,7 +1,11 @@
 #ifndef __CLASS_QUERY_CACHE_H
 #define __CLASS_QUERY_CACHE_H
-#include "proxysql.h"
-#include "cpp.h"
+
+#include <cstdint>
+
+#include <pthread.h>
+
+#include "sqlite3db.h"
 
 #define EXPIRE_DROPIT   0
 #define SHARED_QUERY_CACHE_HASH_TABLES  32

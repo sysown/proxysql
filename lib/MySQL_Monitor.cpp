@@ -1,21 +1,14 @@
-/*
-	RECENT CHANGELOG
-	1.2.0723
-		* almost completely rewritten
-		* use of blocking call for new connections
-    * use of Thread Pool instead of a thread per check type
-	0.2.0902
-		* original implementation
-*/
+#include "MySQL_Monitor.hpp"
 
-#include <map>
 #include <mutex>
-#include <thread>
-#include "proxysql.h"
-#include "cpp.h"
 
+#include <fcntl.h>
+#include <sys/socket.h>
+
+#include "MySQL_Thread.h"
+#include "proxysql_admin.h"
+#include "proxysql_debug.h"
 #include "thread.h"
-#include "wqueue.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -1398,7 +1391,6 @@ __monitor_run:
 	}
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
-	pthread_attr_setstacksize (&attr, 64*1024);
 	pthread_t monitor_connect_thread;
 	pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL);
 	pthread_t monitor_ping_thread;

@@ -1,25 +1,21 @@
-#include <iostream>     // std::cout
-#include <algorithm>    // std::sort
-#include <vector>       // std::vector
-#include "re2/re2.h"
-#include "re2/regexp.h"
-#include "proxysql.h"
-#include "cpp.h"
+#include "proxysql_admin.h"
 
-#include <search.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <sys/time.h>
-#include <time.h>
-#include <string.h>
-#include <assert.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <resolv.h>
-#include <arpa/inet.h>
-#include <pthread.h>
-#include "SpookyV2.h"
-//#define MYSQL_THREAD_IMPLEMENTATION
+#include <iostream>
+
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/wait.h>
+
+#include "jemalloc.h"
+#include "re2/re2.h"
+
+#include "c_tokenizer.h"
+#include "MySQL_Authentication.hpp"
+#include "MySQL_Logger.hpp"
+#include "MySQL_Thread.h"
+#include "network.h"
+#include "proxysql_debug.h"
+#include "query_cache.hpp"
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -2194,7 +2190,6 @@ static void * admin_main_loop(void *arg)
 	pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  pthread_attr_setstacksize (&attr, mystacksize);
 
 	if(GloVars.global.nostart) {
 		nostart_=true;
@@ -2397,7 +2392,6 @@ bool ProxySQL_Admin::init() {
 
 	pthread_attr_t attr;
   pthread_attr_init(&attr);
-  pthread_attr_setstacksize (&attr, mystacksize);
 
 	admindb=new SQLite3DB();
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -3736,8 +3730,8 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 					if (r->fields[1][0]=='*') { // the password is already hashed
 						password=strdup(r->fields[1]);
 					} else { // we must hash it
-						uint8 hash_stage1[SHA_DIGEST_LENGTH];
-						uint8 hash_stage2[SHA_DIGEST_LENGTH];
+						uint8_t hash_stage1[SHA_DIGEST_LENGTH];
+						uint8_t hash_stage2[SHA_DIGEST_LENGTH];
 						SHA_CTX sha1_context;
 						SHA1_Init(&sha1_context);
 						SHA1_Update(&sha1_context, r->fields[1], strlen(r->fields[1]));
@@ -5020,7 +5014,6 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 					pthread_attr_t attr;
 					pthread_attr_init(&attr);
 					pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-					pthread_attr_setstacksize (&attr, 64*1024);
 					pid_t *cpid_ptr=(pid_t *)malloc(sizeof(pid_t));
 					*cpid_ptr=cpid;
 					pthread_t thr;

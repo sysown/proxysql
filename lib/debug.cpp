@@ -1,6 +1,15 @@
+#include "proxysql_debug.h"
+
+#include <cassert>
+#include <climits>
+#include <cstdio>
+#include <cstdarg>
+
+#include <cxxabi.h>
+#include <execinfo.h>
+
 #include "proxysql.h"
 #include "proxysql_atomic.h"
-#include <cxxabi.h>
 
 
 #ifdef DEBUG
