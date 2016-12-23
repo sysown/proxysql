@@ -1262,9 +1262,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
 		if (stats_mysql_query_digest)
-			stats___mysql_query_digests();
+			stats___mysql_query_digests(false);
 		if (stats_mysql_query_digest_reset)
-			stats___mysql_query_digests_reset();
+			stats___mysql_query_digests(true);
 		if (stats_mysql_connection_pool)
 			stats___mysql_connection_pool();
 		if (stats_mysql_global)
@@ -3268,28 +3268,102 @@ void ProxySQL_Admin::stats___mysql_query_rules() {
 	delete resultset;
 }
 
-void ProxySQL_Admin::stats___mysql_query_digests() {
+void ProxySQL_Admin::stats___mysql_query_digests(bool reset) {
 	if (!GloQPro) return;
-	SQLite3_result * resultset=GloQPro->get_query_digests();
+	SQLite3_result * resultset=NULL;
+	if (reset==true) {
+		resultset=GloQPro->get_query_digests_reset();
+	} else {
+		resultset=GloQPro->get_query_digests();
+	}
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
-	statsdb->execute("DELETE FROM stats_mysql_query_digest");
-	char *a=(char *)"INSERT INTO stats_mysql_query_digest VALUES (%s,\"%s\",\"%s\",\"%s\",\"%s\",%s,%s,%s,%s,%s,%s)";
+	int rc;
+	sqlite3_stmt *statement1=NULL;
+	sqlite3_stmt *statement32=NULL;
+	sqlite3 *mydb3=statsdb->get_db();
+	char *query1=NULL;
+	char *query32=NULL;
+	if (reset) {
+		statsdb->execute("DELETE FROM stats_mysql_query_digest_reset");
+	} else {
+		statsdb->execute("DELETE FROM stats_mysql_query_digest");
+	}
+//	char *a=(char *)"INSERT INTO stats_mysql_query_digest VALUES (%s,\"%s\",\"%s\",\"%s\",\"%s\",%s,%s,%s,%s,%s,%s)";
+	if (reset) {
+		query1=(char *)"INSERT INTO stats_mysql_query_digest_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		query32=(char *)"INSERT INTO stats_mysql_query_digest_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11), (?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22), (?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33), (?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44), (?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55),(?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66),(?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77),(?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88),(?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99), (?100, ?101, ?102, ?103, ?104, ?105, ?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120, ?121), (?122, ?123, ?124, ?125, ?126, ?127, ?128, ?129, ?130, ?131, ?132), (?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140, ?141, ?142, ?143), (?144, ?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165), (?166, ?167, ?168, ?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176), (?177, ?178, ?179, ?180, ?181, ?182, ?183, ?184, ?185, ?186, ?187), (?188, ?189, ?190, ?191, ?192, ?193, ?194, ?195, ?196, ?197, ?198), (?199, ?200, ?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208, ?209), (?210, ?211, ?212, ?213, ?214, ?215, ?216, ?217, ?218, ?219, ?220), (?221, ?222, ?223, ?224, ?225, ?226, ?227, ?228, ?229, ?230, ?231), (?232, ?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240, ?241, ?242), (?243, ?244, ?245, ?246, ?247, ?248, ?249, ?250, ?251, ?252, ?253), (?254, ?255, ?256, ?257, ?258, ?259, ?260, ?261, ?262, ?263, ?264), (?265, ?266, ?267, ?268, ?269, ?270, ?271, ?272, ?273, ?274, ?275), (?276, ?277, ?278, ?279, ?280, ?281, ?282, ?283, ?284, ?285, ?286), (?287, ?288, ?289, ?290, ?291, ?292, ?293, ?294, ?295, ?296, ?297), (?298, ?299, ?300, ?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308), (?309, ?310, ?311, ?312, ?313, ?314, ?315, ?316, ?317, ?318, ?319), (?320, ?321, ?322, ?323, ?324, ?325, ?326, ?327, ?328, ?329, ?330), (?331, ?332, ?333, ?334, ?335, ?336, ?337, ?338, ?339, ?340, ?341), (?342, ?343, ?344, ?345, ?346, ?347, ?348, ?349, ?350, ?351, ?352)";
+	} else {
+		query1=(char *)"INSERT INTO stats_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		query32=(char *)"INSERT INTO stats_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11), (?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22), (?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33), (?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44), (?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55),(?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66),(?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77),(?78, ?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88),(?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99), (?100, ?101, ?102, ?103, ?104, ?105, ?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120, ?121), (?122, ?123, ?124, ?125, ?126, ?127, ?128, ?129, ?130, ?131, ?132), (?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140, ?141, ?142, ?143), (?144, ?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165), (?166, ?167, ?168, ?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176), (?177, ?178, ?179, ?180, ?181, ?182, ?183, ?184, ?185, ?186, ?187), (?188, ?189, ?190, ?191, ?192, ?193, ?194, ?195, ?196, ?197, ?198), (?199, ?200, ?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208, ?209), (?210, ?211, ?212, ?213, ?214, ?215, ?216, ?217, ?218, ?219, ?220), (?221, ?222, ?223, ?224, ?225, ?226, ?227, ?228, ?229, ?230, ?231), (?232, ?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240, ?241, ?242), (?243, ?244, ?245, ?246, ?247, ?248, ?249, ?250, ?251, ?252, ?253), (?254, ?255, ?256, ?257, ?258, ?259, ?260, ?261, ?262, ?263, ?264), (?265, ?266, ?267, ?268, ?269, ?270, ?271, ?272, ?273, ?274, ?275), (?276, ?277, ?278, ?279, ?280, ?281, ?282, ?283, ?284, ?285, ?286), (?287, ?288, ?289, ?290, ?291, ?292, ?293, ?294, ?295, ?296, ?297), (?298, ?299, ?300, ?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308), (?309, ?310, ?311, ?312, ?313, ?314, ?315, ?316, ?317, ?318, ?319), (?320, ?321, ?322, ?323, ?324, ?325, ?326, ?327, ?328, ?329, ?330), (?331, ?332, ?333, ?334, ?335, ?336, ?337, ?338, ?339, ?340, ?341), (?342, ?343, ?344, ?345, ?346, ?347, ?348, ?349, ?350, ?351, ?352)";
+	}
+/*
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
 		for (int i=0; i<11; i++) {
 			arg_len+=strlen(r->fields[i]);
 		}
+*/
+	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	assert(rc==SQLITE_OK);
+	rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+	assert(rc==SQLITE_OK);
+	int row_idx=0;
+	int max_bulk_row_idx=resultset->rows_count/32;
+	max_bulk_row_idx=max_bulk_row_idx*32;
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r1=*it;
+		int idx=row_idx%32;
+		if (row_idx<max_bulk_row_idx) { // bulk
+			rc=sqlite3_bind_int64(statement32, (idx*11)+1, atoll(r1->fields[10])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement32, (idx*11)+2, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement32, (idx*11)+3, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement32, (idx*11)+4, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement32, (idx*11)+5, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+6, atoll(r1->fields[4])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+7, atoll(r1->fields[5])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+8, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+9, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+10, atoll(r1->fields[8])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+11, atoll(r1->fields[9])); assert(rc==SQLITE_OK);
+			if (idx==31) {
+				SAFE_SQLITE3_STEP(statement32);
+				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+			}
+		} else { // single row
+			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[10])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 2, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 3, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 4, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 5, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 6, atoll(r1->fields[4])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[5])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 8, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 9, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[8])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 11, atoll(r1->fields[9])); assert(rc==SQLITE_OK);
+			SAFE_SQLITE3_STEP(statement1);
+			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+		}
+		row_idx++;
+	}
+	sqlite3_finalize(statement1);
+	sqlite3_finalize(statement32);
+/*
 		char *query=(char *)malloc(strlen(a)+arg_len+32);
 		sprintf(query,a,r->fields[10],r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9]);
 		statsdb->execute(query);
 		free(query);
 	}
+*/
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
 
+/*
 void ProxySQL_Admin::stats___mysql_query_digests_reset() {
 	if (!GloQPro) return;
 	SQLite3_result * resultset=GloQPro->get_query_digests_reset();
@@ -3311,6 +3385,7 @@ void ProxySQL_Admin::stats___mysql_query_digests_reset() {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+*/
 
 void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	if (_runtime) {

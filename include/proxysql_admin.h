@@ -165,8 +165,8 @@ class ProxySQL_Admin {
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 
 	void stats___mysql_query_rules();
-	void stats___mysql_query_digests();
-	void stats___mysql_query_digests_reset();
+	void stats___mysql_query_digests(bool reset);
+	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();
 	void stats___mysql_connection_pool();
