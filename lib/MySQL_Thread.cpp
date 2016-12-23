@@ -1050,7 +1050,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_slave_lag_when_null")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv <= 600*1000) {
+			if (intv >= 0 && intv <= 604800) {
 				variables.monitor_slave_lag_when_null=intv;
 				return true;
 			} else {
