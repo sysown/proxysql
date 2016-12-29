@@ -2791,7 +2791,17 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (admin==false) {
-		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
+		char *schemaname=strndup((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
+		char *schemanameptr=schemaname;
+		//remove leading spaces
+		while(isspace((unsigned char)*schemanameptr)) schemanameptr++;
+		// handle cases like "USE `schemaname`
+		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
+			schemanameptr[strlen(schemanameptr)-1]='\0';
+			schemanameptr++;
+		}
+		client_myds->myconn->userinfo->set_schemaname(schemanameptr,strlen(schemanameptr));
+		free(schemaname);
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTrx=NumActiveTransactions();
