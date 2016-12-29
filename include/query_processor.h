@@ -52,6 +52,7 @@ class Query_Processor_Output {
 	int destination_hostgroup;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
+	int next_query_flagIN;
 	int cache_ttl;
 	int reconnect;
 	int timeout;
@@ -81,6 +82,7 @@ class Query_Processor_Output {
 		destination_hostgroup=-1;
 		mirror_hostgroup=-1;
 		mirror_flagOUT=-1;
+		next_query_flagIN=-1;
 		cache_ttl=-1;
 		reconnect=-1;
 		timeout=-1;

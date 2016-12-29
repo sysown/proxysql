@@ -710,6 +710,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	QP_rule_t *qr;
 	re2_t *re2p;
 	int flagIN=0;
+	ret->next_query_flagIN=-1; // reset
 	if (sess->next_query_flagIN >= 0) {
 		flagIN=sess->next_query_flagIN;
 	}
@@ -860,8 +861,8 @@ __internal_loop:
     }
     if (qr->next_query_flagIN >= 0) {
 			// Note: Negative next_query_flagIN means this rule doesn't change the next query flagIN
-        proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set next query flagIN: %d\n", qr->rule_id, flagIn);
-        sess->next_query_flagIN=qr->next_query_flagIN;
+        proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set next query flagIN: %d\n", qr->rule_id, qr->next_query_flagIN);
+        ret->next_query_flagIN=qr->next_query_flagIN;
     }
     if (qr->mirror_flagOUT >= 0) {
 			// Note: negative mirror_flagOUT means this rule doesn't change the mirror flagOUT

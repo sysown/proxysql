@@ -3164,6 +3164,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 __exit_set_destination_hostgroup:
 
+	if ( qpo->next_query_flagIN >= 0 ) {
+		next_query_flagIN=qpo->next_query_flagIN;
+	}
 	if ( qpo->destination_hostgroup >= 0 ) {
 		if (transaction_persistent_hostgroup == -1) {
 			current_hostgroup=qpo->destination_hostgroup;
