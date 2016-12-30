@@ -1791,6 +1791,9 @@ __get_pkts_from_client:
 							case _MYSQL_COM_FIELD_LIST:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(&pkt);
 								break;
+							case _MYSQL_COM_PROCESS_KILL:
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(&pkt);
+								break;
 							default:
 								assert(0);
 								break;
@@ -2762,6 +2765,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
+	l_free(pkt->size,pkt->ptr);
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9003,(char *)"#28000",(char *)"Command not supported");
+	client_myds->DSS=STATE_SLEEP;
+}
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
