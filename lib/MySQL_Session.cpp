@@ -2046,7 +2046,10 @@ __get_pkts_from_client:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(&pkt);
 								break;
 							default:
-								assert(0);
+								proxy_error("RECEIVED AN UNKNOWN COMMAND: %d -- PLEASE REPORT A BUG\n", c);
+								l_free(pkt.size,pkt.ptr);
+								return -1; // immediately drop the connection
+								// assert(0); // see issue #859
 								break;
 						}
 						break;
