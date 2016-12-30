@@ -4,12 +4,6 @@
 #include "cpp.h"
 
 
-
-//struct _sqlite3row_t {
-//};
-
-//typedef struct _sqlite3row_t sqlite3row;
-
 class SQLite3_row {
 	public:
 	int cnt;
@@ -24,21 +18,12 @@ class SQLite3_row {
 		data=NULL;
 	};
 	~SQLite3_row() {
-		//int i=0;
-		//for (i=0;i<cnt;i++) {
-		//	if (fields[i]) free(fields[i]);
-		//}
 		free(fields);
 		free(sizes);
 		if (data) {
 			free(data);
 		}
 	};
-//	void add_field(const char *str, int i) {
-//		fields[i]=strdup(str);
-//		//sizes[i]=strlen(fields[i]);
-//		sizes[i]=sqlite3_column_bytes(stmt,i);
-//	};
 	void add_fields(sqlite3_stmt *stmt) {
 		int i;
 		int t;

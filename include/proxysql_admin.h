@@ -7,8 +7,6 @@
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 
 
-
-
 class Scheduler_Row {
 	public:
 	unsigned int id;
@@ -17,17 +15,11 @@ class Scheduler_Row {
 	unsigned long long last;
 	unsigned long long next;
 	char *filename;
-//	char *arg1;
-//	char *arg2;
-//	char *arg3;
-//	char *arg4;
-//	char *arg5;
 	char **args;
 	char *comment;
 	Scheduler_Row(unsigned int _id, bool _is_active, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5, char *_comment);
 	~Scheduler_Row();
 };
-
 
 class ProxySQL_External_Scheduler {
 	private:
@@ -43,7 +35,6 @@ class ProxySQL_External_Scheduler {
 	void update_table(SQLite3_result *result);
 };
 
-
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -51,7 +42,6 @@ class ProxySQL_Admin {
 	std::vector<table_def_t *> *tables_defs_admin;
 	std::vector<table_def_t *> *tables_defs_stats;
 	std::vector<table_def_t *> *tables_defs_config;
-
 
 	pthread_t admin_thr;
 
@@ -85,7 +75,6 @@ class ProxySQL_Admin {
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
-	//void fill_table__server_status(SQLite3DB *db);
 
 #ifdef DEBUG
 	void flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace);
@@ -96,19 +85,15 @@ class ProxySQL_Admin {
 	void __insert_or_replace_maintable_select_disktable();
 	void __delete_disktable();
 	void __insert_or_replace_disktable_select_maintable();
-//	void __attach_configdb_to_admindb();
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
-
 
 	void __add_active_users(enum cred_username_type usertype);
 	void __delete_inactive_users(enum cred_username_type usertype);
-//	void add_default_user(char *, char *);
 	void add_admin_users();
 	void __refresh_users();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
-
 
 	char **get_variables_list();
 	char *get_variable(char *name);
@@ -129,8 +114,6 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 	public:
 	struct {
-		//re2::RE2::Options *opt;
-		//RE2 *re1;
 		void *opt;
 		void **re;
 	} match_regexes;
@@ -153,10 +136,8 @@ class ProxySQL_Admin {
 	void save_mysql_servers_runtime_to_database(bool);
 	void admin_shutdown();
 	bool is_command(std::string);
-//	void SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot);
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
-//	virtual void admin_session_handler(MySQL_Session *sess);
 #ifdef DEBUG
 	int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
 	void save_debug_from_runtime() { return flush_debug_levels_runtime_to_database(admindb, true); }
@@ -183,10 +164,9 @@ class ProxySQL_Admin {
 	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 
-
 	void stats___mysql_query_rules();
-	void stats___mysql_query_digests();
-	void stats___mysql_query_digests_reset();
+	void stats___mysql_query_digests(bool reset);
+	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();
 	void stats___mysql_connection_pool();

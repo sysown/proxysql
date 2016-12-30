@@ -9,7 +9,7 @@
 */
 
 #include <map>
-//#include <list>
+#include <mutex>
 #include <thread>
 #include "proxysql.h"
 #include "cpp.h"
@@ -42,14 +42,10 @@ static MySQL_Monitor *GloMyMon;
 
 
 class ConsumerThread : public Thread {
-	//wqueue<MySQL_Monitor_State_Data*>& m_queue;
 	wqueue<WorkItem*>& m_queue;
-	//void *(*routine) (void *);
 	int thrn;
 	public:
-	//ConsumerThreadPing(wqueue<MySQL_Monitor_State_Data*>& queue, void *(*start_routine) (void *), int _n) : m_queue(queue) {
 	ConsumerThread(wqueue<WorkItem*>& queue, int _n) : m_queue(queue) {
-		//routine=start_routine;
 		thrn=_n;
 	}
 	void* run() {
@@ -71,7 +67,6 @@ class ConsumerThread : public Thread {
 					item->routine((void *)item->mmsd);
 				}
 			}
-			//routine((void *)mmsd);
 			delete item->mmsd;
 			delete item;
 		}
@@ -121,142 +116,63 @@ static void close_mysql(MYSQL *my) {
 }
 
 
-/*
-struct cmp_str {
-	bool operator()(char const *a, char const *b) const
-	{
-		return strcmp(a, b) < 0;
-	}
-};
-*/
-
 class MySQL_Monitor_Connection_Pool {
-	private:
-	pthread_mutex_t mutex;
-	int size;
-	std::map<char *, PtrArray *, cmp_str> my_connections;
-	public:
-	MySQL_Monitor_Connection_Pool();
-	~MySQL_Monitor_Connection_Pool();
+private:
+	std::mutex mutex;
+	std::map<std::pair<std::string, int>, std::vector<MYSQL*> > my_connections;
+public:
 	MYSQL * get_connection(char *hostname, int port);
 	void put_connection(char *hostname, int port, MYSQL *my);
 	void purge_idle_connections();
 };
 
-MySQL_Monitor_Connection_Pool::MySQL_Monitor_Connection_Pool() {
-	size=0;
-	pthread_mutex_init(&mutex,NULL);
-}
-
-MySQL_Monitor_Connection_Pool::~MySQL_Monitor_Connection_Pool() {
-	// FIXME: destructor is yet not completed
-	std::map<char *, PtrArray *>::iterator it;
-	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		PtrArray *lst=it->second;
-		delete lst;
-		char *host=it->first;
-		free(host);
-	}
-	my_connections.erase(my_connections.begin(),my_connections.end());
-}
-
 void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
-	unsigned long long now=monotonic_time();
-	pthread_mutex_lock(&mutex);
-	std::map<char *, PtrArray *>::iterator it;
-	//fprintf(stderr,"conn pool size: %d\n",my_connections.size());
-	unsigned int totconn;
-	totconn=0;
-	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		//std::list<MYSQL *> *lst=it->second;
-		PtrArray *lst=it->second;
-		totconn+=lst->len;
-	}
-__loop_purge_idle_connections:
-	//fprintf(stderr,"tot conn in pool: %d\n",totconn);
-	for(it = my_connections.begin(); it != my_connections.end(); it++) {
-		//std::list<MYSQL *> *lst=it->second;
-		//if (!lst->empty()) {
-		PtrArray *lst=it->second;
-		if (lst->len) {
-			//std::list<MYSQL *>::const_iterator it3;
-			unsigned int it3;
-			//for(it3 = lst->begin(); it3 != lst->end(); it3++) {
-			for(it3 = 0; it3 < lst->len; it3++) {
-				//it3=lst->begin();
-				MYSQL *my=(MYSQL *)(lst->index(it3));
-				unsigned long long then=0;
-				memcpy(&then,my->net.buff,sizeof(unsigned long long));
-				if (now > (then + mysql_thread___monitor_ping_interval*1000 * 3)) {
-					MySQL_Monitor_State_Data *mmsd= new MySQL_Monitor_State_Data((char *)"",0,NULL,false);
-					mmsd->mysql=my;
-					WorkItem *item;
-					item=new WorkItem(mmsd,NULL);
-					GloMyMon->queue.add(item);
-					lst->remove_index_fast(it3);
-					it3--;
-				}
-			}
+	unsigned long long now = monotonic_time();
+	std::lock_guard<std::mutex> lock(mutex);
+	for(auto it = my_connections.begin(); it != my_connections.end();) {
+		auto& lst = it->second;
+		for(auto it3 = lst.begin(); it3 != lst.end();) {
+			MYSQL *my = *it3;
+			unsigned long long then = *(unsigned long long*)my->net.buff;
+			if (now > (then + mysql_thread___monitor_ping_interval*1000 * 3)) {
+				MySQL_Monitor_State_Data *mmsd= new MySQL_Monitor_State_Data((char *)"",0,NULL,false);
+				mmsd->mysql=my;
+				GloMyMon->queue.add(new WorkItem(mmsd,NULL));
+				std::swap(*it3, lst.back());
+				if(it3 == lst.end() - 1)
+					it3 = lst.erase(it3);
+				else
+					lst.pop_back();
+			} else
+				++it3;
+		}
+		if (lst.size()) {
+			++it;
 		} else {
-			my_connections.erase(it);
-			goto __loop_purge_idle_connections;
+			it = my_connections.erase(it);
 		}
 	}
-	pthread_mutex_unlock(&mutex);
 }
 
 
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) {
-	//std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
-	std::map<char *, PtrArray * , cmp_str >::iterator it;
-	//it = my_connections.find(std::make_pair(hostname,port));
-	char *buf=(char *)malloc(16+strlen(hostname));
-	sprintf(buf,"%s:%d",hostname,port);
-	pthread_mutex_lock(&mutex);
-	it = my_connections.find(buf);
-	free(buf);
-	if (it != my_connections.end()) {
-		//std::list<MYSQL *> *lst=it->second;
-		PtrArray *lst=it->second;
-		//if (!lst->empty()) {
-		if (lst->len) {
-			//MYSQL *ret=lst->front();
-			//lst->pop_front();
-			MYSQL *ret=(MYSQL *)lst->remove_index_fast(0);
-			size--;
-			pthread_mutex_unlock(&mutex);
-			memset(ret->net.buff,0,sizeof(unsigned long long)); // reset what was polluted
-			return ret;
-		}
-	}
-	pthread_mutex_unlock(&mutex);
-	return NULL;
+	std::lock_guard<std::mutex> lock(mutex);
+	auto it = my_connections.find(std::make_pair(hostname, port));
+	if (it == my_connections.end() || !it->second.size())
+		return NULL;
+	MYSQL *my = it->second.back();
+	it->second.pop_back();
+	*(unsigned long long*)my->net.buff = 0;
+	return my;
 }
 
 void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYSQL *my) {
-	size++;
-	//std::map<char *, std::list<MYSQL *>* , cmp_str >::iterator it;
-	std::map<char *, PtrArray * , cmp_str >::iterator it;
-	char * buf=(char *)malloc(16+strlen(hostname));
-	sprintf(buf,"%s:%d",hostname,port);
-	unsigned long long now=monotonic_time();
-	memcpy(my->net.buff,&now,sizeof(unsigned long long));	//mark insert time
-	pthread_mutex_lock(&mutex);
-	it = my_connections.find(buf);
-	//std::list<MYSQL *> *lst=NULL;
-	PtrArray *lst=NULL;
-	if (it==my_connections.end()) {
-		//lst=new std::list<MYSQL *>;
-		//my_connections.insert(my_connections.begin(), std::pair<char *,std::list<MYSQL *>*>(buf,lst));
-		lst=new PtrArray();
-		my_connections.insert(my_connections.begin(), std::pair<char *, PtrArray *>(buf,lst));
-	} else {
-		free(buf);
-		lst=it->second;
-	}
-	//lst->push_back(my);
-	lst->add(my);
-	pthread_mutex_unlock(&mutex);
+	unsigned long long now = monotonic_time();
+	std::lock_guard<std::mutex> lock(mutex);
+	*(unsigned long long*)my->net.buff = now;
+	auto it = my_connections.emplace(std::piecewise_construct,
+		std::forward_as_tuple(hostname, port), std::forward_as_tuple()).first;
+	it->second.push_back(my);
 }
 
 MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl, int g) {
@@ -268,10 +184,8 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 		mysql_error_msg=NULL;
 		hostname=strdup(h);
 		port=p;
-		//base=b;
 		use_ssl=_use_ssl;
 		ST=0;
-		//ev_mysql=NULL;
 		hostgroup_id=g;
 	};
 
@@ -602,8 +516,6 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
 		if (timeout==0) timeout=1;
 		mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-//		mysql_options(mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
-//		mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_monitor");
 		MYSQL *myrc=NULL;
 		if (port) {
@@ -652,8 +564,6 @@ void * monitor_read_only_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
-	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
-	//mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'read_only'");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
@@ -980,8 +890,6 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
-	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
-	//mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
@@ -1032,10 +940,7 @@ __exit_monitor_replication_lag_thread:
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_replication_lag_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
-//			while (i>0) {
-//				i--;
 				int repl_lag=-2;
-				//MySQL_Monitor_State_Data *mmsd=sds[i];
 				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
 				unsigned long long time_now=realtime_time();
@@ -1078,10 +983,7 @@ __exit_monitor_replication_lag_thread:
 				SAFE_SQLITE3_STEP(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
-				//MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, (repl_lag==-1 ? 0 : repl_lag));
 				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
-//				delete mmsd;
-//			}
 			sqlite3_finalize(statement);
 
 	}
@@ -1120,7 +1022,6 @@ __fast_exit_monitor_replication_lag_thread:
 
 void * MySQL_Monitor::monitor_connect() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	//struct event_base *libevent_base;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1450,7 +1351,6 @@ __sleep_monitor_ping_loop:
 
 void * MySQL_Monitor::monitor_read_only() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-//	struct event_base *libevent_base;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1467,7 +1367,6 @@ void * MySQL_Monitor::monitor_read_only() {
 		unsigned int glover;
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
-		//char *query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status!='OFFLINE_HARD'";
 		// add support for SSL
 		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
 		t1=monotonic_time();
@@ -1485,7 +1384,6 @@ void * MySQL_Monitor::monitor_read_only() {
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_read_only_interval;
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-//		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		resultset = MyHGM->execute_query(query, &error);
 		assert(resultset);
 		if (error) {
@@ -1503,10 +1401,6 @@ void * MySQL_Monitor::monitor_read_only() {
 				SQLite3_row *r=*it;
 				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
 				mmsd->mondb=monitordb;
-				//pthread_t thr_;
-				//if ( pthread_create(&thr_, &attr, monitor_read_only_thread, (void *)mmsd) != 0 ) {
-				//	perror("Thread creation monitor_read_only_thread");
-				//}
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_read_only_thread);
 				GloMyMon->queue.add(item);
@@ -1536,11 +1430,8 @@ __end_monitor_read_only_loop:
 			sqlite3_finalize(statement);
 		}
 
-
 		if (resultset)
 			delete resultset;
-
-
 
 __sleep_monitor_read_only:
 		t2=monotonic_time();
@@ -1692,7 +1583,6 @@ __sleep_monitor_group_replication:
 
 void * MySQL_Monitor::monitor_replication_lag() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	//struct event_base *libevent_base;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1709,7 +1599,6 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		unsigned int glover;
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
-		//char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT LIKE 'OFFLINE%'";
 		// add support for SSL
 		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag, use_ssl FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT IN (2,3)";
 		t1=monotonic_time();
@@ -1728,7 +1617,6 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		next_loop_at=t1+1000*mysql_thread___monitor_replication_lag_interval;
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-//		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		resultset = MyHGM->execute_query(query, &error);
 		assert(resultset);
 		if (error) {
@@ -1738,7 +1626,6 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			if (resultset->rows_count==0) {
 				goto __end_monitor_replication_lag_loop;
 			}
-//			sds=(MySQL_Monitor_State_Data **)malloc(resultset->rows_count * sizeof(MySQL_Monitor_State_Data *));
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_replication_lag_interval/2/resultset->rows_count;
@@ -1810,7 +1697,6 @@ void * MySQL_Monitor::run() {
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-	//wqueue<WorkItem*>  queue;
 __monitor_run:
 	while (queue.size()) { // this is a clean up in case Monitor was restarted
 		WorkItem* item = (WorkItem*)queue.remove();

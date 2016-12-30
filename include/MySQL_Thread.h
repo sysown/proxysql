@@ -94,8 +94,6 @@ class ProxySQL_Poll {
 		delete loop_counters;
   };
 
-
-
   void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
     if (len==size) {
       expand(1);
@@ -146,7 +144,6 @@ class ProxySQL_Poll {
 
 class MySQL_Thread
 {
-
 	private:
   unsigned long long last_processing_idles;
 	MySQL_Connection **my_idle_conns;
@@ -221,9 +218,6 @@ class MySQL_Thread
   void refresh_variables();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
   void unregister_session_connection_handler(int idx, bool _new=false);
-  //void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
-  //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
-  //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
 	void Get_Memory_Stats();
 	MySQL_Connection * get_MyConn_local(unsigned int);
@@ -232,10 +226,8 @@ class MySQL_Thread
 };
 
 
-
 typedef MySQL_Thread * create_MySQL_Thread_t();
 typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
-
 
 class iface_info {
 	public:
@@ -256,9 +248,6 @@ class iface_info {
 	}
 };
 
-
-
-
 class MySQL_Listeners_Manager {
 	private:
 	PtrArray *ifaces;
@@ -266,15 +255,12 @@ class MySQL_Listeners_Manager {
   MySQL_Listeners_Manager();
 	~MySQL_Listeners_Manager();
 	int add(const char *iface, unsigned int num_threads, int **perthrsocks);
-	//int add(const char *address, int port);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
 	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
 };
-
-
 
 class MySQL_Threads_Handler
 {
@@ -339,6 +325,8 @@ class MySQL_Threads_Handler
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
+		int query_digests_max_digest_length;
+		int query_digests_max_query_length;
 		int wait_timeout;
 		int max_connections;
 		int max_stmts_per_connection;
@@ -371,11 +359,6 @@ class MySQL_Threads_Handler
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 	proxysql_mysql_thread_t *mysql_threads_idles;
-	//rwlock_t rwlock_idles;
-	//rwlock_t rwlock_resumes;
-	//PtrArray *idle_mysql_sessions;
-	//PtrArray *resume_mysql_sessions;
-	//virtual const char *version() {return NULL;};
 	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();

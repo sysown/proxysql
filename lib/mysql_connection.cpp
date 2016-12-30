@@ -6,22 +6,6 @@ extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 #define PROXYSQL_USE_RESULT
 
-// Bug https://mariadb.atlassian.net/browse/CONC-136
-//int STDCALL mysql_select_db_start(int *ret, MYSQL *mysql, const char *db);
-//int STDCALL mysql_select_db_cont(int *ret, MYSQL *mysql, int ready_status);
-
-/*
-void * MySQL_Connection::operator new(size_t size) {
-	return l_alloc(size);
-}
-
-void MySQL_Connection::operator delete(void *ptr) {
-	l_free(sizeof(MySQL_Connection),ptr);
-}
-*/
-
-//extern __thread char *mysql_thread___default_schema;
-
 static int
 mysql_status(short event, short cont) {
 	int status= 0;
@@ -45,7 +29,6 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	sha1_pass=NULL;
 	schemaname=NULL;
 	hash=0;
-	//schemaname=strdup(mysql_thread___default_schema);
 }
 
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
@@ -147,7 +130,6 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 
 
 MySQL_Connection::MySQL_Connection() {
-	//memset(&myconn,0,sizeof(MYSQL));
 	mysql=NULL;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
@@ -203,15 +185,6 @@ MySQL_Connection::~MySQL_Connection() {
 		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
 	}
-//	// FIXME: with the use of mysql client library , this part should be gone.
-//	// for now only commenting it to be sure it is not needed 
-//	if (myds) {
-//		myds->shut_hard();
-//	} else {
-//		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection %p , fd:%d\n", this, fd);
-//		shutdown(fd, SHUT_RDWR);
-//		close(fd);
-//	}
 	if (MyRS) {
 		delete MyRS;
 	}
@@ -219,8 +192,6 @@ MySQL_Connection::~MySQL_Connection() {
 		delete local_stmts;
 	}
 	if (query.stmt) {
-		// we don't run mysql_stmt_close() : should be already destroyed
-//		mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
 	}
 	if (options.sql_mode) {
@@ -484,11 +455,8 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 		largest_query_length=length;
 	}
 	if (query.stmt) {
-		//mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
 	}
-	//query.ptr=(char *)malloc(length);
-	//memcpy(query.ptr,stmt,length);
 }
 
 void MySQL_Connection::real_query_start() {
@@ -765,8 +733,6 @@ handler_again:
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.stmt_meta->size);
 			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.stmt_meta->size;
-//			__sync_fetch_and_add(&parent->bytes_sent,query.length);
-//			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
 			if (async_exit_status) {
 				next_event(ASYNC_STMT_EXECUTE_CONT);
 			} else {
@@ -830,15 +796,6 @@ handler_again:
 					__sync_fetch_and_add(&parent->bytes_recv,total_size);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=total_size;
 				}
-/*
-				int row_count= 0;
-				fprintf(stdout, "Fetching results ...\n");
-				while (!mysql_stmt_fetch(query.stmt))
-				{
-					row_count++;
-					fprintf(stdout, "  row %d\n", row_count);
-				}
-*/
 			}
 /*
 			if (interr) {
@@ -1196,8 +1153,6 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	if (async_state_machine==ASYNC_STMT_PREPARE_SUCCESSFUL || async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
 		query.stmt_meta=NULL;
 		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
-			//mysql_stmt_close(query.stmt);
-			//query.stmt=NULL;
 			return -1;
 		} else {
 			*_stmt=query.stmt;
@@ -1412,7 +1367,6 @@ void MySQL_Connection::async_free_result() {
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
 	if (query.ptr) {
-		//free(query.ptr);
 		query.ptr=NULL;
 		query.length=0;
 	}
@@ -1562,16 +1516,6 @@ void MySQL_Connection::close_mysql() {
 	}
 //	int rc=0;
 	mysql_close_no_command(mysql);
-/*
-	if (mysql->net.vio) {
-		rc=shutdown(fd, SHUT_RDWR);
-		if (rc) {
-			proxy_error("shutdown(): FD=%d , code=%d\n", fd, errno);
-			assert(rc==0);
-		}
-		close(fd);
-	}
-*/
 }
 
 
