@@ -41,11 +41,12 @@ typedef struct _MyGR_status_entry_t {
 
 
 class MyGR_monitor_node {
+	private:
+	int idx_last_entry;
 	public:
 	char *addr;
 	int port;
 	unsigned int writer_hostgroup;
-	int idx_last_entry;
 	MyGR_status_entry_t last_entries[MyGR_Nentries];
 	MyGR_monitor_node(char *_a, int _p, int _whg);
 	~MyGR_monitor_node();
