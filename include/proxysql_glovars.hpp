@@ -29,6 +29,7 @@ class ProxySQL_GlobalVariables {
 	char *config_file;
 	char *datadir;
 	char *admindb;
+	char *statsdb;
 	char *errorlog;
 	char *pid;
 	struct  {

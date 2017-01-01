@@ -239,6 +239,10 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
 	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
 
+	GloVars.statsdb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"stats.db")+2);
+	sprintf(GloVars.statsdb,"%s/%s",GloVars.datadir, (char *)"stats.db");
+
+
 	GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
 	sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
 
