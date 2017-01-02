@@ -1230,7 +1230,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 
 void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin) {
-	bool refresh=false;
+	bool refresh=true;
 	bool stats_mysql_processlist=false;
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_query_digest=false;
@@ -1286,13 +1286,13 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 	}
 	
-	stats___mysql_query_digests(true);
-	stats___mysql_query_digests(false);
 
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
 		pthread_mutex_lock(&admin_mutex);
 		
+		stats___mysql_query_digests(true);
+		stats___mysql_query_digests(false);
 
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
