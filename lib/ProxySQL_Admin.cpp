@@ -4239,10 +4239,11 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+		// Pass the resultset to MyHGM
 		MyHGM->set_incoming_replication_hostgroups(resultset_replication);
 	}
-	if (resultset) delete resultset;
-	resultset=NULL;
+	//if (resultset) delete resultset;
+	//resultset=NULL;
 
 	// support for Group Replication, table mysql_group_replication_hostgroups
 
@@ -4267,6 +4268,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+		// Pass the resultset to MyHGM
 		MyHGM->set_incoming_group_replication_hostgroups(resultset_group_replication);
 	}
 

@@ -1487,11 +1487,11 @@ void * MySQL_Monitor::monitor_group_replication() {
 			next_loop_at=0;
 		}
 
-		pthread_mutex_lock(&group_replication_mutex);
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_group_replication;
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_groupreplication_healthcheck_interval;
+		pthread_mutex_lock(&group_replication_mutex);
 //		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 //		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 //		resultset = MyHGM->execute_query(query, &error);
@@ -1519,7 +1519,7 @@ void * MySQL_Monitor::monitor_group_replication() {
 				//	perror("Thread creation monitor_read_only_thread");
 				//}
 				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_read_only_thread);
+				item=new WorkItem(mmsd,monitor_group_replication_thread);
 				GloMyMon->queue.add(item);
 				usleep(us);
 				if (GloMyMon->shutdown) {
