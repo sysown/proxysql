@@ -16,7 +16,7 @@ If the application will re-executed the same query, the resultset will be return
 
 It is a quite common scenarios to identify database load caused by not-optimal SELECT statements that generate a resultset that should be cached for few seconds.
 To implement a code change can be a long process (developers should write new code, build it, testing in staging, then deploy on production), and this is often not a suitable option during an emergency.
-As the configuration of the database proxy layer (ProxySQL in this case) falls under the responsibility of DBAs, to enable caching DBAs doesn't require that developers to make changes to the application.  
+As the configuration of the database proxy layer (ProxySQL in this case) falls under the responsibility of DBAs, to enable caching DBAs won't require developers to make changes to the application.  
 Therefore this is a feature that empowers the DBAs.
 
 
