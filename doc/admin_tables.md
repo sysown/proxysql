@@ -4,7 +4,7 @@ Admin tables
 ProxySQL admin interface is an interface that uses the MySQL protocol, making it very easy to be configured by any client able to send commands through such interface.
 ProxySQL parses the queries sent through this interface for any command specific to ProxySQL, and if appropiate sends them to the embedded SQLite3 engine to run the queries.
 
-Please note that SQL syntax used by SQLite3 and MySQL differs, therefore not all commands working on MySQL will work on SQLite3 .
+Please note that SQL syntax used by SQLite3 and MySQL differs, therefore not all commands that work on MySQL will work on SQLite3 .
 For example, although the USE command is accepted by the admin interface, it doesn't change the default schema as this feature is not available in SQLite3.
 
 Connecting to the ProxySQL admin interface, we see that there are a few databases available.
@@ -126,11 +126,11 @@ CREATE TABLE mysql_users (
 The fields have the following semantics:
 * `username`, `password` - credentials for connecting to the mysqld or ProxySQL instance
 * `active` - the users with active = 0 will be tracked in the database, but will be never loaded in the in-memory data structures
-* `default_hostgroup` - if there is no matching rule for the queries send by this users, the traffic is generates is sent to the specified hostgroup
+* `default_hostgroup` - if there is no matching rule for the queries sent by the users, the traffic it generates is sent to the specified hostgroup
 * `default_schema` - the schema to which the connection should change by default
 * `schema_locked` - not supported yet (TODO: check)
 * `transaction_persistent` - if this is set for the user with which the MySQL client is connecting to ProxySQL (thus a "frontend" user - see below), transactions started within a hostgroup will remain within that hostgroup regardless of any other rules
-* `fast_forward` - if set it bypass the query processing layer (rewriting, caching) and pass through the query directly as is to the backend server.
+* `fast_forward` - if set, it bypasses the query processing layer (rewriting, caching) and passes the query directly to the backend server.
 * `frontend` - if set to 1, this (username, password) pair is used for authenticating to the ProxySQL instance
 * `backend` - if set to 1, this (username, password) pair is used for authenticating to the mysqld servers against any hostgroup
 
@@ -338,15 +338,15 @@ The fields have the following semantics:
 * `user` - the user with which the MySQL client connected to ProxySQL in order to execute this query
 * `db` - the schema currently selected
 * `cli_host`, `cli_port` - the (host, port) pair of the TCP connection between the MySQL client and ProxySQL
-* `hostgroup` - the currenct hostgroup. If a query being processed, this is the hostgroup towards which the query was or will be routed, or the default hostgroup. The routing is done by default in terms of the default destination hostgroup for the username with which the MySQL client connected to ProxySQL (based on `mysql_users` table, but it can be modified on a per-query basis by using the query rules in `mysql_query_rules`
-* `l_srv_host`, `l_srv_port` - the local (host, part) pair of the TCP connection between ProxySQL and the backend MySQL server from the current hostgroup
+* `hostgroup` - the current hostgroup. If a query being processed, this is the hostgroup towards which the query was or will be routed, or the default hostgroup. The routing is done by default in terms of the default destination hostgroup for the username with which the MySQL client connected to ProxySQL (based on `mysql_users` table, but it can be modified on a per-query basis by using the query rules in `mysql_query_rules`
+* `l_srv_host`, `l_srv_port` - the local (host, port) pair of the TCP connection between ProxySQL and the backend MySQL server from the current hostgroup
 * `srv_host`, `srv_port` - the (host, port) pair on which the backend MySQL server is listening for TCP connections
 * `command` - the type of MySQL query being executed (the MySQL command verb)
 * `time_ms` - the time in millisecond for which the query has been in the specified command state so far
 * `info` - the actual query being executed
 
-Please note that this is just a snapshot in time of the actual MySQL queries being ran. There is no guarantee that the same queries will be running a fraction of a second later.
-Here is how the results look like:
+Please note that this is just a snapshot in time of the actual MySQL queries being run. There is no guarantee that the same queries will be running a fraction of a second later.
+Here is what the results look like:
 
 ```sql
 mysql> select * from stats_mysql_processlist;
