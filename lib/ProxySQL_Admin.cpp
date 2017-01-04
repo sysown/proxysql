@@ -2538,7 +2538,7 @@ bool ProxySQL_Admin::init() {
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	statsdb=new SQLite3DB();
 	//statsdb->open((char *)"file:mem_statsdb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-	statsdb->open((char *)GloVars.statsdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	statsdb->open((char *)GloVars.statsdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX);
 
 	// check if file exists , see #617
 	bool admindb_file_exists=Proxy_file_exists(GloVars.admindb);
