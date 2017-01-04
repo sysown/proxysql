@@ -1230,7 +1230,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 
 void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin) {
-	bool refresh=true;
+	bool refresh=false;
 	bool stats_mysql_processlist=false;
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_query_digest=false;
