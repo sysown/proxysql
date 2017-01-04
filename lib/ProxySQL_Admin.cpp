@@ -1291,16 +1291,14 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	if (refresh==true) {
 		pthread_mutex_lock(&admin_mutex);
 		
-		stats___mysql_query_digests(true);
-		stats___mysql_query_digests(false);
 
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
-		//if (stats_mysql_query_digest)
-		//	stats___mysql_query_digests(false);
-		//if (stats_mysql_query_digest_reset)
-		//	stats___mysql_query_digests(true);
+		if (stats_mysql_query_digest)
+			stats___mysql_query_digests(false);
+		if (stats_mysql_query_digest_reset)
+			stats___mysql_query_digests(true);
 		if (stats_mysql_connection_pool)
 			stats___mysql_connection_pool();
 		if (stats_mysql_global)
