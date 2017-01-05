@@ -575,10 +575,11 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
 	//for (btree::btree_map<uint64_t, void *>::iterator it=digest_bt_map.begin(); it!=digest_bt_map.end(); ++it) {
-	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(),result->rows_count<1000; ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row();
 		result->add_row(pta);
+		proxy_info("result->rows_counter=%d\n",result->rows_count);
 		qds->free_row(pta);
 	}
 	spin_rdunlock(&digest_rwlock);
