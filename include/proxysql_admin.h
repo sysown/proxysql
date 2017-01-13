@@ -1,5 +1,6 @@
 #ifndef __CLASS_PROXYSQL_ADMIN_H
 #define __CLASS_PROXYSQL_ADMIN_H
+#include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include <vector>
@@ -59,7 +60,11 @@ class ProxySQL_Admin {
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
 	rwlock_t rwlock;
+#ifdef PA_PTHREAD_MUTEX
+	pthread_mutex_t mysql_servers_lock;
+#else
 	rwlock_t mysql_servers_rwlock;
+#endif
 	void wrlock();
 	void wrunlock();
 
