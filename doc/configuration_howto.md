@@ -148,9 +148,9 @@ Not all the tables in monitor are currently used.
 For now we can check the relevant tables with the follow queries:
 
 ``` sql
-Admin> SELECT * FROM monitor.mysql_server_connect_log ORDER BY time_start DESC LIMIT 10;
+Admin> SELECT * FROM monitor.mysql_server_connect_log ORDER BY time_start_us DESC LIMIT 10;
 +-----------+-------+------------------+----------------------+---------------+
-| hostname  | port  | time_start       | connect_success_time | connect_error |
+| hostname  | port  | time_start_us       | connect_success_time | connect_error |
 +-----------+-------+------------------+----------------------+---------------+
 | 127.0.0.1 | 21891 | 1456968814253432 | 562                  | NULL          |
 | 127.0.0.1 | 21892 | 1456968814253432 | 309                  | NULL          |
@@ -165,9 +165,9 @@ Admin> SELECT * FROM monitor.mysql_server_connect_log ORDER BY time_start DESC L
 +-----------+-------+------------------+----------------------+---------------+
 10 rows in set (0.00 sec)
 
-Admin> SELECT * FROM monitor.mysql_server_ping_log ORDER BY time_start DESC LIMIT 10;
+Admin> SELECT * FROM monitor.mysql_server_ping_log ORDER BY time_start_us DESC LIMIT 10;
 +-----------+-------+------------------+-------------------+------------+
-| hostname  | port  | time_start       | ping_success_time | ping_error |
+| hostname  | port  | time_start_us       | ping_success_time | ping_error |
 +-----------+-------+------------------+-------------------+------------+
 | 127.0.0.1 | 21891 | 1456968828686787 | 124               | NULL       |
 | 127.0.0.1 | 21892 | 1456968828686787 | 62                | NULL       |
@@ -209,7 +209,7 @@ Admin> SELECT * FROM mysql_servers;
 Let's check another table in the monitor schema , `monitor.mysql_server_read_only_log`:
 
 ``` sql
-Admin> SELECT * FROM monitor.mysql_server_read_only_log ORDER BY time_start DESC LIMIT 10;
+Admin> SELECT * FROM monitor.mysql_server_read_only_log ORDER BY time_start_us DESC LIMIT 10;
 Empty set (0.00 sec)
 ```
 
@@ -267,8 +267,8 @@ Admin> LOAD MYSQL SERVERS TO RUNTIME;                                           
 Wait few seconds, and check again the status:
 
 ``` sql
-Admin> SELECT * FROM monitor.mysql_server_read_only_log ORDER BY time_start DESC LIMIT 10;                                                         +-----------+-------+------------------+--------------+-----------+-------+
-| hostname  | port  | time_start       | success_time | read_only | error |
+Admin> SELECT * FROM monitor.mysql_server_read_only_log ORDER BY time_start_us DESC LIMIT 10;                                                         +-----------+-------+------------------+--------------+-----------+-------+
+| hostname  | port  | time_start_us       | success_time | read_only | error |
 +-----------+-------+------------------+--------------+-----------+-------+
 | 127.0.0.1 | 21891 | 1456969634783579 | 762          | 0         | NULL  |
 | 127.0.0.1 | 21892 | 1456969634783579 | 378          | 1         | NULL  |
