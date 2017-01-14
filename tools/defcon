@@ -1,0 +1,415 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+	Just collect ProxySQl metrics,and print metrics into influxdb line format.
+example:
+	ProxySQL,host=dn02,region=MySQLServersList status="ONLINE" comment="" compression="0" weight="1" hostname="dn03" hostgroup_id="0" use_ssl="0" max_replication_lag="0" port="3306" max_latency_ms="0" max_connections="1000"
+
+Auth: Lei Tian [taylor840326@gmail.com]
+Date: 20170112PM1827
+Version: 1.2
+
+"""
+
+import os
+import sys
+import socket
+import getopt
+import string
+import MySQLdb
+
+#uncomment next line,if you want debug this script. 
+#import ipdb;ipdb.set_trace()
+
+nums = string.digits
+DB_HOST=""
+DB_PORT=0
+DB_USER=""
+DB_PASS=""
+DFDF= ""
+
+
+class ProxySQL(object):
+	"""
+	ProxySQL class.
+	"""
+	def __init__(self):
+		"""
+			init function.
+		"""
+		# get current hostname
+		self.current_hostname = socket.gethostname()
+		# create a cursor to execute some operations.
+		self.proxysql_cursor = connect_instance.cursor()
+		# define some dict variables to save metrics.
+		self.mysql_variables = []
+		self.admin_variables = []
+		self.mysql_status = []
+		self.mysql_users_list= []
+		self.mysql_servers_list = []
+		self.mysql_connect_pool_stats_list = []
+		self.mysql_commands_counters_list = []
+		self.mysql_processlist_list = []
+
+	def get_mysql_variables(self):
+		"""
+			collect mysql variables metrics.save metrics to self.mysql_variables variable.
+		"""	
+		self.proxysql_cursor.execute("SHOW MYSQL VARIABLES")
+		resultset = self.proxysql_cursor.fetchall()
+		
+		#tuple to dict
+		variables_dict = dict(resultset)
+		self.mysql_variables.append(variables_dict)
+		return self.mysql_variables
+
+	def print_mysql_variables_metrics_to_influxdb_format(self):
+		"""
+			print mysql variables metrics as influxdb line format.
+		"""
+		for ops in range(len(self.mysql_variables)):
+			sys.stdout.write("ProxySQL,host=%s,region=MySQLVariables "%self.current_hostname)
+			dict_length = len(self.mysql_variables[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict == dict_length -1:
+					sys.stdout.write("%s=\"%s\""%(self.mysql_variables[ops].keys()[_var_dict],self.mysql_variables[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.mysql_variables[ops].keys()[_var_dict],self.mysql_variables[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+
+	def get_admin_variables(self):
+		"""
+			collect admin variables metrics.save metrics to self.admin_variables variable.
+		"""
+		self.proxysql_cursor.execute("SHOW ADMIN VARIABLES")
+		resultset = self.proxysql_cursor.fetchall()
+
+		admin_variables_dict = dict(resultset)
+		self.admin_variables.append(admin_variables_dict)
+		return self.admin_variables
+
+	def print_admin_variables_metrics_to_influxdb_format(self):
+		"""
+			print admin variables metrics as influxdb line format.
+		"""
+		for ops in range(len(self.admin_variables)):
+			sys.stdout.write("ProxySQL,host=%s,region=AdminVariables "%self.current_hostname)
+			dict_length = len(self.admin_variables[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict == dict_length -1:
+					sys.stdout.write("%s=\"%s\""%(self.admin_variables[ops].keys()[_var_dict],self.admin_variables[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.admin_variables[ops].keys()[_var_dict],self.admin_variables[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+
+	def get_mysql_status(self):
+		"""
+			collect mysql status metrics.save it to self.mysql_status variable.
+		"""
+		self.proxysql_cursor.execute("SHOW MYSQL STATUS")
+		resultset = self.proxysql_cursor.fetchall()
+
+		mysql_status_dict = dict(resultset)
+		self.mysql_status.append(mysql_status_dict)
+		return self.mysql_status
+
+	def print_mysql_status_metrics_to_influxdb_format(self):
+		"""
+			print mysql status metrics as influxdb line format.
+		"""
+		for ops in range(len(self.mysql_status)):
+			sys.stdout.write("ProxySQL,host=%s,region=MySQLStatus "%self.current_hostname)
+			dict_length = len(self.mysql_status[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict ==  dict_length -1:
+					sys.stdout.write("%s=\"%s\""%(self.mysql_status[ops].keys()[_var_dict],self.mysql_status[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.mysql_status[ops].keys()[_var_dict],self.mysql_status[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+
+	def get_mysql_users(self):
+		"""
+			collect mysql users list metrics.save it to self.mysql_users_list.
+		"""
+		self.proxysql_cursor.execute("SHOW MYSQL USERS")
+		resultset = self.proxysql_cursor.fetchall()
+
+		for pos in range(len(resultset)):
+			mysql_one_user = {}
+			( \
+			mysql_one_user['username'], \
+			mysql_one_user['password'], \
+			mysql_one_user['active'], \
+			mysql_one_user['use_ssl'], \
+			mysql_one_user['default_hostgroup'], \
+			mysql_one_user['default_schema'], \
+			mysql_one_user['schema_locked'], \
+			mysql_one_user['transaction_persistent'], \
+			mysql_one_user['fast_forward'], \
+			mysql_one_user['backend'], \
+			mysql_one_user['frontend'], \
+			mysql_one_user['max_connections'] \
+			) = resultset[pos]
+
+			self.mysql_users_list.append(mysql_one_user)	
+
+		return self.mysql_users_list
+
+
+	def print_mysql_users_list_metrics_to_influxdb_format(self):
+		"""
+			print mysql users list metrics as influxdb line format.
+		"""
+		for ops in range(len(self.mysql_users_list)):
+			sys.stdout.write("ProxySQL,host=%s,region=MySQLUsersList "%self.current_hostname)
+			dict_length = len(self.mysql_users_list[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict == dict_length -1:
+					sys.stdout.write("%s=\"%s\""%(self.mysql_users_list[ops].keys()[_var_dict],self.mysql_users_list[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.mysql_users_list[ops].keys()[_var_dict],self.mysql_users_list[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+
+
+
+	def get_mysql_servers(self):
+		"""
+			collect mysql servers list .save it to self.mysql_servers_list
+		"""
+
+		self.proxysql_cursor.execute("SHOW MYSQL SERVERS")
+		resultset = self.proxysql_cursor.fetchall()
+
+
+		for pos in range(len(resultset)):
+			mysql_one_server = {}
+			( \
+			mysql_one_server['hostgroup_id'], \
+			mysql_one_server['hostname'], \
+			mysql_one_server['port'], \
+			mysql_one_server['status'], \
+			mysql_one_server['weight'], \
+			mysql_one_server['compression'], \
+			mysql_one_server['max_connections'], \
+			mysql_one_server['max_replication_lag'], \
+			mysql_one_server['use_ssl'], \
+			mysql_one_server['max_latency_ms'], \
+			mysql_one_server['comment'] \
+			) = resultset[pos]
+			
+			self.mysql_servers_list.append(mysql_one_server)
+
+		return self.mysql_servers_list
+
+	def print_mysql_servers_metrics_to_influxdb_format(self):
+		"""
+			print mysql servers list metrics as influxdb line format.
+		"""
+		for ops in range(len(self.mysql_servers_list)):
+			sys.stdout.write("ProxySQL,host=%s,region=MySQLServersList "%self.current_hostname)
+			dict_length = len(self.mysql_servers_list[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict == dict_length -1:
+					sys.stdout.write("%s=\"%s\""%(self.mysql_servers_list[ops].keys()[_var_dict],self.mysql_servers_list[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.mysql_servers_list[ops].keys()[_var_dict],self.mysql_servers_list[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+		
+	def get_mysql_connect_pool_stats(self):
+		"""	
+			collect mysql connect pool status metrics ,save it to self.mysql_connect_pool_stats_list.
+		"""
+		self.proxysql_cursor.execute("SELECT * FROM stats.stats_mysql_connection_pool")
+		resultset = self.proxysql_cursor.fetchall()
+
+		for pos in range(len(resultset)):
+			mysql_one_connect_pool_stats = {}
+			( \
+			mysql_one_connect_pool_stats['hostgroup'], \
+			mysql_one_connect_pool_stats['srv_host'], \
+			mysql_one_connect_pool_stats['srv_port'], \
+			mysql_one_connect_pool_stats['status'], \
+			mysql_one_connect_pool_stats['ConnUsed'], \
+			mysql_one_connect_pool_stats['ConnFree'], \
+			mysql_one_connect_pool_stats['ConnOK'], \
+			mysql_one_connect_pool_stats['ConnERR'], \
+			mysql_one_connect_pool_stats['Queries'], \
+			mysql_one_connect_pool_stats['Bytes_data_sent'], \
+			mysql_one_connect_pool_stats['Bytes_data_recv'], \
+			mysql_one_connect_pool_stats['Latency_ms'] \
+			) = resultset[pos]
+
+			self.mysql_connect_pool_stats_list.append(mysql_one_connect_pool_stats)
+
+		return self.mysql_connect_pool_stats_list
+
+	def print_mysql_connectpool_metrics_to_influxdb_format(self):
+		"""
+			print mysql connect pool status metrics as influxdb line format.
+		"""
+		for ops in range(len(self.mysql_connect_pool_stats_list)):
+			sys.stdout.write("ProxySQL,host=%s,region=MySQLConnectPoolStatus "%self.current_hostname)
+			dict_length = len(self.mysql_connect_pool_stats_list[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict == dict_length -1:
+					sys.stdout.write("%s=\"%s\""%(self.mysql_connect_pool_stats_list[ops].keys()[_var_dict],self.mysql_connect_pool_stats_list[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.mysql_connect_pool_stats_list[ops].keys()[_var_dict],self.mysql_connect_pool_stats_list[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+
+	def get_mysql_commands_counters(self):
+		"""
+			collect mysql command counter metrics .save it to self.mysql_commands_counters_list.	
+		"""
+		self.proxysql_cursor.execute("SELECT * FROM stats.stats_mysql_commands_counters")
+		resultset = self.proxysql_cursor.fetchall()
+
+		for pos in range(len(resultset)):
+			mysql_one_commands_counters  = {}
+
+			( \
+			mysql_one_commands_counters['Command'], \
+			mysql_one_commands_counters['Total_Time_us'], \
+			mysql_one_commands_counters['Total_cnt'], \
+			mysql_one_commands_counters['cnt_100us'], \
+			mysql_one_commands_counters['cnt_500us'], \
+			mysql_one_commands_counters['cnt_1ms'], \
+			mysql_one_commands_counters['cnt_5ms'], \
+			mysql_one_commands_counters['cnt_10ms'], \
+			mysql_one_commands_counters['cnt_50ms'], \
+			mysql_one_commands_counters['cnt_100ms'], \
+			mysql_one_commands_counters['cnt_500ms'], \
+			mysql_one_commands_counters['cnt_1s'], \
+			mysql_one_commands_counters['cnt_5s'], \
+			mysql_one_commands_counters['cnt_10s'], \
+			mysql_one_commands_counters['cnt_INFs'] \
+			) = resultset[pos]
+
+			self.mysql_commands_counters_list.append(mysql_one_commands_counters)
+
+		return self.mysql_commands_counters_list
+
+
+	def print_mysql_command_metrics_to_influxdb_format(self):
+		"""
+			print mysql command counters metrics as influxdb line format.
+		"""
+		for ops in range(len(self.mysql_commands_counters_list)):
+			sys.stdout.write("ProxySQL,host=%s,region=MySQLCommandCounter,Command=%s "%(self.current_hostname,self.mysql_commands_counters_list[ops]['Command']))
+			dict_length = len(self.mysql_commands_counters_list[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict == dict_length -1:
+					sys.stdout.write("%s=\"%s\""%(self.mysql_commands_counters_list[ops].keys()[_var_dict],self.mysql_commands_counters_list[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.mysql_commands_counters_list[ops].keys()[_var_dict],self.mysql_commands_counters_list[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+
+	def get_mysql_processlist(self):
+		"""
+			collect mysql processlist metrics.
+		"""	
+		self.proxysql_cursor.execute("SHOW PROCESSLIST")
+		resultset = self.proxysql_cursor.fetchall()
+
+		for pos in range(len(resultset)):
+			mysql_one_processlist = {}
+			( \
+			mysql_one_processlist['SessionID'], \
+			mysql_one_processlist['user'], \
+			mysql_one_processlist['db'], \
+			mysql_one_processlist['hostgroup'], \
+			mysql_one_processlist['command'], \
+			mysql_one_processlist['time_ms'], \
+			mysql_one_processlist['info'] \
+			) = resultset[pos]
+
+			self.mysql_processlist_list.append(mysql_one_processlist)
+
+		return self.mysql_processlist_list
+
+	def print_mysql_processlist_metrics_to_influxdb_format(self):
+		"""
+			print mysql processlist metrics to influxdb line format.
+		"""
+		for ops in range(len(self.mysql_processlist_list)):
+			sys.stdout.write("ProxySQL,host=%s,region=MySQLProcessList "%self.current_hostname)
+			dict_length = len(self.mysql_processlist_list[ops])
+			for _var_dict in range(dict_length):
+				if _var_dict == dict_length-1:
+					sys.stdout.write("%s=\"%s\""%(self.mysql_processlist_list[ops].keys()[_var_dict],self.mysql_processlist_list[ops].values()[_var_dict]))
+				else:
+					sys.stdout.write("%s=\"%s\","%(self.mysql_processlist_list[ops].keys()[_var_dict],self.mysql_processlist_list[ops].values()[_var_dict]))
+			sys.stdout.write("\n")
+
+def usage():
+	sys.stdout.write("\
+\nBefore use this command,You must execute follwing command: \
+\n\t# yum install python-pip ;pip install --upgrade pip \
+\n\t# yum install gcc mariadb-devel  openssl-devel crypto-devel \
+\n\t# pip install Flask-MySQLdb \
+\n\nExecute defcon on terminal: \
+\n\t# defcon -H  \
+\n\t\tGet help information. \
+\n\t# defcon -h 0.0.0.0 -u admin -p admin -P6032 \
+\n\t\tRunning defcon. \
+\n\nExecute defcon by telegraf: \
+\n\tAppend following contents to the /etc/telegraf/telegraf.conf file: \
+\n\t[[inputs.exec]] \
+\n\t\tcommands = [\"/usr/bin/defcon -h 0.0.0.0 -uadmin -padmin -P13311\"] \
+\n\t\tdata_format = \"influx\" \
+\n\t# servcie telegraf restart \
+\n")
+	sys.exit(1)	
+	
+	
+if __name__ == "__main__":
+	
+
+	try:
+		options,args = getopt.getopt(sys.argv[1:],"Hh:P:u:p:",["help","host=","port=","user=","passwd="])
+	except getopt.GetoptError:
+		sys.exit()
+
+	for name,value in options:
+		if name in ("-H","--help"):
+			usage()
+		if name in ("-h","--host"):
+			DB_HOST = value
+		if name in ("-P","--port"):
+			DB_PORT = int(value)
+		if name in ("-u","--user"):
+			DB_USER = value
+		if name in ("-p","--passwd"):
+			DB_PASS = value
+			
+
+	if len(DB_HOST) != 0 and DB_PORT != 0 and len(DB_USER) != 0 and len(DB_PASS) != 0:
+	
+		global connect_instance 
+		connect_instance = MySQLdb.connect(host=DB_HOST,port=DB_PORT,user=DB_USER,passwd=DB_PASS)
+	
+		ps = ProxySQL()
+		ps.get_mysql_variables()
+		ps.get_admin_variables()
+		ps.get_mysql_status()
+		ps.get_mysql_users()
+		ps.get_mysql_servers()
+		ps.get_mysql_connect_pool_stats()
+		ps.get_mysql_commands_counters()
+		ps.get_mysql_processlist()
+
+		ps.print_mysql_variables_metrics_to_influxdb_format()
+		ps.print_admin_variables_metrics_to_influxdb_format()
+		ps.print_mysql_status_metrics_to_influxdb_format()
+		ps.print_mysql_users_list_metrics_to_influxdb_format()
+		ps.print_mysql_servers_metrics_to_influxdb_format()
+		ps.print_mysql_connectpool_metrics_to_influxdb_format()
+		ps.print_mysql_command_metrics_to_influxdb_format()
+		ps.print_mysql_processlist_metrics_to_influxdb_format()
+
+		sys.exit(0)
+	else:
+		usage()
+		
+

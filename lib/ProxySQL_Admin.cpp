@@ -2403,7 +2403,11 @@ ProxySQL_Admin::ProxySQL_Admin() {
 
 	SPA=this;
 	spinlock_rwlock_init(&rwlock);
+#ifdef PA_PTHREAD_MUTEX
+	pthread_mutex_init(&mysql_servers_lock,NULL);
+#else
 	spinlock_rwlock_init(&mysql_servers_rwlock);
+#endif
 	variables.admin_credentials=strdup("admin:admin");
 	variables.stats_credentials=strdup("stats:stats");
 	if (GloVars.__cmd_proxysql_admin_socket) {
@@ -2445,11 +2449,19 @@ void ProxySQL_Admin::wrunlock() {
 };
 
 void ProxySQL_Admin::mysql_servers_wrlock() {
+#ifdef PA_PTHREAD_MUTEX
+	pthread_mutex_lock(&mysql_servers_lock);
+#else
 	spin_wrlock(&mysql_servers_rwlock);
+#endif
 };
 
 void ProxySQL_Admin::mysql_servers_wrunlock() {
+#ifdef PA_PTHREAD_MUTEX
+	pthread_mutex_unlock(&mysql_servers_lock);
+#else
 	spin_wrunlock(&mysql_servers_rwlock);
+#endif
 };
 
 void ProxySQL_Admin::print_version() {
