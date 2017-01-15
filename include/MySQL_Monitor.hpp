@@ -19,13 +19,14 @@
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_REPLICATION_LAG_LOG "CREATE TABLE mysql_server_replication_lag_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , repl_lag INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
 
-
+/*
 struct cmp_str {
   bool operator()(char const *a, char const *b) const
   {
     return strcmp(a, b) < 0;
   }
 };
+*/
 
 #define MyGR_Nentries	10
 
@@ -109,7 +110,8 @@ class MySQL_Monitor {
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
-	std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
+	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
+	std::map<std::string, MyGR_monitor_node *> Group_Replication_Hosts_Map;
 	SQLite3_result *Group_Replication_Hosts_resultset;
 	unsigned int num_threads;
 	wqueue<WorkItem*> queue;

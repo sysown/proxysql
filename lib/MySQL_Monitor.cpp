@@ -724,7 +724,7 @@ void * monitor_group_replication_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=nO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_group_replication_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -740,7 +740,7 @@ void * monitor_group_replication_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=nO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_group_replication_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -767,9 +767,49 @@ __exit_monitor_group_replication_thread:
 			s=(char *)malloc(l+16);
 		}
 		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		bool viable_candidate=false;
+		bool read_only=true;
+		long long transactions_behind=-1;
+		if (mmsd->result) {
+			int num_fields=0;
+			int num_rows=0;
+			num_fields = mysql_num_fields(mmsd->result);
+			if (num_fields!=3) {
+				proxy_error("Incorrect number of fields, please report a bug\n");
+				goto __end_process_group_replication_result;
+			}
+			num_rows = mysql_num_rows(mmsd->result);
+			if (num_rows!=1) {
+				proxy_error("Incorrect number of rows, please report a bug\n");
+				goto __end_process_group_replication_result;
+			}
+			MYSQL_ROW row=mysql_fetch_row(mmsd->result);
+			if (!strcasecmp(row[0],"YES")) {
+				viable_candidate=true;
+			}
+			if (!strcasecmp(row[1],"NO")) {
+				read_only=false;
+			}
+			transactions_behind=atol(row[2]);
+		}
+__end_process_group_replication_result:
+		proxy_info("GR: %s:%d , viable=%s , ro=%s, trx=%ld, err=%s\n", mmsd->hostname, mmsd->port, (viable_candidate ? "YES": "NO") , (read_only ? "YES": "NO") , transactions_behind, ( mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "") );
+
 		pthread_mutex_lock(&GloMyMon->group_replication_mutex);
-		auto it = 
+		//auto it = 
 		// TODO : complete this
+		std::map<std::string, MyGR_monitor_node *>::iterator it2;
+		it2 = GloMyMon->Group_Replication_Hosts_Map.find(s);
+		MyGR_monitor_node *node=NULL;
+		if (it2!=GloMyMon->Group_Replication_Hosts_Map.end()) {
+			node=it2->second;
+			node->add_entry(0,transactions_behind,viable_candidate,read_only,NULL);
+		} else {
+			// TODO: find writer
+			node = new MyGR_monitor_node(mmsd->hostname,mmsd->port,0);
+			node->add_entry(0,transactions_behind,viable_candidate,read_only,NULL);
+			GloMyMon->Group_Replication_Hosts_Map.insert(std::make_pair(s,node));
+		}
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 		if (l<110) {
 		} else {
@@ -831,6 +871,7 @@ __exit_monitor_group_replication_thread:
 
 		sqlite3_finalize(statement);
 */
+
 	}
 	if (mmsd->interr) { // check failed
 	} else {
