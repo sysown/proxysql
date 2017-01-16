@@ -1,8 +1,7 @@
 #ifndef __CLASS_MYSQL_LOGGER_H
 #define __CLASS_MYSQL_LOGGER_H
-#include "proxysql.h"
-#include "cpp.h"
 
+#include "MySQL_Session.h"
 
 class MySQL_Event {
 	private:

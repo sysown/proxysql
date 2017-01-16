@@ -1,8 +1,12 @@
 #ifndef CLASS_MYSQL_PREPARED_STATEMENT_H
 #define CLASS_MYSQL_PREPARED_STATEMENT_H
 
+#include <map>
+#include <stack>
+
+#include "mysql_client.h"
 #include "proxysql.h"
-#include "cpp.h"
+#include "proxysql_atomic.h"
 
 /*
 One of the main challenge in handling prepared statement (PS) is that a single

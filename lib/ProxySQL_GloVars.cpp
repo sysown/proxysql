@@ -1,8 +1,12 @@
-#include "ezOptionParser.hpp"
-#include "proxysql.h"
-#include "cpp.h"
-#include <string>
+#include "proxysql_glovars.hpp"
 
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
+
+#include "ezOptionParser.hpp"
+#include "proxysql_debug.h"
+#include "gen_utils.h"
 
 
 static void term_handler(int sig) {

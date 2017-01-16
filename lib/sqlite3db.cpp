@@ -1,5 +1,10 @@
+#include "sqlite3db.h"
+
+#include <cassert>
+
 #include "proxysql.h"
-#include "cpp.h"
+#include "proxysql_atomic.h"
+#include "proxysql_debug.h"
 #include "SpookyV2.h"
 
 #define USLEEP_SQLITE_LOCKED 100

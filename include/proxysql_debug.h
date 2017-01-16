@@ -1,13 +1,10 @@
+#ifndef PROXYSQL_DEBUG_H__
+#define PROXYSQL_DEBUG_H__
 
-/*
-#ifdef DEBUG
-#ifndef DEBUG_EXTERN
-#define DEBUG_EXTERN
-extern debug_level *gdbg_lvl;
-extern int gdbg;
-#endif 
-#endif 
-*/
+#include <ctime>
+
+void proxy_error_func(const char *, ...);
+
 #ifdef DEBUG
 #define PROXY_TRACE() { proxy_debug(PROXY_DEBUG_GENERIC,10,"TRACE\n"); }
 #else
@@ -105,6 +102,34 @@ extern int gdbg;
 	} while(0)
 #endif
 
+// list of possible debugging modules
+enum debug_module {
+	PROXY_DEBUG_GENERIC,
+	PROXY_DEBUG_NET,
+	PROXY_DEBUG_PKT_ARRAY,
+	PROXY_DEBUG_POLL,
+	PROXY_DEBUG_MYSQL_COM,
+	PROXY_DEBUG_MYSQL_SERVER,
+	PROXY_DEBUG_MYSQL_CONNECTION,
+	PROXY_DEBUG_MYSQL_CONNPOOL,
+	PROXY_DEBUG_MYSQL_RW_SPLIT,
+	PROXY_DEBUG_MYSQL_AUTH,
+	PROXY_DEBUG_MYSQL_PROTOCOL,
+	PROXY_DEBUG_MYSQL_QUERY_PROCESSOR,
+	PROXY_DEBUG_MEMORY,
+	PROXY_DEBUG_ADMIN,
+	PROXY_DEBUG_SQLITE,
+	PROXY_DEBUG_IPC,
+	PROXY_DEBUG_QUERY_CACHE,
+	PROXY_DEBUG_QUERY_STATISTICS,
+	PROXY_DEBUG_UNKNOWN // this module doesn't exist. It is used only to define the last possible module
+};
+
 #ifdef DEBUG
-//void *debug_logger();
-#endif
+typedef struct {
+	enum debug_module module;
+	int verbosity;
+	char *name;
+} debug_level;
+#endif /* DEBUG */
+#endif //PROXYSQL_DEBUG_H__
