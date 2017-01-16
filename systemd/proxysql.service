@@ -3,10 +3,16 @@ Description=High Performance Advanced Proxy for MySQL
 After=network.target
 
 [Service]
+Type=simple
+User=mysql
+Group=mysql
+PermissionsStartOnly=true
 LimitNOFILE=102400
 LimitCORE=1073741824
-ExecStart=/usr/local/bin/proxysql -f
+ExecStartPre=/bin/mkdir -p /var/lib/proxysql
+ExecStartPre=/bin/chown mysql:mysql -R /var/lib/proxysql /etc/proxysql.cnf
+ExecStart=/usr/bin/proxysql -f
 Restart=always
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

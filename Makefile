@@ -13,7 +13,7 @@ DEBUG=${ALL_DEBUG}
 CURVER=1.3.0g
 MAKEOPT="-j 8"
 DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
-ifeq ($(wildcard /usr/lib/systemd/systemd), /usr/lib/systemd/systemd)
+ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
 else
 	SYSTEMD=0
@@ -395,7 +395,7 @@ cleanall:
 	rm binaries/*rpm || true
 
 install: src/proxysql
-	install -m 0755 src/proxysql /usr/local/bin
+	install -m 0755 src/proxysql /usr/bin
 	install -m 0600 etc/proxysql.cnf /etc
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
 ifeq ($(SYSTEMD), 1)
@@ -418,7 +418,7 @@ endif
 
 uninstall:
 	rm /etc/proxysql.cnf
-	rm /usr/local/bin/proxysql
+	rm /usr/bin/proxysql
 	rmdir /var/lib/proxysql 2>/dev/null || true
 ifeq ($(SYSTEMD), 1)
 		systemctl stop proxysql.service
