@@ -2333,6 +2333,10 @@ handler_again:
 								if (myds->myconn->IsActiveTransaction()==true) { // only active transaction is important here. Ignore other criterias
 									transaction_persistent_hostgroup=current_hostgroup;
 								}
+							} else {
+								if (myds->myconn->IsActiveTransaction()==false) { // a transaction just completed
+									transaction_persistent_hostgroup=-1;
+								}
 							}
 						}
 					}
