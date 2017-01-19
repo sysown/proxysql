@@ -435,7 +435,7 @@ CREATE TABLE stats_mysql_connection_pool (
     Queries INT,
     Bytes_data_sent INT,
     Bytes_data_recv INT,
-    Latency_ms INT)
+    Latency_us INT)
 ```
 
 Each row represents a backend server within a hostgroup. The fields have the following semantics:
@@ -449,7 +449,7 @@ Each row represents a backend server within a hostgroup. The fields have the fol
 * Queries - the number of queries routed towards this particular backend server
 * Bytes_data_sent - the amount of data sent to the backend. This does not include metadata (packets' headers)
 * Bytes_data_recv - the amount of data received from the backend. This does not include metadata (packets' headers, OK/ERR packets, fields' description, etc)
-* Latency_ms - the currently ping time in milliseconds, as reported from Monitor
+* Latency_us - the currently ping time in microseconds, as reported from Monitor
 
 
 ## stats_mysql_query_digest and stats_mysql_query_digest_reset
