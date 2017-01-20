@@ -49,6 +49,7 @@ class MySQL_Connection {
 		uint8_t protocol_version;
 		uint8_t charset;
 		uint8_t sql_log_bin;
+		int8_t last_set_autocommit;
 		bool autocommit;
 	} options;
 	struct {
