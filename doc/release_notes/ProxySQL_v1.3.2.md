@@ -1,4 +1,4 @@
-## ProxySQL v1.3.1
+## ProxySQL v1.3.2
 
 Release date: 2016-12-29
 
@@ -15,11 +15,3 @@ Compared to v1.3.1, has the following bugs fixed / enhancements:
 Introduced two new variables, mainly to reduce memory footprint for wokload with a lot of unique queries [#766](../../../../issues/766):
 * mysql-query_digests_max_digest_length : defines the maximum length of `digest_text` as reported in `stats_mysql_query_digest`
 * mysql-query_digests_max_query_length : defines the maximum query length processed when computing query's `digest` and `digext_text`
-
-
-* Prepared statements: memory leak on error during STMT_EXECUTE [#796](../../../../issues/796)
-* Monitor: incorrectly reported timeout on check read_only [#836](../../../../issues/836)
-* Monitor: crashing bug [#715](../../../../issues/715)
-* MySQL Protocol: handles charset = 0 [#810](../../../../issues/810)
-* MySQL Protocol: disables multiplexing for SET FOREIGN_KEY_CHECKS [#835](../../../../issues/835)
-* MySQL Protocol: disables multiplexing for SET UNIQUE_CHECKS [#835](../../../../issues/835)
