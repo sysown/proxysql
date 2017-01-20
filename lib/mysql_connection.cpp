@@ -164,6 +164,7 @@ MySQL_Connection::MySQL_Connection() {
 	status_flags=0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
+	options.last_set_autocommit=-1;	// -1 = never set
 	options.autocommit=true;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
@@ -949,6 +950,10 @@ handler_again:
 			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
+			options.last_set_autocommit = ( options.autocommit ? 1 : 0 ) ; // we successfully set autocommit
+			if ((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) && options.autocommit==false) {
+				proxy_warning("It seems we are hitting bug http://bugs.mysql.com/bug.php?id=66884\n");
+			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_FAILED:
 			fprintf(stderr,"%s\n",mysql_error(mysql));
@@ -1408,6 +1413,14 @@ bool MySQL_Connection::IsAutoCommit() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_AUTOCOMMIT);
+		if (ret) {
+			if (options.last_set_autocommit==0) {
+				// it seems we hit bug http://bugs.mysql.com/bug.php?id=66884
+				// we last sent SET AUTOCOMMIT = 0 , but the server says it is 1
+				// we assume that what we sent last is correct .  #873
+				ret = false;
+			}
+		}
 	}
 	return ret;
 }
