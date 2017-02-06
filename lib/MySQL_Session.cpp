@@ -1949,7 +1949,7 @@ __get_pkts_from_client:
 									// if we reach here, we are not on admin
 									thread->status_variables.stmt_execute++;
 									thread->status_variables.queries++;
-									bool rc_break=false;
+									//bool rc_break=false;
 
 									uint32_t stmt_global_id=0;
 									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
@@ -3320,7 +3320,8 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	MYSQL_RES *stmt_result=myconn->query.stmt_result;
 	if (stmt_result) {
 		MySQL_ResultSet *MyRS=new MySQL_ResultSet(&client_myds->myprot, stmt_result, stmt->mysql, stmt);
-		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
+		MyRS->get_resultset(client_myds->PSarrayOUT);
+		//removed  bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		delete MyRS;
 	} else {
 		MYSQL *mysql=stmt->mysql;
