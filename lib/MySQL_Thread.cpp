@@ -2307,7 +2307,7 @@ __run_skip_1a:
 							mysess->thread=NULL;
 							// we first delete the association in sessmap
 							sessmap.erase(mysess->thread_session_id);
-							if (mysql_sessions->len-1 > 0) {
+							if (mysql_sessions->len) {
 								// take the last element and adjust the map
 								MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
 								sessmap[mysess_last->thread_session_id]=sess_pos;
@@ -2402,7 +2402,7 @@ __run_skip_1a:
 						mysess->thread=NULL;
 						// we first delete the association in sessmap
 						sessmap.erase(mysess->thread_session_id);
-						if (mysql_sessions->len-1 > 0) {
+						if (mysql_sessions->len) {
 						// take the last element and adjust the map
 						MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
 							sessmap[mysess_last->thread_session_id]=sess_pos;
