@@ -8,6 +8,12 @@
 MySQL_Session *sess_stopat;
 #endif
 
+#ifdef epoll_create1
+	#define EPOLL_CREATE epoll_create1(0)
+#else
+	#define EPOLL_CREATE epoll_create(1)
+#endif
+
 #define PROXYSQL_LISTEN_LEN 1024
 #define MIN_THREADS_FOR_MAINTENANCE 8
 
@@ -1930,7 +1936,7 @@ void MySQL_Thread::run() {
 	if (idle_maintenance_thread) {
 		// we check if it is the first time we are called
 		if (efd==-1) {
-			efd = epoll_create1(0);
+			efd = EPOLL_CREATE;
 			int fd=pipefd[0];
 			struct epoll_event event;
 			memset(&event,0,sizeof(event)); // let's make valgrind happy
