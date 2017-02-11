@@ -39,9 +39,12 @@ rm -rf %{buildroot}
 mkdir /var/run/%{name}
 chkconfig --add %{name}
 
+%preun
+/etc/init.d/%{name} stop
+chkconfig --del %{name}
+
 %postun
 rm -rf /var/run/%{name}
-chkconfig --del %{name}
 
 %files
 %defattr(-,root,root,-)
