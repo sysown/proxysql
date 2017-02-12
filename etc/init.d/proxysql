@@ -1,5 +1,9 @@
 #!/bin/bash 
 #
+# chkconfig: 345 99 01
+# description: High Performance and Advanced Proxy for MySQL and forks. \
+# It provides advanced features like connection pool, query routing and rewrite, \
+# firewalling, throttling, real time analysis, error-free failover
 ### BEGIN INIT INFO
 # Provides:          proxysql
 # Required-Start:    $local_fs
