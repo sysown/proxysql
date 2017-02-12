@@ -322,6 +322,22 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char
 		compute_hash();
 	}
 
+	is_select_NOT_for_update=false;
+	{ // see bug #899 . Most of the code is borrowed from Query_Info::is_select_NOT_for_update()
+		if (ql>=7) {
+			if (strncasecmp(q,(char *)"SELECT ",7)==0) { // is a SELECT
+				is_select_NOT_for_update=true;
+				if (ql>=17) {
+					char *p=(char *)q;
+					p+=ql-11;
+					if (strncasecmp(p," FOR UPDATE",11)==0) { // is a SELECT FOR UPDATE
+						is_select_NOT_for_update=false;
+					}
+				}
+			}
+		}
+	}
+
 	// set default properties:
 	properties.cache_ttl=-1;
 	properties.timeout=-1;
