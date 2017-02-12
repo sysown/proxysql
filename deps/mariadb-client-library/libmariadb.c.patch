@@ -16,6 +16,34 @@
    if (mysql->client_flag & CLIENT_COMPRESS)
      net->compress= 1;
  
+@@ -2217,7 +2223,7 @@
+ 
+   if (rc==0)
+   {
+-    LIST *li_stmt= mysql->stmts;
++    //LIST *li_stmt= mysql->stmts; // see bug #897
+     my_free(s_user);
+     my_free(s_passwd);
+     my_free(s_db);
+@@ -2230,12 +2236,12 @@
+       rc= 1;
+     }
+ 
+-    for (;li_stmt;li_stmt= li_stmt->next)
+-    {
+-      MYSQL_STMT *stmt= (MYSQL_STMT *)li_stmt->data;
+-      stmt->mysql= NULL;
+-      SET_CLIENT_STMT_ERROR(stmt, CR_SERVER_LOST, SQLSTATE_UNKNOWN, 0);
+-    }/* detach stmts */
++    //for (;li_stmt;li_stmt= li_stmt->next) // see bug #897
++    //{
++    //  MYSQL_STMT *stmt= (MYSQL_STMT *)li_stmt->data;
++    //  stmt->mysql= NULL;
++    //  SET_CLIENT_STMT_ERROR(stmt, CR_SERVER_LOST, SQLSTATE_UNKNOWN, 0);
++    //}/* detach stmts */
+     mysql->stmts= NULL;
+     
+   } else
 @@ -2395,6 +2401,36 @@
      /* Clear pointers for better safety */
      bzero((char*) &mysql->options,sizeof(mysql->options));
@@ -29,11 +57,11 @@
 +void STDCALL
 +mysql_close_no_command(MYSQL *mysql)
 +{
-+   MYSQL_STMT *stmt;
++  //MYSQL_STMT *stmt;
 +  DBUG_ENTER("mysql_close");
 +  if (mysql)					/* Some simple safety */
 +  {
-+    LIST *li_stmt= mysql->stmts;
++    //LIST *li_stmt= mysql->stmts;
 +
 +    if (mysql->methods) {
 +			if (mysql->net.vio) {
