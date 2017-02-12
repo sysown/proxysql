@@ -70,6 +70,9 @@ MySQL_STMTs_local::~MySQL_STMTs_local() {
 		uint32_t stmt_id=it->first;
 		MYSQL_STMT *stmt=it->second;
 		if (stmt) { // is a server
+			if (stmt->mysql) {
+				stmt->mysql->stmts= list_delete(stmt->mysql->stmts, &stmt->list);
+			}
 			// we do a hack here: we pretend there is no server associate
 			// the connection will be dropped anyway immediately after
 			stmt->mysql=NULL;
