@@ -187,6 +187,9 @@ char * Query_Info::get_digest_text() {
 }
 
 bool Query_Info::is_select_NOT_for_update() {
+	if (stmt_info) { // we are processing a prepared statement. We already have the information
+		return stmt_info->is_select_NOT_for_update;
+	}
 	// to avoid an expensive strlen() on the digest_text, we consider only the real query
 	if (QueryPointer==NULL) {
 		return false;
