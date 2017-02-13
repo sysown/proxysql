@@ -900,7 +900,17 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 		if (mysql_thread___init_connect) {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect=strdup(mysql_thread___init_connect);
-			previous_status.push(PROCESSING_QUERY);
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
 	}
