@@ -36,7 +36,7 @@ cp -a * %{buildroot}
 rm -rf %{buildroot}
 
 %post
-mkdir /var/run/%{name}
+mkdir -p /var/run/%{name}
 chkconfig --add %{name}
 
 %preun
