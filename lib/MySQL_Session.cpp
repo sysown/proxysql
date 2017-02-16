@@ -2824,6 +2824,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		char *schemanameptr=schemaname;
 		//remove leading spaces
 		while(isspace((unsigned char)*schemanameptr)) schemanameptr++;
+		// remove trailing semicolon , issue #915
+		if (schemanameptr[strlen(schemanameptr)-1]==';') {
+			schemanameptr[strlen(schemanameptr)-1]='\0';
+		}
 		// handle cases like "USE `schemaname`
 		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
 			schemanameptr[strlen(schemanameptr)-1]='\0';
