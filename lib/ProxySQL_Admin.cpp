@@ -2679,6 +2679,10 @@ bool ProxySQL_Admin::init() {
 	flush_admin_variables___database_to_runtime(admindb,true);
 	flush_mysql_variables___database_to_runtime(admindb,true);
 
+	if (GloVars.__cmd_proxysql_admin_socket) {
+		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);
+	}
+
 	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
 	S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
 	S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);
