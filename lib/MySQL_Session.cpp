@@ -1771,7 +1771,7 @@ __get_pkts_from_client:
 									current_hostgroup=stmt_info->hostgroup_id;
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_STMT_EXECUTE;
-									mybe->server_myds->connect_retries_on_failure=0;
+									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
 									mybe->server_myds->wait_until=0;
 									mybe->server_myds->killed_at=0;
 									//mybe->server_myds->mysql_real_query.init(&pkt);
