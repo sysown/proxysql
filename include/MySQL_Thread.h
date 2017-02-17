@@ -3,7 +3,9 @@
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
 #include "proxysql.h"
 #include "cpp.h"
+#ifdef IDLE_THREADS
 #include <sys/epoll.h>
+#endif // IDLE_THREADS
 
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
