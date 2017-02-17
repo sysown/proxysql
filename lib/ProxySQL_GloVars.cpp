@@ -55,6 +55,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #ifdef SO_REUSEPORT
 	global.reuseport=false;
 #endif /* SO_REUSEPORT */
+#ifdef IDLE_THREADS
+	global.idle_threads=false;
+#endif /* IDLE_THREADS */
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
@@ -83,6 +86,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
+#ifdef IDLE_THREADS
+	opt->add((const char *)"",0,0,0,(const char *)"Create auxiliary threads to handle idle connections",(const char *)"--idle-threads");
+#endif /* IDLE_THREADS */
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	confFile=new ProxySQL_ConfigFile();
@@ -144,7 +150,13 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	if (opt->isSet("--reload")) {
 		__cmd_proxysql_reload=true;
 	}
-	
+
+#ifdef IDLE_THREADS
+	if (opt->isSet("--idle-threads")) {
+		global.idle_threads=true;
+	}
+#endif /* IDLE_THREADS */
+
 	config_file=GloVars.__cmd_proxysql_config_file;
 
 	if (config_file==NULL) {

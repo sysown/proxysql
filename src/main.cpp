@@ -132,7 +132,9 @@ static volatile int load_;
 //const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay,junk:true,tcache:false";
 //#else
 //const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay";
+#ifndef __FreeBSD__
 const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay,prof:true,prof_leak:true,lg_prof_sample:20,lg_prof_interval:30,prof_active:false";
+#endif
 //#endif /* DEBUG */
 //const char *malloc_conf = "prof_leak:true,lg_prof_sample:0,prof_final:true,xmalloc:true,lg_tcache_max:16";
 
@@ -173,6 +175,7 @@ void * mysql_worker_thread_func(void *arg) {
 	return NULL;
 }
 
+#ifdef IDLE_THREADS
 void * mysql_worker_thread_func_idles(void *arg) {
 
 //	__thr_sfp=l_mem_init();
@@ -192,6 +195,7 @@ void * mysql_worker_thread_func_idles(void *arg) {
 //	l_mem_destroy(__thr_sfp);
 	return NULL;
 }
+#endif // IDLE_THREADS
 
 void * mysql_shared_query_cache_funct(void *arg) {
 	GloQC->purgeHash_thread(NULL);
@@ -294,10 +298,20 @@ void ProxySQL_Main_init_Query_module() {
 void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 	unsigned int i;
 	GloMTH->init();
-	load_ = GloMTH->num_threads * 2 + 1;
+	load_ = 1;
+	load_ += GloMTH->num_threads;
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		load_ += GloMTH->num_threads;
+	}
+#endif // IDLE_THREADS
 	for (i=0; i<GloMTH->num_threads; i++) {
 		GloMTH->create_thread(i,mysql_worker_thread_func, false);
-		GloMTH->create_thread(i,mysql_worker_thread_func_idles, true);
+#ifdef IDLE_THREADS
+		if (GloVars.global.idle_threads) {
+			GloMTH->create_thread(i,mysql_worker_thread_func_idles, true);
+		}
+#endif // IDLE_THREADS
 	}
 }
 
@@ -454,6 +468,13 @@ void ProxySQL_Main_init_phase2___not_started() {
 	ProxySQL_Main_init_Admin_module();
 	GloMTH->print_version();
 
+	{
+		cpu_timer t;
+		GloMyLogger->set_datadir(GloVars.datadir);
+#ifdef DEBUG
+		std::cerr << "Main phase3 : GloMyLogger initialized in ";
+#endif
+	}
 	if (GloVars.configfile_open) {
 		GloVars.confFile->CloseFile();
 	}
@@ -468,13 +489,6 @@ void ProxySQL_Main_init_phase2___not_started() {
 
 void ProxySQL_Main_init_phase3___start_all() {
 
-	{
-		cpu_timer t;
-		GloMyLogger->set_datadir(GloVars.datadir);
-#ifdef DEBUG
-		std::cerr << "Main phase3 : GloMyLogger initialized in ";
-#endif
-	}
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;

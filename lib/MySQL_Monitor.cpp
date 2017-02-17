@@ -17,6 +17,8 @@
 #include "thread.h"
 #include "wqueue.h"
 
+#include <fcntl.h>
+
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else

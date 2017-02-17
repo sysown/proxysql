@@ -48,9 +48,11 @@
 
 #include <sys/ioctl.h>
 
+#ifndef __FreeBSD__
 #define HAVE_BOOL
 #include "my_global.h"
-#include "my_pthread.h"
+//#include "my_pthread.h"
+#endif
 #include "mysql.h"
 
 #include "proxysql_mem.h"

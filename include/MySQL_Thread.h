@@ -3,7 +3,9 @@
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
 #include "proxysql.h"
 #include "cpp.h"
+#ifdef IDLE_THREADS
 #include <sys/epoll.h>
+#endif // IDLE_THREADS
 
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
@@ -22,12 +24,14 @@ static unsigned int near_pow_2 (unsigned int n) {
   return i ? i : n;
 }
 
+#ifdef IDLE_THREADS
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) _conn_exchange_t {
 	pthread_mutex_t mutex_idles;
 	PtrArray *idle_mysql_sessions;
 	pthread_mutex_t mutex_resumes;
 	PtrArray *resume_mysql_sessions;
 } conn_exchange_t;
+#endif // IDLE_THREADS
 
 class ProxySQL_Poll {
 
@@ -152,10 +156,12 @@ class MySQL_Thread
 
 	PtrArray *cached_connections;
 
+#ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
 	int efd;
 	unsigned int mysess_idx;
 	std::map<unsigned int, unsigned int> sessmap;
+#endif // IDLE_THREADS
 
 	protected:
 	int nfds;
@@ -168,10 +174,12 @@ class MySQL_Thread
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
+#ifdef IDLE_THREADS
 	PtrArray *idle_mysql_sessions;
 	PtrArray *resume_mysql_sessions;
 
 	conn_exchange_t myexchange;
+#endif // IDLE_THREADS
 
 	int pipefd[2];
 	int shutdown;
@@ -301,8 +309,10 @@ class MySQL_Threads_Handler
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
+#ifdef IDLE_THREADS
 		int session_idle_ms;
 		bool session_idle_show_processlist;
+#endif // IDLE_THREADS
 		bool sessions_sort;
 		char *default_schema;
 		char *interfaces;
@@ -356,7 +366,9 @@ class MySQL_Threads_Handler
 	} variables;
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
+#ifdef IDLE_THREADS
 	proxysql_mysql_thread_t *mysql_threads_idles;
+#endif // IDLE_THREADS
 	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
@@ -395,7 +407,9 @@ class MySQL_Threads_Handler
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
 	unsigned int get_active_transations();
+#ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();
+#endif // IDLE_THREADS
 	unsigned long long get_query_processor_time();
 	unsigned long long get_backend_query_time();
 	unsigned long long get_mysql_backend_buffers_bytes();

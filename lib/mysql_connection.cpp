@@ -1,6 +1,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "SpookyV2.h"
+#include <fcntl.h>
 
 extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 

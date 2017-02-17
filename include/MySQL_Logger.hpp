@@ -20,7 +20,7 @@ class MySQL_Event {
 	char *client;
 	size_t server_len;
 	size_t client_len;
-	uint64_t total_length;
+	//uint64_t total_length;
 	unsigned char buf[10];
 	enum log_event_type et;
 	uint64_t hid;

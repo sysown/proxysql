@@ -2,6 +2,7 @@
 #define __CLASS_PROXYSQL_GLOVARS_H
 
 #include "configfile.hpp"
+#include "proxy_defines.h"
 
 namespace ez {
 class ezOptionParser;
@@ -33,6 +34,9 @@ class ProxySQL_GlobalVariables {
 #ifdef SO_REUSEPORT
 		bool reuseport;
 #endif /* SO_REUSEPORT */
+#ifdef IDLE_THREADS
+		bool idle_threads;
+#endif /* IDLE_THREADS */
 		pthread_mutex_t start_mutex;
 		bool foreground;
 #ifdef DEBUG
