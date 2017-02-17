@@ -817,6 +817,9 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
 					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
 				default:
 					assert(0);
 					break;
