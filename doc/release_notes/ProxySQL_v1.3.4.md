@@ -12,3 +12,4 @@ Compared to v1.3.3, has the following bugs fixed / enhancements:
 * Admin: variable `admin-mysql_ifaces` had priority over cmdline option `--admin-socket` . Now `--admin-socket` has priority [#894](../../../../issues/894)
 * MySQL Protocol: variable `mysql-enforce_autocommit_on_reads` was not evaluated for prepared statements [#899](../../../../issues/899)
 * MySQL Protocol: `COM_CHANGE_USER` could try to reset prepared statements already invalidated from the PS manager [#897](../../../../issues/897)
+* MySQL Protocol: Remove trailing semicolon in `USE` queries [#915](../../../../issues/915)
