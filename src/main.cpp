@@ -173,6 +173,7 @@ void * mysql_worker_thread_func(void *arg) {
 	return NULL;
 }
 
+#ifdef IDLE_THREADS
 void * mysql_worker_thread_func_idles(void *arg) {
 
 //	__thr_sfp=l_mem_init();
@@ -192,6 +193,7 @@ void * mysql_worker_thread_func_idles(void *arg) {
 //	l_mem_destroy(__thr_sfp);
 	return NULL;
 }
+#endif // IDLE_THREADS
 
 void * mysql_shared_query_cache_funct(void *arg) {
 	GloQC->purgeHash_thread(NULL);
@@ -294,10 +296,20 @@ void ProxySQL_Main_init_Query_module() {
 void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 	unsigned int i;
 	GloMTH->init();
-	load_ = GloMTH->num_threads * 2 + 1;
+	load_ = 1;
+	load_ += GloMTH->num_threads;
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		load_ += GloMTH->num_threads;
+	}
+#endif // IDLE_THREADS
 	for (i=0; i<GloMTH->num_threads; i++) {
 		GloMTH->create_thread(i,mysql_worker_thread_func, false);
-		GloMTH->create_thread(i,mysql_worker_thread_func_idles, true);
+#ifdef IDLE_THREADS
+		if (GloVars.global.idle_threads) {
+			GloMTH->create_thread(i,mysql_worker_thread_func_idles, true);
+		}
+#endif // IDLE_THREADS
 	}
 }
 
