@@ -466,6 +466,13 @@ void ProxySQL_Main_init_phase2___not_started() {
 	ProxySQL_Main_init_Admin_module();
 	GloMTH->print_version();
 
+	{
+		cpu_timer t;
+		GloMyLogger->set_datadir(GloVars.datadir);
+#ifdef DEBUG
+		std::cerr << "Main phase3 : GloMyLogger initialized in ";
+#endif
+	}
 	if (GloVars.configfile_open) {
 		GloVars.confFile->CloseFile();
 	}
@@ -480,13 +487,6 @@ void ProxySQL_Main_init_phase2___not_started() {
 
 void ProxySQL_Main_init_phase3___start_all() {
 
-	{
-		cpu_timer t;
-		GloMyLogger->set_datadir(GloVars.datadir);
-#ifdef DEBUG
-		std::cerr << "Main phase3 : GloMyLogger initialized in ";
-#endif
-	}
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;
