@@ -10,6 +10,11 @@ extern MySQL_Threads_Handler *GloMTH;
 #undef max_allowed_packet
 #endif
 
+#ifdef __FreeBSD__
+typedef uint8_t uint8;
+typedef uint8_t uchar;
+#endif
+
 //#define RESULTSET_BUFLEN 16300
 
 #ifdef DEBUG

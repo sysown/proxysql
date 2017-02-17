@@ -19,6 +19,9 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include "SpookyV2.h"
+
+#include <fcntl.h>
+
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -2197,7 +2200,7 @@ static void * admin_main_loop(void *arg)
 	pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  pthread_attr_setstacksize (&attr, mystacksize);
+  //pthread_attr_setstacksize (&attr, mystacksize);
 
 	if(GloVars.global.nostart) {
 		nostart_=true;
@@ -2418,7 +2421,7 @@ bool ProxySQL_Admin::init() {
 
 	pthread_attr_t attr;
   pthread_attr_init(&attr);
-  pthread_attr_setstacksize (&attr, mystacksize);
+  //pthread_attr_setstacksize (&attr, mystacksize);
 
 	admindb=new SQLite3DB();
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
