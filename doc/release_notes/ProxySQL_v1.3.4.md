@@ -1,8 +1,8 @@
 ## ProxySQL v1.3.4
 
-Release date: 2017-xx-xx
+Release date: 2017-02-18
 
-Stable release v1.3.4 , released on 2017-xx-xx
+Stable release v1.3.4 , released on 2017-02-18
 
 Compared to v1.3.3, has the following bugs fixed / enhancements:
 
