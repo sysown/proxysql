@@ -7,6 +7,7 @@
 int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 	int rc, arg_on = 1;
 	struct addrinfo hints;
+	memset(&hints,0,sizeof(hints));
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
