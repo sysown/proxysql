@@ -1,0 +1,19 @@
+
+/var/lib/proxysql/proxysql_node_monitor.log {
+        missingok
+        daily
+        notifempty
+        compress
+        create 0600 proxysql proxysql
+        rotate 5
+}
+
+/var/lib/proxysql/proxysql_galera_check.log {
+        missingok
+        daily
+        notifempty
+        compress
+        create 0600 proxysql proxysql
+        rotate 5
+}
+
