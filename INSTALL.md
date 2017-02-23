@@ -2,11 +2,15 @@ How to install ProxySQL
 =======================
 
 ProxySQL offers 2 types of releases:
-- pre-packaged versions of the __last stable version__ (periodically updated at `https://github.com/sysown/proxysql-binaries/blob/master/binaries/`).
+- pre-packaged versions of the __last stable version__ - periodically updated at [ProxySQL](https://github.com/sysown/proxysql/releases/latest)
+ 
 The list of currently supported operating systems for binary packaging is:
- - [Ubuntu 14](https://github.com/sysown/proxysql-binaries/blob/master/binaries/Ubuntu14/proxysql_0.2.0902-ubuntu14_amd64.deb)
- - [Ubuntu 12](https://github.com/sysown/proxysql-binaries/blob/master/binaries/Ubuntu12/proxysql_0.2.0902-ubuntu12_amd64.deb)
- - [CentOS 7](https://github.com/sysown/proxysql-binaries/blob/master/binaries/Centos7/proxysql-0.2.0902-1.x86_64.rpm)
+ - Ubuntu 14
+ - Ubuntu 12
+ - Debian 7
+ - Debian 8
+ - CentOS 6.7
+ - Centos 7
 
 Installing from source
 ----------------------
