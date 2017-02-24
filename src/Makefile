@@ -61,6 +61,9 @@ ifeq ($(UNAME_S),FreeBSD)
 endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
+ifeq ($(UNAME_S),Darwin)
+	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/sqlite3/sqlite3/sqlite3.o
+endif
 
 ODIR= obj
 

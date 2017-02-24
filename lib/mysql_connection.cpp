@@ -1528,7 +1528,7 @@ void MySQL_Connection::close_mysql() {
 		int fd=mysql->net.fd;
 #ifdef __APPLE__
 		int arg_on=1;
-		setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+		setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
 		send(fd, buff, 5, 0);
 #else
 		send(fd, buff, 5, MSG_NOSIGNAL);

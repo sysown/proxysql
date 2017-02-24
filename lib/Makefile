@@ -47,6 +47,12 @@ NOJEM=-DNOJEM
 else
 NOJEM=
 endif
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+NOJEM=-DNOJEM
+endif
+
 MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
 MYCPPFLAGS=-std=c++11 $(MYCFLAGS)
 

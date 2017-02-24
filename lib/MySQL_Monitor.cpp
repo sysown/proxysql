@@ -110,7 +110,13 @@ static void close_mysql(MYSQL *my) {
 		memcpy(buff, &myhdr, sizeof(mysql_hdr));
 		buff[4]=0x01;
 		int fd=my->net.fd;
+#ifdef __APPLE__
+		int arg_on=1;
+		setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+		int wb=send(fd, buff, 5, 0);
+#else
 		int wb=send(fd, buff, 5, MSG_NOSIGNAL);
+#endif
 		fd+=wb; // dummy, to make compiler happy
 		fd-=wb; // dummy, to make compiler happy
 	}

@@ -1928,7 +1928,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	sess->client_myds->fd=_fd;
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
 #ifdef __APPLE__
-		setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
 #endif
 	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
