@@ -1396,6 +1396,7 @@ void MySQL_Connection::async_free_result() {
 	}
 }
 
+/*
 bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
@@ -1403,6 +1404,7 @@ bool MySQL_Connection::IsActiveTransaction() {
 	}
 	return ret;
 }
+*/
 
 bool MySQL_Connection::IsAutoCommit() {
 	bool ret=false;

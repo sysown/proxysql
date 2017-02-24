@@ -150,7 +150,13 @@ class MySQL_Connection {
 
 
 	void async_free_result();
-	bool IsActiveTransaction();
+	bool IsActiveTransaction() {
+		bool ret=false;
+			if (mysql) {
+				ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
+			}
+		return ret;
+	}
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);

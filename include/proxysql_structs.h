@@ -352,8 +352,10 @@ class MySQL_HostGroups_Manager;
 
 #ifndef PROXYSQL_STRUCTS
 #define PROXYSQL_STRUCTS
+#define QUERY_DIGEST_BUF 128
 
 struct __SQP_query_parser_t {
+	char buf[QUERY_DIGEST_BUF];
 	uint64_t digest;
 	uint64_t digest_total;
 	char *digest_text;

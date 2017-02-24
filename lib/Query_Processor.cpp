@@ -656,8 +656,15 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	if (qi) {
 		qp=(SQP_par_t *)&qi->QueryParserArgs;
 	}
+#define stackbuffer_size 128
+	char stackbuffer[stackbuffer_size];
 	unsigned int len=size-sizeof(mysql_hdr)-1;
-	char *query=(char *)l_alloc(len+1);
+	char *query=NULL;
+	if (len < stackbuffer_size) {
+		query=stackbuffer;
+	} else {
+		query=(char *)l_alloc(len+1);
+	}
 	memcpy(query,(char *)ptr+sizeof(mysql_hdr)+1,len);
 	query[len]=0;
 	if (__sync_add_and_fetch(&version,0) > _thr_SQP_version) {
@@ -940,7 +947,11 @@ __internal_loop:
 	
 __exit_process_mysql_query:
 	// FIXME : there is too much data being copied around
-	l_free(len+1,query);
+	if (len < stackbuffer_size) {
+		// query is in the stack
+	} else {
+		l_free(len+1,query);
+	}
 	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
 		if (qp && qp->first_comment) {
 			// we have a comment to parse
@@ -1002,7 +1013,7 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment);
+		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
 		// the hash is computed only up to query_digests_max_digest_length bytes
 		int digest_text_length=strnlen(qp->digest_text, mysql_thread___query_digests_max_digest_length);
 		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
@@ -1517,7 +1528,9 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 
 void Query_Processor::query_parser_free(SQP_par_t *qp) {
 	if (qp->digest_text) {
-		free(qp->digest_text);
+		if (qp->digest_text != qp->buf) {
+			free(qp->digest_text);
+		}
 		qp->digest_text=NULL;
 	}
 	if (qp->first_comment) {
