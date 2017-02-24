@@ -31,8 +31,8 @@ struct cmp_str {
 #define MyGR_Nentries	10
 
 typedef struct _MyGR_status_entry_t {
-	char *address;
-	int port;
+//	char *address;
+//	int port;
 	unsigned long long check_time;
 	long long transactions_behind;
 	bool primary_partition;
@@ -73,6 +73,7 @@ class MySQL_Monitor_State_Data {
   int ST;
   char *hostname;
   int port;
+	int writer_hostgroup; // used only by group replication
   bool use_ssl;
   MYSQL *mysql;
   MYSQL_RES *result;

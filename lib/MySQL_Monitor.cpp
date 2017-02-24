@@ -795,6 +795,7 @@ __exit_monitor_group_replication_thread:
 __end_process_group_replication_result:
 		proxy_info("GR: %s:%d , viable=%s , ro=%s, trx=%ld, err=%s\n", mmsd->hostname, mmsd->port, (viable_candidate ? "YES": "NO") , (read_only ? "YES": "NO") , transactions_behind, ( mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "") );
 
+		unsigned long long time_now=realtime_time();
 		pthread_mutex_lock(&GloMyMon->group_replication_mutex);
 		//auto it = 
 		// TODO : complete this
@@ -803,11 +804,10 @@ __end_process_group_replication_result:
 		MyGR_monitor_node *node=NULL;
 		if (it2!=GloMyMon->Group_Replication_Hosts_Map.end()) {
 			node=it2->second;
-			node->add_entry(0,transactions_behind,viable_candidate,read_only,NULL);
+			node->add_entry(time_now,transactions_behind,viable_candidate,read_only,NULL);
 		} else {
-			// TODO: find writer
-			node = new MyGR_monitor_node(mmsd->hostname,mmsd->port,0);
-			node->add_entry(0,transactions_behind,viable_candidate,read_only,NULL);
+			node = new MyGR_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
+			node->add_entry(time_now,transactions_behind,viable_candidate,read_only,NULL);
 			GloMyMon->Group_Replication_Hosts_Map.insert(std::make_pair(s,node));
 		}
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
@@ -1553,7 +1553,8 @@ void * MySQL_Monitor::monitor_group_replication() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = Group_Replication_Hosts_resultset->rows.begin() ; it != Group_Replication_Hosts_resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
+				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
+				mmsd->writer_hostgroup=atoi(r->fields[1]);
 				mmsd->mondb=monitordb;
 				//pthread_t thr_;
 				//if ( pthread_create(&thr_, &attr, monitor_read_only_thread, (void *)mmsd) != 0 ) {
