@@ -187,6 +187,11 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
 	if (opt->isSet("-f")) {
 		global.foreground=true;
+#ifdef __APPLE__
+	} else {
+		proxy_warning("ProxySQL does not support daemonize in Darwin: running in foreground\n");
+		global.foreground=true;
+#endif
 	}
 
 	if (opt->isSet("-M")) {

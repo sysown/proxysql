@@ -10,7 +10,7 @@ extern MySQL_Threads_Handler *GloMTH;
 #undef max_allowed_packet
 #endif
 
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__APPLE__)
 typedef uint8_t uint8;
 typedef uint8_t uchar;
 #endif
