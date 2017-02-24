@@ -182,13 +182,15 @@ class PtrSizeArray {
 
 #ifndef mach_time_h
 #define mach_time_h 
+#ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC SYSTEM_CLOCK
+#endif // CLOCK_MONOTONIC
 
-void clock_gettime(int clk_id, struct timespec *tp) {
+static void clock_gettime(int clk_id, struct timespec *tp) {
 	clock_serv_t cclock;
 	mach_timespec_t mts;
 	host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
-	retval = clock_get_time(cclock, &mts);
+	//retval = clock_get_time(cclock, &mts);
 	mach_port_deallocate(mach_task_self(), cclock);
 	tp->tv_sec = mts.tv_sec;
 	tp->tv_nsec = mts.tv_nsec;

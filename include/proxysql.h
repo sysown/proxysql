@@ -48,7 +48,7 @@
 
 #include <sys/ioctl.h>
 
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__APPLE__)
 #define HAVE_BOOL
 #include "my_global.h"
 //#include "my_pthread.h"

@@ -317,7 +317,11 @@ int MySQL_Data_Stream::write_to_net() {
 	if (encrypted) {
 		bytes_io = SSL_write (ssl, queue_r_ptr(queueOUT), s);
 	} else {
+#ifdef __APPLE__
+		bytes_io = send(fd, queue_r_ptr(queueOUT), s, 0);
+#else
 		bytes_io = send(fd, queue_r_ptr(queueOUT), s, MSG_NOSIGNAL);
+#endif
 	}
 	VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
@@ -791,6 +795,9 @@ int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pendin
 		rc=connect(s, (struct sockaddr *) &a, sizeof(a));
 		int arg_on=1;
 		setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
+#ifdef __APPLE__
+		setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+#endif
 	} else {
 		rc=connect(s, (struct sockaddr *) &u, len);
 	}

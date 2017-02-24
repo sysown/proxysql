@@ -1927,6 +1927,9 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	sess->client_myds = new MySQL_Data_Stream();
 	sess->client_myds->fd=_fd;
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
+#ifdef __APPLE__
+		setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+#endif
 	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p, DataStream=%p -- Created new client Data Stream\n", sess->thread, sess, sess->client_myds);
 #ifdef DEBUG
@@ -3800,7 +3803,7 @@ void MySQL_Thread::Get_Memory_Stats() {
 		} else {
 			status_variables.mysql_frontend_buffers_bytes+=(mysql_sessions->len * QUEUE_T_DEFAULT_SIZE * 2);
 			status_variables.mysql_session_internal_bytes+=(mysql_sessions->len * sizeof(MySQL_Connection));
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__APPLE__)
 			status_variables.mysql_session_internal_bytes+=((sizeof(int) + sizeof(int) + sizeof(std::_Rb_tree_node_base)) * mysql_sessions->len );
 #else
 			status_variables.mysql_session_internal_bytes+=((sizeof(int) + sizeof(int) + 32) * mysql_sessions->len );

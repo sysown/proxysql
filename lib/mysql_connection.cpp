@@ -1526,7 +1526,13 @@ void MySQL_Connection::close_mysql() {
 		memcpy(buff, &myhdr, sizeof(mysql_hdr));
 		buff[4]=0x01;
 		int fd=mysql->net.fd;
+#ifdef __APPLE__
+		int arg_on=1;
+		setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+		send(fd, buff, 5, 0);
+#else
 		send(fd, buff, 5, MSG_NOSIGNAL);
+#endif
 	}
 //	int rc=0;
 	mysql_close_no_command(mysql);

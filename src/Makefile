@@ -34,6 +34,12 @@ LDIR=../lib
 IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR)
 LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR)
 
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+	IDIRS+= -I/usr/local/include
+	LDIRS+= -L/usr/local/lib
+endif
 
 MYCPPFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG)
 LDFLAGS+=
@@ -44,7 +50,9 @@ else
 MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
 endif
 
-UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+	MYLIBS=-lssl -lre2 -lmariadbclient -lpthread -lm -lz -liconv -lcrypto
+endif
 ifeq ($(UNAME_S),Linux)
 	MYLIBS+= -ldl
 endif
