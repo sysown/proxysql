@@ -352,6 +352,7 @@ void MySQL_HostGroups_Manager::wrunlock() {
 #endif
 }
 
+
 unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
@@ -623,10 +624,11 @@ bool MySQL_HostGroups_Manager::commit() {
 
 
 	// group replication
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_group_replication_hostgroups\n");
-	mydb->execute("DELETE FROM mysql_group_replication_hostgroups");
-	generate_mysql_group_replication_hostgroups_table();
-
+	if (incoming_group_replication_hostgroups) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_group_replication_hostgroups\n");
+		mydb->execute("DELETE FROM mysql_group_replication_hostgroups");
+		generate_mysql_group_replication_hostgroups_table();
+	}
 	__sync_fetch_and_add(&status.servers_table_version,1);
 	wrunlock();
 	if (GloMTH) {
@@ -653,7 +655,7 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 	}
 }
 
-void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
+void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	int rc;
 	sqlite3_stmt *statement1=NULL;
 	sqlite3_stmt *statement32=NULL;
@@ -667,8 +669,16 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table() {
 	rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	assert(rc==SQLITE_OK);
 
+	proxy_info("Dumping current MySQL Servers structures\n");
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (_onlyhg) {
+			int hidonly=*_onlyhg;
+			if (myhgc->hid!=(unsigned int)hidonly) {
+				// skipping this HG
+				continue;
+			}
+		}
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
@@ -847,7 +857,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port";
+		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->Group_Replication_Hosts_resultset) {
@@ -1694,3 +1704,230 @@ bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _
 	}
 	return ret;
 }
+
+void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=NULL;
+	char *q=NULL;
+	char *error=NULL;
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
+	sprintf(query,q,_hostname,_port);
+  mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		free(error);
+		error=NULL;
+	}
+	free(query);
+	if (resultset) { // we lock only if needed
+		if (resultset->rows_count) {
+			proxy_warning("Group Replication: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
+			GloAdmin->mysql_servers_wrlock();
+			mydb->execute("DELETE FROM mysql_servers_incoming");
+			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			commit();
+			wrlock();
+			SQLite3_result *resultset2=NULL;
+			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_port,_writer_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count) {
+					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int writer_hostgroup=atoi(r->fields[0]);
+						int backup_writer_hostgroup=atoi(r->fields[1]);
+						int reader_hostgroup=atoi(r->fields[2]);
+						int offline_hostgroup=atoi(r->fields[3]);
+						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
+						sprintf(query,q,_port,_writer_hostgroup);
+						mydb->execute(query);
+						generate_mysql_servers_table(&writer_hostgroup);
+						generate_mysql_servers_table(&backup_writer_hostgroup);
+						generate_mysql_servers_table(&reader_hostgroup);
+						generate_mysql_servers_table(&offline_hostgroup);
+					}
+				}
+				delete resultset2;
+				resultset2=NULL;
+			}
+			wrunlock();
+			GloAdmin->mysql_servers_wrunlock();
+			free(query);
+		}
+	}
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+}
+
+void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=NULL;
+	char *q=NULL;
+	char *error=NULL;
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
+	sprintf(query,q,_hostname,_port);
+  mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+	if (error) {
+		free(error);
+		error=NULL;
+	}
+	free(query);
+	if (resultset) { // we lock only if needed
+		if (resultset->rows_count) {
+			proxy_warning("Group Replication: setting host %s:%d read_only because: %s\n", _hostname, _port, _error);
+			GloAdmin->mysql_servers_wrlock();
+			mydb->execute("DELETE FROM mysql_servers_incoming");
+			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			commit();
+			wrlock();
+			SQLite3_result *resultset2=NULL;
+			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_port,_writer_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count) {
+					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int writer_hostgroup=atoi(r->fields[0]);
+						int backup_writer_hostgroup=atoi(r->fields[1]);
+						int reader_hostgroup=atoi(r->fields[2]);
+						int offline_hostgroup=atoi(r->fields[3]);
+						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
+						sprintf(query,q,_port,_writer_hostgroup);
+						mydb->execute(query);
+						generate_mysql_servers_table(&writer_hostgroup);
+						generate_mysql_servers_table(&backup_writer_hostgroup);
+						generate_mysql_servers_table(&reader_hostgroup);
+						generate_mysql_servers_table(&offline_hostgroup);
+					}
+				}
+				delete resultset2;
+				resultset2=NULL;
+			}
+			wrunlock();
+			GloAdmin->mysql_servers_wrunlock();
+			free(query);
+		}
+	}
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+}
+
+void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=NULL;
+	char *q=NULL;
+	char *error=NULL;
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
+	sprintf(query,q,_hostname,_port);
+  mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+	if (error) {
+		free(error);
+		error=NULL;
+	}
+	free(query);
+	if (resultset) { // we lock only if needed
+		if (resultset->rows_count) {
+			proxy_warning("Group Replication: setting host %s:%d as writer\n", _hostname, _port);
+			GloAdmin->mysql_servers_wrlock();
+			mydb->execute("DELETE FROM mysql_servers_incoming");
+			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
+			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			commit();
+			wrlock();
+			SQLite3_result *resultset2=NULL;
+			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_port,_writer_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count) {
+					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int writer_hostgroup=atoi(r->fields[0]);
+						int backup_writer_hostgroup=atoi(r->fields[1]);
+						int reader_hostgroup=atoi(r->fields[2]);
+						int offline_hostgroup=atoi(r->fields[3]);
+						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
+						sprintf(query,q,_port,_writer_hostgroup);
+						mydb->execute(query);
+						generate_mysql_servers_table(&writer_hostgroup);
+						generate_mysql_servers_table(&backup_writer_hostgroup);
+						generate_mysql_servers_table(&reader_hostgroup);
+						generate_mysql_servers_table(&offline_hostgroup);
+					}
+				}
+				delete resultset2;
+				resultset2=NULL;
+			}
+			wrunlock();
+			GloAdmin->mysql_servers_wrunlock();
+			free(query);
+		}
+	}
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+}
+
+

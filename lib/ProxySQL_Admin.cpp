@@ -97,6 +97,8 @@ extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager *GloMyStmt;
+extern MySQL_Monitor *GloMyMon;
+
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 int rc, arg_on=1, arg_off=0;
@@ -1222,6 +1224,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_mysql_servers=false;
 	bool runtime_mysql_query_rules=false;
 
+	bool monitor_mysql_server_group_replication_log=false;
+
 	if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
 		// SHOW PROCESSLIST
@@ -1264,6 +1268,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 		}
 	}
+	if (strstr(query_no_space,"mysql_server_group_replication_log")) {
+		monitor_mysql_server_group_replication_log=true; refresh=true;
+	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
 		pthread_mutex_lock(&admin_mutex);
@@ -1301,6 +1308,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (runtime_scheduler) {
 				save_scheduler_runtime_to_database(true);
+			}
+		}
+		if (monitor_mysql_server_group_replication_log) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_group_replication_log();
 			}
 		}
 		pthread_mutex_unlock(&admin_mutex);

@@ -165,7 +165,7 @@ class MySQL_HostGroups_Manager {
 
 	void add(MySrvC *, unsigned int);
 	void purge_mysql_servers_table();
-	void generate_mysql_servers_table();
+	void generate_mysql_servers_table(int *_onlyhg=NULL);
 	void generate_mysql_replication_hostgroups_table();
 	SQLite3_result *incoming_replication_hostgroups;
 	void generate_mysql_group_replication_hostgroups_table();
@@ -238,6 +238,10 @@ class MySQL_HostGroups_Manager {
 	void shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
+
+	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
+	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
+	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

@@ -274,12 +274,14 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_ping_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_read_only_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_READ_ONLY_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_replication_lag_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_REPLICATION_LAG_LOG);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_server_group_replication_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_GROUP_REPLICATION_LOG);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON mysql_server_ping_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_read_only_log_time_start ON mysql_server_read_only_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_replication_lag_log_time_start ON mysql_server_replication_lag_log (time_start_us)");
+	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_group_replication_log_time_start ON mysql_server_group_replication_log (time_start_us)");
 
 	num_threads=8;
 	if (GloMTH) {
@@ -791,11 +793,16 @@ __exit_monitor_group_replication_thread:
 				read_only=false;
 			}
 			transactions_behind=atol(row[2]);
+			mysql_free_result(mmsd->result);
+			mmsd->result=NULL;
 		}
 __end_process_group_replication_result:
-		proxy_info("GR: %s:%d , viable=%s , ro=%s, trx=%ld, err=%s\n", mmsd->hostname, mmsd->port, (viable_candidate ? "YES": "NO") , (read_only ? "YES": "NO") , transactions_behind, ( mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "") );
-
+		//proxy_info("GR: %s:%d , viable=%s , ro=%s, trx=%ld, err=%s\n", mmsd->hostname, mmsd->port, (viable_candidate ? "YES": "NO") , (read_only ? "YES": "NO") , transactions_behind, ( mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "") );
+		if (mmsd->mysql_error_msg) {
+			//proxy_warning("GR: %s:%d , viable=%s , ro=%s, trx=%ld, err=%s\n", mmsd->hostname, mmsd->port, (viable_candidate ? "YES": "NO") , (read_only ? "YES": "NO") , transactions_behind, ( mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "") );
+		}
 		unsigned long long time_now=realtime_time();
+		time_now=time_now-(mmsd->t2 - start_time);
 		pthread_mutex_lock(&GloMyMon->group_replication_mutex);
 		//auto it = 
 		// TODO : complete this
@@ -804,13 +811,36 @@ __end_process_group_replication_result:
 		MyGR_monitor_node *node=NULL;
 		if (it2!=GloMyMon->Group_Replication_Hosts_Map.end()) {
 			node=it2->second;
-			node->add_entry(time_now,transactions_behind,viable_candidate,read_only,NULL);
+			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
 		} else {
 			node = new MyGR_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
-			node->add_entry(time_now,transactions_behind,viable_candidate,read_only,NULL);
+			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
 			GloMyMon->Group_Replication_Hosts_Map.insert(std::make_pair(s,node));
 		}
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
+
+		// NOTE: we update MyHGM outside the mutex group_replication_mutex
+		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
+			MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
+		} else {
+			if (viable_candidate==false) {
+				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"viable_candidate=NO");
+			} else {
+				if (read_only==true) {
+					if (transactions_behind > mmsd->max_transactions_behind) {
+						MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+					} else {
+						MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+					}
+				} else {
+					// the node is a writer
+					// TODO: for now we don't care about the number of writers
+					MyHGM->update_group_replication_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
+				}
+			}
+		}
+
+		// clean up
 		if (l<110) {
 		} else {
 			free(s);
@@ -1554,7 +1584,9 @@ void * MySQL_Monitor::monitor_group_replication() {
 			for (std::vector<SQLite3_row *>::iterator it = Group_Replication_Hosts_resultset->rows.begin() ; it != Group_Replication_Hosts_resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
 				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
-				mmsd->writer_hostgroup=atoi(r->fields[1]);
+				mmsd->writer_hostgroup=atoi(r->fields[0]);
+				mmsd->writer_is_also_reader=atoi(r->fields[4]);
+				mmsd->max_transactions_behind=atoi(r->fields[5]);
 				mmsd->mondb=monitordb;
 				//pthread_t thr_;
 				//if ( pthread_create(&thr_, &attr, monitor_read_only_thread, (void *)mmsd) != 0 ) {
@@ -1846,6 +1878,7 @@ MyGR_monitor_node::MyGR_monitor_node(char *_a, int _p, int _whg) {
 	int i;
 	for (i=0;i<MyGR_Nentries;i++) {
 		last_entries[i].error=NULL;
+		last_entries[i].start_time=0;
 	}
 }
 
@@ -1856,7 +1889,7 @@ MyGR_monitor_node::~MyGR_monitor_node() {
 }
 
 // return true if status changed
-bool MyGR_monitor_node::add_entry(unsigned long long _ct, long long _tb, bool _pp, bool _ro, char *_error) {
+bool MyGR_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, char *_error) {
 	bool ret=false;
 	if (idx_last_entry==-1) ret=true;
 	int prev_last_entry=idx_last_entry;
@@ -1864,6 +1897,7 @@ bool MyGR_monitor_node::add_entry(unsigned long long _ct, long long _tb, bool _p
 	if (idx_last_entry>=MyGR_Nentries) {
 		idx_last_entry=0;
 	}
+	last_entries[idx_last_entry].start_time=_st;
 	last_entries[idx_last_entry].check_time=_ct;
 	last_entries[idx_last_entry].transactions_behind=_tb;
 	last_entries[idx_last_entry].primary_partition=_pp;
@@ -1893,4 +1927,43 @@ bool MyGR_monitor_node::add_entry(unsigned long long _ct, long long _tb, bool _p
 		}
 	}
 	return ret;
+}
+
+void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
+	sqlite3 *mondb=monitordb->get_db();
+	int rc;
+	//char *query=NULL;
+	char *query1=NULL;
+	query1=(char *)"INSERT INTO mysql_server_group_replication_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+	sqlite3_stmt *statement1=NULL;
+	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
+	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	assert(rc==SQLITE_OK);
+	monitordb->execute((char *)"DELETE FROM mysql_server_group_replication_log");
+	std::map<std::string, MyGR_monitor_node *>::iterator it2;
+	MyGR_monitor_node *node=NULL;
+	for (it2=GloMyMon->Group_Replication_Hosts_Map.begin(); it2!=GloMyMon->Group_Replication_Hosts_Map.end(); ++it2) {
+		std::string s=it2->first;
+		node=it2->second;
+		std::size_t found=s.find_last_of(":");
+		std::string host=s.substr(0,found);
+		std::string port=s.substr(found+1);
+		int i;
+		for (i=0; i<MyGR_Nentries; i++) {
+			if (node->last_entries[i].start_time) {
+				rc=sqlite3_bind_text(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 2, atoi(port.c_str())); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 3, node->last_entries[i].start_time ); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 4, node->last_entries[i].check_time ); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 5, ( node->last_entries[i].primary_partition ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 6, ( node->last_entries[i].read_only ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 7, node->last_entries[i].transactions_behind ); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 8, node->last_entries[i].error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				SAFE_SQLITE3_STEP(statement1);
+				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			}
+		}
+	}
+	pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 }
