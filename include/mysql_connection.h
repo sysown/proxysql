@@ -13,6 +13,7 @@
 #define STATUS_MYSQL_CONNECTION_GET_LOCK             0x00000040
 #define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX         0x00000080
 #define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
+#define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 
 class MySQL_Connection_userinfo {
 	private:
@@ -103,6 +104,7 @@ class MySQL_Connection {
 	void set_status_user_variable(bool);
 	void set_status_no_multiplex(bool);
 	void set_status_sql_log_bin0(bool);
+	void set_status_found_rows(bool);
 	bool get_status_transaction();
 	bool get_status_compression();
 	bool get_status_get_lock();
@@ -112,6 +114,7 @@ class MySQL_Connection {
 	bool get_status_user_variable();
 	bool get_status_no_multiplex();
 	bool get_status_sql_log_bin0();
+	bool get_status_found_rows();
 	void connect_start();
 	void connect_cont(short event);
 	void change_user_start();
