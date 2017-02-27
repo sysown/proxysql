@@ -165,7 +165,7 @@ static char is_digit_string(char *f, char *t)
 }
 
 
-char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comment){
+char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comment, char *buf){
 	int i = 0;
 
 	char cur_comment[FIRST_COMMENT_MAX_LENGTH];
@@ -177,8 +177,10 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	if (_len > mysql_thread___query_digests_max_query_length) {
 		len = mysql_thread___query_digests_max_query_length;
 	}
-	char *r = (char *) malloc(len + SIZECHAR);
-
+	char *r = buf;
+	if (r==NULL) {
+		r = (char *) malloc(len + SIZECHAR);
+	}
 	char *p_r = r;
 	char *p_r_t = r;
 
