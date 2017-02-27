@@ -11,6 +11,7 @@
 #define STATUS_MYSQL_CONNECTION_LOCK_TABLES          0x00000010
 #define STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE      0x00000020
 #define STATUS_MYSQL_CONNECTION_GET_LOCK             0x00000040
+#define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000080
 
 class MySQL_Connection_userinfo {
 	private:
@@ -99,6 +100,7 @@ class MySQL_Connection {
 	void set_status_temporary_table(bool);
 	void set_status_prepared_statement(bool);
 	void set_status_user_variable(bool);
+	void set_status_found_rows(bool);
 	bool get_status_transaction();
 	bool get_status_compression();
 	bool get_status_get_lock();
@@ -106,6 +108,7 @@ class MySQL_Connection {
 	bool get_status_temporary_table();
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
+	bool get_status_found_rows();
 	void connect_start();
 	void connect_cont(short event);
 	void change_user_start();

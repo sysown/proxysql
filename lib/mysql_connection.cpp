@@ -263,6 +263,14 @@ void MySQL_Connection::set_status_get_lock(bool v) {
 	}
 }
 
+void MySQL_Connection::set_status_found_rows(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_FOUND_ROWS;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_FOUND_ROWS;
+	}
+}
+
 void MySQL_Connection::set_status_lock_tables(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_LOCK_TABLES;
@@ -309,6 +317,10 @@ bool MySQL_Connection::get_status_user_variable() {
 
 bool MySQL_Connection::get_status_get_lock() {
 	return status_flags & STATUS_MYSQL_CONNECTION_GET_LOCK;
+}
+
+bool MySQL_Connection::get_status_found_rows() {
+	return status_flags & STATUS_MYSQL_CONNECTION_FOUND_ROWS;
 }
 
 bool MySQL_Connection::get_status_lock_tables() {
@@ -1430,7 +1442,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_FOUND_ROWS) ) {
 		ret=true;
 	}
 	return ret;
@@ -1488,6 +1500,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (get_status_get_lock()==false) { // we search for get_lock if not already set
 		if (strcasestr(query_digest_text,"GET_LOCK(")) {
 			set_status_get_lock(true);
+		}
+	}
+	if (get_status_found_rows()==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
+		if (strcasestr(query_digest_text,"SQL_CALC_FOUND_ROWS")) {
+			set_status_found_rows(true);
 		}
 	}
 }
