@@ -91,6 +91,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
+	opt->add((const char *)"",0,0,0,(const char *)"Test the config file for correct syntax",(const char *)"-t",(const char *)"--configtest");
 
 	confFile=new ProxySQL_ConfigFile();
 };
@@ -177,6 +178,15 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	init_debug_struct();
 #endif
 
+	if (opt->isSet("--configtest")) {
+		if (GloVars.confFile->OpenFile(config_file) == true) {
+			fprintf(stdout,"Configuration file at %s file is valid\n", config_file);
+			exit(EXIT_SUCCESS);
+		}
+
+		fprintf(stdout,"INVALID configuration file at %s\n", config_file);
+		exit(EXIT_FAILURE);
+	}
 };
 
 void ProxySQL_GlobalVariables::process_opts_post() {
