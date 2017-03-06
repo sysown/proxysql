@@ -2615,7 +2615,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=true;
 				free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username);
 			}
-			if (max_connections_reached==true || free_users<0) {
+			if (max_connections_reached==true || free_users<=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Too many connections\n");
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
