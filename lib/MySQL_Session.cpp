@@ -2571,6 +2571,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			if (admin==false) {
 				client_authenticated=true;
 				free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+			} else {
+				free_users=1;
 			}
 			if (max_connections_reached==true || free_users<=0) {
 				*wrong_pass=true;
