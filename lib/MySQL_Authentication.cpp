@@ -139,6 +139,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	//btree::btree_map<uint64_t, account_details_t *>::iterator lookup;
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
+	int current_num_connections_used=0;
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
 		cg.cred_array->remove_fast(ad);
@@ -155,6 +156,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			ad->sha1_pass=NULL;
 		}
 		free(ad->default_schema);
+		current_num_connections_used=ad->num_connections_used;
 		free(ad);
    }
 	account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
@@ -178,7 +180,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
-	ad->num_connections_used=0;
+	ad->num_connections_used=current_num_connections_used;
 	ad->__active=true;
 	cg.bt_map.insert(std::make_pair(hash1,ad));
 	cg.cred_array->add(ad);
