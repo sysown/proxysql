@@ -110,37 +110,50 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	return true;
 };
 
-int MySQL_Authentication::dump_all_users(account_details_t ***ads) {
+int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complete) {
 	spin_rdlock(&creds_frontends.lock);
 	spin_rdlock(&creds_backends.lock);
 	int total_size;
 	int idx_=0;
 	unsigned i=0;
 	account_details_t **_ads;
-	total_size=creds_frontends.cred_array->len+creds_backends.cred_array->len;
+	total_size=creds_frontends.cred_array->len;
+	if (_complete) {
+		total_size+=creds_backends.cred_array->len;
+	}
 	if (!total_size) goto __exit_dump_all_users;
 	_ads=(account_details_t **)malloc(sizeof(account_details_t *)*total_size);
 	for (i=0; i<creds_frontends.cred_array->len; i++) {
 		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
 		account_details_t *ado=(account_details_t *)creds_frontends.cred_array->index(i);
 		ad->username=strdup(ado->username);
-		ad->password=strdup(ado->password);
-		ad->sha1_pass=NULL;
-		ad->use_ssl=ado->use_ssl;
-		ad->default_hostgroup=ado->default_hostgroup;
-		ad->default_schema=strdup(ado->default_schema);
-		ad->schema_locked=ado->schema_locked;
-		ad->transaction_persistent=ado->transaction_persistent;
-		ad->fast_forward=ado->fast_forward;
 		ad->max_connections=ado->max_connections;
-		ad->__frontend=1;
-		ad->__backend=0;
+		ad->default_hostgroup=ado->default_hostgroup;
+		if (_complete==false) {
+			ad->password=NULL;
+			ad->default_schema=NULL;
+			ad->num_connections_used=ado->num_connections_used;
+		} else {
+			ad->num_connections_used=ado->num_connections_used;
+			ad->password=strdup(ado->password);
+			ad->default_schema=strdup(ado->default_schema);
+			ad->sha1_pass=NULL;
+			ad->use_ssl=ado->use_ssl;
+			ad->default_schema=strdup(ado->default_schema);
+			ad->schema_locked=ado->schema_locked;
+			ad->transaction_persistent=ado->transaction_persistent;
+			ad->fast_forward=ado->fast_forward;
+			ad->__frontend=1;
+			ad->__backend=0;
+		}
 		_ads[idx_]=ad;
 		idx_++;
 	}
+	if (_complete==true) {
 	for (i=0; i<creds_backends.cred_array->len; i++) {
 		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
 		account_details_t *ado=(account_details_t *)creds_backends.cred_array->index(i);
+		ad->num_connections_used=0;
 		ad->username=strdup(ado->username);
 		ad->password=strdup(ado->password);
 		ad->sha1_pass=NULL;
@@ -155,6 +168,7 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads) {
 		ad->__backend=1;
 		_ads[idx_]=ad;
 		idx_++;
+	}
 	}
 	*ads=_ads;
 __exit_dump_all_users:

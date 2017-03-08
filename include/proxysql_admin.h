@@ -184,6 +184,7 @@ class ProxySQL_Admin {
 	void stats___mysql_processlist();
 	void stats___mysql_connection_pool();
 	void stats___mysql_global();
+	void stats___mysql_users();
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
 	int Read_MySQL_Users_from_configfile();

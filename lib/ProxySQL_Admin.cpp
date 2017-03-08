@@ -185,6 +185,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER "CREATE TABLE runtime_scheduler (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '')" 
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
+#define STATS_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE stats_mysql_users (username VARCHAR PRIMARY KEY , frontend_connections INT NOT NULL , frontend_max_connections INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
 #define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , db VARCHAR , cli_host VARCHAR , cli_port VARCHAR , hostgroup VARCHAR , l_srv_host VARCHAR , l_srv_port VARCHAR , srv_host VARCHAR , srv_port VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR)"
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL "CREATE TABLE stats_mysql_connection_pool (hostgroup VARCHAR , srv_host VARCHAR , srv_port VARCHAR , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
@@ -1220,6 +1221,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_global=false;
 	bool stats_mysql_commands_counters=false;
 	bool stats_mysql_query_rules=false;
+	bool stats_mysql_users=false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1245,6 +1247,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_commands_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_rules"))
 		{ stats_mysql_query_rules=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_users"))
+		{ stats_mysql_users=true; refresh=true; }
 	if (admin) {
 		if (strstr(query_no_space,"global_variables"))
 			{ dump_global_variables=true; refresh=true; }
@@ -1285,6 +1289,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_query_rules();
 		if (stats_mysql_commands_counters)
 			stats___mysql_commands_counters();
+		if (stats_mysql_users)
+			stats___mysql_users();
 		if (admin) {
 			if (dump_global_variables) {
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
@@ -2483,6 +2489,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_users", STATS_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES); // workaround for issue #708
 
 	// upgrade mysql_servers if needed (upgrade from previous version)
@@ -3934,8 +3941,38 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 			free(query);
 		}
 		free(ad->username);
-		free(ad->password);
-		free(ad->default_schema);
+		free(ad->password); // this is not initialized with dump_all_users( , false)
+		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
+		free(ad);
+	}
+	free(ads);
+}
+
+void ProxySQL_Admin::stats___mysql_users() {
+	account_details_t **ads=NULL;
+	int num_users;
+	int i;
+	statsdb->execute("DELETE FROM stats_mysql_users");
+	char *q=(char *)"INSERT INTO stats_mysql_users(username,frontend_connections,frontend_max_connections) VALUES (\"%s\",%d,%d)";
+	int l=strlen(q);
+	char buf[256];
+	num_users=GloMyAuth->dump_all_users(&ads, false);
+	if (num_users==0) return;
+	for (i=0; i<num_users; i++) {
+		account_details_t *ad=ads[i];
+		if (ad->default_hostgroup>= 0) { // only not admin/stats
+			if ( (strlen(ad->username) + l) > 210) {
+				char *query=(char *)malloc(strlen(ad->username)+l+32);
+				sprintf(query,q,ad->username,ad->num_connections_used);
+				sprintf(query,q,ad->username,ad->max_connections);
+				statsdb->execute(query);
+				free(query);
+			} else {
+				sprintf(buf,q,ad->username,ad->num_connections_used,ad->max_connections);
+				statsdb->execute(buf);
+			}
+		}
+		free(ad->username);
 		free(ad);
 	}
 	free(ads);
