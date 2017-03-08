@@ -1493,6 +1493,12 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	unsigned int query_no_space_length=remove_spaces(query_no_space);
 	//fprintf(stderr,"%s----\n",query_no_space);
 
+	// fix bug #925
+	while (query_no_space[query_no_space_length-1]==';' || query_no_space[query_no_space_length-1]==' ') {
+		query_no_space_length--;
+		query_no_space[query_no_space_length]=0;
+	}
+
 	{
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length,!sess->stats);
