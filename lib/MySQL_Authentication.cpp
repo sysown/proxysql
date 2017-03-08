@@ -91,6 +91,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		ad->password=strdup(password);
 		new_ad=true;
 		ad->sha1_pass=NULL;
+		ad->num_connections_used=0;
 	}
 
 	ad->use_ssl=use_ssl;
@@ -99,7 +100,6 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
-	ad->num_connections_used=0;
 	ad->__active=true;
 	if (new_ad) {
 		cg.bt_map.insert(std::make_pair(hash1,ad));
