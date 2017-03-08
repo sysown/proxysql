@@ -497,6 +497,10 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 				break;
 			case STATE_OK:
 				break;
+			case STATE_SLEEP:
+				if ((*myds)->sess->session_fast_forward==true) { // see issue #733
+					break;
+				}
 			default:
 				assert(0);
 		}
