@@ -178,8 +178,10 @@ int MySQL_Authentication::increase_frontend_user_connections(char *username, int
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
 		account_details_t *ad=it->second;
-		ad->num_connections_used++;
-		ret=ad->max_connections-ad->num_connections_used;
+		if (ad->max_connections > ad->num_connections_used) {
+			ret=ad->max_connections-ad->num_connections_used;
+			ad->num_connections_used++;
+		}
 		if (mc) {
 			*mc=ad->max_connections;
 		}
