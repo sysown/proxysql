@@ -203,5 +203,7 @@ class ProxySQL_Admin {
 	// wrapper to call a private function
 	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
 
+	void flush_configdb(); // 923
+
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

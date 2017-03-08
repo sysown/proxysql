@@ -490,6 +490,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+	if (
+		(query_no_space_length==strlen("PROXYSQL FLUSH CONFIGDB") && !strncasecmp("PROXYSQL FLUSH CONFIGDB",query_no_space, query_no_space_length)) // see #923
+	) {
+		proxy_info("Received %s command\n", query_no_space);
+		proxy_warning("A misconfigured configdb will cause undefined behaviors\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->flush_configdb();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+
 #ifndef NOJEM
 	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE START") && !strncasecmp("PROXYSQL MEMPROFILE START",query_no_space, query_no_space_length)) {
 		bool en=true;
@@ -1211,6 +1222,15 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	return true;
 }
 
+void ProxySQL_Admin::flush_configdb() { // see #923
+	wrlock();
+	admindb->execute((char *)"DETACH DATABASE disk");
+	delete configdb;
+	configdb=new SQLite3DB();
+	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	__attach_db(admindb, configdb, (char *)"disk");
+	wrunlock();
+}
 
 void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin) {
 	bool refresh=false;
