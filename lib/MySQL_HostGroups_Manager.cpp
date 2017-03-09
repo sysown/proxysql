@@ -64,6 +64,8 @@ static void * HGCU_thread_run() {
 					myconn->send_quit=false;
 					MyHGM->destroy_MyConn_from_pool(myconn);
 				}
+				statuses[i]=statuses[conn_array->len];
+				ret[i]=ret[conn_array->len];
 				i--;
 			}
 		}
@@ -84,6 +86,8 @@ static void * HGCU_thread_run() {
 						myconn->send_quit=false;
 						MyHGM->destroy_MyConn_from_pool(myconn);
 					}
+					statuses[i]=statuses[conn_array->len];
+					ret[i]=ret[conn_array->len];
 					i--;
 				}
 			}
