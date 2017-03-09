@@ -16,6 +16,7 @@ extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
+extern time_t proxysql_starttime;
 
 const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	const CHARSET_INFO * c = compiled_charsets;
@@ -2979,6 +2980,7 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	const int colnum=2;
+        time_t proxysql_refresh_globalstatus_time = time(NULL);
 	char buf[256];
 	char **pta=(char **)malloc(sizeof(char *)*colnum);
 	Get_Memory_Stats();
@@ -2987,6 +2989,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
 	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
+        {
+            pta[0] = (char *)"ProxySQL_Uptime";
+            sprintf(buf,"%lld",(long long)(proxysql_refresh_globalstatus_time - proxysql_starttime));
+            pta[1] = buf;
+            result->add_row(pta);
+        }
 	{	// Active Transactions
 		pta[0]=(char *)"Active_Transactions";
 		sprintf(buf,"%u",get_active_transations());
