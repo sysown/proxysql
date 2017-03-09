@@ -2970,6 +2970,13 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
 	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
+	{ // uptime
+		unsigned long long t1=monotonic_time();
+		pta[0] = (char *)"ProxySQL_Uptime";
+		sprintf(buf,"%llu",(t1-GloVars.global.start_time)/1000/1000);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Active Transactions
 		pta[0]=(char *)"Active_Transactions";
 		sprintf(buf,"%u",get_active_transations());
