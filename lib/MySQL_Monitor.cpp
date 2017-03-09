@@ -467,6 +467,9 @@ __fast_exit_monitor_ping_thread:
 }
 
 bool MySQL_Monitor_State_Data::set_wait_timeout() {
+	if (mysql_thread___monitor_wait_timeout==false) {
+		return true;
+	}
 	bool ret=false;
 	char *query=NULL;
 	char *qt=(char *)"SET wait_timeout=%d";
