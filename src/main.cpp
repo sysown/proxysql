@@ -20,6 +20,7 @@
 
 
 time_t laststart;
+time_t proxysql_starttime = time(NULL);
 pid_t pid;
 
 static const char * proxysql_pid_file() {
