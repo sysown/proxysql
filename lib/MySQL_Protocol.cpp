@@ -1114,7 +1114,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
 				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 					ret=true;
-				} else {
+				}
+			} else {
 					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 					if (ret) {
 						if (sha1_pass==NULL) {
@@ -1125,7 +1126,6 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 						userinfo->sha1_pass=sha1_pass_hex(reply);
 					}
 				}
-			}
 		}
 		if (_ret_use_ssl==true) {
 			// if we reached here, use_ssl is false , but _ret_use_ssl is true
