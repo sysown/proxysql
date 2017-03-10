@@ -98,7 +98,8 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_CHARSET(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
-
+	void init();
+	void reset();
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()

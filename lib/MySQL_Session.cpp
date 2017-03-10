@@ -246,7 +246,6 @@ MySQL_Session::MySQL_Session() {
 	mirror=false;
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
-	mybes= new PtrArray(4);
 	set_status(NONE);
 
 	CurrentQuery.sess=this;
@@ -256,32 +255,55 @@ MySQL_Session::MySQL_Session() {
 	next_query_flagIN=-1;
 	mirror_hostgroup=-1;
 	mirror_flagOUT=-1;
-	transaction_persistent_hostgroup=-1;
-	transaction_persistent=false;
 	active_transactions=0;
-	sess_STMTs_meta=new MySQL_STMTs_meta();
-	SLDH=new StmtLongDataHandler();
 
 	match_regexes=NULL;
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_MODE( *)(:|)=( *)");
 	match_regexes[2]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)TIME_ZONE( *)(:|)=( *)");
+
+	init(); // we moved this out to allow CHANGE_USER
+
+}
+
+void MySQL_Session::init() {
+	transaction_persistent_hostgroup=-1;
+	transaction_persistent=false;
+	mybes= new PtrArray(4);
+	sess_STMTs_meta=new MySQL_STMTs_meta();
+	SLDH=new StmtLongDataHandler();
+}
+
+void MySQL_Session::reset() {
+	current_hostgroup=-1;
+	default_hostgroup=-1;
+	if (sess_STMTs_meta) {
+		delete sess_STMTs_meta;
+		sess_STMTs_meta=NULL;
+	}
+	if (SLDH) {
+		delete SLDH;
+		SLDH=NULL;
+	}
+	if (mybes) {
+		reset_all_backends();
+		delete mybes;
+		mybes=NULL;
+	}
+	mybe=NULL;
 }
 
 MySQL_Session::~MySQL_Session() {
-	if (sess_STMTs_meta) {
-		delete sess_STMTs_meta;
-	}
-	delete SLDH;
+
+	reset(); // we moved this out to allow CHANGE_USER
+
 	if (client_myds) {
 		if (client_authenticated) {
 			GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
 		}
 		delete client_myds;
 	}
-	reset_all_backends();
-	delete mybes;
 	if (default_schema) {
 		free(default_schema);
 	}
@@ -3226,12 +3248,23 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *wrong_pass) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
 	if (admin==false) {
+		reset();
+		init();
+		if (client_authenticated) {
+			GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+		}
+		client_authenticated=false;
 		if (client_myds->myprot.process_pkt_COM_CHANGE_USER((unsigned char *)pkt->ptr, pkt->size)==true) {
 			l_free(pkt->size,pkt->ptr);
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
 			*wrong_pass=false;
+			client_authenticated=true;
+			int free_users=0;
+			int used_users=0;
+			free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+			// FIXME: max_connections is not handled for CHANGE_USER
 		} else {
 			l_free(pkt->size,pkt->ptr);
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
