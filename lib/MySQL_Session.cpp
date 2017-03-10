@@ -276,6 +276,8 @@ void MySQL_Session::init() {
 }
 
 void MySQL_Session::reset() {
+	autocommit=true;
+	autocommit_on_hostgroup=-1;
 	current_hostgroup=-1;
 	default_hostgroup=-1;
 	if (sess_STMTs_meta) {
