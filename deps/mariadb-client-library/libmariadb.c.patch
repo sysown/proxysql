@@ -16,7 +16,18 @@
    if (mysql->client_flag & CLIENT_COMPRESS)
      net->compress= 1;
  
-@@ -2217,7 +2223,7 @@
+@@ -2210,36 +2216,39 @@
+   else
+     mysql->charset=default_charset_info;
+ 
+-  mysql->user= (char *)user;
+-  mysql->passwd= (char *)passwd;
+-  mysql->db= (char *)db;
++	mysql->user= strdup(user ? user : "");
++  mysql->passwd= strdup(passwd ? passwd : "");
++  mysql->db= 0;
++
+   rc= run_plugin_auth(mysql, 0, 0, 0, db);
  
    if (rc==0)
    {
@@ -25,7 +36,13 @@
      my_free(s_user);
      my_free(s_passwd);
      my_free(s_db);
-@@ -2230,12 +2236,12 @@
+ 
+-    if (!(mysql->user=  my_strdup(user,MYF(MY_WME))) ||
+-        !(mysql->passwd=my_strdup(passwd,MYF(MY_WME))) ||
+-        !(mysql->db= db ? my_strdup(db,MYF(MY_WME)) : 0))
++		if (db && !(mysql->db= strdup(db)))
+     {
+       SET_CLIENT_ERROR(mysql, CR_OUT_OF_MEMORY, unknown_sqlstate, 0);
        rc= 1;
      }
  
@@ -44,7 +61,15 @@
      mysql->stmts= NULL;
      
    } else
-@@ -2395,6 +2401,36 @@
+   {
++    free(mysql->user);
++    free(mysql->passwd);
++    free(mysql->db);
++
+     mysql->user= s_user;
+     mysql->passwd= s_passwd;
+     mysql->db= s_db;
+@@ -2395,6 +2404,36 @@
      /* Clear pointers for better safety */
      bzero((char*) &mysql->options,sizeof(mysql->options));
      mysql->net.vio= 0;
