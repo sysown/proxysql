@@ -1447,8 +1447,24 @@ bool MySQL_Connection::MultiplexDisabled() {
 
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (query_digest_text==NULL) return;
+	// unknown what to do with multiplex
+	int mul=-1;
+	if (myds) {
+		if (myds->sess) {
+			if (myds->sess->qpo) {
+				mul=myds->sess->qpo->multiplex;
+				if (mul==0) {
+					set_status_no_multiplex(true);
+				} else {
+					if (mul==1) {
+						set_status_no_multiplex(false);
+					}
+				}
+			}
+		}
+	}
 	if (get_status_user_variable()==false) { // we search for variables only if not already set
-		if (index(query_digest_text,'@')) {
+		if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 			if (
 				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
 				&&
@@ -1501,20 +1517,6 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (get_status_found_rows()==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
 		if (strcasestr(query_digest_text,"SQL_CALC_FOUND_ROWS")) {
 			set_status_found_rows(true);
-		}
-	}
-	if (myds) {
-		if (myds->sess) {
-			if (myds->sess->qpo) {
-				int mul=myds->sess->qpo->multiplex;
-				if (mul==0) {
-					set_status_no_multiplex(true);
-				} else {
-					if (mul==1) {
-						set_status_no_multiplex(false);
-					}
-				}
-			}
 		}
 	}
 }

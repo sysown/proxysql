@@ -148,9 +148,11 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_3_1 "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1)) , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
 
 //mysql_query_rules in v1.4.0 + next_query_flagIN
-#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_4_0 "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1)) , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
+#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_4_0a "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1)) , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_4_0
+#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_4_0b "CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT , digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT , replace_pattern VARCHAR , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1,2)) , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_4_0b
 
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
@@ -4922,17 +4924,34 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 	rci=configdb->check_table_structure((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_3_1);
 	if (rci) {
 		// upgrade is required
-		proxy_warning("Detected version v1.2.2 of table mysql_query_rules\n");
+		proxy_warning("Detected version v1.3.1 of table mysql_query_rules\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
-		// drop any existing table with suffix _v110
+		// drop any existing table with suffix _v131
 		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_v131");
-		// rename current table to add suffix _v110
+		// rename current table to add suffix _v131
 		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v131");
 		// create new table
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
 		// copy fields from old table
-		configdb->execute("INSERT INTO mysql_query_rules (rule_id,active,username,schemaname,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,retries,delay,re_modifiers,mirror_flagOUT,mirror_hostgroup,error_msg,sticky_conn,multiplex,log,apply,comment) SELECT rule_id,active,username,schemaname,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,negate_match_pattern,re_modifiers,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,retries,delay,mirror_flagOUT,mirror_hostgroup,error_msg,sticky_conn,multiplex,log,apply,comment FROM mysql_query_rules_v131");
+		configdb->execute("INSERT INTO mysql_query_rules (rule_id,active,username,schemaname,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,retries,delay,mirror_flagOUT,mirror_hostgroup,error_msg,sticky_conn,multiplex,log,apply,comment) SELECT rule_id,active,username,schemaname,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,negate_match_pattern,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,retries,delay,mirror_flagOUT,mirror_hostgroup,error_msg,sticky_conn,multiplex,log,apply,comment FROM mysql_query_rules_v131");
 	}
+
+	rci=configdb->check_table_structure((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V1_4_0a);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version v1.4.0a of table mysql_query_rules\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
+		// drop any existing table with suffix _v140a
+		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_v140a");
+		// rename current table to add suffix _v140a
+		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v40b");
+		// create new table
+		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_query_rules (rule_id,active,username,schemaname,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,negate_match_pattern,re_modifiers,flagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,retries,delay,mirror_flagOUT,mirror_hostgroup,error_msg,sticky_conn,multiplex,log,apply,comment) SELECT rule_id,active,username,schemaname,flagIN,client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,negate_match_pattern,re_modifiersmflagOUT,replace_pattern,destination_hostgroup,cache_ttl,reconnect,timeout,retries,delay,mirror_flagOUT,mirror_hostgroup,error_msg,sticky_conn,multiplex,log,apply,comment FROM mysql_query_rules_v140a");
+	}
+
+
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
 
