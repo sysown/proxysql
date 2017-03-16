@@ -86,6 +86,7 @@ class MySQL_Connection {
 	bool async_fetch_row_start;
 	bool send_quit;
 	bool reusable;
+	bool multiplex;
 	bool has_prepared_statement;
 	bool processing_prepared_statement_prepare;
 	bool processing_prepared_statement_execute;

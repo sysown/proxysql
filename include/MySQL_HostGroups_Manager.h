@@ -120,6 +120,7 @@ class MySrvList {	// MySQL Server List
 class MyHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
+	bool multiplexing;
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
