@@ -10,6 +10,7 @@ extern MySQL_Threads_Handler *GloMTH;
 
 //#define RESULTSET_BUFLEN 16300
 
+
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
 
@@ -1638,17 +1639,48 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					p+=8;
 					break;
 				case MYSQL_TYPE_TIME:
+					{
+						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
+						uint8_t l;
+						memcpy(&l,p,1);
+						p++;
+						MYSQL_TIME ts;
+						memset(&ts,0,sizeof(MYSQL_TIME));
+						memcpy(&ts.neg,p,1);
+						memcpy(&ts.day,p+1,4);
+						memcpy(&ts.hour,p+5,1);
+						memcpy(&ts.minute,p+6,1);
+						memcpy(&ts.second,p+7,1);
+						if (l>8) {
+							memcpy(&ts.second_part,p+8,4);
+						}
+						p+=l;
+						memcpy(binds[i].buffer,&ts,sizeof(MYSQL_TIME));
+					}
+					break;
 				case MYSQL_TYPE_DATE:
 				case MYSQL_TYPE_TIMESTAMP:
 				case MYSQL_TYPE_DATETIME:
 					{
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
-						memset(binds[i].buffer,0,sizeof(MYSQL_TIME));
 						uint8_t l;
 						memcpy(&l,p,1);
 						p++;
-						memcpy(binds[i].buffer,p,l);
+						MYSQL_TIME ts;
+						memset(&ts,0,sizeof(MYSQL_TIME));
+						memcpy(&ts.year,p,2);
+						memcpy(&ts.month,p+2,1);
+						memcpy(&ts.day,p+3,1);
+						if (l>4) {
+							memcpy(&ts.hour,p+4,1);
+							memcpy(&ts.minute,p+5,1);
+							memcpy(&ts.second,p+6,1);
+						}
+						if (l>7) {
+							memcpy(&ts.second_part,p+7,4);
+						}
 						p+=l;
+						memcpy(binds[i].buffer,&ts,sizeof(MYSQL_TIME));
 					}
 					break;
 				case MYSQL_TYPE_TINY_BLOB:
