@@ -936,7 +936,11 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 					}
 				} else {
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
-						if (current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag)) {
+						if (
+							(current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
+							||
+							(current_replication_lag==-2) // see issue 959
+						) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 						}
 					}
