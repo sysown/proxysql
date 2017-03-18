@@ -29,7 +29,7 @@ struct cmp_str {
 };
 */
 
-#define MyGR_Nentries	50
+#define MyGR_Nentries	100
 
 typedef struct _MyGR_status_entry_t {
 //	char *address;

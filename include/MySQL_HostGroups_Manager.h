@@ -140,6 +140,7 @@ class Group_Replication_Info {
 	bool active;
 	bool writer_is_also_reader;
 	bool __active;
+	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
 	int current_num_readers;
@@ -242,6 +243,7 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
+	void converge_group_replication_config(int _writer_hostgroup);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

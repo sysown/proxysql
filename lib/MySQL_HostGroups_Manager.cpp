@@ -669,7 +669,14 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	assert(rc==SQLITE_OK);
 
-	proxy_info("Dumping current MySQL Servers structures\n");
+	if (GloMTH->variables.hostgroup_manager_verbose) {
+		if (_onlyhg==NULL) {
+			proxy_info("Dumping current MySQL Servers structures for hostgroup ALL\n");
+		} else {
+			int hidonly=*_onlyhg;
+			proxy_info("Dumping current MySQL Servers structures for hostgroup %d\n", hidonly);
+		}
+	}
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		if (_onlyhg) {
@@ -829,8 +836,12 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 			info=it2->second;
 			bool changed=false;
 			changed=info->update(backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, (bool)writer_is_also_reader, r->fields[8]);
+			if (changed) {
+				//info->need_converge=true;
+			}
 		} else {
 			info=new Group_Replication_Info(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, (bool)writer_is_also_reader, r->fields[8]);
+			//info->need_converge=true;
 			Group_Replication_Info_Map.insert(Group_Replication_Info_Map.begin(), std::pair<int, Group_Replication_Info *>(writer_hostgroup,info));
 		}
 	}
@@ -1646,6 +1657,7 @@ Group_Replication_Info::Group_Replication_Info(int w, int b, int r, int o, int m
 	current_num_readers=0;
 	current_num_offline=0;
 	__active=true;
+	need_converge=true;
 }
 
 Group_Replication_Info::~Group_Replication_Info() {
@@ -1742,6 +1754,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			sprintf(query,q,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
+			converge_group_replication_config(_writer_hostgroup);
 			commit();
 			wrlock();
 			SQLite3_result *resultset2=NULL;
@@ -1798,7 +1811,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 	free(query);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
-			proxy_warning("Group Replication: setting host %s:%d read_only because: %s\n", _hostname, _port, _error);
+			proxy_warning("Group Replication: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
@@ -1817,12 +1830,13 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			sprintf(query,q,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
+			converge_group_replication_config(_writer_hostgroup);
 			commit();
 			wrlock();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
 			if (resultset2) {
 				if (resultset2->rows_count) {
@@ -1833,7 +1847,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 						int reader_hostgroup=atoi(r->fields[2]);
 						int offline_hostgroup=atoi(r->fields[3]);
 						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-						sprintf(query,q,_port,_writer_hostgroup);
+						sprintf(query,q,writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
 						mydb->execute(query);
 						generate_mysql_servers_table(&writer_hostgroup);
 						generate_mysql_servers_table(&backup_writer_hostgroup);
@@ -1862,7 +1876,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
   mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -1871,14 +1885,61 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 		error=NULL;
 	}
 	free(query);
-	if (resultset) { // we lock only if needed
+
+	bool writer_is_also_reader=false;
+	bool found_writer=false;
+	bool found_reader=false;
+	int read_HG=-1;
+	bool need_converge=false;
+	if (resultset) {
+		// let's get info about this cluster
+		pthread_mutex_lock(&Group_Replication_Info_mutex);
+		std::map<int , Group_Replication_Info *>::iterator it2;
+		it2 = Group_Replication_Info_Map.find(_writer_hostgroup);
+		Group_Replication_Info *info=NULL;
+		if (it2!=Group_Replication_Info_Map.end()) {
+			info=it2->second;
+			writer_is_also_reader=info->writer_is_also_reader;
+			read_HG=info->reader_hostgroup;
+			need_converge=info->need_converge;
+			info->need_converge=false;
+		}
+		pthread_mutex_unlock(&Group_Replication_Info_mutex);
+
 		if (resultset->rows_count) {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				int hostgroup=atoi(r->fields[0]);
+				if (hostgroup==_writer_hostgroup) {
+					found_writer=true;
+				}
+				if (read_HG>=0) {
+					if (hostgroup==read_HG) {
+						found_reader=true;
+					}
+				}
+			}
+		}
+		if (need_converge==false) {
+			if (found_writer) { // maybe no-op
+				if (writer_is_also_reader==found_reader) { // either both true or both false
+					delete resultset;
+					resultset=NULL;
+				}
+			}
+		}
+	}
+
+	if (resultset) { // if we reach there, there is some action to perform
+		if (resultset->rows_count) {
+			need_converge=false;
 			proxy_warning("Group Replication: setting host %s:%d as writer\n", _hostname, _port);
+
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			query=(char *)malloc(strlen(q)+strlen(_hostname)+256);
 			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
@@ -1892,12 +1953,18 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			sprintf(query,q,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
+			if (writer_is_also_reader && read_HG>=0) {
+				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+				sprintf(query,q,read_HG,_writer_hostgroup,_hostname,_port);
+				mydb->execute(query);
+			}
+			converge_group_replication_config(_writer_hostgroup);
 			commit();
 			wrlock();
 			SQLite3_result *resultset2=NULL;
-			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
+			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
 			if (resultset2) {
 				if (resultset2->rows_count) {
@@ -1907,8 +1974,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 						int backup_writer_hostgroup=atoi(r->fields[1]);
 						int reader_hostgroup=atoi(r->fields[2]);
 						int offline_hostgroup=atoi(r->fields[3]);
+//						int max_writers=atoi(r->fields[4]);
+//						int int_writer_is_also_reader=atoi(r->fields[5]);
 						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-						sprintf(query,q,_port,_writer_hostgroup);
+						sprintf(query,q,_writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
 						mydb->execute(query);
 						generate_mysql_servers_table(&writer_hostgroup);
 						generate_mysql_servers_table(&backup_writer_hostgroup);
@@ -1930,4 +1999,91 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	}
 }
 
+// this function completes the tuning of mysql_servers_incoming
+// it assumes that before calling converge_group_replication_config()
+// * GloAdmin->mysql_servers_wrlock() was already called
+// * mysql_servers_incoming has already entries copied from mysql_servers and ready to be loaded
+// at this moment, it is only used to check if there are more than one writer
+void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hostgroup) {
 
+	// we first gather info about the cluster
+	pthread_mutex_lock(&Group_Replication_Info_mutex);
+	std::map<int , Group_Replication_Info *>::iterator it2;
+	it2 = Group_Replication_Info_Map.find(_writer_hostgroup);
+	Group_Replication_Info *info=NULL;
+	if (it2!=Group_Replication_Info_Map.end()) {
+		info=it2->second;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *query=NULL;
+		char *q=NULL;
+		char *error=NULL;
+		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+		query=(char *)malloc(strlen(q)+256);
+		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
+		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+		free(query);
+		if (resultset) {
+			if (resultset->rows_count) {
+				int num_writers=0;
+				int num_backup_writers=0;
+				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+					SQLite3_row *r=*it;
+					int hostgroup=atoi(r->fields[0]);
+					if (hostgroup==info->writer_hostgroup) {
+						num_writers++;
+					} else {
+						if (hostgroup==info->backup_writer_hostgroup) {
+							num_backup_writers++;
+						}
+					}
+				}
+				if (num_writers > info->max_writers) { // there are more writers than allowed
+					int to_move=num_writers-info->max_writers;
+					proxy_info("Group replication: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
+						SQLite3_row *r=*it;
+						if (to_move) {
+							int hostgroup=atoi(r->fields[0]);
+							if (hostgroup==info->writer_hostgroup) {
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
+								sprintf(query,q,info->backup_writer_hostgroup,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+								mydb->execute(query);
+								free(query);
+								to_move--;
+							}
+						}
+					}
+				} else {
+					if (num_writers < info->max_writers && num_backup_writers) { // or way too low writer
+						int to_move= ( (info->max_writers - num_writers) < num_backup_writers ? (info->max_writers - num_writers) : num_backup_writers);
+						proxy_info("Group replication: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+							SQLite3_row *r=*it;
+							if (to_move) {
+								int hostgroup=atoi(r->fields[0]);
+								if (hostgroup==info->backup_writer_hostgroup) {
+									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+									query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
+									sprintf(query,q,info->writer_hostgroup,info->backup_writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+									mydb->execute(query);
+									free(query);
+									to_move--;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if (resultset) {
+			delete resultset;
+			resultset=NULL;
+		}
+	} else {
+		// we couldn't find the cluster, exits
+	}
+	pthread_mutex_unlock(&Group_Replication_Info_mutex);
+}

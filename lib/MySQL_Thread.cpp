@@ -1048,7 +1048,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_groupreplication_healthcheck_interval")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv <= 7*24*3600*1000) {
+			if (intv >= 50 && intv <= 7*24*3600*1000) {
 				variables.monitor_groupreplication_healthcheck_interval=intv;
 				return true;
 			} else {
@@ -1057,7 +1057,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_groupreplication_healthcheck_timeout")) {
 			int intv=atoi(value);
-			if (intv >= 100 && intv <= 600*1000) {
+			if (intv >= 50 && intv <= 600*1000) {
 				variables.monitor_groupreplication_healthcheck_timeout=intv;
 				return true;
 			} else {
