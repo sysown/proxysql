@@ -935,7 +935,11 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 	} else {
 		// if mysql_thread___query_digests==false but we still want command statistics, we copy the prefix of the query
 		if (mysql_thread___commands_stats) {
-			qp->query_prefix=strndup(query,32);
+			size_t sl=32;
+			if ((unsigned int)query_length < sl) {
+				sl=query_length;
+			}
+			qp->query_prefix=strndup(query,sl);
 		}
 	}
 };
