@@ -27,6 +27,8 @@
 #endif /* DEBUG */
 #define MYHGM_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , comment VARCHAR , UNIQUE (reader_hostgroup))"
 
+#define MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS "CREATE TABLE mysql_group_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
+
 class MySrvConnList;
 class MySrvC;
 class MySrvList;
@@ -126,6 +128,28 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvC *get_random_MySrvC();
 };
 
+class Group_Replication_Info {
+	public:
+	int writer_hostgroup;
+	int backup_writer_hostgroup;
+	int reader_hostgroup;
+	int offline_hostgroup;
+	int max_writers;
+	int max_transactions_behind;
+	char *comment;
+	bool active;
+	bool writer_is_also_reader;
+	bool __active;
+	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
+	int current_num_writers;
+	int current_num_backup_writers;
+	int current_num_readers;
+	int current_num_offline;
+	Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
+	bool update(int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
+	~Group_Replication_Info();
+};
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -142,9 +166,14 @@ class MySQL_HostGroups_Manager {
 
 	void add(MySrvC *, unsigned int);
 	void purge_mysql_servers_table();
-	void generate_mysql_servers_table();
+	void generate_mysql_servers_table(int *_onlyhg=NULL);
 	void generate_mysql_replication_hostgroups_table();
 	SQLite3_result *incoming_replication_hostgroups;
+	void generate_mysql_group_replication_hostgroups_table();
+	SQLite3_result *incoming_group_replication_hostgroups;
+
+	pthread_mutex_t Group_Replication_Info_mutex;
+	std::map<int , Group_Replication_Info *> Group_Replication_Info_Map;
 
 	std::thread *HGCU_thread;
 
@@ -185,9 +214,11 @@ class MySQL_HostGroups_Manager {
 	bool commit();
 
 	void set_incoming_replication_hostgroups(SQLite3_result *);
+	void set_incoming_group_replication_hostgroups(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
+	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
@@ -208,6 +239,11 @@ class MySQL_HostGroups_Manager {
 	void shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
+
+	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
+	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
+	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
+	void converge_group_replication_config(int _writer_hostgroup);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
