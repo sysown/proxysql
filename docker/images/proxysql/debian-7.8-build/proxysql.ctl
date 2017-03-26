@@ -4,7 +4,7 @@ Homepage: http://www.proxysql.com
 Standards-Version: 3.9.2
 
 Package: proxysql
-Version: 1.3.4
+Version: 1.3.5
 Maintainer: Rene Cannao <rene.cannao@gmail.com>
 Architecture: amd64
 # Changelog: CHANGELOG.md
