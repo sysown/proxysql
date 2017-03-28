@@ -15,6 +15,21 @@ class MySQL_Session_userinfo {
 	bool set_schemaname(char *, int);
 };
 */
+
+// these structs will be used for various regex hardcoded
+// their initial use will be for sql_log_bin , sql_mode and time_zone
+// issues #509 , #815 and #816
+class Session_Regex {
+	private:
+	void *opt;
+	void *re;
+	char *s;
+	public:
+	Session_Regex(char *p);
+	~Session_Regex();
+	bool match(char *m);
+};
+
 class Query_Info {
 	public:
 	SQP_par_t QueryParserArgs;
@@ -84,7 +99,13 @@ class MySQL_Session
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_user_schema();
+	bool handler_again___verify_backend_sql_log_bin();
+ 	bool handler_again___verify_backend_sql_mode();
+ 	bool handler_again___verify_backend_time_zone();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
+	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
+	bool handler_again___status_SETTING_SQL_MODE(int *);
+	bool handler_again___status_SETTING_TIME_ZONE(int *);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
@@ -100,6 +121,9 @@ class MySQL_Session
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
 	PtrSize_t *pktH;
+
+	Session_Regex **match_regexes;
+
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);

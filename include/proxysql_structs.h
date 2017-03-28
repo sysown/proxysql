@@ -130,6 +130,9 @@ enum session_status {
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
 	SETTING_INIT_CONNECT,
+	SETTING_SQL_LOG_BIN,
+	SETTING_SQL_MODE,
+	SETTING_TIME_ZONE,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
@@ -781,6 +784,8 @@ MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___init_connect;
+__thread char *mysql_thread___default_sql_mode;
+__thread char *mysql_thread___default_time_zone;
 __thread int mysql_thread___max_allowed_packet;
 __thread int mysql_thread___max_transaction_time;
 __thread int mysql_thread___threshold_query_length;
@@ -872,6 +877,8 @@ extern MySQL_HostGroups_Manager *MyHGM;
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___init_connect;
+extern __thread char *mysql_thread___default_sql_mode;
+extern __thread char *mysql_thread___default_time_zone;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread int mysql_thread___max_transaction_time;
 extern __thread int mysql_thread___threshold_query_length;
