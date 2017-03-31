@@ -233,10 +233,11 @@ Admin> SHOW CREATE TABLE mysql_replication_hostgroups\G
 Create Table: CREATE TABLE mysql_replication_hostgroups (
 writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY,
 reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0),
+comment VARCHAR,
 UNIQUE (reader_hostgroup))
 1 row in set (0.00 sec)
 
-Admin> INSERT INTO mysql_replication_hostgroups VALUES (1,2);
+Admin> INSERT INTO mysql_replication_hostgroups VALUES (1,2,'group comment');
 Query OK, 1 row affected (0.00 sec)
 ```
 
