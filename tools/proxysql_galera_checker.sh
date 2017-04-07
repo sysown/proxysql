@@ -155,9 +155,9 @@ do
   fi
 
   # WSREP status is not ok, but the node is marked online, we should put it offline
-  if [ "${WSREP_STATUS}" != "4" -a "${WSREP_STATUS}" != "2" -a "$stat" = "ONLINE" ]; then
+  if [ "${WSREP_STATUS}" != "4" -a "$stat" = "ONLINE" ]; then
     change_server_status $HOSTGROUP_WRITER_ID "$server" $port "OFFLINE_SOFT" "WSREP status is ${WSREP_STATUS} which is not ok"
-  elif [ "${WSREP_STATUS}" != "4" -a "${WSREP_STATUS}" != "2" -a "$stat" = "OFFLINE_SOFT" ]; then
+  elif [ "${WSREP_STATUS}" != "4" -a "$stat" = "OFFLINE_SOFT" ]; then
     echo "`date` server $hostgroup:$server:$port is already OFFLINE_SOFT, WSREP status is ${WSREP_STATUS} which is not ok" >> ${ERR_FILE}
   fi
 
@@ -286,7 +286,7 @@ if [  ${HOSTGROUP_READER_ID} -ne -1 -a ${NUMBER_READERS_ONLINE} -eq 0 ]; then
         echo "`date` Check server $hostgroup:$server:$port for only available node in DONOR state, status $stat , wsrep_local_state $WSREP_STATUS" >> ${ERR_FILE}
         if [ "${WSREP_STATUS}" = "2" -a "$stat" != "ONLINE" ]
         then
-          change_server_status $HOSTGROUP_WRITER_ID "$server" $port "ONLINE" "WSREP status is DESYNC/DONOR, as this is the only node we will put this one online"
+          change_server_status $HOSTGROUP_READER_ID "$server" $port "ONLINE" "WSREP status is DESYNC/DONOR, as this is the only node we will put this one online"
           cnt=$(( $cnt + 1 ))
         fi
         safety_cnt=$(( $safety_cnt + 1 ))
