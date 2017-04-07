@@ -1,5 +1,3 @@
-#include <openssl/rand.h>
-
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -60,6 +58,22 @@ char *sha1_pass_hex(char *sha1_pass) {
 	return buff;
 }
 
+
+double proxy_my_rnd(struct rand_struct *rand_st) {
+  rand_st->seed1= (rand_st->seed1*3+rand_st->seed2) % rand_st->max_value;
+  rand_st->seed2= (rand_st->seed1+rand_st->seed2+33) % rand_st->max_value;
+  return (((double) rand_st->seed1) / rand_st->max_value_dbl);
+}
+
+void proxy_create_random_string(char *to, uint length, struct rand_struct *rand_st) {
+  uint i;
+  for (i=0; i<length ; i++) {
+    *to= (char) (proxy_my_rnd(rand_st) * 94 + 33);
+    to++;
+  }
+  *to= '\0';
+}
+
 static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t len, char prefix) {
 	if (len==1) {
 		*p=(char)val;
@@ -79,7 +93,7 @@ static inline int write_encoded_length_and_string(unsigned char *p, uint64_t val
 	return l+val;
 }
 
-void proxy_compute_sha1_hash_multi(uint8 *digest, const uint8_t *buf1, int len1, const char *buf2, int len2) {
+void proxy_compute_sha1_hash_multi(uint8 *digest, const char *buf1, int len1, const char *buf2, int len2) {
   PROXY_TRACE();
   
   SHA_CTX sha1_context;
@@ -136,7 +150,7 @@ void unhex_pass(uint8_t *out, const char *in) {
 	}
 }
 
-void proxy_scramble(char *to, const uint8_t *message, const char *password)
+void proxy_scramble(char *to, const char *message, const char *password)
 {
 	uint8 hash_stage1[SHA_DIGEST_LENGTH];
 	uint8 hash_stage2[SHA_DIGEST_LENGTH];
@@ -146,7 +160,7 @@ void proxy_scramble(char *to, const uint8_t *message, const char *password)
 	return;
 }
 
-bool proxy_scramble_sha1(char *pass_reply,  const uint8_t *message, const char *sha1_sha1_pass, char *sha1_pass) {
+bool proxy_scramble_sha1(char *pass_reply,  const char *message, const char *sha1_sha1_pass, char *sha1_pass) {
 	bool ret=false;
 	uint8 hash_stage1[SHA_DIGEST_LENGTH];
 	uint8 hash_stage2[SHA_DIGEST_LENGTH];
@@ -912,13 +926,27 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	*_thread_id=thread_id;
 
+  rand_struct rand_st;
+  //randominit(&rand_st,rand(),rand());
+  rand_st.max_value= 0x3FFFFFFFL;
+  rand_st.max_value_dbl=0x3FFFFFFFL;
+  rand_st.seed1=rand()%rand_st.max_value;
+  rand_st.seed2=rand()%rand_st.max_value;
+
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
   memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
+//#ifdef MARIADB_BASE_VERSION
+//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
+//#else
+  proxy_create_random_string((*myds)->myconn->scramble_buff+0,8,(struct rand_struct *)&rand_st);
+//#endif
 
-  int status = RAND_bytes((*myds)->myconn->scramble_buff, 20);
-  if (status != 1) {
-	  return false;
+  int i;
+  for (i=0;i<8;i++) {
+    if ((*myds)->myconn->scramble_buff[i]==0) {
+      (*myds)->myconn->scramble_buff[i]='a';
+    }
   }
 
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
@@ -931,7 +959,20 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
   memcpy(_ptr+l,"\x0f\x80\x15",3); l+=3;
-  for (int i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
+  for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
+  //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
+//#ifdef MARIADB_BASE_VERSION
+//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
+//#else
+  proxy_create_random_string((*myds)->myconn->scramble_buff+8,12,(struct rand_struct *)&rand_st);
+//#endif
+  //create_random_string(scramble_buf+8,12,&rand_st);
+
+  for (i=8;i<20;i++) {
+    if ((*myds)->myconn->scramble_buff[i]==0) {
+      (*myds)->myconn->scramble_buff[i]='a';
+    }
+  }
 
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00

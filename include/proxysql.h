@@ -54,6 +54,7 @@
 //#include "my_pthread.h"
 #endif
 #include "mysql.h"
+#include "mysql_com.h"
 
 #include "proxysql_mem.h"
 
