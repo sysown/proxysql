@@ -3548,13 +3548,13 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 			( strcmp(r->fields[19],"-1")==0 ? "NULL" : r->fields[19] ), // retries
 			( strcmp(r->fields[20],"-1")==0 ? "NULL" : r->fields[20] ), // delay
 			( strcmp(r->fields[21],"-1")==0 ? "NULL" : r->fields[21] ), // next_query_flagIN
-			( strcmp(r->fields[22],"-1")==0 ? "NULL" : r->fields[21] ), // mirror_flagOUT
-			( strcmp(r->fields[23],"-1")==0 ? "NULL" : r->fields[22] ), // mirror_hostgroup
+			( strcmp(r->fields[22],"-1")==0 ? "NULL" : r->fields[22] ), // mirror_flagOUT
+			( strcmp(r->fields[23],"-1")==0 ? "NULL" : r->fields[23] ), // mirror_hostgroup
 			buffs[24], // error_msg
-			( strcmp(r->fields[25],"-1")==0 ? "NULL" : r->fields[24] ), // sticky_conn
-			( strcmp(r->fields[26],"-1")==0 ? "NULL" : r->fields[25] ), // multiplex
-			( strcmp(r->fields[27],"-1")==0 ? "NULL" : r->fields[26] ), // log
-			( strcmp(r->fields[28],"-1")==0 ? "NULL" : r->fields[27] ), // apply
+			( strcmp(r->fields[25],"-1")==0 ? "NULL" : r->fields[25] ), // sticky_conn
+			( strcmp(r->fields[26],"-1")==0 ? "NULL" : r->fields[26] ), // multiplex
+			( strcmp(r->fields[27],"-1")==0 ? "NULL" : r->fields[27] ), // log
+			( strcmp(r->fields[28],"-1")==0 ? "NULL" : r->fields[28] ), // apply
 			buffs[29] // comment
 		);
 		//fprintf(stderr,"%s\n",query);
