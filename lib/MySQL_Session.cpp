@@ -1878,9 +1878,13 @@ __get_pkts_from_client:
 									}
 									rc_break=handler_special_queries(&pkt);
 									if (rc_break==true) {
-										// track also special queries
-										RequestEnd(NULL);
-										break;
+										if (mirror==false) {
+											// track also special queries
+											RequestEnd(NULL);
+											break;
+										} else {
+											return -1;
+										}
 									}
 									{
 										timespec begint;
