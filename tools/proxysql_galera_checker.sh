@@ -277,7 +277,7 @@ cnt=0
 if [  ${HOSTGROUP_READER_ID} -ne -1 -a ${NUMBER_READERS_ONLINE} -eq 0 ]; then
   echo "`date` ###### TRYING TO FIX MISSING READERS ######"
   echo "`date` --> No readers found, Trying to enable last available node of the cluster (in Donor/Desync state) or pick the master" >> ${ERR_FILE}
-  $PROXYSQL_CMDLINE "SELECT hostgroup_id, hostname, port, status FROM mysql_servers WHERE hostgroup_id IN ($HOSTGROUP_WRITER_ID) AND status <> 'OFFLINE_HARD'" | while read hostgroup server port stat
+  $PROXYSQL_CMDLINE "SELECT hostgroup_id, hostname, port, status FROM mysql_servers WHERE hostgroup_id IN ($HOSTGROUP_READER_ID) AND status <> 'OFFLINE_HARD'" | while read hostgroup server port stat
   do
     safety_cnt=0
       while [ ${cnt} -eq 0 -a ${safety_cnt} -lt 5 ]
