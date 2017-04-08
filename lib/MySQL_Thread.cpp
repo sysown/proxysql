@@ -3376,7 +3376,10 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
                                                 pta[5] = NULL;
                                                 break;
                                         }
-                                }
+                                } else {
+					pta[4] = strdup("mirror_internal");
+					pta[5] = NULL;
+				}
 				sprintf(buf,"%d", sess->current_hostgroup);
 				pta[6]=strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
