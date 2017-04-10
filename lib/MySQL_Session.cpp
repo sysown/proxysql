@@ -327,6 +327,9 @@ MySQL_Session::~MySQL_Session() {
 	free(match_regexes);
 	match_regexes=NULL;
 	}
+	if (mirror) {
+		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+	}
 }
 
 
@@ -675,6 +678,15 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session() {
 	if (pktH->size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
+		// check if there are too many mirror sessions in queue
+		if (thread->mirror_queue_mysql_sessions->len >= mysql_thread___mirror_max_queue_length) {
+			return;
+		}
+		// at this point, we will create the new session
+		// we will later decide if queue it or sent it immediately
+
+//		int i=0;
+//		for (i=0;i<100;i++) {
 		MySQL_Session *newsess=new MySQL_Session();
 		newsess->client_myds = new MySQL_Data_Stream();
 		newsess->client_myds->DSS=STATE_SLEEP;
@@ -686,7 +698,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (newsess->thread_session_id==0) {
 			newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
 		}
-		thread->register_session(newsess);
 		newsess->status=WAITING_CLIENT_DATA;
 		MySQL_Connection *myconn=new MySQL_Connection;
 		myconn->userinfo->set(client_myds->myconn->userinfo);
@@ -701,12 +712,30 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 		newsess->mirror_flagOUT=qpo->mirror_flagOUT; // in the new session we copy the mirror flagOUT
 		newsess->default_schema=strdup(default_schema);
-		newsess->mirror=true;
 		newsess->mirrorPkt.size=pktH->size;
 		newsess->mirrorPkt.ptr=l_alloc(newsess->mirrorPkt.size);
 		memcpy(newsess->mirrorPkt.ptr,pktH->ptr,pktH->size);
-		newsess->handler(); // execute immediately
-		newsess->to_process=0;
+		newsess->mirror=true;
+
+		if (thread->mirror_queue_mysql_sessions->len) {
+			// there are no sessions in the queue, we try to execute immediately
+			// Only mysql_thread___mirror_max_concurrency mirror session can run in parallel
+			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > mysql_thread___mirror_max_concurrency ) {
+				// if the limit is reached, we queue it instead
+				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+				thread->mirror_queue_mysql_sessions->add(newsess);
+			}	else {
+				thread->register_session(newsess);
+				newsess->handler(); // execute immediately
+				newsess->to_process=0;
+			}
+		}
+
+
+//		if (i==0) {
+//		} else {
+//			delete newsess;
+//		}
 	}
 }
 

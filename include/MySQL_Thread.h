@@ -174,6 +174,7 @@ class MySQL_Thread
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
+	PtrArray *mirror_queue_mysql_sessions;
 #ifdef IDLE_THREADS
 	PtrArray *idle_mysql_sessions;
 	PtrArray *resume_mysql_sessions;
@@ -342,6 +343,8 @@ class MySQL_Threads_Handler
 		int max_connections;
 		int max_stmts_per_connection;
 		int max_stmts_cache;
+		int mirror_max_concurrency;
+		int mirror_max_queue_length;
 		int default_max_latency_ms;
 		int default_query_delay;
 		int default_query_timeout;
@@ -367,6 +370,9 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
 	} variables;
+	struct {
+		unsigned int mirror_sessions_current;
+	} status_variables;
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 #ifdef IDLE_THREADS
@@ -402,6 +408,7 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_Processlist();
 	SQLite3_result * SQL3_GlobalStatus();
 	bool kill_session(uint32_t _thread_session_id);
+	unsigned long long get_total_mirror_queue();
 	unsigned long long get_total_stmt_prepare();
 	unsigned long long get_total_stmt_execute();
 	unsigned long long get_total_stmt_close();
