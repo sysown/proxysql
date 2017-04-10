@@ -717,7 +717,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		memcpy(newsess->mirrorPkt.ptr,pktH->ptr,pktH->size);
 		newsess->mirror=true;
 
-		if (thread->mirror_queue_mysql_sessions->len) {
+		if (thread->mirror_queue_mysql_sessions->len==0) {
 			// there are no sessions in the queue, we try to execute immediately
 			// Only mysql_thread___mirror_max_concurrency mirror session can run in parallel
 			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > mysql_thread___mirror_max_concurrency ) {
@@ -727,8 +727,14 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}	else {
 				thread->register_session(newsess);
 				newsess->handler(); // execute immediately
-				newsess->to_process=0;
+				//newsess->to_process=0;
+				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
+					thread->unregister_session(thread->mysql_sessions->len-1);
+					delete newsess;
+				}
 			}
+		} else {
+			thread->mirror_queue_mysql_sessions->add(newsess);
 		}
 
 

@@ -246,7 +246,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"max_stmts_cache",
 	(char *)"mirror_max_concurrency",
 	(char *)"mirror_max_queue_length",
-	(char *)"mirror_max_queue_length",
 	(char *)"default_max_latency_ms",
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
@@ -2205,6 +2204,24 @@ __run_skip_1:
 			goto __run_skip_1a;
 		}
 #endif // IDLE_THREADS
+		while (mirror_queue_mysql_sessions->len) {
+			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > mysql_thread___mirror_max_concurrency ) {
+				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+				goto __mysql_thread_exit_add_mirror; // we can't add more mirror sessions at runtime
+			} else {
+				int idx;
+				idx=fastrand()%(mirror_queue_mysql_sessions->len);
+				MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
+				register_session(newsess);
+				newsess->handler(); // execute immediately
+				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
+					unregister_session(mysql_sessions->len-1);
+					delete newsess;
+				}
+				//newsess->to_process=0;
+			}
+		}
+__mysql_thread_exit_add_mirror:
 		for (n = 0; n < mypolls.len; n++) {
 			MySQL_Data_Stream *myds=NULL;
 			myds=mypolls.myds[n];
@@ -2812,20 +2829,6 @@ void MySQL_Thread::process_all_sessions() {
 			}
 		}
 	}
-	while (mirror_queue_mysql_sessions->len) {
-		if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > mysql_thread___mirror_max_concurrency ) {
-			__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-			goto __mysql_thread_exit_add_mirror; // we can't add more mirror sessions at runtime
-		} else {
-			int idx;
-			idx=fastrand()%(mirror_queue_mysql_sessions->len);
-			MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
-			register_session(newsess);
-			newsess->handler(); // execute immediately
-			newsess->to_process=0;
-		}
-	}
-__mysql_thread_exit_add_mirror:
 	unsigned int total_active_transactions_tmp;
 	total_active_transactions_tmp=__sync_add_and_fetch(&status_variables.active_transactions,0);
 	__sync_bool_compare_and_swap(&status_variables.active_transactions,total_active_transactions_tmp,total_active_transactions_);
