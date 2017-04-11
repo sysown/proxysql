@@ -1481,7 +1481,10 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 						sprintf(buf,"Max connect failure while reaching hostgroup %d", current_hostgroup);
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000",buf);
 					}
-					RequestEnd(myds);
+					if (session_fast_forward==false) {
+						// see bug #979
+						RequestEnd(myds);
+					}
 					while (previous_status.size()) {
 						st=previous_status.top();
 						previous_status.pop();
