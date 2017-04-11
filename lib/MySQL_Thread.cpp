@@ -1942,6 +1942,15 @@ MySQL_Thread::~MySQL_Thread() {
 		mirror_queue_mysql_sessions=NULL;
 	}
 
+	if (mirror_queue_mysql_sessions_cache) {
+		while(mirror_queue_mysql_sessions_cache->len) {
+			MySQL_Session *sess=(MySQL_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
+				delete sess;
+			}
+		delete mirror_queue_mysql_sessions_cache;
+		mirror_queue_mysql_sessions_cache=NULL;
+	}
+
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
 		if (idle_mysql_sessions) {
@@ -2043,6 +2052,7 @@ bool MySQL_Thread::init() {
 	int i;
 	mysql_sessions = new PtrArray();
 	mirror_queue_mysql_sessions = new PtrArray();
+	mirror_queue_mysql_sessions_cache = new PtrArray();
 	cached_connections = new PtrArray();
 	assert(mysql_sessions);
 
@@ -2216,7 +2226,14 @@ __run_skip_1:
 				newsess->handler(); // execute immediately
 				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 					unregister_session(mysql_sessions->len-1);
-					delete newsess;
+					int l=mysql_thread___mirror_max_concurrency;
+					if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
+					if (mirror_queue_mysql_sessions_cache->len <= l) {
+						__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+						mirror_queue_mysql_sessions_cache->add(newsess);
+					} else {
+						delete newsess;
+					}
 				}
 				//newsess->to_process=0;
 			}
@@ -2417,6 +2434,15 @@ __run_skip_1a:
 		mypolls.loop_counters->incr(curtime/1000000);
 
 		if (maintenance_loop) {
+			// house keeping
+			int l=mysql_thread___mirror_max_concurrency;
+			if (mirror_queue_mysql_sessions_cache->len > l) {
+				while (mirror_queue_mysql_sessions_cache->len > mirror_queue_mysql_sessions->len && mirror_queue_mysql_sessions_cache->len > l) {
+					MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
+					__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+					delete newsess;
+				}
+			}
 			GloQPro->update_query_processor_stats();
 		}
 			if (rc == -1 && errno == EINTR)
@@ -2770,7 +2796,14 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 				unregister_session(n);
 				n--;
-				delete sess;
+				int l=mysql_thread___mirror_max_concurrency;
+				if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
+				if (mirror_queue_mysql_sessions_cache->len <= l) {
+					__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+					mirror_queue_mysql_sessions_cache->add(sess);
+				} else {
+					delete sess;
+				}
 				continue;
 			}
 		}

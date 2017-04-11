@@ -175,6 +175,7 @@ class MySQL_Thread
 	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
+	PtrArray *mirror_queue_mysql_sessions_cache;
 #ifdef IDLE_THREADS
 	PtrArray *idle_mysql_sessions;
 	PtrArray *resume_mysql_sessions;

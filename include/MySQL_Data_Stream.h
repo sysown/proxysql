@@ -183,5 +183,6 @@ class MySQL_Data_Stream
 	}
 	void free_mysql_real_query();	
 	void reinit_queues();
+	void destroy_queues();
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

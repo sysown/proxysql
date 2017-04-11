@@ -876,3 +876,8 @@ void MySQL_Data_Stream::free_mysql_real_query() {
 		mysql_real_query.end();
 	}
 }
+
+void MySQL_Data_Stream::destroy_queues() {
+	queue_destroy(queueIN);
+	queue_destroy(queueOUT);
+}
