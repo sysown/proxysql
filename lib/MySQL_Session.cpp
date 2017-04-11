@@ -1552,7 +1552,10 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 //							CurrentQuery.end();
 //							myds->free_mysql_real_query();
 //							client_myds->DSS=STATE_SLEEP;
-					RequestEnd(myds);
+					if (session_fast_forward==false) {
+						// see bug #979
+						RequestEnd(myds);
+					}
 					while (previous_status.size()) {
 						st=previous_status.top();
 						previous_status.pop();
