@@ -3004,6 +3004,8 @@ MySQL_Thread::MySQL_Thread() {
 	my_idle_conns=NULL;
 	cached_connections=NULL;
 	mysql_sessions=NULL;
+	mirror_queue_mysql_sessions=NULL;
+	mirror_queue_mysql_sessions_cache=NULL;
 #ifdef IDLE_THREADS
 	efd=-1;
 	epoll_thread=false;
