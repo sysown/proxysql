@@ -2230,7 +2230,17 @@ __run_skip_1:
 					if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
 					if (mirror_queue_mysql_sessions_cache->len <= l) {
 						__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-						mirror_queue_mysql_sessions_cache->add(newsess);
+						bool to_cache=true;
+						if (newsess->mybe) {
+							if (newsess->mybe->server_myds) {
+								to_cache=false;
+							}
+						}
+						if (to_cache) {
+							mirror_queue_mysql_sessions_cache->add(newsess);
+						} else {
+							delete newsess;
+						}
 					} else {
 						delete newsess;
 					}
@@ -2800,7 +2810,17 @@ void MySQL_Thread::process_all_sessions() {
 				if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
 				if (mirror_queue_mysql_sessions_cache->len <= l) {
 					__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-					mirror_queue_mysql_sessions_cache->add(sess);
+					bool to_cache=true;
+					if (sess->mybe) {
+						if (sess->mybe->server_myds) {
+							to_cache=false;
+						}
+					}
+					if (to_cache) {
+						mirror_queue_mysql_sessions_cache->add(sess);
+					} else {
+						delete sess;
+					}
 				} else {
 					delete sess;
 				}

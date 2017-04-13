@@ -747,7 +747,17 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					if (thread->mirror_queue_mysql_sessions->len*0.3 > l) l=thread->mirror_queue_mysql_sessions->len*0.3;
 					if (thread->mirror_queue_mysql_sessions_cache->len <= l) {
 						__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-						thread->mirror_queue_mysql_sessions_cache->add(newsess);
+						bool to_cache=true;
+						if (newsess->mybe) {
+							if (newsess->mybe->server_myds) {
+								to_cache=false;
+							}
+						}
+						if (to_cache) {
+							thread->mirror_queue_mysql_sessions_cache->add(newsess);
+						} else {
+							delete newsess;
+						}
 					} else {
 						delete newsess;
 					}
