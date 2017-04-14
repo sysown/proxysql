@@ -1379,7 +1379,7 @@ void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3
 	incoming_group_replication_hostgroups=s;
 }
 
-SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
   const int colnum=12;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
@@ -1446,14 +1446,29 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool() {
 			pta[5]=strdup(buf);
 			sprintf(buf,"%u", mysrvc->connect_OK);
 			pta[6]=strdup(buf);
+			if (_reset) {
+				mysrvc->connect_OK=0;
+			}
 			sprintf(buf,"%u", mysrvc->connect_ERR);
 			pta[7]=strdup(buf);
+			if (_reset) {
+				mysrvc->connect_ERR=0;
+			}
 			sprintf(buf,"%llu", mysrvc->queries_sent);
 			pta[8]=strdup(buf);
+			if (_reset) {
+				mysrvc->queries_sent=0;
+			}
 			sprintf(buf,"%llu", mysrvc->bytes_sent);
 			pta[9]=strdup(buf);
+			if (_reset) {
+				mysrvc->bytes_sent=0;
+			}
 			sprintf(buf,"%llu", mysrvc->bytes_recv);
 			pta[10]=strdup(buf);
+			if (_reset) {
+				mysrvc->bytes_recv=0;
+			}
 			sprintf(buf,"%u", mysrvc->current_latency_us);
 			pta[11]=strdup(buf);
 			result->add_row(pta);

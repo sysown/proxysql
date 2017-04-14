@@ -182,7 +182,7 @@ class ProxySQL_Admin {
 	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();
-	void stats___mysql_connection_pool();
+	void stats___mysql_connection_pool(bool _reset);
 	void stats___mysql_global();
 	void stats___mysql_users();
 

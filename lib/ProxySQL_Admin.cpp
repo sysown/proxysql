@@ -194,6 +194,8 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , db VARCHAR , cli_host VARCHAR , cli_port VARCHAR , hostgroup VARCHAR , l_srv_host VARCHAR , l_srv_port VARCHAR , srv_host VARCHAR , srv_port VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR)"
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL "CREATE TABLE stats_mysql_connection_pool (hostgroup VARCHAR , srv_host VARCHAR , srv_port VARCHAR , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 
+#define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL_RESET "CREATE TABLE stats_mysql_connection_pool_reset (hostgroup VARCHAR , srv_host VARCHAR , srv_port VARCHAR , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
+
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST "CREATE TABLE stats_mysql_query_digest (hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY(hostgroup, schemaname, username, digest))"
 
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_mysql_query_digest_reset (hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , PRIMARY KEY(hostgroup, schemaname, username, digest))"
@@ -1244,6 +1246,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool refresh=false;
 	bool stats_mysql_processlist=false;
 	bool stats_mysql_connection_pool=false;
+	bool stats_mysql_connection_pool_reset=false;
 	bool stats_mysql_query_digest=false;
 	bool stats_mysql_query_digest_reset=false;
 	bool stats_mysql_global=false;
@@ -1271,8 +1274,13 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_query_digest_reset=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_global"))
 		{ stats_mysql_global=true; refresh=true; }
-	if (strstr(query_no_space,"stats_mysql_connection_pool"))
-		{ stats_mysql_connection_pool=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_connection_pool_reset"))
+		{
+			stats_mysql_connection_pool_reset=true; refresh=true;
+		} else {
+			if (strstr(query_no_space,"stats_mysql_connection_pool"))
+				{ stats_mysql_connection_pool=true; refresh=true; }
+		}
 	if (strstr(query_no_space,"stats_mysql_commands_counters"))
 		{ stats_mysql_commands_counters=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_rules"))
@@ -1316,8 +1324,12 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_query_digests(false);
 		if (stats_mysql_query_digest_reset)
 			stats___mysql_query_digests(true);
-		if (stats_mysql_connection_pool)
-			stats___mysql_connection_pool();
+		if (stats_mysql_connection_pool_reset) {
+			stats___mysql_connection_pool(true);
+		} else {
+			if (stats_mysql_connection_pool)
+				stats___mysql_connection_pool(false);
+		}
 		if (stats_mysql_global)
 			stats___mysql_global();
 		if (stats_mysql_query_rules)
@@ -2545,6 +2557,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_processlist", STATS_SQLITE_TABLE_MYSQL_PROCESSLIST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_connection_pool", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_connection_pool_reset", STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
@@ -3301,10 +3314,10 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 	delete resultset;
 }
 
-void ProxySQL_Admin::stats___mysql_connection_pool() {
+void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
 
 	if (!MyHGM) return;
-	SQLite3_result * resultset=MyHGM->SQL3_Connection_Pool();
+	SQLite3_result * resultset=MyHGM->SQL3_Connection_Pool(_reset);
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_connection_pool");
@@ -3319,6 +3332,10 @@ void ProxySQL_Admin::stats___mysql_connection_pool() {
 		sprintf(query,a,r->fields[0],r->fields[1],r->fields[2],r->fields[3],r->fields[4],r->fields[5],r->fields[6],r->fields[7],r->fields[8],r->fields[9],r->fields[10],r->fields[11]);
 		statsdb->execute(query);
 		free(query);
+	}
+	if (_reset) {
+		statsdb->execute("DELETE FROM stats_mysql_connection_pool_reset");
+		statsdb->execute("INSERT INTO stats_mysql_connection_pool_reset SELECT * FROM stats_mysql_connection_pool");
 	}
 	statsdb->execute("COMMIT");
 	delete resultset;
