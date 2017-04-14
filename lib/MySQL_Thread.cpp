@@ -2624,6 +2624,21 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					}
 				}
 				if (myds->myds_type==MYDS_BACKEND && myds->sess->status!=FAST_FORWARD) {
+					if (mypolls.fds[n].revents) {
+					// this part of the code fixes an important bug
+					// if a connection in use but idle (ex: running a transaction)
+					// get data, immediately destroy the session
+					//
+					// this can happen, for example, with a low wait_timeout and running transaction
+						if (myds->sess->status==WAITING_CLIENT_DATA) {
+							if (myds->myconn->async_state_machine==ASYNC_IDLE) {
+								proxy_warning("Detected broken idle connection on %s:%d\n", myds->myconn->parent->address, myds->myconn->parent->port);
+								myds->destroy_MySQL_Connection_From_Pool(false);
+								myds->sess->set_unhealthy();
+								return false;
+							}
+						}
+					}
 					return true;
 				}
 				if (mypolls.fds[n].revents) {
