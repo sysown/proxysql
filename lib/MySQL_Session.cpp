@@ -2433,6 +2433,9 @@ handler_again:
 									case PROCESSING_STMT_PREPARE:
 										previous_status.push(PROCESSING_STMT_PREPARE);
 										break;
+									case PROCESSING_STMT_EXECUTE:
+										previous_status.push(PROCESSING_STMT_EXECUTE);
+										break;
 									default:
 										assert(0);
 										break;
