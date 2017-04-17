@@ -15,7 +15,7 @@ static unsigned int l_near_pow_2 (unsigned int n) {
 #ifndef def_fastrand
 inline int fastrand() {
 	g_seed = (214013*g_seed+2531011);
-	return (g_seed>>16);
+	return (g_seed>>16)&0x7FFF;
 }
 #define def_fastrand
 #endif

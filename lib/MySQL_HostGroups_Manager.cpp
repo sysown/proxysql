@@ -1147,7 +1147,12 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		unsigned int k=fastrand()%New_sum;
+		unsigned int k;
+		if (New_sum > 32768) {
+			k=rand()%New_sum;
+		} else {
+			k=fastrand()%New_sum;
+		}
   	k++;
 		New_sum=0;
 
@@ -1184,7 +1189,11 @@ MySQL_Connection * MySrvConnList::get_random_MyConn() {
 	unsigned int i;
 	unsigned int l=conns_length();
 	if (l) {
-		i=fastrand()%l;
+		if (l>32768) {
+			i=rand()%l;
+		} else {
+			i=fastrand()%l;
+		}
 		conn=(MySQL_Connection *)conns->remove_index_fast(i);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return conn;
