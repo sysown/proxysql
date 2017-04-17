@@ -61,32 +61,6 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #ifdef SO_REUSEPORT
 		global.reuseport=false;
 #endif /* SO_REUSEPORT */
-	{
-		struct utsname unameData;
-		int rc;
-		rc=uname(&unameData);
-		if (rc==0) {
-			proxy_info("Detected OS: %s\n", unameData.release);
-			//proxy_info("Detected OS: %s %s %s %s %s\n", unameData.sysname, unameData.nodename, unameData.release, unameData.version, unameData.machine);
-#ifdef SO_REUSEPORT
-			if (strcmp(unameData.sysname,"Linux")==0) {
-				int major=0, minor=0, revision=0;
-				sscanf(unameData.release, "%d.%d.%d", &major, &minor, &revision);
-				//fprintf(stderr,"%d %d %d\n",major,minor,revision);
-				if (
-					(major > 3)
-					||
-					(major == 3 && minor >= 9)
-				) {
-					proxy_info("Detected Linux Kernel %d.%d >= 3.9 . Enabling the use of SO_REUSEPORT\n", major, minor);
-					global.reuseport=true;
-				}
-			}
-#endif /* SO_REUSEPORT */
-		} else {
-			proxy_error("ERROR: unable to get information about current kernel\n");
-		}
-	}
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
@@ -221,6 +195,32 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		global.monitor=false;
 	}
 
+	{
+		struct utsname unameData;
+		int rc;
+		proxy_info("ProxySQL version %s\n", PROXYSQL_VERSION);
+		rc=uname(&unameData);
+		if (rc==0) {
+			proxy_info("Detected OS: %s %s %s %s %s\n", unameData.sysname, unameData.nodename, unameData.release, unameData.version, unameData.machine);
+#ifdef SO_REUSEPORT
+			if (strcmp(unameData.sysname,"Linux")==0) {
+				int major=0, minor=0, revision=0;
+				sscanf(unameData.release, "%d.%d.%d", &major, &minor, &revision);
+				//fprintf(stderr,"%d %d %d\n",major,minor,revision);
+				if (
+					(major > 3)
+					||
+					(major == 3 && minor >= 9)
+				) {
+					proxy_info("Detected Linux Kernel %d.%d >= 3.9 . Enabling the use of SO_REUSEPORT\n", major, minor);
+					global.reuseport=true;
+				}
+			}
+#endif /* SO_REUSEPORT */
+		} else {
+			proxy_error("ERROR: unable to get information about current kernel\n");
+		}
+	}
 #ifdef SO_REUSEPORT
 	if (opt->isSet("-r")) {
 		global.reuseport=true;
