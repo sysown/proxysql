@@ -4984,7 +4984,7 @@ extern "C" void destroy_Admin(ProxySQL_Admin * pa) {
 }
 
 void ProxySQL_Admin::flush_error_log() {
-	if (GloVars.global.foreground==true) return;
+	if (GloVars.global.foreground==false) {
 	int outfd=0;
 	int errfd=0;
 	outfd=open(GloVars.errorlog, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
@@ -5000,6 +5000,7 @@ void ProxySQL_Admin::flush_error_log() {
 		close(errfd);
 	} else {
 		proxy_error("Impossible to open file\n");
+	}
 	}
 	{
 		struct utsname unameData;
