@@ -219,17 +219,23 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				flag = 2;
 			}
 
+			// comment type 3 - start with '--'
+			else if(prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
+			{
+				flag = 3;
+			}
+
 			// string - start with '
 			else if(*s == '\'' || *s == '"')
 			{
-				flag = 3;
+				flag = 4;
 				qutr_char = *s;
 			}
 
 			// may be digit - start with digit
 			else if(is_token_char(prev_char) && is_digit_char(*s))
 			{
-				flag = 4;
+				flag = 5;
 				if(len == i+1)
 					continue;
 			}
@@ -295,10 +301,16 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				(flag == 1 && prev_char == '*' && *s == '/') ||
 
 				// comment type 2 - # ... \n
-				(flag == 2 && (*s == '\n' || *s == '\r'))
+				(flag == 2 && (*s == '\n' || *s == '\r' || (i == len - 1) ))
+				||
+				// comment type 2 - # ... \n
+				(flag == 3 && (*s == '\n' || *s == '\r' || (i == len -1) ))
 			)
 			{
-				p_r = flag == 1 ? p_r_t - SIZECHAR : p_r_t;
+				p_r = p_r_t;
+				if (flag == 1 || (i == len -1)) {
+					p_r -= SIZECHAR;
+				}
 				if (cmd) {
 					cur_comment[ccl]=0;
 					if (ccl>=2) {
@@ -347,7 +359,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			// --------
 			// string
 			// --------
-			else if(flag == 3)
+			else if(flag == 4)
 			{
 				// Last char process
 				if(len == i + 1)
@@ -390,7 +402,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			// --------
 			// digit
 			// --------
-			else if(flag == 4)
+			else if(flag == 5)
 			{
 				// last single char
 				if(p_r_t == p_r)
