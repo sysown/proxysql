@@ -727,6 +727,8 @@ gotofork:
 
 
 
+	} else {
+		GloAdmin->flush_error_log();
 	}
 
 __start_label:
