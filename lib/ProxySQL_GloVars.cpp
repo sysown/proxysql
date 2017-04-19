@@ -195,14 +195,12 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		global.monitor=false;
 	}
 
+#ifdef SO_REUSEPORT
 	{
 		struct utsname unameData;
 		int rc;
-		proxy_info("ProxySQL version %s\n", PROXYSQL_VERSION);
 		rc=uname(&unameData);
 		if (rc==0) {
-			proxy_info("Detected OS: %s %s %s %s %s\n", unameData.sysname, unameData.nodename, unameData.release, unameData.version, unameData.machine);
-#ifdef SO_REUSEPORT
 			if (strcmp(unameData.sysname,"Linux")==0) {
 				int major=0, minor=0, revision=0;
 				sscanf(unameData.release, "%d.%d.%d", &major, &minor, &revision);
@@ -212,15 +210,12 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 					||
 					(major == 3 && minor >= 9)
 				) {
-					proxy_info("Detected Linux Kernel %d.%d >= 3.9 . Enabling the use of SO_REUSEPORT\n", major, minor);
 					global.reuseport=true;
 				}
 			}
-#endif /* SO_REUSEPORT */
-		} else {
-			proxy_error("ERROR: unable to get information about current kernel\n");
 		}
 	}
+#endif /* SO_REUSEPORT */
 #ifdef SO_REUSEPORT
 	if (opt->isSet("-r")) {
 		global.reuseport=true;
