@@ -40,13 +40,15 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
                         return -1;
                 }
 
-#ifdef SO_REUSEPORT
   		if (reuseport) {
+#ifdef SO_REUSEPORT
 			if (setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on)) == -1) {
 				proxy_error("setsockopt() SO_REUSEPORT: %d\n", gai_strerror(errno));
 			}
-		}
+#else
+			proxy_error("--reuseport option given, but compiled without SO_REUSEPORT support\n");
 #endif /* SO_REUSEPORT */
+		}
 
                 if (bind(sd, next->ai_addr, next->ai_addrlen) == -1) {
                         //if (errno != EADDRINUSE) {

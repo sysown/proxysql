@@ -58,9 +58,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.nostart=false;
 	global.foreground=false;
 	global.monitor=true;
-#ifdef SO_REUSEPORT
-		global.reuseport=false;
-#endif /* SO_REUSEPORT */
+	global.reuseport=false;
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 #ifdef DEBUG
@@ -81,9 +79,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not start Monitor Module",(const char *)"-M",(const char *)"--no-monitor");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
-#ifdef SO_REUSEPORT
 	opt->add((const char *)"",0,0,0,(const char *)"Use SO_REUSEPORT",(const char *)"-r",(const char *)"--reuseport");
-#endif /* SO_REUSEPORT */
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
 	//opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
@@ -195,37 +191,9 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		global.monitor=false;
 	}
 
-	{
-		struct utsname unameData;
-		int rc;
-		proxy_info("ProxySQL version %s\n", PROXYSQL_VERSION);
-		rc=uname(&unameData);
-		if (rc==0) {
-			proxy_info("Detected OS: %s %s %s %s %s\n", unameData.sysname, unameData.nodename, unameData.release, unameData.version, unameData.machine);
-#ifdef SO_REUSEPORT
-			if (strcmp(unameData.sysname,"Linux")==0) {
-				int major=0, minor=0, revision=0;
-				sscanf(unameData.release, "%d.%d.%d", &major, &minor, &revision);
-				//fprintf(stderr,"%d %d %d\n",major,minor,revision);
-				if (
-					(major > 3)
-					||
-					(major == 3 && minor >= 9)
-				) {
-					proxy_info("Detected Linux Kernel %d.%d >= 3.9 . Enabling the use of SO_REUSEPORT\n", major, minor);
-					global.reuseport=true;
-				}
-			}
-#endif /* SO_REUSEPORT */
-		} else {
-			proxy_error("ERROR: unable to get information about current kernel\n");
-		}
-	}
-#ifdef SO_REUSEPORT
 	if (opt->isSet("-r")) {
 		global.reuseport=true;
 	}
-#endif /* SO_REUSEPORT */
 
 	if (opt->isSet("-S")) {
 		std::string admin_socket;
@@ -233,6 +201,8 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		if (GloVars.__cmd_proxysql_admin_socket) free(GloVars.__cmd_proxysql_admin_socket);
 		GloVars.__cmd_proxysql_admin_socket=strdup(admin_socket.c_str());
 	}
+
+	proxy_info("ProxySQL version %s\n", PROXYSQL_VERSION);
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 4, "processing opts\n");
 
