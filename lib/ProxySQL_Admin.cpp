@@ -21,6 +21,7 @@
 #include "SpookyV2.h"
 
 #include <fcntl.h>
+#include <sys/utsname.h>
 
 //#define MYSQL_THREAD_IMPLEMENTATION
 
@@ -4999,6 +5000,15 @@ void ProxySQL_Admin::flush_error_log() {
 		close(errfd);
 	} else {
 		proxy_error("Impossible to open file\n");
+	}
+	{
+		struct utsname unameData;
+		int rc;
+		proxy_info("ProxySQL version %s\n", PROXYSQL_VERSION);
+		rc=uname(&unameData);
+		if (rc==0) {
+			proxy_info("Detected OS: %s %s %s %s %s\n", unameData.sysname, unameData.nodename, unameData.release, unameData.version, unameData.machine);
+		}
 	}
 }
 
