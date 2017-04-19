@@ -113,7 +113,6 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
                 c_split_2(iface, ":" , &address, &port);
         }
 
-#ifdef SO_REUSEPORT
 	if (GloVars.global.reuseport==false) {
 		s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
 	} else {
@@ -134,9 +133,6 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 			s=0;
 		}
 	}
-#else
-	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
-#endif /* SO_REUSEPORT */
 	if (s==-1) return s;
 	if (s>0) {
 		ioctl_FIONBIO(s,1);
@@ -2995,13 +2991,9 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	memset(addr, 0, sizeof(custom_sockaddr));
 	if (GloMTH->num_threads > 1) {
 		// there are more than 1 thread . We pause for a little bit to avoid all connections to be handled by the same thread
-#ifdef SO_REUSEPORT
 		if (GloVars.global.reuseport==false) { // only if reuseport is not enabled
 			usleep(10+rand()%50);
 		}
-#else
-		usleep(10+rand()%50);
-#endif /* SO_REUSEPORT */
 	}
 	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
