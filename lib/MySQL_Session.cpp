@@ -2145,6 +2145,29 @@ __get_pkts_from_client:
 handler_again:
 
 	switch (status) {
+		case WAITING_CLIENT_DATA:
+			// housekeeping
+			if (mybes) {
+				MySQL_Backend *_mybe;
+				unsigned int i;
+				for (i=0; i < mybes->len; i++) {
+					_mybe=(MySQL_Backend *)mybes->index(i);
+					if (_mybe->server_myds) {
+						MySQL_Data_Stream *_myds=_mybe->server_myds;
+						if (_myds->myconn) {
+							if (_myds->myconn->multiplex_delayed) {
+								if (_myds->wait_until <= thread->curtime) {
+									_myds->wait_until=0;
+									_myds->myconn->multiplex_delayed=false;
+									_myds->DSS=STATE_NOT_INITIALIZED;
+									_myds->return_MySQL_Connection_To_Pool();
+								}
+							}
+						}
+					}
+				}
+			}
+			break;
 		case FAST_FORWARD:
 			if (mybe->server_myds->mypolls==NULL) {
 				// register the mysql_data_stream
@@ -2373,12 +2396,22 @@ handler_again:
 
 					RequestEnd(myds);
 					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-						myds->DSS=STATE_NOT_INITIALIZED;
-						myds->return_MySQL_Connection_To_Pool();
+						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
+							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
+							myconn->async_state_machine=ASYNC_IDLE;
+							myconn->multiplex_delayed=true;
+							myds->DSS=STATE_MARIADB_GENERIC;
+						} else {
+							myconn->multiplex_delayed=false;
+							myds->wait_until=0;
+							myds->DSS=STATE_NOT_INITIALIZED;
+							myds->return_MySQL_Connection_To_Pool();
+						}
 						if (transaction_persistent==true) {
 							transaction_persistent_hostgroup=-1;
 						}
 					} else {
+						myconn->multiplex_delayed=false;
 						myconn->async_state_machine=ASYNC_IDLE;
 						myds->DSS=STATE_MARIADB_GENERIC;
 						if (transaction_persistent==true) {

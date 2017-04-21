@@ -90,6 +90,7 @@ class MySQL_Connection {
 	bool processing_prepared_statement_prepare;
 	bool processing_prepared_statement_execute;
 	bool processing_multi_statement;
+	bool multiplex_delayed;
 	MySQL_Connection();
 	~MySQL_Connection();
 	bool set_autocommit(bool);
