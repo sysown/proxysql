@@ -1077,7 +1077,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 					myds->destroy_MySQL_Connection_From_Pool(true);
 					myds->fd=0;
@@ -1153,7 +1153,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
@@ -1221,7 +1221,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
@@ -1288,7 +1288,7 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
@@ -1346,7 +1346,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
@@ -1474,7 +1474,7 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 					int myerr=mysql_errno(myconn->mysql);
 					if (myerr) {
 						char sqlstate[10];
-						sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+						sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 					} else {
 						char buf[256];
@@ -1548,7 +1548,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
@@ -1602,7 +1602,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
@@ -1657,7 +1657,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 					myds->destroy_MySQL_Connection_From_Pool(true);
 					myds->fd=0;
@@ -2536,7 +2536,7 @@ handler_again:
 								case PROCESSING_STMT_PREPARE:
 									{
 										char sqlstate[10];
-										sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+										sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 										client_myds->pkt_sid++;
 									}
@@ -2544,7 +2544,7 @@ handler_again:
 								case PROCESSING_STMT_EXECUTE:
 									{
 										char sqlstate[10];
-										sprintf(sqlstate,"#%s",mysql_sqlstate(myconn->mysql));
+										sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 										client_myds->pkt_sid++;
 									}
@@ -3406,7 +3406,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 		} else {
 			// error
 			char sqlstate[10];
-			sprintf(sqlstate,"#%s",mysql_sqlstate(mysql));
+			sprintf(sqlstate,"%s",mysql_sqlstate(mysql));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
 			client_myds->pkt_sid++;
 		}
