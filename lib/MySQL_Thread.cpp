@@ -197,6 +197,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_retries_on_failure",
 	(char *)"connect_retries_on_failure",
 	(char *)"connect_retries_delay",
+	(char *)"connection_delay_multiplex_ms",
 	(char *)"connection_max_age_ms",
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
@@ -304,6 +305,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
 	variables.connect_retries_on_failure=10;
+	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
 	variables.connect_timeout_server=1000;
 	variables.connect_timeout_server_max=10000;
@@ -567,6 +569,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"shun_recovery_time_sec")) return (int)variables.shun_recovery_time_sec;
 	if (!strcasecmp(name,"query_retries_on_failure")) return (int)variables.query_retries_on_failure;
 	if (!strcasecmp(name,"connect_retries_on_failure")) return (int)variables.connect_retries_on_failure;
+	if (!strcasecmp(name,"connection_delay_multiplex_ms")) return (int)variables.connection_delay_multiplex_ms;
 	if (!strcasecmp(name,"connection_max_age_ms")) return (int)variables.connection_max_age_ms;
 	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
 	if (!strcasecmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
@@ -777,6 +780,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"connect_retries_on_failure")) {
 		sprintf(intbuf,"%d",variables.connect_retries_on_failure);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"connection_delay_multiplex_ms")) {
+		sprintf(intbuf,"%d",variables.connection_delay_multiplex_ms);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"connection_max_age_ms")) {
@@ -1407,6 +1414,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
 			variables.connect_retries_on_failure=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"connection_delay_multiplex_ms")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 300*1000) {
+			variables.connection_delay_multiplex_ms=intv;
 			return true;
 		} else {
 			return false;
@@ -2933,6 +2949,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___shun_recovery_time_sec=GloMTH->get_variable_int((char *)"shun_recovery_time_sec");
 	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
+	mysql_thread___connection_delay_multiplex_ms=GloMTH->get_variable_int((char *)"connection_delay_multiplex_ms");
 	mysql_thread___connection_max_age_ms=GloMTH->get_variable_int((char *)"connection_max_age_ms");
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
 	mysql_thread___connect_timeout_server_max=GloMTH->get_variable_int((char *)"connect_timeout_server_max");

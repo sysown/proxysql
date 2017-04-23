@@ -176,6 +176,7 @@ MySQL_Connection::MySQL_Connection() {
 	query.stmt_meta=NULL;
 	query.stmt_result=NULL;
 	largest_query_length=0;
+	multiplex_delayed=false;
 	MyRS=NULL;
 	creation_time=0;
 	processing_multi_statement=false;
