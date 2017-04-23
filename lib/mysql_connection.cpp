@@ -77,12 +77,24 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 
 void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (u) {
-		if (username) free(username);
-		username=strdup(u);
+		if (username) {
+			if (strcmp(u,username)) {
+				free(username);
+				username=strdup(u);
+			}
+		} else {
+			username=strdup(u);
+		}
 	}
 	if (p) {
-		if (password) free(password);
-		password=strdup(p);
+		if (password) {
+			if (strcmp(p,password)) {
+				free(password);
+				password=strdup(p);
+			}
+		} else {
+			password=strdup(p);
+		}
 	}
 	if (s) {
 		if (schemaname) free(schemaname);

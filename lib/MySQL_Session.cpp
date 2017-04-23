@@ -327,6 +327,9 @@ MySQL_Session::~MySQL_Session() {
 	free(match_regexes);
 	match_regexes=NULL;
 	}
+	if (mirror) {
+		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+	}
 }
 
 
@@ -675,23 +678,38 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session() {
 	if (pktH->size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
-		MySQL_Session *newsess=new MySQL_Session();
-		newsess->client_myds = new MySQL_Data_Stream();
-		newsess->client_myds->DSS=STATE_SLEEP;
-		newsess->client_myds->sess=newsess;
-		newsess->client_myds->fd=0;
-		newsess->client_myds->myds_type=MYDS_FRONTEND;
-		newsess->client_myds->PSarrayOUT= new PtrSizeArray();
-		newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
-		if (newsess->thread_session_id==0) {
-			newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
+		// check if there are too many mirror sessions in queue
+		if (thread->mirror_queue_mysql_sessions->len >= mysql_thread___mirror_max_queue_length) {
+			return;
 		}
-		thread->register_session(newsess);
-		newsess->status=WAITING_CLIENT_DATA;
-		MySQL_Connection *myconn=new MySQL_Connection;
-		myconn->userinfo->set(client_myds->myconn->userinfo);
-		newsess->client_myds->attach_connection(myconn);
-		newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
+		// at this point, we will create the new session
+		// we will later decide if queue it or sent it immediately
+
+//		int i=0;
+//		for (i=0;i<100;i++) {
+		MySQL_Session *newsess=NULL;
+		if (thread->mirror_queue_mysql_sessions_cache->len==0) {
+			newsess=new MySQL_Session();
+			newsess->client_myds = new MySQL_Data_Stream();
+			newsess->client_myds->DSS=STATE_SLEEP;
+			newsess->client_myds->sess=newsess;
+			newsess->client_myds->fd=0;
+			newsess->client_myds->myds_type=MYDS_FRONTEND;
+			newsess->client_myds->PSarrayOUT= new PtrSizeArray();
+			newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
+			if (newsess->thread_session_id==0) {
+				newsess->thread_session_id=__sync_fetch_and_add(&glovars.thread_id,1);
+			}
+			newsess->status=WAITING_CLIENT_DATA;
+			MySQL_Connection *myconn=new MySQL_Connection;
+			newsess->client_myds->attach_connection(myconn);
+			newsess->client_myds->myprot.init(&newsess->client_myds, newsess->client_myds->myconn->userinfo, newsess);
+			newsess->mirror=true;
+			newsess->client_myds->destroy_queues();
+		} else {
+			newsess=(MySQL_Session *)thread->mirror_queue_mysql_sessions_cache->remove_index_fast(0);
+		}
+		newsess->client_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		newsess->to_process=1;
 		newsess->default_hostgroup=default_hostgroup;
 		if (qpo->mirror_hostgroup>= 0) {
@@ -700,13 +718,60 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			newsess->mirror_hostgroup=default_hostgroup; // copy the default
 		}
 		newsess->mirror_flagOUT=qpo->mirror_flagOUT; // in the new session we copy the mirror flagOUT
-		newsess->default_schema=strdup(default_schema);
-		newsess->mirror=true;
+		if (newsess->default_schema==NULL) {
+			newsess->default_schema=strdup(default_schema);
+		} else {
+			if (strcmp(newsess->default_schema,default_schema)) {
+				free(newsess->default_schema);
+				newsess->default_schema=strdup(default_schema);
+			}
+		}
 		newsess->mirrorPkt.size=pktH->size;
 		newsess->mirrorPkt.ptr=l_alloc(newsess->mirrorPkt.size);
 		memcpy(newsess->mirrorPkt.ptr,pktH->ptr,pktH->size);
-		newsess->handler(); // execute immediately
-		newsess->to_process=0;
+
+		if (thread->mirror_queue_mysql_sessions->len==0) {
+			// there are no sessions in the queue, we try to execute immediately
+			// Only mysql_thread___mirror_max_concurrency mirror session can run in parallel
+			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > mysql_thread___mirror_max_concurrency ) {
+				// if the limit is reached, we queue it instead
+				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+				thread->mirror_queue_mysql_sessions->add(newsess);
+			}	else {
+				thread->register_session(newsess);
+				newsess->handler(); // execute immediately
+				//newsess->to_process=0;
+				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
+					thread->unregister_session(thread->mysql_sessions->len-1);
+					int l=mysql_thread___mirror_max_concurrency;
+					if (thread->mirror_queue_mysql_sessions->len*0.3 > l) l=thread->mirror_queue_mysql_sessions->len*0.3;
+					if (thread->mirror_queue_mysql_sessions_cache->len <= l) {
+						bool to_cache=true;
+						if (newsess->mybe) {
+							if (newsess->mybe->server_myds) {
+								to_cache=false;
+							}
+						}
+						if (to_cache) {
+							__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+							thread->mirror_queue_mysql_sessions_cache->add(newsess);
+						} else {
+							delete newsess;
+						}
+					} else {
+						delete newsess;
+					}
+				}
+			}
+		} else {
+			thread->mirror_queue_mysql_sessions->add(newsess);
+		}
+
+
+//		if (i==0) {
+//		} else {
+//			delete newsess;
+//		}
 	}
 }
 
@@ -2106,6 +2171,7 @@ __get_pkts_from_client:
 					default:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
 						{
+							if (mirror==false) {
                                                         char buf[INET6_ADDRSTRLEN];
                                                         switch (client_myds->client_addr->sa_family) {
                                                         case AF_INET: {
@@ -2122,7 +2188,8 @@ __get_pkts_from_client:
                                                                 sprintf(buf, "localhost");
                                                                 break;
                                                         }
-						proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+								proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+							}
 						}
 						return -1;
 						break;
