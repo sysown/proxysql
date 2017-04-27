@@ -390,7 +390,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				if(*s == qutr_char && (len == i+1 || *(s + SIZECHAR) != qutr_char))
 				{
 						p_r = p_r_t;
-						*p_r++ = '?';
+						// wrap two more ? to one ?,
+						if (*(p_r_t-2) == '?' && (*(p_r_t-1) ==' ' || *(p_r_t-1) == ',' || *(p_r_t-1) == '?')){
+							*(p_r-1) = ',';
+						}
+						else
+							*p_r++ = '?';
 						flag = 0;
 						if(i < len)
 							s++;
@@ -418,7 +423,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					if(is_digit_string(p_r_t, p_r))
 					{
 						p_r = p_r_t;
-						*p_r++ = '?';
+						// wrap two more ? to ?,
+						if (*(p_r_t-2) == '?' && (*(p_r_t-1) ==' ' || *(p_r_t-1) == ',' || *(p_r_t-1) == '?')){
+							*(p_r-1) = ',';
+						}
+						else
+							*p_r++ = '?';
 						if(len == i+1)
 						{
 							if(is_token_char(*s))
@@ -437,11 +447,18 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		// =================================================
 		// COPY CHAR
 		// =================================================
-		// convert every space char to ' '
-		if (lowercase==0) {
-			*p_r++ = !is_space_char(*s) ? *s : ' ';
-		} else {
-			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+		// wrap two more ? to ?,
+		if ((*s == ' ' || *s == ',') && (*(p_r_t-1) == '?' || *(p_r_t-1) == ',' || *(p_r_t-1) == ' ')) {
+			if (*(p_r_t-1) == ' ' && *(p_r_t-2) == '?')
+				*(p_r-1) = ',';  // p_r may be changed in line:435:is_digit_string
+		}
+		else {
+			// convert every space char to ' '
+			if (lowercase==0) {
+				*p_r++ = !is_space_char(*s) ? *s : ' ';
+			} else {
+				*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+			}
 		}
 		prev_char = *s++;
 
