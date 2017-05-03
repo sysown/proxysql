@@ -111,7 +111,7 @@ extern MySQL_Monitor *GloMyMon;
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
-int rc, arg_on=1, arg_off=0;
+//int rc, arg_on=1, arg_off=0;
 
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -2270,6 +2270,7 @@ void* child_telnet_also(void* arg)
 static void * admin_main_loop(void *arg)
 {
 	int i;
+	int rc;
 	int version=0;
 	struct sockaddr_in addr;
 	struct pollfd *fds=((struct _main_args *)arg)->fds;

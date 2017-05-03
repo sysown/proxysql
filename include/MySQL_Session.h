@@ -150,6 +150,9 @@ class MySQL_Session
 	bool autocommit;
 	bool killed;
 	bool admin;
+
+	bool is_ClickHouse_Server;
+
 	bool max_connections_reached;
 	bool client_authenticated;
 	bool connections_handler;

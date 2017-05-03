@@ -1,0 +1,62 @@
+CityHash v1.1.1, June 17, 2013
+
+  * Fix CityHash32() so platforms that disagree about whether 'char' is signed
+    use the same mathematical function.  For most people this changes nothing
+    as most popular platforms agree with x86 about whether 'char' is signed.
+  * No changes to any of the functions, unless you had been using CityHash32()
+    despite "make check" reporting a failure on your platform.
+  * Slightly modernize and improve configuration and portability.
+
+CityHash v1.1, October 22, 2012
+
+  * Add CityHash32(), intended for 32-bit platforms.
+  * Change existing functions to improve their hash quality and/or speed.  Most
+    of the changes were minor, but CityHashCrc* was substantially reworked
+    (and made perhaps 10% slower, unfortunately).
+  * Improve README.
+
+CityHash v1.0.3, October 6, 2011
+
+  * Change all the functions to improve their hash quality.  Most of the
+    changes were minor.  Special thanks to Bob Jenkins for reporting some
+    issues that he'd found.  The speed of the functions after these changes is
+    roughly unchanged, except that CityHash128() and CityHash128WithSeed() are
+    slower.
+  * To improve portability, replace the one use of ssize_t with signed long.
+  * Improve README.
+
+CityHash v1.0.2, May 8, 2011
+
+  * Correct a problem in CityHashCrc256(); for inputs under 240 bytes the
+    scheme of padding to 240 bytes was causing the empty string and an input
+    of exactly 240 NULs to have the same hash code.  That is now fixed.
+    Most strings less than 240 bytes long will have a different hash than
+    they did in v1.0.1.
+  * Other hash functions are unchanged.
+  * Minor corrections and improvements to README.
+
+CityHash v1.0.1, April 28, 2011
+
+  * Added README, NEWS, and COPYING.  The README contains installation and
+    usage instructions, information on "hash quality," and other goodies.
+  * Improved how CityHash128() and CityHash128WithSeed() handle very short
+    input strings.
+  * Added new functions that are faster on long strings on 64-bit CPUs with
+    a CRC32 instruction: CityHashCrc128(), CityHashCrc128WithSeed(), and
+    CityHashCrc256().
+  * Removed our assumption that "*(const uint64*)p" and such is safe.  Now we
+    memcpy() instead. It has no speed penalty and makes our intent explicit
+    to the compiler.
+  * Changed #include "city.h" to #include <city.h>, suggested by Robert Escriva.
+  * Added build system, a modified version of one contributed by Robert Escriva.
+  * We now use __builtin_expect if the configure script can make it work, rather
+    than just on gcc.
+  * Added a test: use "make check" to run it.  If you compile CityHash in a way
+    that causes it to return unexpected results, the test should fail.
+  * Added untested big-endian support. Please let us know if you try it!
+  * Other than CityHash128() and CityHash128WithSeed(), the hash functions in
+    the previous release are unchanged.
+
+CityHash v1, April 11, 2011
+
+  * Initial release

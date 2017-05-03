@@ -14,6 +14,7 @@
 #include "configfile.hpp"
 #include "query_processor.h"
 #include "proxysql_admin.h"
+//#include "ClickHouseServer.hpp"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
 #include "MySQL_PreparedStatement.h"

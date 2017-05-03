@@ -20,6 +20,8 @@ extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager *GloMyStmt;
 
+extern ClickHouseServer *GloClickHouseServer;
+
 Session_Regex::Session_Regex(char *p) {
 	s=strdup(p);
 	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
@@ -256,6 +258,8 @@ MySQL_Session::MySQL_Session() {
 	mirror_hostgroup=-1;
 	mirror_flagOUT=-1;
 	active_transactions=0;
+
+	is_ClickHouse_Server=false;
 
 	match_regexes=NULL;
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
@@ -1932,9 +1936,15 @@ __get_pkts_from_client:
 									mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
-									// this is processed by the admin module
-									admin_func(this, GloAdmin, &pkt);
-									l_free(pkt.size,pkt.ptr);
+									if (is_ClickHouse_Server) {
+										// this is processed by the ClickHouse Module
+										admin_func(this, (ProxySQL_Admin *)GloClickHouseServer, &pkt);
+										l_free(pkt.size,pkt.ptr);
+									} else {
+										// this is processed by the admin module
+										admin_func(this, GloAdmin, &pkt);
+										l_free(pkt.size,pkt.ptr);
+									}
 								}
 								break;
 							case _MYSQL_COM_CHANGE_USER:

@@ -5,7 +5,7 @@
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
-
+#include "ClickHouseServer.hpp"
 
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>
@@ -155,6 +155,7 @@ std::thread *MyMon_thread;
 
 MySQL_Logger *GloMyLogger;
 
+ClickHouseServer *GloClickHouseServer;
 
 void * mysql_worker_thread_func(void *arg) {
 
@@ -326,6 +327,13 @@ void ProxySQL_Main_init_MySQL_Monitor_module() {
 //	GloMyMon = new MySQL_Monitor();
 	MyMon_thread = new std::thread(&MySQL_Monitor::run,GloMyMon);
 	GloMyMon->print_version();
+}
+
+
+void ProxySQL_Main_init_ClickHouse_module() {
+	// start ClickHouse
+	GloClickHouseServer = new ClickHouseServer();
+	//GloClickHouseServer->init();
 }
 
 void ProxySQL_Main_join_all_threads() {
@@ -547,6 +555,13 @@ void ProxySQL_Main_init_phase3___start_all() {
 			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
 #endif
 		}
+	if (GloVars.global.clickhouse==true) {
+		cpu_timer t;
+		ProxySQL_Main_init_ClickHouse_module();
+#ifdef DEBUG
+			std::cerr << "Main phase3 : ClickHouse Server initialized in ";
+#endif
+	}
 }
 
 

@@ -51,6 +51,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
+	global.clickhouse=true;
 	global.monitor=true;
 #ifdef IDLE_THREADS
 	global.idle_threads=false;

@@ -38,7 +38,7 @@ class ProxySQL_External_Scheduler {
 };
 
 class ProxySQL_Admin {
-	private:
+	protected:
 	volatile int main_shutdown;
 
 	std::vector<table_def_t *> *tables_defs_admin;

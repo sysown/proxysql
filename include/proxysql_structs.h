@@ -346,6 +346,7 @@ class SQLite3_result;
 class stmt_execute_metadata_t;
 class MySQL_STMTs_meta;
 class MySQL_HostGroups_Manager;
+class ClickHouseServer;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
