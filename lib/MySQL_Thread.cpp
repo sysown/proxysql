@@ -1946,6 +1946,7 @@ bool MySQL_Thread::init() {
 	GloQPro->init_thread();
 	refresh_variables();
 	i=pipe(pipefd);
+	ioctl_FIONBIO(pipefd[0],1);
 	ioctl_FIONBIO(pipefd[1],1);
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
 	assert(i==0);
