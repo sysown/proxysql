@@ -1,0 +1,19 @@
+@@ -928,8 +928,7 @@
+ 	    | (opt_junk_free ? flag_opt_junk_free : 0)
+ 	    | (opt_quarantine ? flag_opt_quarantine : 0)
+ 	    | (opt_zero ? flag_opt_zero : 0)
+-	    | (opt_utrace ? flag_opt_utrace : 0)
+-	    | (opt_xmalloc ? flag_opt_xmalloc : 0);
++	    | (opt_utrace ? flag_opt_utrace : 0);
+ 
+ 	if (config_valgrind)
+ 		malloc_slow_flags |= (in_valgrind ? flag_in_valgrind : 0);
+@@ -1588,7 +1587,7 @@
+ 	assert(!tsdn_null(tsdn) || ret == NULL);
+ 
+ 	if (unlikely(ret == NULL)) {
+-		if (slow_path && config_xmalloc && unlikely(opt_xmalloc)) {
++		if (config_xmalloc && unlikely(opt_xmalloc)) {
+ 			malloc_printf("<jemalloc>: Error in %s(): out of "
+ 			    "memory\n", func);
+ 			abort();

@@ -1,8 +1,5 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
-//#include <thread>
-//#include <list>
-//#include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "thread.h"
@@ -21,6 +18,43 @@
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_REPLICATION_LAG_LOG "CREATE TABLE mysql_server_replication_lag_log ( hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , repl_lag INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GROUP_REPLICATION_LOG "CREATE TABLE mysql_server_group_replication_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , viable_candidate VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , transactions_behind INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+
+/*
+struct cmp_str {
+  bool operator()(char const *a, char const *b) const
+  {
+    return strcmp(a, b) < 0;
+  }
+};
+*/
+
+#define MyGR_Nentries	100
+
+typedef struct _MyGR_status_entry_t {
+//	char *address;
+//	int port;
+	unsigned long long start_time;
+	unsigned long long check_time;
+	long long transactions_behind;
+	bool primary_partition;
+	bool read_only;
+	char *error;
+} MyGR_status_entry_t;
+
+
+class MyGR_monitor_node {
+	private:
+	int idx_last_entry;
+	public:
+	char *addr;
+	int port;
+	unsigned int writer_hostgroup;
+	MyGR_status_entry_t last_entries[MyGR_Nentries];
+	MyGR_monitor_node(char *_a, int _p, int _whg);
+	~MyGR_monitor_node();
+	bool add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, char *_error); // return true if status changed
+};
 
 
 class MySQL_Monitor_Connection_Pool;
@@ -41,6 +75,9 @@ class MySQL_Monitor_State_Data {
   int ST;
   char *hostname;
   int port;
+	int writer_hostgroup; // used only by group replication
+	bool writer_is_also_reader; // used only by group replication
+	int  max_transactions_behind; // used only by group replication
   bool use_ssl;
   MYSQL *mysql;
   MYSQL_RES *result;
@@ -72,13 +109,15 @@ class WorkItem {
 
 class MySQL_Monitor {
 	private:
-	//unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	//MySQL_Thread *mysql_thr;
 	std::vector<table_def_t *> *tables_defs_monitor;
 	void insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	public:
+	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
+	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
+	std::map<std::string, MyGR_monitor_node *> Group_Replication_Hosts_Map;
+	SQLite3_result *Group_Replication_Hosts_resultset;
 	unsigned int num_threads;
 	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
@@ -92,8 +131,10 @@ class MySQL_Monitor {
 	void * monitor_connect();
 	void * monitor_ping();
 	void * monitor_read_only();
+	void * monitor_group_replication();
 	void * monitor_replication_lag();
 	void * run();
+	void populate_monitor_mysql_server_group_replication_log();
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */

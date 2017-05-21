@@ -1,26 +1,11 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "SpookyV2.h"
+#include <fcntl.h>
 
 extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 #define PROXYSQL_USE_RESULT
-
-// Bug https://mariadb.atlassian.net/browse/CONC-136
-//int STDCALL mysql_select_db_start(int *ret, MYSQL *mysql, const char *db);
-//int STDCALL mysql_select_db_cont(int *ret, MYSQL *mysql, int ready_status);
-
-/*
-void * MySQL_Connection::operator new(size_t size) {
-	return l_alloc(size);
-}
-
-void MySQL_Connection::operator delete(void *ptr) {
-	l_free(sizeof(MySQL_Connection),ptr);
-}
-*/
-
-//extern __thread char *mysql_thread___default_schema;
 
 static int
 mysql_status(short event, short cont) {
@@ -45,7 +30,6 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	sha1_pass=NULL;
 	schemaname=NULL;
 	hash=0;
-	//schemaname=strdup(mysql_thread___default_schema);
 }
 
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
@@ -93,12 +77,24 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 
 void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (u) {
-		if (username) free(username);
-		username=strdup(u);
+		if (username) {
+			if (strcmp(u,username)) {
+				free(username);
+				username=strdup(u);
+			}
+		} else {
+			username=strdup(u);
+		}
 	}
 	if (p) {
-		if (password) free(password);
-		password=strdup(p);
+		if (password) {
+			if (strcmp(p,password)) {
+				free(password);
+				password=strdup(p);
+			}
+		} else {
+			password=strdup(p);
+		}
 	}
 	if (s) {
 		if (schemaname) free(schemaname);
@@ -147,7 +143,6 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 
 
 MySQL_Connection::MySQL_Connection() {
-	//memset(&myconn,0,sizeof(MYSQL));
 	mysql=NULL;
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
@@ -164,9 +159,15 @@ MySQL_Connection::MySQL_Connection() {
 	status_flags=0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
+	options.last_set_autocommit=-1;	// -1 = never set
 	options.autocommit=true;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.sql_log_bin=1;	// default #818
+	options.sql_mode=NULL;	// #509
+	options.sql_mode_int=0;	// #509
+	options.time_zone=NULL;	// #819
+	options.time_zone_int=0;	// #819
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -175,6 +176,7 @@ MySQL_Connection::MySQL_Connection() {
 	query.stmt_meta=NULL;
 	query.stmt_result=NULL;
 	largest_query_length=0;
+	multiplex_delayed=false;
 	MyRS=NULL;
 	creation_time=0;
 	processing_multi_statement=false;
@@ -198,15 +200,6 @@ MySQL_Connection::~MySQL_Connection() {
 		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
 	}
-//	// FIXME: with the use of mysql client library , this part should be gone.
-//	// for now only commenting it to be sure it is not needed 
-//	if (myds) {
-//		myds->shut_hard();
-//	} else {
-//		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "MySQL_Connection %p , fd:%d\n", this, fd);
-//		shutdown(fd, SHUT_RDWR);
-//		close(fd);
-//	}
 	if (MyRS) {
 		delete MyRS;
 	}
@@ -214,9 +207,15 @@ MySQL_Connection::~MySQL_Connection() {
 		delete local_stmts;
 	}
 	if (query.stmt) {
-		// we don't run mysql_stmt_close() : should be already destroyed
-//		mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
+	}
+	if (options.sql_mode) {
+		free(options.sql_mode);
+		options.sql_mode=NULL;
+	}
+	if (options.time_zone) {
+		free(options.time_zone);
+		options.time_zone=NULL;
 	}
 };
 
@@ -262,6 +261,14 @@ void MySQL_Connection::set_status_get_lock(bool v) {
 	}
 }
 
+void MySQL_Connection::set_status_found_rows(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_FOUND_ROWS;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_FOUND_ROWS;
+	}
+}
+
 void MySQL_Connection::set_status_lock_tables(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_LOCK_TABLES;
@@ -302,6 +309,17 @@ void MySQL_Connection::set_status_no_multiplex(bool v) {
 	}
 }
 
+// pay attention here. set_status_sql_log_bin0 sets it sql_log_bin is ZERO
+// sql_log_bin=0 => true
+// sql_log_bin=1 => false
+void MySQL_Connection::set_status_sql_log_bin0(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
+	}
+}
+
 bool MySQL_Connection::get_status_transaction() {
 	return status_flags & STATUS_MYSQL_CONNECTION_TRANSACTION;
 }
@@ -318,6 +336,10 @@ bool MySQL_Connection::get_status_get_lock() {
 	return status_flags & STATUS_MYSQL_CONNECTION_GET_LOCK;
 }
 
+bool MySQL_Connection::get_status_found_rows() {
+	return status_flags & STATUS_MYSQL_CONNECTION_FOUND_ROWS;
+}
+
 bool MySQL_Connection::get_status_lock_tables() {
 	return status_flags & STATUS_MYSQL_CONNECTION_LOCK_TABLES;
 }
@@ -332,6 +354,10 @@ bool MySQL_Connection::get_status_prepared_statement() {
 
 bool MySQL_Connection::get_status_no_multiplex() {
 	return status_flags & STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
+}
+
+bool MySQL_Connection::get_status_sql_log_bin0() {
+	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
 // non blocking API
@@ -456,11 +482,8 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 		largest_query_length=length;
 	}
 	if (query.stmt) {
-		//mysql_stmt_close(query.stmt);
 		query.stmt=NULL;
 	}
-	//query.ptr=(char *)malloc(length);
-	//memcpy(query.ptr,stmt,length);
 }
 
 void MySQL_Connection::real_query_start() {
@@ -737,8 +760,6 @@ handler_again:
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.stmt_meta->size);
 			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.stmt_meta->size;
-//			__sync_fetch_and_add(&parent->bytes_sent,query.length);
-//			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
 			if (async_exit_status) {
 				next_event(ASYNC_STMT_EXECUTE_CONT);
 			} else {
@@ -802,15 +823,6 @@ handler_again:
 					__sync_fetch_and_add(&parent->bytes_recv,total_size);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=total_size;
 				}
-/*
-				int row_count= 0;
-				fprintf(stdout, "Fetching results ...\n");
-				while (!mysql_stmt_fetch(query.stmt))
-				{
-					row_count++;
-					fprintf(stdout, "  row %d\n", row_count);
-				}
-*/
 			}
 /*
 			if (interr) {
@@ -961,6 +973,10 @@ handler_again:
 			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
+			options.last_set_autocommit = ( options.autocommit ? 1 : 0 ) ; // we successfully set autocommit
+			if ((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) && options.autocommit==false) {
+				proxy_warning("It seems we are hitting bug http://bugs.mysql.com/bug.php?id=66884\n");
+			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_FAILED:
 			fprintf(stderr,"%s\n",mysql_error(mysql));
@@ -1168,8 +1184,6 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	if (async_state_machine==ASYNC_STMT_PREPARE_SUCCESSFUL || async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
 		query.stmt_meta=NULL;
 		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
-			//mysql_stmt_close(query.stmt);
-			//query.stmt=NULL;
 			return -1;
 		} else {
 			*_stmt=query.stmt;
@@ -1384,7 +1398,6 @@ void MySQL_Connection::async_free_result() {
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
 	if (query.ptr) {
-		//free(query.ptr);
 		query.ptr=NULL;
 		query.length=0;
 	}
@@ -1408,6 +1421,7 @@ void MySQL_Connection::async_free_result() {
 	}
 }
 
+/*
 bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
@@ -1415,11 +1429,20 @@ bool MySQL_Connection::IsActiveTransaction() {
 	}
 	return ret;
 }
+*/
 
 bool MySQL_Connection::IsAutoCommit() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_AUTOCOMMIT);
+		if (ret) {
+			if (options.last_set_autocommit==0) {
+				// it seems we hit bug http://bugs.mysql.com/bug.php?id=66884
+				// we last sent SET AUTOCOMMIT = 0 , but the server says it is 1
+				// we assume that what we sent last is correct .  #873
+				ret = false;
+			}
+		}
 	}
 	return ret;
 }
@@ -1428,7 +1451,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS) ) {
 		ret=true;
 	}
 	return ret;
@@ -1437,8 +1460,24 @@ bool MySQL_Connection::MultiplexDisabled() {
 
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (query_digest_text==NULL) return;
+	// unknown what to do with multiplex
+	int mul=-1;
+	if (myds) {
+		if (myds->sess) {
+			if (myds->sess->qpo) {
+				mul=myds->sess->qpo->multiplex;
+				if (mul==0) {
+					set_status_no_multiplex(true);
+				} else {
+					if (mul==1) {
+						set_status_no_multiplex(false);
+					}
+				}
+			}
+		}
+	}
 	if (get_status_user_variable()==false) { // we search for variables only if not already set
-		if (index(query_digest_text,'@')) {
+		if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 			if (
 				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
 				&&
@@ -1447,9 +1486,15 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				set_status_user_variable(true);
 			}
 		}
-		// For issue #555 , multiplexing is disabled if --safe-updates is used
-		if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
+		if (strncasecmp(query_digest_text,"SET ",4)==0) {
+			// For issue #555 , multiplexing is disabled if --safe-updates is used
+			if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
 				set_status_user_variable(true);
+			} else if (strcasecmp(query_digest_text,"SET FOREIGN_KEY_CHECKS=?")==0) { // see #835
+				set_status_user_variable(true);
+			} else if (strcasecmp(query_digest_text,"SET UNIQUE_CHECKS=?")==0) { // see #835
+				set_status_user_variable(true);
+			}
 		}
 	}
 	if (get_status_prepared_statement()==false) { // we search if prepared was already executed
@@ -1482,18 +1527,9 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			set_status_get_lock(true);
 		}
 	}
-	if (myds) {
-		if (myds->sess) {
-			if (myds->sess->qpo) {
-				int mul=myds->sess->qpo->multiplex;
-				if (mul==0) {
-					set_status_no_multiplex(true);
-				} else {
-					if (mul==1) {
-						set_status_no_multiplex(false);
-					}
-				}
-			}
+	if (get_status_found_rows()==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
+		if (strcasestr(query_digest_text,"SQL_CALC_FOUND_ROWS")) {
+			set_status_found_rows(true);
 		}
 	}
 }
@@ -1524,20 +1560,16 @@ void MySQL_Connection::close_mysql() {
 		memcpy(buff, &myhdr, sizeof(mysql_hdr));
 		buff[4]=0x01;
 		int fd=mysql->net.fd;
+#ifdef __APPLE__
+		int arg_on=1;
+		setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+		send(fd, buff, 5, 0);
+#else
 		send(fd, buff, 5, MSG_NOSIGNAL);
+#endif
 	}
 //	int rc=0;
 	mysql_close_no_command(mysql);
-/*
-	if (mysql->net.vio) {
-		rc=shutdown(fd, SHUT_RDWR);
-		if (rc) {
-			proxy_error("shutdown(): FD=%d , code=%d\n", fd, errno);
-			assert(rc==0);
-		}
-		close(fd);
-	}
-*/
 }
 
 
@@ -1594,6 +1626,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 void MySQL_Connection::reset() {
 	status_flags=0;
 	reusable=true;
+	options.last_set_autocommit=-1; // never sent
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local(false);
 }

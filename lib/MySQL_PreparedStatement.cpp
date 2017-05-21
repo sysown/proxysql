@@ -70,6 +70,9 @@ MySQL_STMTs_local::~MySQL_STMTs_local() {
 		uint32_t stmt_id=it->first;
 		MYSQL_STMT *stmt=it->second;
 		if (stmt) { // is a server
+			if (stmt->mysql) {
+				stmt->mysql->stmts= list_delete(stmt->mysql->stmts, &stmt->list);
+			}
 			// we do a hack here: we pretend there is no server associate
 			// the connection will be dropped anyway immediately after
 			stmt->mysql=NULL;
@@ -317,6 +320,22 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h, char
 		hash=_h;
 	} else {
 		compute_hash();
+	}
+
+	is_select_NOT_for_update=false;
+	{ // see bug #899 . Most of the code is borrowed from Query_Info::is_select_NOT_for_update()
+		if (ql>=7) {
+			if (strncasecmp(q,(char *)"SELECT ",7)==0) { // is a SELECT
+				is_select_NOT_for_update=true;
+				if (ql>=17) {
+					char *p=(char *)q;
+					p+=ql-11;
+					if (strncasecmp(p," FOR UPDATE",11)==0) { // is a SELECT FOR UPDATE
+						is_select_NOT_for_update=false;
+					}
+				}
+			}
+		}
 	}
 
 	// set default properties:

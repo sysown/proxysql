@@ -18,8 +18,8 @@ Usage: $0 <hostgroup_id write> [hostgroup_id read] [number writers] [writers are
 - HOSTGROUP READERS   (optional)  (0..)   The hostgroup_id that contains nodes that will server 'reads'
 - NUMBER WRITERS      (optional)  (0..)   Maximum number of write hostgroup_id node that can be marked ONLINE
                                           When 0 (default), all nodes can be marked ONLINE
-- WRITERS ARE READERS (optional)  (0|1)   When 1 (default), ONLINE nodes in write hostgroup_id will prefer not
-                                          to be ONLINE in read hostgroup_id
+- WRITERS ARE READERS (optional)  (0|1)   When 1 (default), ONLINE nodes in write hostgroup_id will prefer
+                                          to be ONLINE also in read hostgroup_id
 - LOG_FILE            (optional)  file    logfile where node state checks & changes are written to (verbose)
 
 

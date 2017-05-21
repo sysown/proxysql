@@ -58,3 +58,13 @@
 		uint32_t *a=(uint32_t *)x; \
 		*a=*((uint32_t *)y); \
 	} while(0)
+
+#ifndef PROXYSQL_LIKELY
+#ifdef __GNUC__
+# define likely(x)   __builtin_expect(!!(x), 1)
+# define unlikely(x) __builtin_expect(!!(x), 0)
+#else
+# define likely(x)   !!(x)
+# define unlikely(x) !!(x)
+#endif
+#endif /* PROXYSQL_LIKELY */

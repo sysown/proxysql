@@ -24,6 +24,7 @@ libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-4.3.1
 	cd jemalloc && tar -jxf jemalloc-4.3.1.tar.bz2
+	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.patch
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -95,6 +96,7 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
+	cd pcre && rm -rf pcre-8.39
 	cd sqlite3/sqlite3 && rm -rf * || true
 .PHONY: cleanall
 

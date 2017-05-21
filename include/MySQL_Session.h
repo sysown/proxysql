@@ -2,19 +2,21 @@
 #define __CLASS_MYSQL_SESSION_H
 #include "proxysql.h"
 #include "cpp.h"
-/*
-class MySQL_Session_userinfo {
+
+// these structs will be used for various regex hardcoded
+// their initial use will be for sql_log_bin , sql_mode and time_zone
+// issues #509 , #815 and #816
+class Session_Regex {
+	private:
+	void *opt;
+	void *re;
+	char *s;
 	public:
-  char *username;
-  char *password;
-  char *schemaname;
-	MySQL_Session_userinfo();
-	~MySQL_Session_userinfo();
-	void set(char *, char *, char *);
-	void set(MySQL_Session_userinfo *);
-	bool set_schemaname(char *, int);
+	Session_Regex(char *p);
+	~Session_Regex();
+	bool match(char *m);
 };
-*/
+
 class Query_Info {
 	public:
 	SQP_par_t QueryParserArgs;
@@ -56,6 +58,7 @@ class MySQL_Session
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
@@ -65,6 +68,7 @@ class MySQL_Session
 	void handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool ps=false);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
@@ -82,22 +86,27 @@ class MySQL_Session
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_user_schema();
+	bool handler_again___verify_backend_sql_log_bin();
+	bool handler_again___verify_backend_sql_mode();
+	bool handler_again___verify_backend_time_zone();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
+	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
+	bool handler_again___status_SETTING_SQL_MODE(int *);
+	bool handler_again___status_SETTING_TIME_ZONE(int *);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_CHARSET(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
-
-
-//	void return_MySQL_Connection_To_Poll(MySQL_Data_Stream *);
-
-
-//	MySQL_STMT_Manager *Session_STMT_Manager;
+	void init();
+	void reset();
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
 	PtrSize_t *pktH;
+
+	Session_Regex **match_regexes;
+
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
@@ -128,6 +137,7 @@ class MySQL_Session
 	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
+	int next_query_flagIN;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
 	int active_transactions;
@@ -154,7 +164,6 @@ class MySQL_Session
 	StmtLongDataHandler *SLDH;
 
 	MySQL_Session();
-//	MySQL_Session(int);
 	~MySQL_Session();
 
 	void set_unhealthy();
@@ -171,8 +180,6 @@ class MySQL_Session
 		}
 		status=e;
 	}
-	//MySQL_Protocol myprot_client;
-	//MySQL_Protocol myprot_server;
 	int handler();
 
 	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);

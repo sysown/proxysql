@@ -78,13 +78,6 @@ inline int mystrcasecmp(const char *a, const char *b) {
 	} while (cb);
 
 	return 0;
-/*
-	if (*a == 0) {
-		return 0;
-	} else {
-		return 1;
-	}
-*/
 }
 
 static inline char * l_strdup(const char *s) {
@@ -94,14 +87,5 @@ static inline char * l_strdup(const char *s) {
 	return r;
 }
 
-/*
-static inline void l_free_string(const char *s) {
-	size_t len=strlen(s)+1;
-	l_free(len,(char *)s);
-}
-*/
-
-
 
 #endif /* L_STACK */
-

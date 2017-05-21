@@ -2,7 +2,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include <string>
-
+#include <sys/utsname.h>
 
 
 static void term_handler(int sig) {
@@ -25,15 +25,9 @@ void crash_handler(int sig) {
 	fprintf(stderr, "Error: signal %d:\n", sig);
 	backtrace_symbols_fd(arr, s, STDERR_FILENO);
 #endif /* __GLIBC__ */
-//#ifdef SYS_gettid
 	// try to generate a core dump signaling again the thread
 	signal(sig, SIG_DFL);
-//	pid_t tid;
-//	tid = syscall(SYS_gettid);
 	pthread_kill(pthread_self(), sig);
-	//kill(tid, sig);
-//#endif /* SYS_gettid */
-//	exit(EXIT_FAILURE);
 }
 
 ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
@@ -58,6 +52,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.nostart=false;
 	global.foreground=false;
 	global.monitor=true;
+#ifdef IDLE_THREADS
+	global.idle_threads=false;
+#endif /* IDLE_THREADS */
 #ifdef SO_REUSEPORT
 	global.reuseport=false;
 #endif /* SO_REUSEPORT */
@@ -86,10 +83,12 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #endif /* SO_REUSEPORT */
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
-	//opt->add((const char *)"",0,0,0,(const char *)"Enable custom memory allocator",(const char *)"-m",(const char *)"--custom-memory");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
+#ifdef IDLE_THREADS
+	opt->add((const char *)"",0,0,0,(const char *)"Create auxiliary threads to handle idle connections",(const char *)"--idle-threads");
+#endif /* IDLE_THREADS */
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	confFile=new ProxySQL_ConfigFile();
@@ -107,8 +106,6 @@ void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
 };
 
 void ProxySQL_GlobalVariables::process_opts_pre() {
-
-
 	if (opt->isSet("-h")) {
 		std::string usage;
 		opt->getUsage(usage);
@@ -146,10 +143,6 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		GloVars.__cmd_proxysql_datadir=strdup(datadir.c_str());
 	}
 
-//	if (opt->isSet("-m")) {
-//		global.use_proxysql_mem=true;
-//	}
-
 	if (opt->isSet("--initial")) {
 		__cmd_proxysql_initial=true;
 	}
@@ -158,7 +151,12 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		__cmd_proxysql_reload=true;
 	}
 
-	
+#ifdef IDLE_THREADS
+	if (opt->isSet("--idle-threads")) {
+		global.idle_threads=true;
+	}
+#endif /* IDLE_THREADS */
+
 	config_file=GloVars.__cmd_proxysql_config_file;
 
 	if (config_file==NULL) {
@@ -189,12 +187,38 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
 	if (opt->isSet("-f")) {
 		global.foreground=true;
+#ifdef __APPLE__
+	} else {
+		proxy_warning("ProxySQL does not support daemonize in Darwin: running in foreground\n");
+		global.foreground=true;
+#endif
 	}
 
 	if (opt->isSet("-M")) {
 		global.monitor=false;
 	}
 
+#ifdef SO_REUSEPORT
+	{
+		struct utsname unameData;
+		int rc;
+		rc=uname(&unameData);
+		if (rc==0) {
+			if (strcmp(unameData.sysname,"Linux")==0) {
+				int major=0, minor=0, revision=0;
+				sscanf(unameData.release, "%d.%d.%d", &major, &minor, &revision);
+				//fprintf(stderr,"%d %d %d\n",major,minor,revision);
+				if (
+					(major > 3)
+					||
+					(major == 3 && minor >= 9)
+				) {
+					global.reuseport=true;
+				}
+			}
+		}
+	}
+#endif /* SO_REUSEPORT */
 #ifdef SO_REUSEPORT
 	if (opt->isSet("-r")) {
 		global.reuseport=true;
@@ -210,16 +234,11 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 
 	proxy_debug(PROXY_DEBUG_GENERIC, 4, "processing opts\n");
 
-  //gchar *config_file=*config_file_ptr;
-
-
   // apply settings from cmdline, that have priority over config file
 #ifdef DEBUG
-//	if (GloVars.__cmd_proxysql_gdbg>0) { GloVars.global.gdbg=true; }
 	init_debug_struct_from_cmdline();
 #endif
 
-//	if (GloVars.__cmd_proxysql_foreground>=0) { foreground=GloVars.__cmd_proxysql_foreground; }
 	if (GloVars.__cmd_proxysql_nostart>=0) { glovars.nostart=GloVars.__cmd_proxysql_nostart; }
 	if (GloVars.__cmd_proxysql_datadir) {
 		free(glovars.proxy_datadir);

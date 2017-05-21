@@ -7,6 +7,7 @@
 int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 	int rc, arg_on = 1;
 	struct addrinfo hints;
+	memset(&hints,0,sizeof(hints));
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -48,15 +49,15 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 #endif /* SO_REUSEPORT */
 
                 if (bind(sd, next->ai_addr, next->ai_addrlen) == -1) {
-                        if (errno != EADDRINUSE) {
-                                proxy_error("bind(): %s\n", gai_strerror(errno));
+                        //if (errno != EADDRINUSE) {
+                                proxy_error("bind(): %s\n", strerror(errno));
                                 close(sd);
                                 freeaddrinfo(ai);
                                 return -1;
-                        }
+                        //}
                 } else {
                         if (listen(sd, backlog) == -1) {
-                                proxy_error("listen(): %s\n", gai_strerror(errno));
+                                proxy_error("listen(): %s\n", strerror(errno));
                                 close(sd);
                                 freeaddrinfo(ai);
                                 return -1;

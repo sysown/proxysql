@@ -4,65 +4,85 @@
 #include "cpp.h"
 
 
-
-//struct _sqlite3row_t {
-//};
-
-//typedef struct _sqlite3row_t sqlite3row;
-
 class SQLite3_row {
 	public:
 	int cnt;
 	int *sizes;
 	char **fields;
+	char *data;
 	SQLite3_row(int c) {
 		sizes=(int *)malloc(sizeof(int)*c);
 		fields=(char **)malloc(sizeof(char *)*c);
 		memset(fields,0,sizeof(char *)*c);
 		cnt=c;
+		data=NULL;
 	};
 	~SQLite3_row() {
-		int i=0;
-		for (i=0;i<cnt;i++) {
-			if (fields[i]) free(fields[i]);
-		}
 		free(fields);
 		free(sizes);
+		if (data) {
+			free(data);
+		}
 	};
-//	void add_field(const char *str, int i) {
-//		fields[i]=strdup(str);
-//		//sizes[i]=strlen(fields[i]);
-//		sizes[i]=sqlite3_column_bytes(stmt,i);
-//	};
 	void add_fields(sqlite3_stmt *stmt) {
 		int i;
 		int t;
+		int data_size=0;
+		int data_ptr=0;
+		// compute the length
+		for (i=0;i<cnt;i++) {
+			t=sqlite3_column_type(stmt,i);
+			if (t==SQLITE_NULL) {
+				sizes[i]=0;
+			} else {
+				sizes[i]=sqlite3_column_bytes(stmt,i);
+				data_size+=sizes[i];
+				data_size++; // leading 0
+			}
+		}
+		if (data_size) {
+			data=(char *)malloc(data_size);
+		}
 		for (i=0;i<cnt;i++) {
 			t=sqlite3_column_type(stmt,i);
 			const char *c=(char *)sqlite3_column_text(stmt,i);
 			if (t==SQLITE_NULL) {
-				sizes[i]=0;
+				//sizes[i]=0;
 				fields[i]=NULL;
 			} else {
-				sizes[i]=sqlite3_column_bytes(stmt,i);
-				fields[i]=strdup(c);
+				memcpy(data+data_ptr,c,sizes[i]);
+				fields[i]=data+data_ptr;
+				data_ptr+=sizes[i];
+				data[data_ptr]='\0';
+				data_ptr++; // leading 0
 			}
-//			} else {
-//				fields[i]=NULL;
-//			}
-			//fields[i]=(sizes[i] ? strdup((char *)sqlite3_column_text(stmt,i)) : NULL);
 		}
 	};
 	void add_fields(char **_fields) {
 		int i;
+		int data_size=0;
+		int data_ptr=0;
 		for (i=0;i<cnt;i++) {
 			if (_fields[i]) {
 				sizes[i]=strlen(_fields[i]);
-				fields[i]=strdup(_fields[i]);
+				data_size+=sizes[i];
+				data_size++; // leading 0
 			} else {
 				sizes[i]=0;
+			}
+		}
+		if (data_size) {
+			data=(char *)malloc(data_size);
+		}
+		for (i=0;i<cnt;i++) {
+			if (_fields[i]) {
+				memcpy(data+data_ptr,_fields[i],sizes[i]);
+				fields[i]=data+data_ptr;
+				data_ptr+=sizes[i];
+				data[data_ptr]='\0';
+				data_ptr++; // leading 0
+			} else {
 				fields[i]=NULL;
-				//fields[i]=strdup((char *)"");
 			}
 		}
 	};

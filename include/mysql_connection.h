@@ -12,6 +12,8 @@
 #define STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE      0x00000020
 #define STATUS_MYSQL_CONNECTION_GET_LOCK             0x00000040
 #define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX         0x00000080
+#define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
+#define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 
 class MySQL_Connection_userinfo {
 	private:
@@ -29,8 +31,6 @@ class MySQL_Connection_userinfo {
 	bool set_schemaname(char *, int);
 };
 
-
-
 class MySQL_Connection {
 	private:
 	bool is_expired(unsigned long long timeout);
@@ -38,6 +38,10 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
+		char *sql_mode;
+		char *time_zone;
+		uint32_t sql_mode_int;
+		uint32_t time_zone_int;
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
 		unsigned int compression_min_length;
@@ -45,6 +49,8 @@ class MySQL_Connection {
 		bool init_connect_sent;
 		uint8_t protocol_version;
 		uint8_t charset;
+		uint8_t sql_log_bin;
+		int8_t last_set_autocommit;
 		bool autocommit;
 	} options;
 	struct {
@@ -84,11 +90,9 @@ class MySQL_Connection {
 	bool processing_prepared_statement_prepare;
 	bool processing_prepared_statement_execute;
 	bool processing_multi_statement;
+	bool multiplex_delayed;
 	MySQL_Connection();
 	~MySQL_Connection();
-//	int assign_mshge(unsigned int);
-	//void set_mshge(MySQL_Hostgroup_Entry *);
-//	void free_mshge();
 	bool set_autocommit(bool);
 	uint8_t set_charset(uint8_t);
 
@@ -100,6 +104,8 @@ class MySQL_Connection {
 	void set_status_prepared_statement(bool);
 	void set_status_user_variable(bool);
 	void set_status_no_multiplex(bool);
+	void set_status_sql_log_bin0(bool);
+	void set_status_found_rows(bool);
 	bool get_status_transaction();
 	bool get_status_compression();
 	bool get_status_get_lock();
@@ -108,6 +114,8 @@ class MySQL_Connection {
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
 	bool get_status_no_multiplex();
+	bool get_status_sql_log_bin0();
+	bool get_status_found_rows();
 	void connect_start();
 	void connect_cont(short event);
 	void change_user_start();
@@ -146,7 +154,13 @@ class MySQL_Connection {
 
 
 	void async_free_result();
-	bool IsActiveTransaction();
+	bool IsActiveTransaction() {
+		bool ret=false;
+			if (mysql) {
+				ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
+			}
+		return ret;
+	}
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);

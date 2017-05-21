@@ -3,7 +3,9 @@
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
 #include "proxysql.h"
 #include "cpp.h"
+#ifdef IDLE_THREADS
 #include <sys/epoll.h>
+#endif // IDLE_THREADS
 
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
@@ -13,18 +15,23 @@
 #define STATS_HOSTGROUP	-3
 
 
+#define MYSQL_DEFAULT_SQL_MODE	""
+#define MYSQL_DEFAULT_TIME_ZONE	"SYSTEM"
+
 static unsigned int near_pow_2 (unsigned int n) {
   unsigned int i = 1;
   while (i < n) i <<= 1;
   return i ? i : n;
 }
 
+#ifdef IDLE_THREADS
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) _conn_exchange_t {
 	pthread_mutex_t mutex_idles;
 	PtrArray *idle_mysql_sessions;
 	pthread_mutex_t mutex_resumes;
 	PtrArray *resume_mysql_sessions;
 } conn_exchange_t;
+#endif // IDLE_THREADS
 
 class ProxySQL_Poll {
 
@@ -91,8 +98,6 @@ class ProxySQL_Poll {
 		delete loop_counters;
   };
 
-
-
   void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
     if (len==size) {
       expand(1);
@@ -143,7 +148,6 @@ class ProxySQL_Poll {
 
 class MySQL_Thread
 {
-
 	private:
   unsigned long long last_processing_idles;
 	MySQL_Connection **my_idle_conns;
@@ -152,10 +156,12 @@ class MySQL_Thread
 
 	PtrArray *cached_connections;
 
+#ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
 	int efd;
 	unsigned int mysess_idx;
 	std::map<unsigned int, unsigned int> sessmap;
+#endif // IDLE_THREADS
 
 	protected:
 	int nfds;
@@ -168,10 +174,14 @@ class MySQL_Thread
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
 	PtrArray *mysql_sessions;
+	PtrArray *mirror_queue_mysql_sessions;
+	PtrArray *mirror_queue_mysql_sessions_cache;
+#ifdef IDLE_THREADS
 	PtrArray *idle_mysql_sessions;
 	PtrArray *resume_mysql_sessions;
 
 	conn_exchange_t myexchange;
+#endif // IDLE_THREADS
 
 	int pipefd[2];
 	int shutdown;
@@ -218,9 +228,6 @@ class MySQL_Thread
   void refresh_variables();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
   void unregister_session_connection_handler(int idx, bool _new=false);
-  //void myds_backend_set_failed_connect(MySQL_Data_Stream *myds, unsigned int n);
-  //void myds_backend_pause_connect(MySQL_Data_Stream *myds);
-  //void myds_backend_first_packet_after_connect(MySQL_Data_Stream *myds, unsigned int n);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
 	void Get_Memory_Stats();
 	MySQL_Connection * get_MyConn_local(unsigned int);
@@ -229,10 +236,8 @@ class MySQL_Thread
 };
 
 
-
 typedef MySQL_Thread * create_MySQL_Thread_t();
 typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
-
 
 class iface_info {
 	public:
@@ -253,9 +258,6 @@ class iface_info {
 	}
 };
 
-
-
-
 class MySQL_Listeners_Manager {
 	private:
 	PtrArray *ifaces;
@@ -263,15 +265,12 @@ class MySQL_Listeners_Manager {
   MySQL_Listeners_Manager();
 	~MySQL_Listeners_Manager();
 	int add(const char *iface, unsigned int num_threads, int **perthrsocks);
-	//int add(const char *address, int port);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
 	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
 };
-
-
 
 class MySQL_Threads_Handler
 {
@@ -293,9 +292,12 @@ class MySQL_Threads_Handler
 		int monitor_read_only_interval;
 		int monitor_read_only_timeout;
 		bool monitor_enabled;
+		bool monitor_wait_timeout;
 		bool monitor_writer_is_also_reader;
 		int monitor_replication_lag_interval;
 		int monitor_replication_lag_timeout;
+		int monitor_groupreplication_healthcheck_interval;
+		int monitor_groupreplication_healthcheck_timeout;
 		int monitor_query_interval;
 		int monitor_query_timeout;
 		int monitor_slave_lag_when_null;
@@ -308,12 +310,15 @@ class MySQL_Threads_Handler
 		int query_retries_on_failure;
 		int connect_retries_on_failure;
 		int connect_retries_delay;
+		int connection_delay_multiplex_ms;
 		int connection_max_age_ms;
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
+#ifdef IDLE_THREADS
 		int session_idle_ms;
 		bool session_idle_show_processlist;
+#endif // IDLE_THREADS
 		bool sessions_sort;
 		char *default_schema;
 		char *interfaces;
@@ -328,22 +333,30 @@ class MySQL_Threads_Handler
 		bool client_found_rows;
 		bool multiplexing;
 //		bool stmt_multiplexing;
+		bool forward_autocommit;
 		bool enforce_autocommit_on_reads;
 		int max_allowed_packet;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
+		int query_digests_max_digest_length;
+		int query_digests_max_query_length;
 		int wait_timeout;
 		int max_connections;
 		int max_stmts_per_connection;
 		int max_stmts_cache;
+		int mirror_max_concurrency;
+		int mirror_max_queue_length;
 		int default_max_latency_ms;
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
 		int query_processor_regex;
 		int long_query_time;
+		int hostgroup_manager_verbose;
 		char *init_connect;
+		char *default_sql_mode;
+		char *default_time_zone;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
@@ -359,14 +372,14 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
 	} variables;
+	struct {
+		unsigned int mirror_sessions_current;
+	} status_variables;
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
+#ifdef IDLE_THREADS
 	proxysql_mysql_thread_t *mysql_threads_idles;
-	//rwlock_t rwlock_idles;
-	//rwlock_t rwlock_resumes;
-	//PtrArray *idle_mysql_sessions;
-	//PtrArray *resume_mysql_sessions;
-	//virtual const char *version() {return NULL;};
+#endif // IDLE_THREADS
 	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
@@ -397,6 +410,7 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_Processlist();
 	SQLite3_result * SQL3_GlobalStatus();
 	bool kill_session(uint32_t _thread_session_id);
+	unsigned long long get_total_mirror_queue();
 	unsigned long long get_total_stmt_prepare();
 	unsigned long long get_total_stmt_execute();
 	unsigned long long get_total_stmt_close();
@@ -405,7 +419,9 @@ class MySQL_Threads_Handler
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
 	unsigned int get_active_transations();
+#ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();
+#endif // IDLE_THREADS
 	unsigned long long get_query_processor_time();
 	unsigned long long get_backend_query_time();
 	unsigned long long get_mysql_backend_buffers_bytes();

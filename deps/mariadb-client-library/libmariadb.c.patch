@@ -1,7 +1,79 @@
-@@ -2396,6 +2396,36 @@
+@@ -2039,10 +2039,16 @@
+ 
+   mysql->client_flag= client_flag;
+ 
++	{
++		volatile my_bool net_blocking = vio_is_blocking(net->vio);
++		if (!net_blocking)
++			vio_blocking(net->vio, TRUE, 0);
+   if (run_plugin_auth(mysql, scramble_data, scramble_len,
+                              scramble_plugin, db))
+     goto error;
+-
++		if (!net_blocking)
++			vio_blocking(net->vio, FALSE, 0);
++	}
+   if (mysql->client_flag & CLIENT_COMPRESS)
+     net->compress= 1;
+ 
+@@ -2210,36 +2216,39 @@
+   else
+     mysql->charset=default_charset_info;
+ 
+-  mysql->user= (char *)user;
+-  mysql->passwd= (char *)passwd;
+-  mysql->db= (char *)db;
++	mysql->user= strdup(user ? user : "");
++  mysql->passwd= strdup(passwd ? passwd : "");
++  mysql->db= 0;
++
+   rc= run_plugin_auth(mysql, 0, 0, 0, db);
+ 
+   if (rc==0)
+   {
+-    LIST *li_stmt= mysql->stmts;
++    //LIST *li_stmt= mysql->stmts; // see bug #897
+     my_free(s_user);
+     my_free(s_passwd);
+     my_free(s_db);
+ 
+-    if (!(mysql->user=  my_strdup(user,MYF(MY_WME))) ||
+-        !(mysql->passwd=my_strdup(passwd,MYF(MY_WME))) ||
+-        !(mysql->db= db ? my_strdup(db,MYF(MY_WME)) : 0))
++		if (db && !(mysql->db= strdup(db)))
+     {
+       SET_CLIENT_ERROR(mysql, CR_OUT_OF_MEMORY, unknown_sqlstate, 0);
+       rc= 1;
+     }
+ 
+-    for (;li_stmt;li_stmt= li_stmt->next)
+-    {
+-      MYSQL_STMT *stmt= (MYSQL_STMT *)li_stmt->data;
+-      stmt->mysql= NULL;
+-      SET_CLIENT_STMT_ERROR(stmt, CR_SERVER_LOST, SQLSTATE_UNKNOWN, 0);
+-    }/* detach stmts */
++    //for (;li_stmt;li_stmt= li_stmt->next) // see bug #897
++    //{
++    //  MYSQL_STMT *stmt= (MYSQL_STMT *)li_stmt->data;
++    //  stmt->mysql= NULL;
++    //  SET_CLIENT_STMT_ERROR(stmt, CR_SERVER_LOST, SQLSTATE_UNKNOWN, 0);
++    //}/* detach stmts */
+     mysql->stmts= NULL;
+     
+   } else
+   {
++    free(mysql->user);
++    free(mysql->passwd);
++    free(mysql->db);
++
+     mysql->user= s_user;
+     mysql->passwd= s_passwd;
+     mysql->db= s_db;
+@@ -2395,6 +2404,36 @@
+     /* Clear pointers for better safety */
      bzero((char*) &mysql->options,sizeof(mysql->options));
      mysql->net.vio= 0;
-     if (mysql->free_me)
++    if (mysql->free_me)
 +      my_free((gptr) mysql);
 +  }
 +  DBUG_VOID_RETURN;
@@ -10,11 +82,11 @@
 +void STDCALL
 +mysql_close_no_command(MYSQL *mysql)
 +{
-+   MYSQL_STMT *stmt;
++  //MYSQL_STMT *stmt;
 +  DBUG_ENTER("mysql_close");
 +  if (mysql)					/* Some simple safety */
 +  {
-+    LIST *li_stmt= mysql->stmts;
++    //LIST *li_stmt= mysql->stmts;
 +
 +    if (mysql->methods) {
 +			if (mysql->net.vio) {
@@ -31,7 +103,6 @@
 +    /* Clear pointers for better safety */
 +    bzero((char*) &mysql->options,sizeof(mysql->options));
 +    mysql->net.vio= 0;
-+    if (mysql->free_me)
+     if (mysql->free_me)
        my_free(mysql);
    }
-   DBUG_VOID_RETURN;

@@ -105,11 +105,6 @@ extern int gdbg;
 	} while(0)
 #endif
 
-//void proxy_debug_func(enum debug_module, int, const char *, ...);
-//void proxy_debug_func(enum debug_module, int, int, const char *, int, const char *, const char *, ...);
-//void proxy_error_func(const char *, ...);
-//void crash_handler(int);
-//void init_debug_struct();
 #ifdef DEBUG
 //void *debug_logger();
 #endif

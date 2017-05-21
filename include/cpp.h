@@ -1,4 +1,3 @@
-//#ifdef __cplusplus
 #include "gen_utils.h"
 #include "MySQL_Thread.h"
 #include "MySQL_Session.h"
@@ -7,7 +6,6 @@
 #include "query_cache.hpp"
 #include "mysql_connection.h"
 #include "sqlite3db.h"
-//#include "simple_kv.h"
 #include "StatCounters.h"
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Protocol.h"
@@ -22,17 +20,6 @@
 #undef swap
 #undef min
 #undef max
-//#include <memory>
 #include <stdio.h>
-//#include <algorithm>
-//#include <functional>
-//#include <type_traits>
-//#include <iosfwd>
 #include <map>
 #include <unordered_map>
-//#include <set>
-//#include <sstream>
-//#include <string>
-//#include <utility>
-//#include <vector>
-//#endif /* __cplusplus */

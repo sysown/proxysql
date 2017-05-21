@@ -1,26 +1,6 @@
 #ifndef __CLASS_PTR_ARRAY_H
 #define __CLASS_PTR_ARRAY_H
 #include "proxysql.h"
-///#include "cpp.h"
-
-/*
-#ifdef __cplusplus
-extern "C" {
-#endif
-void fast_srand( int seed );
-char * gen_random_string(const int len);
-#ifdef __cplusplus
-}
-#endif
-*/
-
-/*
-typedef struct _PtrSize_t PtrSize_t;
-struct _PtrSize_t {
-	void *ptr;
-	unsigned int size;
-}; 
-*/
 
 #define MIN_ARRAY_LEN 8
 #define MIN_ARRAY_DELETE_RATIO  8
@@ -35,8 +15,7 @@ static unsigned int l_near_pow_2 (unsigned int n) {
 #ifndef def_fastrand
 inline int fastrand() {
 	g_seed = (214013*g_seed+2531011);
-	//return (g_seed>>16)&0x7FFF;
-	return (g_seed>>16);
+	return (g_seed>>16)&0x7FFF;
 }
 #define def_fastrand
 #endif
@@ -61,16 +40,10 @@ class PtrArray {
 		pdata=(void **)realloc(pdata,new_size*sizeof(void *));
 		size=new_size;
 	}
-//	bool use_l_alloc;
 	public:
-//	void * operator new(size_t);
-//	void operator delete(void *);
-//	void * operator new(size_t, bool);
-//	void operator delete(void *, bool);
 	void **pdata;
 	unsigned int len;
 	unsigned int size;
-	//PtrArray(unsigned int __size=0, bool _use_l_alloc=false);
 	PtrArray(unsigned int __size=0) {
 		len=0;
 		pdata=NULL;
@@ -153,9 +126,7 @@ class PtrSizeArray {
 	unsigned int size;
 	PtrSizeArray(unsigned int __size=0);
 	~PtrSizeArray();
-	//PtrSize_t *index(unsigned int);
 
-//	void add(void *, unsigned int);
 	void add(void *p, unsigned int s) {
 		if (len==size) {
 			expand(1);
@@ -169,8 +140,6 @@ class PtrSizeArray {
 //#endif /* DEBUG */
 	};
 
-
-//	void remove_index(unsigned int, PtrSize_t *);
 	void remove_index(unsigned int i, PtrSize_t *ps) {
 		if (ps) {
 			ps->ptr=pdata[i].ptr;
@@ -213,13 +182,15 @@ class PtrSizeArray {
 
 #ifndef mach_time_h
 #define mach_time_h 
+#ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC SYSTEM_CLOCK
+#endif // CLOCK_MONOTONIC
 
-void clock_gettime(int clk_id, struct timespec *tp) {
+static void clock_gettime(int clk_id, struct timespec *tp) {
 	clock_serv_t cclock;
 	mach_timespec_t mts;
 	host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
-	retval = clock_get_time(cclock, &mts);
+	//retval = clock_get_time(cclock, &mts);
 	mach_port_deallocate(mach_task_self(), cclock);
 	tp->tv_sec = mts.tv_sec;
 	tp->tv_nsec = mts.tv_nsec;
