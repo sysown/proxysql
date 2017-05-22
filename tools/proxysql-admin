@@ -3,6 +3,20 @@
 # Version 1.0
 ###############################################################################################
 
+# This program is copyright 2016-2017 Percona LLC and/or its affiliates.
+#
+# THIS PROGRAM IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR IMPLIED
+# WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+#
+# This program is free software; you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, version 2 or later
+#
+# You should have received a copy of the GNU General Public License version 2
+# along with this program; if not, write to the Free Software Foundation, Inc.,
+# 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA.
+
 # Make sure only root can run this script
 if [ $(id -u) -ne 0 ]; then
   echo "ERROR: This script must be run as root!" 1>&2
@@ -67,6 +81,9 @@ if ! echo "$go_out" | grep -q 'config-file'; then
     # Reading default variables from default configuration file location.
     if [ -e "/etc/proxysql-admin.cnf" ]; then
       source /etc/proxysql-admin.cnf
+      config_file="/etc/proxysql-admin.cnf"
+    else
+      echo "WARNING! Default configuration file (/etc/proxysql-admin.cnf) does not exist"
     fi
   fi
 fi
@@ -197,9 +214,10 @@ do
     --quick-demo )
     shift
     DUMMY_TEST="YES"
+    enable=1
     ;;
     -v | --version )
-      echo "proxysql-admin version 1.3.2-1"
+      echo "proxysql-admin version 1.3.6"
       exit 0
     ;;
     --help )
@@ -336,19 +354,24 @@ fi
 if [ $MODE == "loadbal" ]; then
   WRITE_HOSTGROUP_ID=10
   READ_HOSTGROUP_ID=10
-  sudo sed -i "0,/^[ \t]*export MODE[ \t]*=.*$/s|^[ \t]*export MODE[ \t]*=.*$|export MODE=\"loadbal\"|" /etc/proxysql-admin.cnf
+  if [ -e "${config_file}" ]; then
+    sudo sed -i "0,/^[ \t]*export MODE[ \t]*=.*$/s|^[ \t]*export MODE[ \t]*=.*$|export MODE=\"loadbal\"|" ${config_file}
+  fi
 elif [ $MODE == "singlewrite" ]; then
   WRITE_HOSTGROUP_ID=10
   READ_HOSTGROUP_ID=11
-  sudo sed -i "0,/^[ \t]*export MODE[ \t]*=.*$/s|^[ \t]*export MODE[ \t]*=.*$|export MODE=\"singlewrite\"|" /etc/proxysql-admin.cnf
+  if [ -e "${config_file}" ]; then
+    sudo sed -i "0,/^[ \t]*export MODE[ \t]*=.*$/s|^[ \t]*export MODE[ \t]*=.*$|export MODE=\"singlewrite\"|" ${config_file}
+  fi
 fi
 
 PIDFILE=/tmp/cluster-proxysql-monitor.pid
 
 proxysql_exec() {
   query=$1
+  args=$2
   printf "[client]\nuser=${PROXYSQL_USERNAME}\npassword=${PROXYSQL_PASSWORD}\nhost=${PROXYSQL_HOSTNAME}\nport=${PROXYSQL_PORT}\n" | \
-      mysql --defaults-file=/dev/stdin --protocol=tcp -e "${query}" 2>/dev/null
+      mysql --defaults-file=/dev/stdin --protocol=tcp -${args}e  "${query}" 2>/dev/null
 }
 
 mysql_exec() {
@@ -421,14 +444,14 @@ user_input_check(){
     check_user=`mysql_exec "SELECT user,host FROM mysql.user where user='$USERNAME' and host='$USER_HOST_RANGE';"`
     if [[ -z "$check_user" ]]; then
       mysql_exec "CREATE USER $USERNAME@'$USER_HOST_RANGE' IDENTIFIED BY '$PASSWORD';"
-      check_cmd $? "Cannot add Percona XtraDB Cluster application user: '$USERNAME'"
+      check_cmd $? "Failed to add Percona XtraDB Cluster application user: '$USERNAME'. Please check '$CLUSTER_USERNAME'@'$CLUSTER_HOSTNAME' has proper permission to create montioring user"
       if [ ! -z "$DUMMY_TEST" ]; then
         mysql_exec "GRANT ALL ON *.* to $USERNAME@'$USER_HOST_RANGE'"
         check_cmd $? "$CLUSTER_USERNAME@'$CLUSTER_HOSTNAME' does not have the GRANT privilege required to assign the requested permissions"
       fi
 
       proxysql_exec "INSERT INTO mysql_users (username,password,active,default_hostgroup) values ('$USERNAME','$PASSWORD',1,$HOSTGROUP_ID);LOAD MYSQL USERS TO RUNTIME;SAVE MYSQL USERS FROM RUNTIME;SAVE MYSQL USERS TO DISK;"
-      check_cmd $? "Cannot add Percona XtraDB Cluster application user: '$USERNAME' (mysql_users update)"
+      check_cmd $? "Failed to add Percona XtraDB Cluster application user: '$USERNAME' in ProxySQL database. Please check username, password and other options for connecting to ProxySQL database"
       if [ -z "$DUMMY_TEST" ]; then
         echo -e "\nPercona XtraDB Cluster application user '${BD}$USERNAME'@'$USER_HOST_RANGE${NBD}' has been added with the USAGE privilege, please make sure to the grant appropriate privileges"
       else
@@ -439,7 +462,7 @@ user_input_check(){
       if [[ -z "$check_user" ]]; then
         echo -e "\nApplication user '${BD}${USERNAME}'@'$USER_HOST_RANGE${NBD}' already present in Percona XtraDB Cluster."
         proxysql_exec "INSERT INTO mysql_users (username,password,active,default_hostgroup) values ('$USERNAME','$PASSWORD',1,$HOSTGROUP_ID);LOAD MYSQL USERS TO RUNTIME;SAVE MYSQL USERS FROM RUNTIME;SAVE MYSQL USERS TO DISK;"
-        check_cmd $? "Cannot add Percona XtraDB Cluster application user: '$USERNAME' (mysql_users update)"
+        check_cmd $? "Failed to add Percona XtraDB Cluster application user: '$USERNAME' in ProxySQL database. Please check username, password and other options for connecting to ProxySQL database"
       else
         echo -e "\nThe application user '${BD}${USERNAME}'@'$USER_HOST_RANGE${NBD}' is already present in Percona XtraDB Cluster and ProxySQL database."
       fi
@@ -472,12 +495,12 @@ enable_proxysql(){
   proxysql_connection_check
 
   #modifying proxysql-admin.cnf file with command line proxysql user credentials if you dont use --config-file option.
-  if [ -z "${config_file}" ]; then 
-    sed -i "s|[ \t]*PROXYSQL_USERNAME[ \t]*=.*$| PROXYSQL_USERNAME=\"${PROXYSQL_USERNAME}\"|" /etc/proxysql-admin.cnf
-    sed -i "s|[ \t]*PROXYSQL_PASSWORD[ \t]*=.*$| PROXYSQL_PASSWORD=\"${PROXYSQL_PASSWORD}\"|" /etc/proxysql-admin.cnf
-    sed -i "s|[ \t]*PROXYSQL_HOSTNAME[ \t]*=.*$| PROXYSQL_HOSTNAME=\"${PROXYSQL_HOSTNAME}\"|" /etc/proxysql-admin.cnf
-    sed -i "s|[ \t]*PROXYSQL_PORT[ \t]*=.*$| PROXYSQL_PORT=\"${PROXYSQL_PORT}\"|" /etc/proxysql-admin.cnf
-  fi
+  #if [ -z "${config_file}" ]; then 
+  #  sed -i "s|[ \t]*PROXYSQL_USERNAME[ \t]*=.*$| PROXYSQL_USERNAME=\"${PROXYSQL_USERNAME}\"|" /etc/proxysql-admin.cnf
+  #  sed -i "s|[ \t]*PROXYSQL_PASSWORD[ \t]*=.*$| PROXYSQL_PASSWORD=\"${PROXYSQL_PASSWORD}\"|" /etc/proxysql-admin.cnf
+  #  sed -i "s|[ \t]*PROXYSQL_HOSTNAME[ \t]*=.*$| PROXYSQL_HOSTNAME=\"${PROXYSQL_HOSTNAME}\"|" /etc/proxysql-admin.cnf
+  #  sed -i "s|[ \t]*PROXYSQL_PORT[ \t]*=.*$| PROXYSQL_PORT=\"${PROXYSQL_PORT}\"|" /etc/proxysql-admin.cnf
+  #fi
 
   cluster_connection_check
 
@@ -493,9 +516,9 @@ enable_proxysql(){
   check_user=`mysql_exec "SELECT user,host FROM mysql.user where user='$MONITOR_USERNAME' and host='$USER_HOST_RANGE';"`
   if [[ -z "$check_user" ]]; then
     mysql_exec "CREATE USER $MONITOR_USERNAME@'$USER_HOST_RANGE' IDENTIFIED BY '$MONITOR_PASSWORD';"
-    check_cmd $?  "Cannot create the ProxySQL monitoring user"
+    check_cmd $?  "Failed to create the ProxySQL monitoring user. Please check '$CLUSTER_USERNAME'@'$CLUSTER_HOSTNAME' has proper permission to create montioring user"
     proxysql_exec "update global_variables set variable_value='$MONITOR_USERNAME' where variable_name='mysql-monitor_username'; update global_variables set variable_value='$MONITOR_PASSWORD' where variable_name='mysql-monitor_password'; "
-    check_cmd $?  "Cannot set the mysql-monitor variables in ProxySQL"
+    check_cmd $?  "Failed to set the mysql-monitor variables in ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
     proxysql_exec "LOAD MYSQL VARIABLES TO RUNTIME;SAVE MYSQL VARIABLES TO DISK;"
     echo -e "\nUser '${BD}$MONITOR_USERNAME'@'$USER_HOST_RANGE${NBD}' has been added with USAGE privilege"
   else
@@ -506,13 +529,13 @@ enable_proxysql(){
         if [ -z "$DUMMY_TEST" ]; then
           read -r -s -p  "Please enter the password you have assigned to monitoring user '$MONITOR_USERNAME': " MONITOR_PASSWORD
           proxysql_exec "update global_variables set variable_value='$MONITOR_USERNAME' where variable_name='mysql-monitor_username'; update global_variables set variable_value='$MONITOR_PASSWORD' where variable_name='mysql-monitor_password'; "
-          check_cmd $?  "Cannot set the mysql-monitor variables in ProxySQL"
+          check_cmd $?  "Failed to set the mysql-monitor variables in ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
           proxysql_exec "LOAD MYSQL VARIABLES TO RUNTIME;SAVE MYSQL VARIABLES TO DISK;"
         fi
       ;;
       n|N)
         proxysql_exec "update global_variables set variable_value='$MONITOR_USERNAME' where variable_name='mysql-monitor_username'; update global_variables set variable_value='$MONITOR_PASSWORD' where variable_name='mysql-monitor_password'; "
-        check_cmd $?  "Cannot set the mysql-monitor variables in ProxySQL"
+        check_cmd $?  "Failed to set the mysql-monitor variables in ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
         proxysql_exec "LOAD MYSQL VARIABLES TO RUNTIME;SAVE MYSQL VARIABLES TO DISK;"
         echo -e "\nUser '${BD}$MONITOR_USERNAME'@'$USER_HOST_RANGE${NBD}' has been updated in ProxySQL database. Please make sure the credentials are the same in Percona XtraDB Cluster"
       ;;
@@ -535,7 +558,7 @@ enable_proxysql(){
       ws_ip=$(echo $i | cut -d':' -f1)
       ws_port=$(echo $i | cut -d':' -f2)
       proxysql_exec "INSERT INTO mysql_servers (hostname,hostgroup_id,port,weight,comment) VALUES ('$ws_ip',$WRITE_HOSTGROUP_ID,$ws_port,1000,'READWRITE');"
-      check_cmd $? "Failed to add the Percona XtraDB Cluster server node $ws_ip:$ws_port"
+      check_cmd $? "Failed to add the Percona XtraDB Cluster server node $ws_ip:$ws_port. Please check username, password and other options for connecting to ProxySQL database"
     done
     proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
 
@@ -544,25 +567,19 @@ enable_proxysql(){
     proxysql_exec "DELETE FROM mysql_query_rules WHERE destination_hostgroup in ($WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID)"
     if [ -z "$DUMMY_TEST" ]; then
       if [ -z $WRITE_NODE ]; then
-        echo ""
-        read -r -p  "You have not given the writer node info through the command line or in the config-file. Please enter the writer-node info (eg : 127.0.0.1:3306): " WRITE_NODE
-        writer_ws_ip=$(echo $WRITE_NODE | cut -d':' -f1)
-        writer_ws_port=$(echo $WRITE_NODE | cut -d':' -f2)
-        printf "[client]\nuser=${CLUSTER_USERNAME}\npassword=${CLUSTER_PASSWORD}\nhost=${writer_ws_ip}\nport=${writer_ws_port}\n" | mysql --defaults-file=/dev/stdin --protocol=tcp -Bse "select @@port" >/dev/null 2>/dev/null
-        if [ $? -ne 0 ]; then 
-          echo -e "\nERROR: Could not establish connection to the write node $writer_ws_ip:$writer_ws_port. Terminating!\n"; 
-          proxysql_exec "DELETE FROM mysql_users WHERE default_hostgroup in ($WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID);"
-          check_cmd $? "Cannot delete the Percona XtraDB Cluster user from ProxySQL"
-          exit 1
-        fi
+        writer_ws_ip=(`mysql_exec "show variables like 'wsrep_provider_options'" | grep -o -P '(?<=base_host =).*(?=; base_port)' | xargs`)
+        writer_ws_port=$CLUSTER_PORT
       else
-        writer_ws_ip=$(echo $WRITE_NODE | cut -d':' -f1)
-        writer_ws_port=$(echo $WRITE_NODE | cut -d':' -f2)
+        writer_ws_ip=$(echo $WRITE_NODE | awk -F':' '{print $1}')
+        writer_ws_port=$(echo $WRITE_NODE | awk -F':' '{print $2}')
+        if [ -z "$writer_ws_port" ];then
+          writer_ws_port=3306
+        fi
         printf "[client]\nuser=${CLUSTER_USERNAME}\npassword=${CLUSTER_PASSWORD}\nhost=${writer_ws_ip}\nport=${writer_ws_port}\n" | mysql --defaults-file=/dev/stdin --protocol=tcp -Bse "select @@port" >/dev/null 2>/dev/null
         if [ $? -ne 0 ]; then 
-          echo -e "\nERROR: Could not establish connection to write node $writer_ws_ip:$writer_ws_port. Terminating!\n"; 
+          echo -e "\nERROR: Failed to establish connection to write node $writer_ws_ip:$writer_ws_port. Please check write node is alive and username, password and other options for connecting to server.... Terminating!\n"; 
           proxysql_exec "DELETE FROM mysql_users WHERE default_hostgroup in ($WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID);"
-          check_cmd $? "Cannot delete Percona XtraDB Cluster user from ProxySQL"
+          check_cmd $? "Failed to delete Percona XtraDB Cluster user from ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
           exit 1
         fi
       fi
@@ -572,34 +589,47 @@ enable_proxysql(){
     fi
     proxysql_exec "DELETE FROM mysql_servers WHERE hostgroup_id=$WRITE_HOSTGROUP_ID"
     wsrep_address=(`mysql_exec "show status like 'wsrep_incoming_addresses'" | awk '{print $2}' | sed 's|,| |g'`)
+    if [[ ${wsrep_address[@]} != *"$writer_ws_ip:$writer_ws_port"* ]]; then
+      echo -e "\nERROR: Writer node cluster address($writer_ws_ip:$writer_ws_port) does not exist in WSREP incoming address(${wsrep_address[@]})."
+      echo -e "Different wsrep incoming and cluster IP addresses are not supported by proxysql-admin at this time"
+      echo -e "Please configure ProxySQL manually.. Terminating!"
+      exit 1
+    fi
     for i in "${wsrep_address[@]}"; do	
       ws_ip=$(echo $i | cut -d':' -f1)
       ws_port=$(echo $i | cut -d':' -f2)
       if [ "$ws_ip" == "$writer_ws_ip" -a "$ws_port" == "$writer_ws_port" ]; then
         proxysql_exec "INSERT INTO mysql_servers (hostname,hostgroup_id,port,weight,comment) VALUES ('$writer_ws_ip',$WRITE_HOSTGROUP_ID,$writer_ws_port,1000000,'WRITE');"
-        check_cmd $? "Failed to add the Percona XtraDB Cluster server node $writer_ws_ip:$writer_ws_port"
+        check_cmd $? "Failed to add the Percona XtraDB Cluster server node $writer_ws_ip:$writer_ws_port. Please check username, password and other options for connecting to ProxySQL database"
+        echo -e "\nWrite node info"
+        proxysql_exec "SELECT hostname,hostgroup_id,port,weight,comment FROM mysql_servers WHERE hostgroup_id=$WRITE_HOSTGROUP_ID" "t"
       else
         proxysql_exec "INSERT INTO mysql_servers (hostname,hostgroup_id,port,weight,comment) VALUES ('$ws_ip',$READ_HOSTGROUP_ID,$ws_port,1000,'READ');"
-        check_cmd $? "Failed to add the Percona XtraDB Cluster server node $ws_ip:$ws_port"
+        check_cmd $? "Failed to add the Percona XtraDB Cluster server node $ws_ip:$ws_port. Please check username, password and other options for connecting to ProxySQL database"
       fi
     done
     proxysql_exec "INSERT INTO mysql_query_rules (username,destination_hostgroup,active,match_digest,apply) values('$CLUSTER_APP_USERNAME',$WRITE_HOSTGROUP_ID,1,'^SELECT.*FOR UPDATE',1),('$CLUSTER_APP_USERNAME',$READ_HOSTGROUP_ID,1,'^SELECT ',1);"
-    check_cmd $? "Failed to add the read query rule"
+    check_cmd $? "Failed to add the read query rule. Please check username, password and other options for connecting to ProxySQL database"
     proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;LOAD MYSQL QUERY RULES TO RUNTIME;SAVE MYSQL QUERY RULES TO DISK;"
   fi
 
   # Adding Percona XtraDB Cluster monitoring scripts
   # Adding proxysql galera check scheduler
   proxysql_exec "DELETE FROM SCHEDULER WHERE ID=10;"
-  check_cmd $?
-  proxysql_exec "INSERT  INTO SCHEDULER (id,active,interval_ms,filename,arg1,arg2,arg3,arg4,arg5) VALUES (10,1,$NODE_CHECK_INTERVAL,'$PROXYSQL_GALERA_CHECK',$WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID,${#wsrep_address[@]},1,'/var/lib/proxysql/proxysql_galera_check.log');"
-  check_cmd $? "Failed to add the Percona XtraDB Cluster monitoring scheduler in ProxySQL"
+  check_cmd $? "Failed to delete the Percona XtraDB Cluster nodes from ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
+  if [ $MODE == "singlewrite" ]; then
+    NUMBER_WRITERS=1
+  else
+    NUMBER_WRITERS=0
+  fi
+  proxysql_exec "INSERT  INTO SCHEDULER (id,active,interval_ms,filename,arg1,arg2,arg3,arg4,arg5) VALUES (10,1,$NODE_CHECK_INTERVAL,'$PROXYSQL_GALERA_CHECK',$WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID,$NUMBER_WRITERS,1,'/var/lib/proxysql/proxysql_galera_check.log');"
+  check_cmd $? "Failed to add the Percona XtraDB Cluster monitoring scheduler in ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
 
   # Adding Percona XtraDB Cluster membership checking scheduler
-  proxysql_exec "DELETE FROM SCHEDULER WHERE ID=11;"
-  check_cmd $?
-  proxysql_exec "INSERT  INTO SCHEDULER (id,active,interval_ms,filename,arg1,arg2,arg3) VALUES (11,1,5000,'$PROXYSQL_NODE_MONITOR',$WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID,'/var/lib/proxysql/proxysql_node_monitor.log');"
-  check_cmd $? "Failed to add the Percona XtraDB Cluster membership checking scheduler in ProxySQL"
+  #proxysql_exec "DELETE FROM SCHEDULER WHERE ID=11;"
+  #check_cmd $?
+  #proxysql_exec "INSERT  INTO SCHEDULER (id,active,interval_ms,filename,arg1,arg2,arg3) VALUES (11,1,5000,'$PROXYSQL_NODE_MONITOR',$WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID,'/var/lib/proxysql/proxysql_node_monitor.log');"
+  #check_cmd $? "Failed to add the Percona XtraDB Cluster membership checking scheduler in ProxySQL"
 
   proxysql_exec "LOAD SCHEDULER TO RUNTIME;SAVE SCHEDULER TO DISK;"
 }
@@ -608,13 +638,15 @@ enable_proxysql(){
 disable_proxysql(){
   proxysql_connection_check
   proxysql_exec "DELETE FROM mysql_users WHERE default_hostgroup in ($WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID);"
-  check_cmd $? "Cannot delete the Percona XtraDB Cluster user from ProxySQL"
+  check_cmd $? "Failed to delete the Percona XtraDB Cluster user from ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
   proxysql_exec "DELETE FROM mysql_servers WHERE hostgroup_id in ($WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID);"
-  check_cmd $? "Cannot delete the Percona XtraDB Cluster nodes from ProxySQL"
-  proxysql_exec "DELETE FROM SCHEDULER WHERE ID IN (10,11);"
-  check_cmd $? "Cannot delete the Galera checker and node monitoring scheduler from ProxySQL"
+  check_cmd $? "Failed to delete the Percona XtraDB Cluster nodes from ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
+  #proxysql_exec "DELETE FROM SCHEDULER WHERE ID IN (10,11);"
+  #check_cmd $? "Failed to delete the Galera checker and node monitoring scheduler from ProxySQL"
+  proxysql_exec "DELETE FROM SCHEDULER WHERE ID IN (10);"
+  check_cmd $? "Failed to delete the Galera checker from ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
   proxysql_exec "DELETE FROM mysql_query_rules WHERE destination_hostgroup in ($WRITE_HOSTGROUP_ID,$READ_HOSTGROUP_ID)"
-  check_cmd $? "Cannot delete the query rules from ProxySQL"
+  check_cmd $? "Failed to delete the query rules from ProxySQL. Please check username, password and other options for connecting to ProxySQL database"
   proxysql_exec "LOAD MYSQL USERS TO RUNTIME;SAVE MYSQL USERS TO DISK;LOAD SCHEDULER TO RUNTIME;SAVE SCHEDULER TO DISK;LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;LOAD MYSQL QUERY RULES TO RUNTIME;SAVE MYSQL QUERY RULES TO DISK;"
 
 }
@@ -645,7 +677,7 @@ adduser(){
       case $check_param in
         y|Y)
           proxysql_exec "INSERT INTO mysql_users (username,password,active,default_hostgroup) values ('$CLUSTER_APP_WRITE_USERNAME','$CLUSTER_APP_WRITE_PASSWORD',1,$WRITE_HOSTGROUP_ID);LOAD MYSQL USERS TO RUNTIME;SAVE MYSQL USERS FROM RUNTIME;SAVE MYSQL USERS TO DISK;"
-          check_cmd $? "Cannot add the Percona XtraDB Cluster application user: '$CLUSTER_APP_WRITE_USERNAME' to ProxySQL database"
+          check_cmd $? "Failed to add the Percona XtraDB Cluster application user: '$CLUSTER_APP_WRITE_USERNAME' to ProxySQL database. Please check username, password and other options for connecting to ProxySQL database"
           echo -e "\nPlease create the user ${BD}$CLUSTER_APP_WRITE_USERNAME${NBD} in Percona XtraDB Cluster to access the application through ProxySQL"
         ;;
         n|N)
@@ -658,7 +690,7 @@ adduser(){
       esac
     else
       proxysql_exec "INSERT INTO mysql_users (username,password,active,default_hostgroup) values ('$CLUSTER_APP_WRITE_USERNAME','$CLUSTER_APP_WRITE_PASSWORD',1,$WRITE_HOSTGROUP_ID);LOAD MYSQL USERS TO RUNTIME;SAVE MYSQL USERS FROM RUNTIME;SAVE MYSQL USERS TO DISK;"
-      check_cmd $? "Cannot add the Percona XtraDB Cluster application user: '$CLUSTER_APP_WRITE_USERNAME' to ProxySQL database"
+      check_cmd $? "Failed to add the Percona XtraDB Cluster application user: '$CLUSTER_APP_WRITE_USERNAME' to ProxySQL database. Please check username, password and other options for connecting to ProxySQL database"
     fi
   else
     echo -e "\nERROR: The application user '$CLUSTER_APP_WRITE_USERNAME' already exist in ProxySQL database. Terminating."
@@ -678,7 +710,7 @@ if [ "$enable" == 1 -o "$disable" == 1 -o "$adduser" == 1 ]; then
     echo -e "ProxySQL has been successfully configured to use with Percona XtraDB Cluster\n"
     echo -e "You can use the following login credentials to connect your application through ProxySQL\n"
     if [ -z "$DUMMY_TEST" ]; then
-      echo -e "${BD}mysql --user=$CLUSTER_APP_USERNAME --password=*****  --host=$PROXYSQL_HOSTNAME --port=$PROXYSQL_CLIENT_PORT --protocol=tcp ${NBD}\n"
+      echo -e "${BD}mysql --user=$CLUSTER_APP_USERNAME -p  --host=$PROXYSQL_HOSTNAME --port=$PROXYSQL_CLIENT_PORT --protocol=tcp ${NBD}\n"
     else
       echo -e "${BD}mysql --user=$CLUSTER_APP_USERNAME  --host=$PROXYSQL_HOSTNAME --port=$PROXYSQL_CLIENT_PORT --protocol=tcp ${NBD}\n"
     fi 

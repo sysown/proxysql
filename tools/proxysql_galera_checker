@@ -48,7 +48,7 @@ HOSTGROUP_READER_ID="${2:--1}"
 NUMBER_WRITERS="${3:-0}"
 WRITER_IS_READER="${4:-1}"
 ERR_FILE="${5:-/dev/null}"
-
+CHECK_STATUS=0
 #Running proxysql_node_monitor script.
 if [ ! -f /usr/bin/proxysql_node_monitor ] ;then
   echo "`date` ERROR! Could not run /usr/bin/proxysql_node_monitor. Monitoring script does not exists in default location. Terminating" >> ${ERR_FILE}
@@ -144,6 +144,7 @@ MYSQL_PASSWORD=$(echo $MYSQL_CREDENTIALS | awk '{print $2}')
 function change_server_status() {
   echo "`date` Changing server $1:$2:$3 to status $4. Reason: $5" >> ${ERR_FILE}
   proxysql_exec "UPDATE mysql_servers set status = '$4' WHERE hostgroup_id = $1 AND hostname = '$2' AND port = $3;" 2>> ${ERR_FILE}
+  CHECK_STATUS=1
 }
 
 
@@ -157,7 +158,7 @@ do
   echo "`date` --> Checking WRITE server $hostgroup:$server:$port, current status $stat, wsrep_local_state $WSREP_STATUS" >> ${ERR_FILE}
 
   # we have to limit amount of writers, WSREP status OK, AND node is not marked ONLINE
-  if [ -z $PXC_MAIN_MODE ]; then
+  if [ -z "$PXC_MAIN_MODE" ]; then
     if [ $NUMBER_WRITERS -gt 0 -a "${WSREP_STATUS}" = "4" -a "$stat" == "ONLINE" ] ; then
         if [ $NUMBER_WRITERS_ONLINE -lt $NUMBER_WRITERS ]; then
           NUMBER_WRITERS_ONLINE=$(( $NUMBER_WRITERS_ONLINE + 1 ))
@@ -183,7 +184,7 @@ do
   fi
 
   # WSREP status OK, but node is not marked ONLINE
-  if [ -z $PXC_MAIN_MODE ]; then
+  if [ -z "$PXC_MAIN_MODE" ]; then
     if [ "${WSREP_STATUS}" = "4" -a "$stat" != "ONLINE" ] ; then
       # we have to limit amount of writers
       if [ $NUMBER_WRITERS -gt 0 ] ; then
@@ -225,7 +226,7 @@ do
     fi
   fi
   # WSREP status is not ok, but the node is marked online, we should put it offline
-  if [ -z $PXC_MAIN_MODE ]; then
+  if [ -z "$PXC_MAIN_MODE" ]; then
     if [ "${WSREP_STATUS}" != "4" -a "${WSREP_STATUS}" != "2" -a "$stat" = "ONLINE" ]; then
       change_server_status $HOSTGROUP_WRITER_ID "$server" $port "OFFLINE_SOFT" "WSREP status is ${WSREP_STATUS} which is not ok"
     elif [ "${WSREP_STATUS}" != "4" -a "${WSREP_STATUS}" != "2" -a "$stat" = "OFFLINE_SOFT" ]; then
@@ -285,7 +286,7 @@ if [ ${HOSTGROUP_READER_ID} -ne -1 ]; then
     if [ $WRITER_IS_READER -eq 0 -a "$writer_stat" == "ONLINE" ] ; then
 
       if [ $OFFLINE_READERS_FOUND -eq 0 ] ; then
-        if [ -z $PXC_MAIN_MODE ]; then
+        if [ -z "$PXC_MAIN_MODE" ]; then
           if [ "${WSREP_STATUS}" = "4" -a "$stat" == "ONLINE" ] ; then
             echo "`date` server $hostgroup:$server:$port is already ONLINE, is also write node in ONLINE state, not enough non-ONLINE readers found" >> ${ERR_FILE}
           fi
@@ -304,7 +305,7 @@ if [ ${HOSTGROUP_READER_ID} -ne -1 ]; then
           fi
         fi
       else
-        if [ -z $PXC_MAIN_MODE ]; then
+        if [ -z "$PXC_MAIN_MODE" ]; then
           if [ "${WSREP_STATUS}" = "4" -a "$stat" == "ONLINE" ] ; then
             change_server_status $HOSTGROUP_READER_ID "$server" $port "OFFLINE_SOFT" "making ONLINE writer node as read OFFLINE_SOFT as well because writers should not be readers"
           fi
@@ -324,7 +325,7 @@ if [ ${HOSTGROUP_READER_ID} -ne -1 ]; then
         fi
       fi
     else
-      if [ -z $PXC_MAIN_MODE ]; then
+      if [ -z "$PXC_MAIN_MODE" ]; then
         if [ "${WSREP_STATUS}" = "4" -a "$stat" == "ONLINE" ] ; then
           echo "`date` server $hostgroup:$server:$port is already ONLINE" >> ${ERR_FILE}
           OFFLINE_READERS_FOUND=$(( $OFFLINE_READERS_FOUND + 1 ))
@@ -355,18 +356,18 @@ if [ ${HOSTGROUP_READER_ID} -ne -1 ]; then
       fi
     fi
     # WSREP status is not ok, but the node is marked online, we should put it offline
-    if [ -z $PXC_MAIN_MODE ]; then
+    if [ -z "$PXC_MAIN_MODE" ]; then
       if [ "${WSREP_STATUS}" != "4" -a "$stat" = "ONLINE" ]; then
         change_server_status $HOSTGROUP_READER_ID "$server" $port "OFFLINE_SOFT" "WSREP status is ${WSREP_STATUS} which is not ok"
-      elif [ "${PXC_MAIN_MODE}" != "DISABLED" -a "$stat" = "ONLINE" ];then
-        echo "`date` Changing server $hostgroup:$server:$port to status OFFLINE_SOFT due to $PXC_MAIN_MODE" >> ${ERR_FILE}
-        change_server_status  $HOSTGROUP_WRITER_ID "$server" $port "OFFLINE_SOFT" "Changed  server $hostgroup:$server:$port to status OFFLINE_SOFT due to $PXC_MAIN_MODE" 2>> ${ERR_FILE}
       elif [ "${WSREP_STATUS}" != "4" -a "$stat" = "OFFLINE_SOFT" ]; then
         echo "`date` server $hostgroup:$server:$port is already OFFLINE_SOFT, WSREP status is ${WSREP_STATUS} which is not ok" >> ${ERR_FILE}
       fi
     else
       if [ "${WSREP_STATUS}" != "4" -a "$stat" = "ONLINE" ]; then
         change_server_status $HOSTGROUP_READER_ID "$server" $port "OFFLINE_SOFT" "WSREP status is ${WSREP_STATUS} which is not ok"
+      elif [ "${PXC_MAIN_MODE}" != "DISABLED" -a "$stat" = "ONLINE" ];then
+        echo "`date` Changing server $hostgroup:$server:$port to status OFFLINE_SOFT due to $PXC_MAIN_MODE" >> ${ERR_FILE}
+        change_server_status  $HOSTGROUP_WRITER_ID "$server" $port "OFFLINE_SOFT" "Changed  server $hostgroup:$server:$port to status OFFLINE_SOFT due to $PXC_MAIN_MODE" 2>> ${ERR_FILE}
       elif [ "${WSREP_STATUS}" != "4" -a "$stat" = "OFFLINE_SOFT" ]; then
         echo "`date` server $hostgroup:$server:$port is already OFFLINE_SOFT, WSREP status is ${WSREP_STATUS} which is not ok" >> ${ERR_FILE}
       fi
@@ -427,9 +428,9 @@ if [  ${HOSTGROUP_READER_ID} -ne -1 -a ${NUMBER_READERS_ONLINE} -eq 0 ]; then
   done
 fi
 
-
-
-echo "`date` ###### Loading mysql_servers config into runtime ######" >> ${ERR_FILE}
-proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME;" 2>> ${ERR_FILE}
+if [ $CHECK_STATUS -eq 1 ];then
+  echo "`date` ###### Loading mysql_servers config into runtime ######" >> ${ERR_FILE}
+  proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME;" 2>> ${ERR_FILE}
+fi
 
 exit 0

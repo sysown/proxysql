@@ -41,10 +41,10 @@ This script will accept two different options to configure Cluster nodes
 
   __1) --enable__
 
-  This option will configure Cluster nodes into the ProxySQL database, and add two cluster monitoring scripts into the ProxySQL scheduler table for checking the cluster status.
-  _scheduler script info :
-  * proxysql_node_monitor : will check cluster node membership, and re-configure ProxySQL if cluster membership changes occur
-  * proxysql_galera_checker : will check desynced nodes, and temporarily deactivate them. 
+  This option will configure Cluster nodes into the ProxySQL database, and add cluster monitoring script into the ProxySQL scheduler table for checking the cluster status.
+  
+ ___scheduler___ script info :
+  * __proxysql_galera_checker__ : will check desynced nodes, and temporarily deactivate them. This will also call __proxysql_node_monitor__ script to check cluster node membership, and re-configure ProxySQL if cluster membership changes occur
 
   It will also add two new users into the Percona XtraDB Cluster with the USAGE privilege; one is for monitoring cluster nodes through ProxySQL, and another is for connecting to Cluster node via the ProxySQL console. 
   

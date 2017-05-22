@@ -12,7 +12,6 @@ fi
 WRITE_HOSTGROUP_ID="${1:-0}"
 READ_HOSTGROUP_ID="${2:-0}"
 ERR_FILE="${3:-/dev/null}"
-SCHEDULER_ID="10"
 CHECK_STATUS=0
 if [ "$RW_MODE" == "loadbal" ]; then
   MODE_COMMENT="READWRITE"
@@ -59,7 +58,6 @@ update_cluster(){
       echo "`date` Cluster node (${ws_hg_id}:${i}) does not exists in ProxySQL database!" >> $ERR_FILE
       proxysql_exec "INSERT INTO mysql_servers (hostname,hostgroup_id,port,weight,comment) VALUES ('$ws_ip',$READ_HOSTGROUP_ID,$ws_port,1000,'$MODE_COMMENT');"
       check_cmd $? "Cannot add Percona XtraDB Cluster node $ws_ip:$ws_port (hostgroup $READ_HOSTGROUP_ID) to ProxySQL database, Please check proxysql credentials"
-      proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
       echo "`date` Added ${ws_hg_id}:${i} node into ProxySQL database." >> $ERR_FILE
     else
       CHECK_STATUS=1
@@ -76,7 +74,6 @@ update_cluster(){
       echo "`date` Node ${ws_hg_id}:${i} does not exists in cluster membership!" >> $ERR_FILE
       proxysql_exec "UPDATE mysql_servers set status = 'OFFLINE_HARD', weight=1000 WHERE hostname='$ws_ip' and port=$ws_port;"
       check_cmd $? "Cannot update Percona XtraDB Cluster node $ws_ip:$ws_port to ProxySQL database, Please check proxysql credentials"
-      proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
       echo "`date` ${ws_hg_id}:${i} node set to OFFLINE_HARD status to ProxySQL database." >> $ERR_FILE 
     else
       CHECK_STATUS=1 
@@ -94,14 +91,12 @@ update_cluster(){
       if [ "$ws_status" == "OFFLINE_HARD" ]; then
 	proxysql_exec "UPDATE mysql_servers set status = 'OFFLINE_SOFT', weight=1000 WHERE hostname='$ws_ip' and port=$ws_port;"
         check_cmd $? "Cannot update Percona XtraDB Cluster node $ws_ip:$ws_port to ProxySQL database, Please check proxysql credentials" 
-        proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
         echo "`date` ${ws_hg_id}:${i} node set to OFFLINE_SOFT status to ProxySQL database." >> $ERR_FILE
+      else
+        CHECK_STATUS=1
       fi
-    else
-      CHECK_STATUS=1
     fi
   done
-  proxysql_exec "UPDATE SCHEDULER SET arg3=${#wsrep_address[@]} WHERE id=$SCHEDULER_ID;LOAD SCHEDULER TO RUNTIME;SAVE SCHEDULER TO DISK;"
 }
 
 mode_change_check(){
@@ -114,7 +109,8 @@ mode_change_check(){
     ws_port=$(echo $current_hosts | cut -d':' -f2)
     proxysql_exec "UPDATE mysql_servers set hostgroup_id = $WRITE_HOSTGROUP_ID, comment='WRITE', weight=1000000 WHERE hostname='$ws_ip' and port=$ws_port"
     check_cmd $? "Cannot update Percona XtraDB Cluster writer node in ProxySQL database, Please check proxysql credentials"
-    proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME; SAVE MYSQL SERVERS TO DISK;"
+  else
+    CHECK_STATUS=1
   fi
 }
 
@@ -139,6 +135,9 @@ fi
 
 if [ $CHECK_STATUS -eq 1 ]; then
   echo "`date` Percona XtraDB Cluster membership looks good." >> $ERR_FILE
+else
+  echo "`date` ###### Loading mysql_servers config into runtime ######" >> $ERR_FILE
+  proxysql_exec "LOAD MYSQL SERVERS TO RUNTIME"
 fi
 exit 0
 
