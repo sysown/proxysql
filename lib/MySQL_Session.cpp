@@ -1777,6 +1777,10 @@ __get_pkts_from_client:
 							case _MYSQL_COM_FIELD_LIST:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(&pkt);
 								break;
+                                                        case _MYSQL_COM_SLEEP:
+                                                                proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Dummy handling for COM_SLEEP\n");
+                                                                return -1;
+                                                                break;
 							default:
 								assert(0);
 								break;
