@@ -24,11 +24,10 @@ namespace btree {
 
 // A common base class for btree_set, btree_map, btree_multiset and
 // btree_multimap.
-template <typename Tree>
-class btree_container {
+template <typename Tree> class btree_container {
   typedef btree_container<Tree> self_type;
 
- public:
+public:
   typedef typename Tree::params_type params_type;
   typedef typename Tree::key_type key_type;
   typedef typename Tree::value_type value_type;
@@ -45,16 +44,13 @@ class btree_container {
   typedef typename Tree::reverse_iterator reverse_iterator;
   typedef typename Tree::const_reverse_iterator const_reverse_iterator;
 
- public:
+public:
   // Default constructor.
   btree_container(const key_compare &comp, const allocator_type &alloc)
-      : tree_(comp, alloc) {
-  }
+      : tree_(comp, alloc) {}
 
   // Copy constructor.
-  btree_container(const self_type &x)
-      : tree_(x.tree_) {
-  }
+  btree_container(const self_type &x) : tree_(x.tree_) {}
 
   // Iterator routines.
   iterator begin() { return tree_.begin(); }
@@ -67,38 +63,27 @@ class btree_container {
   const_reverse_iterator rend() const { return tree_.rend(); }
 
   // Lookup routines.
-  iterator lower_bound(const key_type &key) {
-    return tree_.lower_bound(key);
-  }
+  iterator lower_bound(const key_type &key) { return tree_.lower_bound(key); }
   const_iterator lower_bound(const key_type &key) const {
     return tree_.lower_bound(key);
   }
-  iterator upper_bound(const key_type &key) {
-    return tree_.upper_bound(key);
-  }
+  iterator upper_bound(const key_type &key) { return tree_.upper_bound(key); }
   const_iterator upper_bound(const key_type &key) const {
     return tree_.upper_bound(key);
   }
-  std::pair<iterator,iterator> equal_range(const key_type &key) {
+  std::pair<iterator, iterator> equal_range(const key_type &key) {
     return tree_.equal_range(key);
   }
-  std::pair<const_iterator,const_iterator> equal_range(const key_type &key) const {
+  std::pair<const_iterator, const_iterator>
+  equal_range(const key_type &key) const {
     return tree_.equal_range(key);
   }
 
   // Utility routines.
-  void clear() {
-    tree_.clear();
-  }
-  void swap(self_type &x) {
-    tree_.swap(x.tree_);
-  }
-  void dump(std::ostream &os) const {
-    tree_.dump(os);
-  }
-  void verify() const {
-    tree_.verify();
-  }
+  void clear() { tree_.clear(); }
+  void swap(self_type &x) { tree_.swap(x.tree_); }
+  void dump(std::ostream &os) const { tree_.dump(os); }
+  void verify() const { tree_.verify(); }
 
   // Size routines.
   size_type size() const { return tree_.size(); }
@@ -115,7 +100,7 @@ class btree_container {
   double fullness() const { return tree_.fullness(); }
   double overhead() const { return tree_.overhead(); }
 
-  bool operator==(const self_type& x) const {
+  bool operator==(const self_type &x) const {
     if (size() != x.size()) {
       return false;
     }
@@ -127,17 +112,14 @@ class btree_container {
     return true;
   }
 
-  bool operator!=(const self_type& other) const {
-    return !operator==(other);
-  }
+  bool operator!=(const self_type &other) const { return !operator==(other); }
 
-
- protected:
+protected:
   Tree tree_;
 };
 
 template <typename T>
-inline std::ostream& operator<<(std::ostream &os, const btree_container<T> &b) {
+inline std::ostream &operator<<(std::ostream &os, const btree_container<T> &b) {
   b.dump(os);
   return os;
 }
@@ -148,7 +130,7 @@ class btree_unique_container : public btree_container<Tree> {
   typedef btree_unique_container<Tree> self_type;
   typedef btree_container<Tree> super_type;
 
- public:
+public:
   typedef typename Tree::key_type key_type;
   typedef typename Tree::value_type value_type;
   typedef typename Tree::size_type size_type;
@@ -157,17 +139,14 @@ class btree_unique_container : public btree_container<Tree> {
   typedef typename Tree::iterator iterator;
   typedef typename Tree::const_iterator const_iterator;
 
- public:
+public:
   // Default constructor.
   btree_unique_container(const key_compare &comp = key_compare(),
                          const allocator_type &alloc = allocator_type())
-      : super_type(comp, alloc) {
-  }
+      : super_type(comp, alloc) {}
 
   // Copy constructor.
-  btree_unique_container(const self_type &x)
-      : super_type(x) {
-  }
+  btree_unique_container(const self_type &x) : super_type(x) {}
 
   // Range constructor.
   template <class InputIterator>
@@ -179,9 +158,7 @@ class btree_unique_container : public btree_container<Tree> {
   }
 
   // Lookup routines.
-  iterator find(const key_type &key) {
-    return this->tree_.find_unique(key);
-  }
+  iterator find(const key_type &key) { return this->tree_.find_unique(key); }
   const_iterator find(const key_type &key) const {
     return this->tree_.find_unique(key);
   }
@@ -190,7 +167,7 @@ class btree_unique_container : public btree_container<Tree> {
   }
 
   // Insertion routines.
-  std::pair<iterator,bool> insert(const value_type &x) {
+  std::pair<iterator, bool> insert(const value_type &x) {
     return this->tree_.insert_unique(x);
   }
   iterator insert(iterator position, const value_type &x) {
@@ -202,15 +179,11 @@ class btree_unique_container : public btree_container<Tree> {
   }
 
   // Deletion routines.
-  int erase(const key_type &key) {
-    return this->tree_.erase_unique(key);
-  }
+  int erase(const key_type &key) { return this->tree_.erase_unique(key); }
   // Erase the specified iterator from the btree. The iterator must be valid
   // (i.e. not equal to end()).  Return an iterator pointing to the node after
   // the one that was erased (or end() if none exists).
-  iterator erase(const iterator &iter) {
-    return this->tree_.erase(iter);
-  }
+  iterator erase(const iterator &iter) { return this->tree_.erase(iter); }
   void erase(const iterator &first, const iterator &last) {
     this->tree_.erase(first, last);
   }
@@ -222,7 +195,7 @@ class btree_map_container : public btree_unique_container<Tree> {
   typedef btree_map_container<Tree> self_type;
   typedef btree_unique_container<Tree> super_type;
 
- public:
+public:
   typedef typename Tree::key_type key_type;
   typedef typename Tree::data_type data_type;
   typedef typename Tree::value_type value_type;
@@ -230,42 +203,34 @@ class btree_map_container : public btree_unique_container<Tree> {
   typedef typename Tree::key_compare key_compare;
   typedef typename Tree::allocator_type allocator_type;
 
- private:
+private:
   // A pointer-like object which only generates its value when
   // dereferenced. Used by operator[] to avoid constructing an empty data_type
   // if the key already exists in the map.
   struct generate_value {
-    generate_value(const key_type &k)
-        : key(k) {
-    }
-    value_type operator*() const {
-      return std::make_pair(key, data_type());
-    }
+    generate_value(const key_type &k) : key(k) {}
+    value_type operator*() const { return std::make_pair(key, data_type()); }
     const key_type &key;
   };
 
- public:
+public:
   // Default constructor.
   btree_map_container(const key_compare &comp = key_compare(),
                       const allocator_type &alloc = allocator_type())
-      : super_type(comp, alloc) {
-  }
+      : super_type(comp, alloc) {}
 
   // Copy constructor.
-  btree_map_container(const self_type &x)
-      : super_type(x) {
-  }
+  btree_map_container(const self_type &x) : super_type(x) {}
 
   // Range constructor.
   template <class InputIterator>
   btree_map_container(InputIterator b, InputIterator e,
                       const key_compare &comp = key_compare(),
                       const allocator_type &alloc = allocator_type())
-      : super_type(b, e, comp, alloc) {
-  }
+      : super_type(b, e, comp, alloc) {}
 
   // Insertion routines.
-  data_type& operator[](const key_type &key) {
+  data_type &operator[](const key_type &key) {
     return this->tree_.insert_unique(key, generate_value(key)).first->second;
   }
 };
@@ -276,7 +241,7 @@ class btree_multi_container : public btree_container<Tree> {
   typedef btree_multi_container<Tree> self_type;
   typedef btree_container<Tree> super_type;
 
- public:
+public:
   typedef typename Tree::key_type key_type;
   typedef typename Tree::value_type value_type;
   typedef typename Tree::size_type size_type;
@@ -285,17 +250,14 @@ class btree_multi_container : public btree_container<Tree> {
   typedef typename Tree::iterator iterator;
   typedef typename Tree::const_iterator const_iterator;
 
- public:
+public:
   // Default constructor.
   btree_multi_container(const key_compare &comp = key_compare(),
                         const allocator_type &alloc = allocator_type())
-      : super_type(comp, alloc) {
-  }
+      : super_type(comp, alloc) {}
 
   // Copy constructor.
-  btree_multi_container(const self_type &x)
-      : super_type(x) {
-  }
+  btree_multi_container(const self_type &x) : super_type(x) {}
 
   // Range constructor.
   template <class InputIterator>
@@ -307,9 +269,7 @@ class btree_multi_container : public btree_container<Tree> {
   }
 
   // Lookup routines.
-  iterator find(const key_type &key) {
-    return this->tree_.find_multi(key);
-  }
+  iterator find(const key_type &key) { return this->tree_.find_multi(key); }
   const_iterator find(const key_type &key) const {
     return this->tree_.find_multi(key);
   }
@@ -318,9 +278,7 @@ class btree_multi_container : public btree_container<Tree> {
   }
 
   // Insertion routines.
-  iterator insert(const value_type &x) {
-    return this->tree_.insert_multi(x);
-  }
+  iterator insert(const value_type &x) { return this->tree_.insert_multi(x); }
   iterator insert(iterator position, const value_type &x) {
     return this->tree_.insert_multi(position, x);
   }
@@ -330,15 +288,11 @@ class btree_multi_container : public btree_container<Tree> {
   }
 
   // Deletion routines.
-  int erase(const key_type &key) {
-    return this->tree_.erase_multi(key);
-  }
+  int erase(const key_type &key) { return this->tree_.erase_multi(key); }
   // Erase the specified iterator from the btree. The iterator must be valid
   // (i.e. not equal to end()).  Return an iterator pointing to the node after
   // the one that was erased (or end() if none exists).
-  iterator erase(const iterator &iter) {
-    return this->tree_.erase(iter);
-  }
+  iterator erase(const iterator &iter) { return this->tree_.erase(iter); }
   void erase(const iterator &first, const iterator &last) {
     this->tree_.erase(first, last);
   }
@@ -346,4 +300,4 @@ class btree_multi_container : public btree_container<Tree> {
 
 } // namespace btree
 
-#endif  // UTIL_BTREE_BTREE_CONTAINER_H__
+#endif // UTIL_BTREE_BTREE_CONTAINER_H__

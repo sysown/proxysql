@@ -2,4 +2,4 @@
 #include "proxysql.h"
 //#include "proxysql_glovars.hpp"
 #include "cpp.h"
-//ProxySQL_GlobalVariables GloVars;
+// ProxySQL_GlobalVariables GloVars;

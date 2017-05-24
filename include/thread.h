@@ -23,26 +23,25 @@
 #ifndef __thread_h__
 #define __thread_h__
 
-#include <pthread.h>
 #include "jemalloc.h"
+#include <pthread.h>
 
-class Thread
-{
-  public:
-    Thread();
-    virtual ~Thread();
+class Thread {
+public:
+  Thread();
+  virtual ~Thread();
 
-    int start(unsigned int ss=64, bool jemalloc_tcache=true);
-    int join();
-    int detach();
-    pthread_t self();
-    
-    virtual void* run() = 0;
-    
-  private:
-    pthread_t  m_tid;
-    int        m_running;
-    int        m_detached;
+  int start(unsigned int ss = 64, bool jemalloc_tcache = true);
+  int join();
+  int detach();
+  pthread_t self();
+
+  virtual void *run() = 0;
+
+private:
+  pthread_t m_tid;
+  int m_running;
+  int m_detached;
 };
 
 #endif

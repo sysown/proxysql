@@ -1,8 +1,8 @@
 #ifndef CLASS_MYSQL_PREPARED_STATEMENT_H
 #define CLASS_MYSQL_PREPARED_STATEMENT_H
 
-#include "proxysql.h"
 #include "cpp.h"
+#include "proxysql.h"
 
 /*
 One of the main challenge in handling prepared statement (PS) is that a single
@@ -34,206 +34,222 @@ To summarie the most important classes:
   global_stmt_id
 */
 
-// class MySQL_STMT_Global_info represents information about a MySQL Prepared Statement
-// it is an internal representation of prepared statement
-// it include all metadata associated with it
+// class MySQL_STMT_Global_info represents information about a MySQL Prepared
+// Statement it is an internal representation of prepared statement it include
+// all metadata associated with it
 class MySQL_STMT_Global_info {
-	private:
-	void compute_hash();
-  public:
-	uint64_t digest;
-	MYSQL_COM_QUERY_command MyComQueryCmd;
-	char * digest_text;
+private:
+  void compute_hash();
+
+public:
+  uint64_t digest;
+  MYSQL_COM_QUERY_command MyComQueryCmd;
+  char *digest_text;
   uint64_t hash;
   char *username;
   char *schemaname;
   char *query;
   unsigned int query_length;
-	unsigned int hostgroup_id;
-	int ref_count_client;
-	int ref_count_server;
+  unsigned int hostgroup_id;
+  int ref_count_client;
+  int ref_count_server;
   uint32_t statement_id;
   uint16_t num_columns;
   uint16_t num_params;
   uint16_t warning_count;
-	MYSQL_FIELD **fields;
-	struct {
-		int cache_ttl;
-		int timeout;
-		int delay;
-	} properties;
-	MYSQL_BIND **params; // seems unused (?)
-	MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
-	~MySQL_STMT_Global_info();
+  MYSQL_FIELD **fields;
+  struct {
+    int cache_ttl;
+    int timeout;
+    int delay;
+  } properties;
+  MYSQL_BIND **params; // seems unused (?)
+  MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q,
+                         unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
+  ~MySQL_STMT_Global_info();
 };
-
 
 // stmt_execute_metadata_t represent metadata required to run STMT_EXECUTE
 class stmt_execute_metadata_t {
-	public:
-	uint32_t size;
-	uint32_t stmt_id;
-	uint8_t flags;
-	uint16_t num_params;
-	MYSQL_BIND *binds;
-	my_bool *is_nulls;
-	//MySQL_STMT_Global_info *stmt_info;
-	unsigned long *lengths;
-	void *pkt;
-	stmt_execute_metadata_t() {
-		binds=NULL;
-		is_nulls=NULL;
-		lengths=NULL;
-		pkt=NULL;
-	}
-	~stmt_execute_metadata_t() {
-		if (binds)
-			free(binds);
-		if (is_nulls)
-			free(is_nulls);
-		if (lengths)
-			free(lengths);
-	}
+public:
+  uint32_t size;
+  uint32_t stmt_id;
+  uint8_t flags;
+  uint16_t num_params;
+  MYSQL_BIND *binds;
+  my_bool *is_nulls;
+  // MySQL_STMT_Global_info *stmt_info;
+  unsigned long *lengths;
+  void *pkt;
+  stmt_execute_metadata_t() {
+    binds = NULL;
+    is_nulls = NULL;
+    lengths = NULL;
+    pkt = NULL;
+  }
+  ~stmt_execute_metadata_t() {
+    if (binds)
+      free(binds);
+    if (is_nulls)
+      free(is_nulls);
+    if (lengths)
+      free(lengths);
+  }
 };
 
-
 typedef struct _stmt_long_data_t {
-	uint32_t stmt_id;
-	uint16_t param_id;
-	void *data;
-	unsigned long size;
+  uint32_t stmt_id;
+  uint16_t param_id;
+  void *data;
+  unsigned long size;
 } stmt_long_data_t;
 
-
 class StmtLongDataHandler {
-	private:
-	PtrArray *long_datas;
-	public:
-	StmtLongDataHandler();
-	~StmtLongDataHandler();
-	unsigned int reset(uint32_t _stmt_id);
-	bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size);
-	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size);
+private:
+  PtrArray *long_datas;
+
+public:
+  StmtLongDataHandler();
+  ~StmtLongDataHandler();
+  unsigned int reset(uint32_t _stmt_id);
+  bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data,
+           unsigned long _size);
+  void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size);
 };
 
 // server side, metadata related to STMT_EXECUTE are stored in MYSQL_STMT itself
 // client side, they are stored in stmt_execute_metadata_t
 // MySQL_STMTs_meta maps stmt_execute_metadata_t with stmt_id
 class MySQL_STMTs_meta {
-	private:
-	unsigned int num_entries;
-	std::map<uint32_t, stmt_execute_metadata_t *> m;
-	public:
-	MySQL_STMTs_meta() {
-		num_entries=0;
-	}
-	~MySQL_STMTs_meta() {
-		// FIXME: destructor not there yet
-		for (std::map<uint32_t, stmt_execute_metadata_t *>::iterator it=m.begin(); it!=m.end(); ++it) {
-			stmt_execute_metadata_t *sem=it->second;
-			delete sem;
-		}
-	}
-	// we declare it here to be inline
-	void insert(uint32_t global_statement_id, stmt_execute_metadata_t *stmt_meta) {
-		std::pair<std::map<uint32_t, stmt_execute_metadata_t *>::iterator,bool> ret;
-		ret=m.insert(std::make_pair(global_statement_id, stmt_meta));
-		if (ret.second==true) {
-			num_entries++;
-		}
-	}
-	// we declare it here to be inline
-	stmt_execute_metadata_t * find(uint32_t global_statement_id) {
-		auto s=m.find(global_statement_id);
-		if (s!=m.end()) {	// found
-			return s->second;
-		}
-		return NULL;	// not found
-	}
+private:
+  unsigned int num_entries;
+  std::map<uint32_t, stmt_execute_metadata_t *> m;
 
-	void erase(uint32_t global_statement_id) {
-		auto s=m.find(global_statement_id);
-		if (s!=m.end()) { // found
-			stmt_execute_metadata_t *sem=s->second;
-			//__sync_fetch_and_sub(&sem->stmt_info->ref_count,1); // decrease reference count
-			delete sem;
-			num_entries--;
-			m.erase(s);
-		}
-	}
+public:
+  MySQL_STMTs_meta() { num_entries = 0; }
+  ~MySQL_STMTs_meta() {
+    // FIXME: destructor not there yet
+    for (std::map<uint32_t, stmt_execute_metadata_t *>::iterator it = m.begin();
+         it != m.end(); ++it) {
+      stmt_execute_metadata_t *sem = it->second;
+      delete sem;
+    }
+  }
+  // we declare it here to be inline
+  void insert(uint32_t global_statement_id,
+              stmt_execute_metadata_t *stmt_meta) {
+    std::pair<std::map<uint32_t, stmt_execute_metadata_t *>::iterator, bool>
+        ret;
+    ret = m.insert(std::make_pair(global_statement_id, stmt_meta));
+    if (ret.second == true) {
+      num_entries++;
+    }
+  }
+  // we declare it here to be inline
+  stmt_execute_metadata_t *find(uint32_t global_statement_id) {
+    auto s = m.find(global_statement_id);
+    if (s != m.end()) { // found
+      return s->second;
+    }
+    return NULL; // not found
+  }
 
-	//bool erase(uint32_t global_statement_id);
+  void erase(uint32_t global_statement_id) {
+    auto s = m.find(global_statement_id);
+    if (s != m.end()) { // found
+      stmt_execute_metadata_t *sem = s->second;
+      //__sync_fetch_and_sub(&sem->stmt_info->ref_count,1); // decrease
+      //reference count
+      delete sem;
+      num_entries--;
+      m.erase(s);
+    }
+  }
+
+  // bool erase(uint32_t global_statement_id);
 };
 
-// class MySQL_STMTs_local associates a global statement ID with a local statement ID for a specific connection
+// class MySQL_STMTs_local associates a global statement ID with a local
+// statement ID for a specific connection
 
 class MySQL_STMTs_local {
-	private:
-	unsigned int num_entries;
-	bool is_client;
-	std::map<uint32_t, MYSQL_STMT *> m;
-	public:
-	MySQL_Session *sess;
-	MySQL_STMTs_local(bool _ic) {
-		sess=NULL;
-		is_client=_ic;
-		num_entries=0;
-	}
-	void set_is_client(MySQL_Session *_s) {
-		sess=_s;
-		is_client=true;
-	}
-	~MySQL_STMTs_local();
-	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt);
-/*
-	// we declare it here to be inline
-	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt) {
-		std::pair<std::map<uint32_t, MYSQL_STMT *>::iterator,bool> ret;
-		ret=m.insert(std::make_pair(global_statement_id, stmt));
-		if (ret.second==true) {
-			num_entries++;
-		}
-	}
-*/
-	// we declare it here to be inline
-	MYSQL_STMT * find(uint32_t global_statement_id) {
-		auto s=m.find(global_statement_id);
-		if (s!=m.end()) {	// found
-			return s->second;
-		}
-		return NULL;	// not found
-	}
-	bool exists(uint32_t global_statement_id) {
-		auto s=m.find(global_statement_id);
-		if (s!=m.end()) {	// found
-			return true;
-		}
-		return false;	// not found
-	}
-	bool erase(uint32_t global_statement_id);
-	uint64_t compute_hash(unsigned int hostgroup, char *user, char *schema, char *query, unsigned int query_length);
-	unsigned int get_num_entries() { return num_entries; }
+private:
+  unsigned int num_entries;
+  bool is_client;
+  std::map<uint32_t, MYSQL_STMT *> m;
+
+public:
+  MySQL_Session *sess;
+  MySQL_STMTs_local(bool _ic) {
+    sess = NULL;
+    is_client = _ic;
+    num_entries = 0;
+  }
+  void set_is_client(MySQL_Session *_s) {
+    sess = _s;
+    is_client = true;
+  }
+  ~MySQL_STMTs_local();
+  void insert(uint32_t global_statement_id, MYSQL_STMT *stmt);
+  /*
+          // we declare it here to be inline
+          void insert(uint32_t global_statement_id, MYSQL_STMT *stmt) {
+                  std::pair<std::map<uint32_t, MYSQL_STMT *>::iterator,bool>
+     ret; ret=m.insert(std::make_pair(global_statement_id, stmt)); if
+     (ret.second==true) { num_entries++;
+                  }
+          }
+  */
+  // we declare it here to be inline
+  MYSQL_STMT *find(uint32_t global_statement_id) {
+    auto s = m.find(global_statement_id);
+    if (s != m.end()) { // found
+      return s->second;
+    }
+    return NULL; // not found
+  }
+  bool exists(uint32_t global_statement_id) {
+    auto s = m.find(global_statement_id);
+    if (s != m.end()) { // found
+      return true;
+    }
+    return false; // not found
+  }
+  bool erase(uint32_t global_statement_id);
+  uint64_t compute_hash(unsigned int hostgroup, char *user, char *schema,
+                        char *query, unsigned int query_length);
+  unsigned int get_num_entries() { return num_entries; }
 };
 
-
-
 class MySQL_STMT_Manager {
-	private:
-	uint32_t next_statement_id;
-	rwlock_t rwlock;
-	std::map<uint32_t, MySQL_STMT_Global_info *> m;	// map using statement id
-	std::map<uint64_t, MySQL_STMT_Global_info *> h;	// map using hashes
-	std::stack<uint32_t> free_stmt_ids;
-	public:
-	MySQL_STMT_Manager();
-	~MySQL_STMT_Manager();
-	int ref_count(uint32_t statement_id, int cnt, bool lock, bool is_client);
-	MySQL_STMT_Global_info * add_prepared_statement(bool *is_new, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock=true);
-	MySQL_STMT_Global_info * add_prepared_statement(bool *is_new, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock=true);
-	MySQL_STMT_Global_info * find_prepared_statement_by_stmt_id(uint32_t id, bool lock=true);
-	MySQL_STMT_Global_info * find_prepared_statement_by_hash(uint64_t hash, bool lock=true);
-	uint32_t total_prepared_statements() { return next_statement_id-1; }
-	void active_prepared_statements(uint32_t *unique, uint32_t *total);
+private:
+  uint32_t next_statement_id;
+  rwlock_t rwlock;
+  std::map<uint32_t, MySQL_STMT_Global_info *> m; // map using statement id
+  std::map<uint64_t, MySQL_STMT_Global_info *> h; // map using hashes
+  std::stack<uint32_t> free_stmt_ids;
+
+public:
+  MySQL_STMT_Manager();
+  ~MySQL_STMT_Manager();
+  int ref_count(uint32_t statement_id, int cnt, bool lock, bool is_client);
+  MySQL_STMT_Global_info *add_prepared_statement(bool *is_new, unsigned int h,
+                                                 char *u, char *s, char *q,
+                                                 unsigned int ql,
+                                                 MYSQL_STMT *stmt,
+                                                 bool lock = true);
+  MySQL_STMT_Global_info *add_prepared_statement(bool *is_new, unsigned int h,
+                                                 char *u, char *s, char *q,
+                                                 unsigned int ql,
+                                                 MYSQL_STMT *stmt,
+                                                 int _cache_ttl, int _timeout,
+                                                 int _delay, bool lock = true);
+  MySQL_STMT_Global_info *find_prepared_statement_by_stmt_id(uint32_t id,
+                                                             bool lock = true);
+  MySQL_STMT_Global_info *find_prepared_statement_by_hash(uint64_t hash,
+                                                          bool lock = true);
+  uint32_t total_prepared_statements() { return next_statement_id - 1; }
+  void active_prepared_statements(uint32_t *unique, uint32_t *total);
 };
 
 #endif /* CLASS_MYSQL_PREPARED_STATEMENT_H */
