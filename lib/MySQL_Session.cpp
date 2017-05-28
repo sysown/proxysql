@@ -3359,7 +3359,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 				opt2->set_case_sensitive(false);
 				//char *pattern=(char *)"SET *(|SESSION +|@@|@@session.)SQL_LOG_BIN *(:|)= *(\\d+) *(?:(--|#))$";
-				char *pattern=(char *)"(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_LOG_BIN *(?:|:)= *(\\d+) *(?:(|-- .*|#.*))$";
+				char *pattern=(char *)"(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_LOG_BIN *(?:|:)= *(\\d+) *(?:(|;|-- .*|#.*))$";
 				re2::RE2 *re=new RE2(pattern, *opt2);
 				//string s0;
 				int i;
@@ -3389,7 +3389,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				// set sql_mode
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 				opt2->set_case_sensitive(false);
-				char *pattern=(char *)"^(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_MODE *(?:|:)= *(?:'||\")((\\w|,)*)(?:'||\") *(?:(|-- .*|#.*))$";
+				char *pattern=(char *)"^(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_MODE *(?:|:)= *(?:'||\")((\\w|,)*)(?:'||\") *(?:(|;|-- .*|#.*))$";
 				re2::RE2 *re=new RE2(pattern, *opt2);
 				string s;
 				rc=RE2::PartialMatch(nq, *re, &s);
@@ -3424,7 +3424,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				// set time_zone
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 				opt2->set_case_sensitive(false);
-				char *pattern=(char *)"^(?: *)SET *(?:|SESSION +|@@|@@session.)TIME_ZONE *(?:|:)= *(?:'||\")((\\w|/|:|\\d|\\+|-)*)(?:'||\") *(?:(|-- .*|#.*))$";
+				char *pattern=(char *)"^(?: *)SET *(?:|SESSION +|@@|@@session.)TIME_ZONE *(?:|:)= *(?:'||\")((\\w|/|:|\\d|\\+|-)*)(?:'||\") *(?:(|;|-- .*|#.*))$";
 				re2::RE2 *re=new RE2(pattern, *opt2);
 				string s;
 				rc=RE2::PartialMatch(nq, *re, &s);
