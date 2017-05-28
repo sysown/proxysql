@@ -2121,6 +2121,18 @@ __end_show_commands:
 		goto __run_query;
 	}
 
+	// see issue #1022
+	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		if (sess->stats==false) {
+			query=l_strdup("SELECT \"admin\" AS 'name'");
+		} else {
+			query=l_strdup("SELECT \"stats\" AS 'name'");
+		}
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
 	if (sess->stats==true) {
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
