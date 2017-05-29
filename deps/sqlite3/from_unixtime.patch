@@ -1,6 +1,6 @@
---- sqlite-amalgamation-3150000/sqlite3.c	2016-10-14 18:48:16.000000000 +0000
-+++ /tmp/sqlite3.c	2016-10-28 00:22:06.993102669 +0000
-@@ -19426,6 +19426,27 @@
+--- sqlite3.c	2017-05-26 00:15:22.000000000 +0200
++++ /tmp/sqlite3.c	2017-05-29 20:12:54.644378605 +0200
+@@ -19772,6 +19772,44 @@
  }
  
  /*
@@ -13,22 +13,39 @@
 +  int argc,
 +  sqlite3_value **argv
 +){
-+  DateTime x;
-+  if( isDate(context, 1, argv, &x)==0 ){
-+		parseModifier(context, (char*)"unixepoch", &x);
-+    char zBuf[100];
-+    computeYMD_HMS(&x);
-+    sqlite3_snprintf(sizeof(zBuf), zBuf, "%04d-%02d-%02d %02d:%02d:%02d",
-+                     x.Y, x.M, x.D, x.h, x.m, (int)(x.s));
-+    sqlite3_result_text(context, zBuf, -1, SQLITE_TRANSIENT);
++  DateTime p;
++  int i, n;
++  const unsigned char *z;
++  int eType;
++  memset(&p, 0, sizeof(p));
++  if( argc==0 ){
++    setDateTimeToCurrent(context, &p);
++    return;
 +  }
++  if( (eType = sqlite3_value_type(argv[0]))==SQLITE_FLOAT
++                   || eType==SQLITE_INTEGER ){
++    setRawDateNumber(&p, sqlite3_value_double(argv[0]));
++  }else{
++    z = sqlite3_value_text(argv[0]);
++    if( !z || parseDateOrTime(context, (char*)z, &p) ){
++      return;
++    }
++  }
++  if( z==0 || parseModifier(context, (char*)"unixepoch", 9, &p) ) return;
++  computeJD(&p);
++  if( p.isError || !validJulianDay(p.iJD) ) return;
++    char zBuf[100];
++    computeYMD_HMS(&p);
++    sqlite3_snprintf(sizeof(zBuf), zBuf, "%04d-%02d-%02d %02d:%02d:%02d",
++                     p.Y, p.M, p.D, p.h, p.m, (int)(p.s));
++    sqlite3_result_text(context, zBuf, -1, SQLITE_TRANSIENT);
 +}
 +
 +/*
  **    time( TIMESTRING, MOD, MOD, ...)
  **
  ** Return HH:MM:SS
-@@ -19715,6 +19736,7 @@
+@@ -20061,6 +20099,7 @@
      DFUNCTION(date,             -1, 0, 0, dateFunc      ),
      DFUNCTION(time,             -1, 0, 0, timeFunc      ),
      DFUNCTION(datetime,         -1, 0, 0, datetimeFunc  ),

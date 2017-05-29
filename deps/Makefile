@@ -50,8 +50,8 @@ mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
 
 
 sqlite3/sqlite3/sqlite3.o:
-	cd sqlite3 && rm -rf sqlite-amalgamation-3150000
-	cd sqlite3 && tar -zxf sqlite-amalgamation-3150000.tar.gz
+	cd sqlite3 && rm -rf sqlite-amalgamation-3190200
+	cd sqlite3 && tar -zxf sqlite-amalgamation-3190200.tar.gz
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT
 
