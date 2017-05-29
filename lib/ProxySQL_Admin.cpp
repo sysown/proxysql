@@ -142,6 +142,7 @@ int rc, arg_on=1, arg_off=0;
 
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define LINESIZE	2048
 
@@ -830,9 +831,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				}
 				if (legitname) {
 					proxy_info("Loading user %s\n", name);
-					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					pthread_mutex_lock(&users_mutex);
 					SPA->public_add_active_users(USERNAME_BACKEND, name);
 					SPA->public_add_active_users(USERNAME_FRONTEND, name);
+					pthread_mutex_unlock(&users_mutex);
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 				} else {
 					proxy_info("Tried to load invalid user %s\n", name);
 					char *s=(char *)"Invalid name %s";
@@ -3925,7 +3928,9 @@ void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
 
 
 void ProxySQL_Admin::init_users() {
+	pthread_mutex_lock(&users_mutex);
 	__refresh_users();
+	pthread_mutex_unlock(&users_mutex);
 }
 
 void ProxySQL_Admin::init_mysql_servers() {
