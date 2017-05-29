@@ -52,11 +52,10 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
-void StringToHex(unsigned char *string, unsigned char *hexstring) {
+void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
 	unsigned char ch;
-	size_t i, j, l;
+	size_t i, j;
 
-	l = strlen((char *)string);
 	for (i=0, j=0; i<l; i++, j+=2) {
 		ch=string[i];
 		ch = ch >> 4;
@@ -66,7 +65,7 @@ void StringToHex(unsigned char *string, unsigned char *hexstring) {
 			hexstring[j]= 'A' + ch - 10;
 		}
 		ch = string[i];
-		ch = ch | 0x0F;
+		ch = ch & 0x0F;
 		if (ch <= 9) {
 			hexstring[j+1]= '0' + ch;
 		} else {
@@ -102,20 +101,22 @@ char *s_strdup(char *s) {
 
 static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
 	if (sha1_pass==NULL) return NULL;
+	// previous code is commented. Uncomment all to perform validation
 //	char *buff=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
 //	buff[0]='*';
 //	buff[SHA_DIGEST_LENGTH*2+1]='\0';
-	char *buff1=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
-	buff1[0]='*';
-	buff1[SHA_DIGEST_LENGTH*2+1]='\0';
 //	int i;
 //	uint8_t a;
-	StringToHex((unsigned char *)sha1_pass,(unsigned char *)buff1+1);
 //	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
 //		memcpy(&a,sha1_pass+i,1);
 //		sprintf(buff+1+2*i, "%02X", a);
 //	}
-//	assert(strcmp(buff,buff1));
+	char *buff1=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
+	buff1[0]='*';
+	buff1[SHA_DIGEST_LENGTH*2+1]='\0';
+	StringToHex((unsigned char *)sha1_pass,(unsigned char *)buff1+1,SHA_DIGEST_LENGTH);
+//	assert(strcmp(buff,buff1)==0);
+//	free(buff);
 	return buff1;
 }
 
