@@ -52,6 +52,28 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
+void StringToHex(unsigned char *string, unsigned char *hexstring) {
+	unsigned char ch;
+	size_t i, j, l;
+
+	l = strlen((char *)string);
+	for (i=0, j=0; i<l; i++, j+=2) {
+		ch=string[i];
+		ch = ch >> 4;
+		if (ch <= 9) {
+			hexstring[j]= '0' + ch;
+		} else {
+			hexstring[j]= 'A' + ch - 10;
+		}
+		ch = string[i];
+		ch = ch | 0x0F;
+		if (ch <= 9) {
+			hexstring[j+1]= '0' + ch;
+		} else {
+			hexstring[j+1]= 'A' + ch - 10;
+		}
+	}
+}
 
 struct cpu_timer
 {
@@ -80,16 +102,21 @@ char *s_strdup(char *s) {
 
 static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
 	if (sha1_pass==NULL) return NULL;
-	char *buff=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
-	buff[0]='*';
-	buff[SHA_DIGEST_LENGTH*2+1]='\0';
-	int i;
-	uint8_t a;
-	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
-		memcpy(&a,sha1_pass+i,1);
-		sprintf(buff+1+2*i, "%02X", a);
-	}
-	return buff;
+//	char *buff=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
+//	buff[0]='*';
+//	buff[SHA_DIGEST_LENGTH*2+1]='\0';
+	char *buff1=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
+	buff1[0]='*';
+	buff1[SHA_DIGEST_LENGTH*2+1]='\0';
+//	int i;
+//	uint8_t a;
+	StringToHex((unsigned char *)sha1_pass,(unsigned char *)buff1+1);
+//	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
+//		memcpy(&a,sha1_pass+i,1);
+//		sprintf(buff+1+2*i, "%02X", a);
+//	}
+//	assert(strcmp(buff,buff1));
+	return buff1;
 }
 
 static volatile int load_main_=0;
@@ -776,6 +803,47 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
+	}
+	if ((query_no_space_length>16) && (!strncasecmp("LOAD MYSQL USER ", query_no_space, 16)) ) {
+		if (query_no_space_length>27) {
+			if (!strncasecmp(" TO RUNTIME", query_no_space+query_no_space_length-11, 11)) {
+				char *name=(char *)malloc(query_no_space_length-27+1);
+				strncpy(name,query_no_space+16,query_no_space_length-27);
+				name[query_no_space_length-27]=0;
+				int i=0;
+				int s=strlen(name);
+				bool legitname=true;
+				for (i=0; i<s; i++) {
+					char c=name[i];
+					bool v=false;
+					if (
+						(c >= 'a' && c <= 'z') ||
+						(c >= 'A' && c <= 'Z') ||
+						(c >= '0' && c <= '9') ||
+						( (c == '-') || (c == '+') || (c == '_'))
+					) {
+						v=true;
+					}
+					if (v==false) {
+						legitname=false;
+					}
+				}
+				if (legitname) {
+					proxy_info("Loading user %s\n", name);
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					SPA->public_add_active_users(USERNAME_BACKEND, name);
+					SPA->public_add_active_users(USERNAME_FRONTEND, name);
+				} else {
+					proxy_info("Tried to load invalid user %s\n", name);
+					char *s=(char *)"Invalid name %s";
+					char *m=(char *)malloc(strlen(s)+strlen(name)+1);
+					sprintf(m,s,name);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+				}
+				free(name);
+				return false;
+			}
+		}
 	}
 	if ((query_no_space_length>17) && ( (!strncasecmp("SAVE MYSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD MYSQL USERS ", query_no_space, 17))) ) {
 
@@ -3905,7 +3973,7 @@ void ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
-	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",msg);
+	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",msg);
 	myds->DSS=STATE_SLEEP;
 }
 
@@ -3930,20 +3998,44 @@ void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
 	free(query);
 }
 
-void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
+#define ADDUSER_STMT_RAW
+void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *__user) {
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
+#ifdef ADDUSER_STMT_RAW
+	sqlite3_stmt *statement=NULL;
+#else
 	SQLite3_result *resultset=NULL;
-	char *str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0";
-	char *query=(char *)malloc(strlen(str)+15);
-	sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
+#endif
+	char *str=NULL;
+	char *query=NULL;
+	if (__user==NULL) {
+		str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0";
+		query=(char *)malloc(strlen(str)+15);
+		sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
+	} else {
+		str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
+		query=(char *)malloc(strlen(str)+strlen(__user)+15);
+		sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"),__user);
+	}
+#ifdef ADDUSER_STMT_RAW
+	admindb->execute_statement_raw(query, &error , &cols , &affected_rows , &statement);
+#else
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+#endif
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+#ifdef ADDUSER_STMT_RAW
+		int rc;
+		while ((rc=sqlite3_step(statement))==SQLITE_ROW) {
+			SQLite3_row *r=new SQLite3_row(cols);
+			r->add_fields(statement);
+#else
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-      SQLite3_row *r=*it;
+	      SQLite3_row *r=*it;
+#endif
 			char *password=NULL;
 			if (variables.hash_passwords) { // We must use hashed password. See issue #676
 				// Admin needs to hash the password
@@ -3987,9 +4079,18 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype) {
 			if (variables.hash_passwords) {
 				free(password); // because we always generate a new string
 			}
+#ifdef ADDUSER_STMT_RAW
+			delete r;
+#endif
 		}
 	}
+#ifdef ADDUSER_STMT_RAW
+	if (statement) {
+		sqlite3_finalize(statement);
+	}
+#else
 	if (resultset) delete resultset;
+#endif
 	free(query);
 }
 

@@ -100,7 +100,7 @@ class ProxySQL_Admin {
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
-	void __add_active_users(enum cred_username_type usertype);
+	void __add_active_users(enum cred_username_type usertype, char *user=NULL);
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void add_admin_users();
 	void __refresh_users();
@@ -130,6 +130,9 @@ class ProxySQL_Admin {
 		void *opt;
 		void **re;
 	} match_regexes;
+	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
+		__add_active_users(usertype, user);
+	}
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
 	SQLite3DB *admindb;	// in memory

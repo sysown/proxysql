@@ -109,6 +109,44 @@ __exit_execute_statement:
 	return ret;
 }
 
+bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, int *affected_rows, sqlite3_stmt **statement) {
+	int rc;
+	//sqlite3_stmt *statement=NULL;
+	*error=NULL;
+	bool ret=false;
+	VALGRIND_DISABLE_ERROR_REPORTING;
+	if(sqlite3_prepare_v2(db, str, -1, statement, 0) != SQLITE_OK) {
+		*error=strdup(sqlite3_errmsg(db));
+		goto __exit_execute_statement;
+	}
+	VALGRIND_ENABLE_ERROR_REPORTING;
+	*cols = sqlite3_column_count(*statement);
+	if (*cols==0) { // not a SELECT
+		//*resultset=NULL;
+		do {
+			rc=sqlite3_step(*statement);
+			if (rc==SQLITE_LOCKED) { // the execution of the prepared statement failed because locked
+				usleep(USLEEP_SQLITE_LOCKED);
+			}
+		} while (rc==SQLITE_LOCKED);
+		if (rc==SQLITE_DONE) {
+			*affected_rows=sqlite3_changes(db);
+			ret=true;
+		} else {
+			*error=strdup(sqlite3_errmsg(db));
+			goto __exit_execute_statement;
+		}
+	} else {
+		*affected_rows=0;
+		//*resultset=new SQLite3_result(statement);
+		ret=true;
+	}
+__exit_execute_statement:
+	// NOTE: the caller MUST call sqlite3_finalize()
+	//sqlite3_finalize(statement);
+	return ret;
+}
+
 int SQLite3DB::return_one_int(const char *str) {
 	char *error=NULL;
 	int cols=0;
