@@ -4117,11 +4117,28 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 	char *qb=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,1,COALESCE((SELECT frontend FROM mysql_users WHERE username='%s' AND backend=1),0),%d)";
 	char *qfr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username='%s' AND frontend=1),0),1,%d)";
 	char *qbr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username='%s' AND backend=1),0),%d)";
+	char *qfr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username=?9 AND frontend=1),0),1,?10)";
+	char *qbr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username=?9 AND backend=1),0),?10)";
 	num_users=GloMyAuth->dump_all_users(&ads);
 	if (num_users==0) return;
+	char *q_stmt1_f=NULL;
+	char *q_stmt1_b=NULL;
+	sqlite3_stmt *f_statement1=NULL;
+	sqlite3_stmt *b_statement1=NULL;
+	sqlite3 *mydb3=admindb->get_db();
+	if (_runtime) {
+		int rc;
+		q_stmt1_f=qfr_stmt1;
+		q_stmt1_b=qbr_stmt1;
+		rc=sqlite3_prepare_v2(mydb3, q_stmt1_f, -1, &f_statement1, 0);
+		assert(rc==SQLITE_OK);
+		rc=sqlite3_prepare_v2(mydb3, q_stmt1_b, -1, &b_statement1, 0);
+		assert(rc==SQLITE_OK);
+	}
 	for (i=0; i<num_users; i++) {
 	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
 		account_details_t *ad=ads[i];
+		sqlite3_stmt *statement1=NULL;
 		if (ads[i]->default_hostgroup >= 0) {
 			char *q=NULL;
 			if (_runtime==false) {
@@ -4133,21 +4150,43 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 			} else { // _runtime==true
 				if (ad->__frontend) {
 					q=qfr;
+					statement1=f_statement1;
 				} else {
 					q=qbr;
+					statement1=b_statement1;
 				}
 			}
-			query=(char *)malloc(strlen(q)+strlen(ad->username)*2+strlen(ad->password)+strlen(ad->default_schema)+256);
-			sprintf(query, q, ad->username, ad->password, ad->use_ssl, ad->default_hostgroup, ad->default_schema, ad->schema_locked, ad->transaction_persistent, ad->fast_forward, ad->username, ad->max_connections);
-			//fprintf(stderr,"%s\n",query);
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-			admindb->execute(query);
-			free(query);
+			if (_runtime==false) {
+				query=(char *)malloc(strlen(q)+strlen(ad->username)*2+strlen(ad->password)+strlen(ad->default_schema)+256);
+				sprintf(query, q, ad->username, ad->password, ad->use_ssl, ad->default_hostgroup, ad->default_schema, ad->schema_locked, ad->transaction_persistent, ad->fast_forward, ad->username, ad->max_connections);
+				//fprintf(stderr,"%s\n",query);
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+				admindb->execute(query);
+				free(query);
+			} else {
+				rc=sqlite3_bind_text(statement1, 1, ad->username, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 2, ad->password, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 3, ad->use_ssl); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 4, ad->default_hostgroup); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 5, ad->default_schema, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 6, ad->schema_locked); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 7, ad->transaction_persistent); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 8, ad->fast_forward); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 9, ad->username, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 10, ad->max_connections); assert(rc==SQLITE_OK);
+				SAFE_SQLITE3_STEP(statement1);
+				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			}
 		}
 		free(ad->username);
 		free(ad->password); // this is not initialized with dump_all_users( , false)
 		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
 		free(ad);
+	}
+	if (_runtime) {
+		sqlite3_finalize(f_statement1);
+		sqlite3_finalize(b_statement1);
 	}
 	free(ads);
 }
