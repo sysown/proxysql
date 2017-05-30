@@ -434,8 +434,7 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 
 int MySQL_Threads_Handler::listener_del(const char *iface) {
 	int idx;
-	idx=MLM->find_idx(iface);
-	if (idx>-1) {
+	while ((idx=MLM->find_idx(iface)) >= 0) {
 		unsigned int i;
 		int fd=MLM->get_fd(idx);
 		for (i=0;i<num_threads;i++) {
@@ -450,7 +449,6 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 		shutdown(fd,SHUT_RDWR);
 		close(fd);
 	}
-
 	return 0;
 }
 

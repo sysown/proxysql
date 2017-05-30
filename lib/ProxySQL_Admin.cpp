@@ -473,15 +473,20 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			}
 		}
 		if (proxysql_mysql_paused==false) {
-			old_wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
-			GloMTH->set_variable((char *)"wait_timeout",(char *)"0");
+			// to speed up this process we first change poll_timeout to 10
+			// MySQL_thread will call poll() with a maximum timeout of 10ms
+			old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
 			GloMTH->commit();
-			// to speed up this process we first change wait_timeout to 0
-			// MySQL_thread will call poll() with a maximum timeout of 100ms
 			GloMTH->signal_all_threads(0);
 			GloMTH->stop_listeners();
 			proxysql_mysql_paused=true;
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			// we now rollback poll_timeout
+			char buf[32];
+			sprintf(buf,"%d",old_wait_timeout);
+			GloMTH->set_variable((char *)"poll_timeout",buf);
+			GloMTH->commit();
 		} else {
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is already paused, impossible to pause");
 		}
@@ -498,14 +503,24 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			}
 		}
 		if (proxysql_mysql_paused==true) {
-			// to speed up the process we add the listeners while poll() is called with a maximum timeout of of 100ms
-			GloMTH->start_listeners();
-			char buf[32];
-			sprintf(buf,"%d",old_wait_timeout);
-			GloMTH->set_variable((char *)"wait_timeout",buf);
+			// to speed up this process we first change poll_timeout to 10
+			// MySQL_thread will call poll() with a maximum timeout of 10ms
+			old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
+			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
 			GloMTH->commit();
+			GloMTH->signal_all_threads(0);
+			GloMTH->start_listeners();
+			//char buf[32];
+			//sprintf(buf,"%d",old_wait_timeout);
+			//GloMTH->set_variable((char *)"poll_timeout",buf);
+			//GloMTH->commit();
 			proxysql_mysql_paused=false;
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			// we now rollback poll_timeout
+			char buf[32];
+			sprintf(buf,"%d",old_wait_timeout);
+			GloMTH->set_variable((char *)"poll_timeout",buf);
+			GloMTH->commit();
 		} else {
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is not paused, impossible to resume");
 		}
