@@ -1,0 +1,11 @@
+--- /tmp/my_alloc.c	2017-06-02 19:20:45.010772240 +0200
++++ my_alloc.c	2017-06-02 19:22:00.934088486 +0200
+@@ -87,7 +87,7 @@
+   if (! next)
+   {						/* Time to alloc new block */
+     get_size= MAX(Size+ALIGN_SIZE(sizeof(USED_MEM)),
+-              (mem_root->block_size & ~1) * (mem_root->block_num >> 2));
++              (mem_root->block_size & ~1) * 2);
+ 
+     if (!(next = (USED_MEM*) my_malloc(get_size,MYF(MY_WME))))
+     {
