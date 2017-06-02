@@ -66,7 +66,7 @@ re2: re2/re2/obj/libre2.a
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd jemalloc && rm -rf jemalloc-4.3.1
-	cd mariadb-client-library && rm -rf mariadb-connector-c-2.1.0-src
+	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2
 	cd sqlite3/sqlite3 && rm -rf *.o

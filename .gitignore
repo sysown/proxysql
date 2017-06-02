@@ -106,6 +106,7 @@ deps/pcre/pcre/
 deps/protobuf/protobuf-2.6.1/
 
 deps/sqlite3/sqlite-amalgamation-3150000/
+deps/sqlite3/sqlite-amalgamation-3190200/
 
 deps/clickhouse-cpp
 
