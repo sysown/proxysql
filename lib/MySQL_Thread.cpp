@@ -368,7 +368,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
 	variables.sessions_sort=true;
-	variables.session_idle_show_processlist=false;
+	variables.session_idle_show_processlist=true;
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
 	variables.ssl_p2s_ca=NULL;
