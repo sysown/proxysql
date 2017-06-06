@@ -266,7 +266,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests_lowercase",
 	(char *)"servers_stats",
 	(char *)"default_reconnect",
+#ifdef DEBUG
 	(char *)"session_debug",
+#endif /* DEBUG */
 	(char *)"ssl_p2s_ca",
 	(char *)"ssl_p2s_cert",
 	(char *)"ssl_p2s_key",
