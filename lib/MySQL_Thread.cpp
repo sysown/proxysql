@@ -376,7 +376,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms=1000;
-	variables.session_idle_show_processlist=false;
+	variables.session_idle_show_processlist=true;
 #endif // IDLE_THREADS
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
