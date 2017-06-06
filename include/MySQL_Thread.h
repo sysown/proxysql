@@ -193,9 +193,12 @@ class MySQL_Thread
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
 	struct {
-		unsigned long long stmt_prepare;
-		unsigned long long stmt_execute;
-		unsigned long long stmt_close;
+		unsigned long long backend_stmt_prepare;
+		unsigned long long backend_stmt_execute;
+		unsigned long long backend_stmt_close;
+		unsigned long long frontend_stmt_prepare;
+		unsigned long long frontend_stmt_execute;
+		unsigned long long frontend_stmt_close;
 		unsigned long long queries;
 		unsigned long long queries_slow;
 		unsigned long long queries_backends_bytes_sent;
@@ -411,9 +414,12 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_GlobalStatus();
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
-	unsigned long long get_total_stmt_prepare();
-	unsigned long long get_total_stmt_execute();
-	unsigned long long get_total_stmt_close();
+	unsigned long long get_total_backend_stmt_prepare();
+	unsigned long long get_total_backend_stmt_execute();
+	unsigned long long get_total_backend_stmt_close();
+	unsigned long long get_total_frontend_stmt_prepare();
+	unsigned long long get_total_frontend_stmt_execute();
+	unsigned long long get_total_frontend_stmt_close();
 	unsigned long long get_total_queries();
 	unsigned long long get_slow_queries();
 	unsigned long long get_queries_backends_bytes_recv();

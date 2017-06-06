@@ -695,7 +695,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 
 // FIXME FIXME function not completed yet!
 // see https://dev.mysql.com/doc/internals/en/com-stmt-prepare-response.html
-bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info) {
+bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id) {
 	uint8_t sid=sequence_id;
 	uint16_t i;
 	char *okpack=(char *)malloc(16); // first packet
@@ -705,7 +705,11 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	memcpy(okpack,&hdr,sizeof(mysql_hdr)); // copy header
 	okpack[4]=0;
 	okpack[13]=0;
-	memcpy(okpack+5,&stmt_info->statement_id,sizeof(uint32_t));
+	if (_stmt_id) {
+		memcpy(okpack+5,&_stmt_id,sizeof(uint32_t));
+	} else {
+		memcpy(okpack+5,&stmt_info->statement_id,sizeof(uint32_t));
+	}
 	memcpy(okpack+9,&stmt_info->num_columns,sizeof(uint16_t));
 	memcpy(okpack+11,&stmt_info->num_params,sizeof(uint16_t));
 	memcpy(okpack+14,&stmt_info->warning_count,sizeof(uint16_t));

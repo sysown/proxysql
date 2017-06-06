@@ -181,7 +181,11 @@ MySQL_Connection::MySQL_Connection() {
 	creation_time=0;
 	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
+#ifndef PROXYSQL_STMT_V14
 	local_stmts=new MySQL_STMTs_local(false); // false by default, it is a backend
+#else
+	local_stmts=new MySQL_STMTs_local_v14(false); // false by default, it is a backend
+#endif
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -1628,5 +1632,9 @@ void MySQL_Connection::reset() {
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
 	delete local_stmts;
+#ifndef PROXYSQL_STMT_V14
 	local_stmts=new MySQL_STMTs_local(false);
+#else
+	local_stmts=new MySQL_STMTs_local_v14(false);
+#endif
 }
