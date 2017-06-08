@@ -29,7 +29,11 @@ class ProxySQL_External_Scheduler {
 	public:
 	unsigned int last_version;
 	unsigned int version;
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_t rwlock;
+#else
 	rwlock_t rwlock;
+#endif
 	std::vector<Scheduler_Row *> Scheduler_Rows;
 	ProxySQL_External_Scheduler();
 	~ProxySQL_External_Scheduler();
@@ -52,7 +56,11 @@ class ProxySQL_Admin {
 	int *main_callback_func;
 
 
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_t rwlock;
+#else
 	rwlock_t rwlock;
+#endif
 
 #ifdef PA_PTHREAD_MUTEX
 	pthread_mutex_t mysql_servers_lock;

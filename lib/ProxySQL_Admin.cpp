@@ -307,7 +307,11 @@ class ifaces_desc {
 class admin_main_loop_listeners {
 	private:
 	int version;
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_t rwlock;
+#else
 	rwlock_t rwlock;
+#endif
 
 	char ** reset_ifaces(char **ifaces) {
 		int i;
@@ -330,14 +334,30 @@ class admin_main_loop_listeners {
 	struct pollfd *fds;
 	int *callback_func;
 	int get_version() { return version; }
-	void wrlock() { spin_wrlock(&rwlock); }
-	void wrunlock() { spin_wrunlock(&rwlock); }
+	void wrlock() {
+#ifdef PA_PTHREAD_MUTEX
+		pthread_rwlock_wrlock(&rwlock);
+#else
+		spin_wrlock(&rwlock);
+#endif
+	}
+	void wrunlock() {
+#ifdef PA_PTHREAD_MUTEX
+		pthread_rwlock_unlock(&rwlock);
+#else
+		spin_wrunlock(&rwlock);
+#endif
+	}
 	ifaces_desc *ifaces_mysql;
 	ifaces_desc *ifaces_telnet_admin;
 	ifaces_desc *ifaces_telnet_stats;
 	ifaces_desc_t descriptor_new;
 	admin_main_loop_listeners() {
+#ifdef PA_PTHREAD_MUTEX
+		pthread_rwlock_init(&rwlock, NULL);
+#else
 		spinlock_rwlock_init(&rwlock);
+#endif
 		ifaces_mysql=new ifaces_desc();
 		ifaces_telnet_admin=new ifaces_desc();
 		ifaces_telnet_stats=new ifaces_desc();
@@ -2513,7 +2533,11 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	SPA=this;
 
 	//Initialize locker
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_init(&rwlock,NULL);
+#else
 	spinlock_rwlock_init(&rwlock);
+#endif
 
 #ifdef PA_PTHREAD_MUTEX
 	pthread_mutex_init(&mysql_servers_lock, NULL);
@@ -2553,11 +2577,19 @@ ProxySQL_Admin::ProxySQL_Admin() {
 };
 
 void ProxySQL_Admin::wrlock() {
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&rwlock);
+#else
 	spin_wrlock(&rwlock);
+#endif
 };
 
 void ProxySQL_Admin::wrunlock() {
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
 	spin_wrunlock(&rwlock);
+#endif
 };
 
 void ProxySQL_Admin::mysql_servers_wrlock() {
@@ -4315,7 +4347,11 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	// allocate args only once
 	char **args=(char **)malloc(5*sizeof(char *));
 	// read lock the scheduler
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&scheduler->rwlock);
+#else
 	spin_rdlock(&scheduler->rwlock);
+#endif
 	char *q=NULL;
 	if (_runtime) {
 		q=(char *)"INSERT INTO runtime_scheduler VALUES(%lu,%d,%lu,\"%s\" ,%s,%s,%s,%s,%s,'%s')";
@@ -4369,7 +4405,11 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	}
 
 	// unlock the scheduler
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&scheduler->rwlock);
+#else
 	spin_rdunlock(&scheduler->rwlock);
+#endif
 
 	// deallocate args
 	free(args);
@@ -5515,7 +5555,11 @@ Scheduler_Row::~Scheduler_Row() {
 }
 
 ProxySQL_External_Scheduler::ProxySQL_External_Scheduler() {
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_init(&rwlock,NULL);
+#else
 	spinlock_rwlock_init(&rwlock);
+#endif
 	last_version=0;
 	version=0;
 	next_run=0;
@@ -5525,7 +5569,11 @@ ProxySQL_External_Scheduler::~ProxySQL_External_Scheduler() {
 }
 
 void ProxySQL_External_Scheduler::update_table(SQLite3_result *resultset) {
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&rwlock);
+#else
 	spin_wrlock(&rwlock);
+#endif
 	// delete all current rows
 	Scheduler_Row *sr;
 	for (std::vector<Scheduler_Row *>::iterator it=Scheduler_Rows.begin(); it!=Scheduler_Rows.end(); ++it) {
@@ -5554,7 +5602,11 @@ void ProxySQL_External_Scheduler::update_table(SQLite3_result *resultset) {
 	// increase version
 	__sync_fetch_and_add(&version,1);
 	// unlock
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
 	spin_wrunlock(&rwlock);
+#endif
 }
 
 // this fuction will be called a s a deatached thread
@@ -5570,7 +5622,11 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 	Scheduler_Row *sr=NULL;
 	unsigned long long curtime=monotonic_time();
 	curtime=curtime/1000;
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&rwlock);
+#else
 	spin_rdlock(&rwlock);
+#endif
 	if (__sync_add_and_fetch(&version,0) > last_version) {	// version was changed
 		next_run=0;
 		last_version=version;
@@ -5649,6 +5705,10 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 		if (next_run==0) {
 		}
 	}
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
 	spin_rdunlock(&rwlock);
+#endif
 	return next_run;
 }
