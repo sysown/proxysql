@@ -8,7 +8,11 @@ SQLite3DB::SQLite3DB() {
 	db=NULL;
 	url=NULL;
 	assert_on_error=0;
+#ifdef PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
+	pthread_rwlock_init(&rwlock, NULL);
+#else
 	spinlock_rwlock_init(&rwlock);
+#endif
 }
 
 SQLite3DB::~SQLite3DB() {
@@ -217,19 +221,35 @@ bool SQLite3DB::check_and_build_table(char *table_name, char *table_def) {
 }
 
 void SQLite3DB::rdlock() {
+#ifdef PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&rwlock);
+#else
 	spin_wrlock(&rwlock);
+#endif
 }
 
 void SQLite3DB::rdunlock() {
+#ifdef PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
 	spin_wrunlock(&rwlock);
+#endif
 }
 
 void SQLite3DB::wrlock() {
+#ifdef PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&rwlock);
+#else
 	spin_wrlock(&rwlock);
+#endif
 }
 
 void SQLite3DB::wrunlock() {
+#ifdef PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
 	spin_wrunlock(&rwlock);
+#endif
 }
 
 int64_t SQLite3_result::raw_checksum() {

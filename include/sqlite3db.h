@@ -2,7 +2,7 @@
 #define __CLASS_SQLITE3DB_H
 #include "proxysql.h"
 #include "cpp.h"
-
+#define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 
 class SQLite3_row {
 	public:
@@ -166,7 +166,11 @@ class SQLite3DB {
 	private:
 	char *url;
 	sqlite3 *db;
+#ifdef PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
+	pthread_rwlock_t rwlock;
+#else
 	rwlock_t rwlock;
+#endif
 	public:
 	char *get_url() const { return url; }
 	sqlite3 *get_db() const { return db; }
