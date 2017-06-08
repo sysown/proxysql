@@ -148,7 +148,11 @@ MySQL_Logger::MySQL_Logger() {
 	base_filename=NULL;
 	datadir=NULL;
 	base_filename=strdup((char *)"");
+#ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
+	pthread_mutex_init(&wmutex,NULL);
+#else
 	spinlock_rwlock_init(&rwlock);
+#endif
 	logfile=NULL;
 	log_file_id=0;
 	max_log_file_size=100*1024*1024;
@@ -162,11 +166,19 @@ MySQL_Logger::~MySQL_Logger() {
 };
 
 void MySQL_Logger::wrlock() {
+#ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
+	pthread_mutex_lock(&wmutex);
+#else
   spin_wrlock(&rwlock);
+#endif
 };
 
 void MySQL_Logger::wrunlock() {
+#ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
+	pthread_mutex_unlock(&wmutex);
+#else
   spin_wrunlock(&rwlock);
+#endif
 };
 
 void MySQL_Logger::flush_log() {

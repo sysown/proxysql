@@ -3,6 +3,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#define PROXYSQL_LOGGER_PTHREAD_MUTEX
 
 class MySQL_Event {
 	private:
@@ -39,7 +40,11 @@ class MySQL_Logger {
 	char *datadir;
 	unsigned int log_file_id;
 	unsigned int max_log_file_size;
+#ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX
+	pthread_mutex_t wmutex;
+#else
 	rwlock_t rwlock;
+#endif
 	void wrlock();
 	void wrunlock();
 	std::fstream *logfile;
