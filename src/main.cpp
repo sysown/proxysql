@@ -148,7 +148,11 @@ Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH;
 
+#ifndef PROXYSQL_STMT_V14
 MySQL_STMT_Manager *GloMyStmt;
+#else
+MySQL_STMT_Manager_v14 *GloMyStmt;
+#endif
 
 MySQL_Monitor *GloMyMon;
 std::thread *MyMon_thread;
@@ -272,7 +276,11 @@ void ProxySQL_Main_init_main_modules() {
 	MyHGM=new MySQL_HostGroups_Manager();
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
+#ifndef PROXYSQL_STMT_V14
 	GloMyStmt=new MySQL_STMT_Manager();
+#else
+	GloMyStmt=new MySQL_STMT_Manager_v14();
+#endif
 }
 
 

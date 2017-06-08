@@ -134,7 +134,11 @@ extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
+#ifndef PROXYSQL_STMT_V14
 extern MySQL_STMT_Manager *GloMyStmt;
+#else
+extern MySQL_STMT_Manager_v14 *GloMyStmt;
+#endif
 extern MySQL_Monitor *GloMyMon;
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
@@ -3333,6 +3337,7 @@ void ProxySQL_Admin::stats___mysql_global() {
 	statsdb->execute(query);
 	free(query);
 
+#ifndef PROXYSQL_STMT_V14
 	if (GloMyStmt) {
 		uint32_t stmt_active_unique=0;
 		uint32_t stmt_active_total=0;
@@ -3356,6 +3361,53 @@ void ProxySQL_Admin::stats___mysql_global() {
 		statsdb->execute(query);
 		free(query);
 	}
+#else
+	if (GloMyStmt) {
+		uint64_t stmt_client_active_unique = 0;
+		uint64_t stmt_client_active_total = 0;
+		uint64_t stmt_max_stmt_id = 0;
+		uint64_t stmt_cached = 0;
+		uint64_t stmt_server_active_unique = 0;
+		uint64_t stmt_server_active_total = 0;
+		GloMyStmt->get_metrics(&stmt_client_active_unique,&stmt_client_active_total,&stmt_max_stmt_id,&stmt_cached,&stmt_server_active_unique,&stmt_server_active_total);
+		vn=(char *)"Stmt_Client_Active_Total";
+		sprintf(bu,"%lu",stmt_client_active_total);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"Stmt_Client_Active_Unique";
+		sprintf(bu,"%lu",stmt_client_active_unique);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"Stmt_Server_Active_Total";
+		sprintf(bu,"%lu",stmt_server_active_total);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"Stmt_Server_Active_Unique";
+		sprintf(bu,"%lu",stmt_server_active_unique);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"Stmt_Max_Stmt_id";
+		sprintf(bu,"%lu",stmt_max_stmt_id);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"Stmt_Cached";
+		sprintf(bu,"%lu",stmt_cached);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+	}
+#endif
 
 	resultset=GloQC->SQL3_getStats();
 	if (resultset) {

@@ -27,7 +27,11 @@ class Query_Info {
 
 	MYSQL_STMT *mysql_stmt;
 	stmt_execute_metadata_t *stmt_meta;
+#ifndef PROXYSQL_STMT_V14
 	uint32_t stmt_global_id;
+#else
+	uint64_t stmt_global_id;
+#endif
 	MySQL_STMT_Global_info *stmt_info;
 
 	int QueryLength;
