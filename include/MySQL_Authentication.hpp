@@ -4,6 +4,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#define PROXYSQL_AUTH_PTHREAD_MUTEX
 
 typedef struct _account_details_t {
 	char *username;
@@ -34,7 +35,11 @@ typedef std::unordered_map<uint64_t, account_details_t *> umap_auth;
 class PtrArray;
 
 typedef struct _creds_group_t {
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_t lock;
+#else
 	rwlock_t lock;
+#endif
 	umap_auth bt_map;
 	PtrArray *cred_array;
 } creds_group_t;

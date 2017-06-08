@@ -13,8 +13,13 @@ MySQL_Authentication::MySQL_Authentication() {
 		perror("Incompatible debagging version");
 		exit(EXIT_FAILURE);
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_init(&creds_backends.lock, NULL);
+	pthread_rwlock_init(&creds_frontends.lock, NULL);
+#else
 	spinlock_rwlock_init(&creds_backends.lock);
 	spinlock_rwlock_init(&creds_frontends.lock);
+#endif
 	creds_backends.cred_array = new PtrArray();
 	creds_frontends.cred_array = new PtrArray();
 };
@@ -31,18 +36,30 @@ void MySQL_Authentication::print_version() {
 
 void MySQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
 	spin_wrlock(&cg.lock);
+#endif
 	unsigned int i;
 	for (i=0; i<cg.cred_array->len; i++) {
 		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
 		ado->__active=false;
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
 	spin_wrunlock(&cg.lock);
+#endif
 }
 
 void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
 	spin_wrlock(&cg.lock);
+#endif
 	unsigned int i;
 __loop_remove_inactives:
 	for (i=0; i<cg.cred_array->len; i++) {
@@ -52,7 +69,11 @@ __loop_remove_inactives:
 			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
 		}
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
 	spin_wrunlock(&cg.lock);
+#endif
 }
 
 bool MySQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections) {
@@ -64,7 +85,11 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 	
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
 	spin_wrlock(&cg.lock);
+#endif
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	// few changes will follow, due to issue #802
@@ -105,14 +130,22 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
 	spin_wrunlock(&cg.lock);
-
+#endif
 	return true;
 };
 
 int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complete) {
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&creds_frontends.lock);
+	pthread_rwlock_rdlock(&creds_backends.lock);
+#else
 	spin_rdlock(&creds_frontends.lock);
 	spin_rdlock(&creds_backends.lock);
+#endif
 	int total_size;
 	int idx_=0;
 	unsigned i=0;
@@ -172,8 +205,13 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 	}
 	*ads=_ads;
 __exit_dump_all_users:
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&creds_frontends.lock);
+	pthread_rwlock_unlock(&creds_backends.lock);
+#else
 	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+#endif
 	return total_size;
 }
 
@@ -187,7 +225,11 @@ int MySQL_Authentication::increase_frontend_user_connections(char *username, int
 	delete myhash;
 	creds_group_t &cg=creds_frontends;
 	int ret=0;
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
 	spin_wrlock(&cg.lock);
+#endif
 	std::unordered_map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
@@ -200,7 +242,11 @@ int MySQL_Authentication::increase_frontend_user_connections(char *username, int
 			*mc=ad->max_connections;
 		}
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
 	spin_wrunlock(&cg.lock);
+#endif
 	return ret;
 }
 
@@ -212,7 +258,11 @@ void MySQL_Authentication::decrease_frontend_user_connections(char *username) {
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 	creds_group_t &cg=creds_frontends;
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
 	spin_wrlock(&cg.lock);
+#endif
 	std::unordered_map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
@@ -221,7 +271,11 @@ void MySQL_Authentication::decrease_frontend_user_connections(char *username) {
 			ad->num_connections_used--;
 		}
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
 	spin_wrunlock(&cg.lock);
+#endif
 }
 
 bool MySQL_Authentication::del(char * username, enum cred_username_type usertype, bool set_lock) {
@@ -236,7 +290,11 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	if (set_lock)
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+		pthread_rwlock_wrlock(&cg.lock);
+#else
 		spin_wrlock(&cg.lock);
+#endif
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
@@ -251,8 +309,11 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 		ret=true;
 	}
 	if (set_lock)
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+		pthread_rwlock_unlock(&cg.lock);
+#else
 		spin_wrunlock(&cg.lock);
-
+#endif
 	return ret;
 };
 
@@ -267,7 +328,11 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
 	spin_wrlock(&cg.lock);
+#endif
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
@@ -279,8 +344,11 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 		}
 		ret=true;
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
    spin_wrunlock(&cg.lock);
-
+#endif
 	return ret;
 };
 
@@ -294,7 +362,11 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&cg.lock);
+#else
 	spin_rdlock(&cg.lock);
+#endif
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
@@ -314,7 +386,11 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 			}
 		}
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
 	spin_rdunlock(&cg.lock);
+#endif
 	return ret;
 
 }
@@ -322,7 +398,11 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&cg.lock);
+#else
 	spin_wrlock(&cg.lock);
+#endif
 	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
 
 	while (cg.bt_map.size()) {
@@ -340,8 +420,11 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 	while (cg.cred_array->len) {
 		cg.cred_array->remove_index_fast(0);
 	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&cg.lock);
+#else
 	spin_wrunlock(&cg.lock);
-
+#endif
 	return true;
 };
 
