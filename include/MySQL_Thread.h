@@ -69,7 +69,11 @@ class ProxySQL_Poll {
 	volatile int pending_listener_del;
 
   ProxySQL_Poll() {
+#ifdef PROXYSQL_STATSCOUNTERS_NOLOCK
+		loop_counters=new StatCounters(15,10);
+#else
 		loop_counters=new StatCounters(15,10,false);
+#endif
 		poll_timeout=0;
 		loops=0;
 		len=0;
