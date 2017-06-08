@@ -3,6 +3,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#define PROXYSQL_QPRO_PTHREAD_MUTEX
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 
@@ -162,11 +163,19 @@ class Command_Counter {
 class Query_Processor {
 	private:
 	umap_query_digest digest_umap;
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_t digest_rwlock;
+#else
 	rwlock_t digest_rwlock;
 	int64_t padding;	// to get rwlock cache aligned
+#endif
 	enum MYSQL_COM_QUERY_command __query_parser_command_type(SQP_par_t *qp);
 	protected:
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_t rwlock;
+#else
 	rwlock_t rwlock;
+#endif
 	std::vector<QP_rule_t *> rules;
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 	volatile unsigned int version;
