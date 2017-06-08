@@ -28,6 +28,7 @@
 #define DEB ""
 #endif /* DEBUG */
 #define QUERY_CACHE_VERSION "1.2.0905" DEB
+#define PROXYSQL_QC_PTHREAD_MUTEX
 
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -35,7 +36,11 @@ typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
 
 class KV_BtreeArray {
 	private:
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_t lock;
+#else
 	rwlock_t lock;
+#endif
 	BtMap_cache bt_map;
 	PtrArray *ptrArray;
 	uint64_t purgeChunkSize;
@@ -80,7 +85,11 @@ static uint64_t Glo_total_freed_memory;
 KV_BtreeArray::KV_BtreeArray() {
 	freeable_memory=0;
 	tottopurge=0;
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_init(&lock, NULL);
+#else
 	spinlock_rwlock_init(&lock);
+#endif
 	ptrArray = new PtrArray;
 };
 
@@ -107,7 +116,11 @@ void KV_BtreeArray::purge_some(unsigned long long QCnow_ms, bool aggressive) {
 	QC_entry_t *qce;
 	unsigned long long access_ms_min=0;
 	unsigned long long access_ms_max=0;
-  spin_rdlock(&lock);
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&lock);
+#else
+	spin_rdlock(&lock);
+#endif
 	for (i=0; i<ptrArray->len;i++) {
 		qce=(QC_entry_t *)ptrArray->index(i);
 		if (aggressive) { // we have been asked to do aggressive purging
@@ -133,7 +146,11 @@ void KV_BtreeArray::purge_some(unsigned long long QCnow_ms, bool aggressive) {
 		}
 	}
 	freeable_memory=_size;
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&lock);
+#else
 	spin_rdunlock(&lock);
+#endif
 	bool cond_freeable_memory=false;
 	if (aggressive==false) {
 		uint64_t total_freeable_memory=0;
@@ -150,7 +167,11 @@ void KV_BtreeArray::purge_some(unsigned long long QCnow_ms, bool aggressive) {
 		if (aggressive) {
 			access_ms_lower_mark=access_ms_min+(access_ms_max-access_ms_min)*0.1; // hardcoded for now. Remove the entries with access time in the 10% range closest to access_ms_min
 		}
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&lock);
+#else
   	spin_wrlock(&lock);
+#endif
 		for (i=0; i<ptrArray->len;i++) {
 			qce=(QC_entry_t *)ptrArray->index(i);
 			bool drop_entry=false;
@@ -181,7 +202,11 @@ void KV_BtreeArray::purge_some(unsigned long long QCnow_ms, bool aggressive) {
 				free(qce);
 			}
 		}
-  	spin_wrunlock(&lock);
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+		pthread_rwlock_unlock(&lock);
+#else
+		spin_wrunlock(&lock);
+#endif
 		THR_DECREASE_CNT(__thr_num_deleted,Glo_num_entries,removed_entries,1);
 		if (removed_entries) {
 			__sync_fetch_and_add(&Glo_total_freed_memory,freed_memory);
@@ -196,7 +221,11 @@ int KV_BtreeArray::cnt() {
 };
 
 bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
-  spin_wrlock(&lock);
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&lock);
+#else
+	spin_wrlock(&lock);
+#endif
 	THR_UPDATE_CNT(__thr_cntSet,Glo_cntSet,1,1);
 	THR_UPDATE_CNT(__thr_size_values,Glo_size_values,entry->length,1);
 	THR_UPDATE_CNT(__thr_dataIN,Glo_dataIN,entry->length,1);
@@ -212,13 +241,21 @@ bool KV_BtreeArray::replace(uint64_t key, QC_entry_t *entry) {
 		bt_map.erase(lookup);
  	}
 	bt_map.insert(std::make_pair(key,entry));
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&lock);
+#else
 	spin_wrunlock(&lock);
+#endif
 	return true;
 }
 
 QC_entry_t * KV_BtreeArray::lookup(uint64_t key) {
 	QC_entry_t *entry=NULL;
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&lock);
+#else
 	spin_rdlock(&lock);
+#endif
 	THR_UPDATE_CNT(__thr_cntGet,Glo_cntGet,1,1);
   btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
   lookup = bt_map.find(key);
@@ -226,13 +263,20 @@ QC_entry_t * KV_BtreeArray::lookup(uint64_t key) {
 		entry=lookup->second;
 		__sync_fetch_and_add(&entry->ref_count,1);
  	}	
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&lock);
+#else
 	spin_rdunlock(&lock);
+#endif
 	return entry;
 };
 
 void KV_BtreeArray::empty() {
-  spin_wrlock(&lock);
-
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&lock);
+#else
+	spin_wrlock(&lock);
+#endif
 	btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
 
 	while (bt_map.size()) {
@@ -242,7 +286,11 @@ void KV_BtreeArray::empty() {
 			bt_map.erase(lookup);
 		}
 	}
+#ifdef PROXYSQL_QC_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&lock);
+#else
 	spin_wrunlock(&lock);
+#endif
 };
 
 uint64_t Query_Cache::get_data_size_total() {
