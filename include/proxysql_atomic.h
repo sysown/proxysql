@@ -1,3 +1,7 @@
+#ifdef PROXYSQL_USE_SPINLOCK
+// PROXYSQL_USE_SPINLOCK is NOT define
+// spinlock have been removed in 1.4.1 due to issue #977 , to compile in ARM
+// this file is kept for reference, and will be completely removed in future
 #ifndef PROXYSQL_ATOMIC
 #define PROXYSQL_ATOMIC 
 /*
@@ -75,3 +79,4 @@ static inline void spin_rdunlock(rwlock_t *l) {
 
 
 #endif /* PROXYSQL_ATOMIC */
+#endif // PROXYSQL_USE_SPINLOCK
