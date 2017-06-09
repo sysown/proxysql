@@ -9,9 +9,15 @@
 #endif /* DEBUG_EXTERN */
 #endif /* DEBUG */
 
+#define PROXYSQL_DEBUG_PTHREAD_MUTEX
+
 #ifdef DEBUG
 static unsigned long long pretime=0;
+#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
+static pthread_mutex_t debug_mutex;
+#else
 static spinlock debug_spinlock;
+#endif
 #endif /* DEBUG */
 
 static inline unsigned long long debug_monotonic_time() {
@@ -36,7 +42,11 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		va_start(ap, fmt);
 		vsnprintf(debugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
+#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
+		pthread_mutex_lock(&debug_mutex);
+#else
 		spin_lock(&debug_spinlock);
+#endif
 		unsigned long long curtime=debug_monotonic_time();
 		//fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
 		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, verbosity, debugbuff);
@@ -72,7 +82,11 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 //		fprintf(stderr, "%s", longdebugbuff);
 	}
 	if (strlen(longdebugbuff)) fprintf(stderr, "%s", longdebugbuff);
+#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
+	pthread_mutex_unlock(&debug_mutex);
+#else
 	spin_unlock(&debug_spinlock);
+#endif
 	if (GloVars.global.foreground) {
 		return;
 	}
@@ -89,7 +103,11 @@ void proxy_error_func(const char *fmt, ...) {
 #ifdef DEBUG
 void init_debug_struct() {	
 	int i;
+#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
+		pthread_mutex_init(&debug_mutex,NULL);
+#else
 	spinlock_init(&debug_spinlock);
+#endif
 	pretime=debug_monotonic_time();
 	GloVars.global.gdbg_lvl= (debug_level *) malloc(PROXY_DEBUG_UNKNOWN*sizeof(debug_level));
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
