@@ -18,6 +18,8 @@
 #define MYSQL_DEFAULT_SQL_MODE	""
 #define MYSQL_DEFAULT_TIME_ZONE	"SYSTEM"
 
+#define PROXYSQL_MYSQL_PTHREAD_MUTEX
+
 static unsigned int near_pow_2 (unsigned int n) {
   unsigned int i = 1;
   while (i < n) i <<= 1;
@@ -219,7 +221,11 @@ class MySQL_Thread
 	} status_variables;
 
 
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+  pthread_mutex_t thread_mutex;
+#else
   rwlock_t thread_mutex;
+#endif
   MySQL_Thread();
   ~MySQL_Thread();
   MySQL_Session * create_new_session_and_client_data_stream(int _fd);
@@ -285,7 +291,11 @@ class MySQL_Threads_Handler
 	int shutdown_;
 	size_t stacksize;
 	pthread_attr_t attr;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+	pthread_rwlock_t rwlock;
+#else
 	rwlock_t rwlock;
+#endif
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;
 	public:

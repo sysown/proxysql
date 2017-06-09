@@ -301,7 +301,11 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize=0;
 	shutdown_=0;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+	pthread_rwlock_init(&rwlock,NULL);
+#else
 	spinlock_rwlock_init(&rwlock);
+#endif
 	pthread_attr_init(&attr);
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
@@ -455,11 +459,19 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 }
 
 void MySQL_Threads_Handler::wrlock() {
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&rwlock);
+#else
 	spin_wrlock(&rwlock);
+#endif
 }
 
 void MySQL_Threads_Handler::wrunlock() {
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
 	spin_wrunlock(&rwlock);
+#endif
 }
 
 void MySQL_Threads_Handler::commit() {
@@ -2161,8 +2173,11 @@ void MySQL_Thread::run() {
 
 	curtime=monotonic_time();
 
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+	pthread_mutex_lock(&thread_mutex);
+#else
 	spin_wrlock(&thread_mutex);
-
+#endif
 	while (shutdown==0) {
 
 #ifdef IDLE_THREADS
@@ -2391,8 +2406,11 @@ __mysql_thread_exit_add_mirror:
 __run_skip_1a:
 #endif // IDLE_THREADS
 
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_unlock(&thread_mutex);
+#else
 		spin_wrunlock(&thread_mutex);
-
+#endif
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
 			poll_listener_add(n);
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
@@ -2431,7 +2449,11 @@ __run_skip_1a:
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_lock(&thread_mutex);
+#else
 		spin_wrlock(&thread_mutex);
+#endif
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
@@ -2591,9 +2613,17 @@ __run_skip_1a:
 					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
 					if (c) {
 						// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+						pthread_mutex_unlock(&thread_mutex);
+#else
 						spin_wrunlock(&thread_mutex);
+#endif
 						usleep(c*1000);
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+						pthread_mutex_lock(&thread_mutex);
+#else
 						spin_wrlock(&thread_mutex);
+#endif
 						// we enter in maintenance loop only if c is set
 						// when threads are signaling each other, there is no need to set maintenance_loop
 						maintenance_loop=true;
@@ -3033,7 +3063,11 @@ void MySQL_Thread::refresh_variables() {
 }
 
 MySQL_Thread::MySQL_Thread() {
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+	pthread_mutex_init(&thread_mutex,NULL);
+#else
 	spinlock_rwlock_init(&thread_mutex);
+#endif
 	my_idle_conns=NULL;
 	cached_connections=NULL;
 	mysql_sessions=NULL;
@@ -3476,7 +3510,11 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			}
 #endif /* IDLE_THREADS */
 		}
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_lock(&thr->thread_mutex);
+#else
 		spin_wrlock(&thr->thread_mutex);
+#endif
 	}
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
@@ -3500,7 +3538,11 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			}
 #endif /* IDLE_THREADS */
 		}
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_unlock(&thr->thread_mutex);
+#else
 		spin_wrunlock(&thr->thread_mutex);
+#endif
 	}
 }
 
@@ -3537,12 +3579,20 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	for (i=0;i<i2;i++) {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+			pthread_mutex_lock(&thr->thread_mutex);
+#else
 			spin_wrlock(&thr->thread_mutex);
+#endif
 #ifdef IDLE_THREADS
 		} else {
 			if (mysql_thread___session_idle_show_processlist) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+				pthread_mutex_lock(&thr->thread_mutex);
+#else
 				spin_wrlock(&thr->thread_mutex);
+#endif
 			}
 #endif // IDLE_THREADS
 		}
@@ -3741,12 +3791,20 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 #endif // IDLE_THREADS
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+			pthread_mutex_unlock(&thr->thread_mutex);
+#else
 			spin_wrunlock(&thr->thread_mutex);
+#endif
 #ifdef IDLE_THREADS
 		} else {
 			if (mysql_thread___session_idle_show_processlist) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+				pthread_mutex_unlock(&thr->thread_mutex);
+#else
 				spin_wrunlock(&thr->thread_mutex);
+#endif
 			}
 #endif // IDLE_THREADS
 		}
@@ -3783,13 +3841,21 @@ bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 	signal_all_threads(1);
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_lock(&thr->thread_mutex);
+#else
 		spin_wrlock(&thr->thread_mutex);
+#endif
 	}
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads)
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_lock(&thr->thread_mutex);
+#else
 		spin_wrlock(&thr->thread_mutex);
+#endif
 	}
 #endif // IDLE_THREADS
 	for (i=0;i<num_threads;i++) {
@@ -3822,13 +3888,21 @@ bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 __exit_kill_session:
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_unlock(&thr->thread_mutex);
+#else
 		spin_wrunlock(&thr->thread_mutex);
+#endif
 	}
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads)
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+		pthread_mutex_unlock(&thr->thread_mutex);
+#else
 		spin_wrunlock(&thr->thread_mutex);
+#endif
 	}
 #endif // IDLE_THREADS
 	return ret;
