@@ -103,6 +103,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	connect_retries_on_failure=0;
 	max_connect_time=0;
 	wait_until=0;
+	pause_until=0;
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;

@@ -402,7 +402,7 @@ void MySQL_Session::writeout() {
 			mybe->server_myds->array2buffer_full();
 		}
 	}
-	if (client_myds) {
+	if (client_myds && thread->curtime >= client_myds->pause_until) {
 		if (mirror==false) {
 			bool runloop=false;
 			int retbytes=client_myds->write_to_net_poll();
@@ -431,8 +431,11 @@ void MySQL_Session::writeout() {
 		}
 	}
 	if (total_written > mwpl) {
-		pause_until = thread->curtime + 1000000/tps + 1000000/tps*(total_written - mwpl)/mwpl;
+		unsigned long long add_ = 1000000/tps + 1000000/tps*((unsigned long long)total_written - (unsigned long long)mwpl)/mwpl;
+		pause_until = thread->curtime + add_;
+		assert(pause_until > thread->curtime);
 		client_myds->remove_pollout();
+		client_myds->pause_until=pause_until;
 	}
 	if (mybe) {
 		if (mybe->server_myds) mybe->server_myds->write_to_net_poll();

@@ -73,6 +73,7 @@ class MySQL_Data_Stream
 
 	PtrSize_t multi_pkt;
 
+	unsigned long long pause_until;
 	unsigned long long wait_until;
 	unsigned long long killed_at;
 	unsigned long long max_connect_time;
