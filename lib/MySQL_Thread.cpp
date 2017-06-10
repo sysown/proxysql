@@ -243,6 +243,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests_max_query_length",
 	(char *)"wait_timeout",
 	(char *)"throttle_max_bytes_per_second_to_client",
+	(char *)"throttle_ratio_server_to_client",
 	(char *)"max_connections",
 	(char *)"max_stmts_per_connection",
 	(char *)"max_stmts_cache",
@@ -347,6 +348,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_max_query_length=65000; // legacy default
 	variables.wait_timeout=8*3600*1000;
 	variables.throttle_max_bytes_per_second_to_client=2147483647;
+	variables.throttle_ratio_server_to_client=0;
 	variables.max_connections=10*1000;
 	variables.max_stmts_per_connection=20;
 	variables.max_stmts_cache=10000;
@@ -598,6 +600,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"query_digests_max_query_length")) return (int)variables.query_digests_max_query_length;
 	if (!strcasecmp(name,"wait_timeout")) return (int)variables.wait_timeout;
 	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) return (int)variables.throttle_max_bytes_per_second_to_client;
+	if (!strcasecmp(name,"throttle_ratio_server_to_client")) return (int)variables.throttle_ratio_server_to_client;
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
 	if (!strcasecmp(name,"max_stmts_per_connection")) return (int)variables.max_stmts_per_connection;
 	if (!strcasecmp(name,"max_stmts_cache")) return (int)variables.max_stmts_cache;
@@ -865,6 +868,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) {
 		sprintf(intbuf,"%d",variables.throttle_max_bytes_per_second_to_client);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"throttle_ratio_server_to_client")) {
+		sprintf(intbuf,"%d",variables.throttle_ratio_server_to_client);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"max_connections")) {
@@ -1280,6 +1287,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1024 && intv <= 2147483647) {
 			variables.throttle_max_bytes_per_second_to_client=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"throttle_ratio_server_to_client")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 100) {
+			variables.throttle_ratio_server_to_client=intv;
 			return true;
 		} else {
 			return false;
@@ -2379,7 +2395,9 @@ __mysql_thread_exit_add_mirror:
 						mypolls.myds[n]->remove_pollout();
 					}
 					if (myds->myds_type==MYDS_BACKEND) {
-						mypolls.fds[n].events = 0;
+						if (mysql_thread___throttle_ratio_server_to_client) {
+							mypolls.fds[n].events = 0;
+						}
 					}
 				}
 
@@ -2988,6 +3006,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_max_query_length=GloMTH->get_variable_int((char *)"query_digests_max_query_length");
 	mysql_thread___wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
 	mysql_thread___throttle_max_bytes_per_second_to_client=GloMTH->get_variable_int((char *)"throttle_max_bytes_per_second_to_client");
+	mysql_thread___throttle_ratio_server_to_client=GloMTH->get_variable_int((char *)"throttle_ratio_server_to_client");
 	mysql_thread___max_connections=GloMTH->get_variable_int((char *)"max_connections");
 	mysql_thread___max_stmts_per_connection=GloMTH->get_variable_int((char *)"max_stmts_per_connection");
 	mysql_thread___max_stmts_cache=GloMTH->get_variable_int((char *)"max_stmts_cache");

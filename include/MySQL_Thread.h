@@ -360,6 +360,7 @@ class MySQL_Threads_Handler
 		int query_digests_max_query_length;
 		int wait_timeout;
 		int throttle_max_bytes_per_second_to_client;
+		int throttle_ratio_server_to_client;
 		int max_connections;
 		int max_stmts_per_connection;
 		int max_stmts_cache;
