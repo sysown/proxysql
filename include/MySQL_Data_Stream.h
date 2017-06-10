@@ -135,6 +135,7 @@ class MySQL_Data_Stream
 	int write_to_net();
 	int write_to_net_poll();
 	bool available_data_out();	
+	void remove_pollout();
 	void set_pollout();	
 	void mysql_free();
 

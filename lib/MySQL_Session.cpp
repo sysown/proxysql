@@ -386,6 +386,10 @@ void MySQL_Session::reset_all_backends() {
 };
 
 void MySQL_Session::writeout() {
+	int tps = 10; // throttling per second , by default every 100ms
+	int total_written = 0;
+	int mwpl = mysql_thread___throttle_max_bytes_per_second_to_client; // max writes per call
+	mwpl = mwpl/tps;
 	if (client_myds) client_myds->array2buffer_full();
 	if (mybe && mybe->server_myds && mybe->server_myds->myds_type==MYDS_BACKEND) {
 		if (admin==false) {
@@ -402,10 +406,11 @@ void MySQL_Session::writeout() {
 		if (mirror==false) {
 			bool runloop=false;
 			int retbytes=client_myds->write_to_net_poll();
+			total_written+=retbytes;
 			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
 				runloop=true;
 			}
-			while (runloop) {
+			while (runloop && total_written < mwpl) {
 				runloop=false; // the default
 				client_myds->array2buffer_full();
 				struct pollfd fds;
@@ -416,6 +421,7 @@ void MySQL_Session::writeout() {
 				if (retpoll>0) {
 					if (fds.revents==POLLOUT) {
 						retbytes=client_myds->write_to_net_poll();
+						total_written+=retbytes;
 						if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
 							runloop=true;
 						}
@@ -423,6 +429,10 @@ void MySQL_Session::writeout() {
 				}
 			}
 		}
+	}
+	if (total_written > mwpl) {
+		pause_until = thread->curtime + 1000000/tps + 1000000/tps*(total_written - mwpl)/mwpl;
+		client_myds->remove_pollout();
 	}
 	if (mybe) {
 		if (mybe->server_myds) mybe->server_myds->write_to_net_poll();

@@ -350,6 +350,12 @@ bool MySQL_Data_Stream::available_data_out() {
 	return false;
 }
 
+void MySQL_Data_Stream::remove_pollout() {
+	struct pollfd *_pollfd;
+	_pollfd=&mypolls->fds[poll_fds_idx];
+	_pollfd->events = 0;
+}
+
 void MySQL_Data_Stream::set_pollout() {
 	struct pollfd *_pollfd;
 	_pollfd=&mypolls->fds[poll_fds_idx];
