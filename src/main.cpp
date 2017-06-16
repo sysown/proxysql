@@ -19,6 +19,35 @@
 #endif
 
 
+void parent_open_error_log() {
+	if (GloVars.global.foreground==false) {
+		int outfd=0;
+		int errfd=0;
+		outfd=open(GloVars.errorlog, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+		if (outfd>0) {
+			dup2(outfd, STDOUT_FILENO);
+			close(outfd);
+		} else {
+			proxy_error("Impossible to open file\n");
+		}
+		errfd=open(GloVars.errorlog, O_WRONLY | O_APPEND | O_CREAT , S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+		if (errfd>0) {
+			dup2(errfd, STDERR_FILENO);
+			close(errfd);
+		} else {
+			proxy_error("Impossible to open file\n");
+		}
+	}
+}
+
+
+void parent_close_error_log() {
+	if (GloVars.global.foreground==false) {
+		close(STDOUT_FILENO);
+		close(STDERR_FILENO);
+	}
+}
+
 time_t laststart;
 pid_t pid;
 
@@ -650,9 +679,12 @@ bool ProxySQL_daemonize_phase3() {
 	int rc;
 	int status;
 	//daemon_log(LOG_INFO, "Angel process started ProxySQL process %d\n", pid);
+	parent_open_error_log();
 	proxy_info("Angel process started ProxySQL process %d\n", pid);
+	parent_close_error_log();
 	rc=waitpid(pid, &status, 0);
 	if (rc==-1) {
+		parent_open_error_log();
 		perror("waitpid");
 		//proxy_error("[FATAL]: waitpid: %s\n", perror("waitpid"));
 		exit(EXIT_FAILURE);
@@ -662,16 +694,21 @@ bool ProxySQL_daemonize_phase3() {
 		rc=WEXITSTATUS(status);
 		if (rc==0) {
 			//daemon_log(LOG_INFO, "Shutdown angel process\n");
+			parent_open_error_log();
 			proxy_info("Shutdown angel process\n");
 			exit(EXIT_SUCCESS);
 		} else {
 			//daemon_log(LOG_INFO, "ProxySQL exited with code %d . Restarting!\n", rc);
+			parent_open_error_log();
 			proxy_error("ProxySQL exited with code %d . Restarting!\n", rc);
+			parent_close_error_log();
 			return false;
 		}
 	} else {
 		//daemon_log(LOG_INFO, "ProxySQL crashed. Restarting!\n");
+		parent_open_error_log();
 		proxy_error("ProxySQL crashed. Restarting!\n");
+		parent_close_error_log();
 		return false;
 	}
 	return true;
@@ -733,25 +770,32 @@ int main(int argc, const char * argv[]) {
 gotofork:
 		if (laststart) {
 			//daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+			parent_open_error_log();
 			proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+			parent_close_error_log();
 			sleep(glovars.proxy_restart_delay);
 		}
 		laststart=time(NULL);
 		pid = fork();
 		if (pid < 0) {
 			//daemon_log(LOG_INFO, "[FATAL]: Error in fork()\n");
+			parent_open_error_log();
 			proxy_error("[FATAL]: Error in fork()\n");
 			exit(EXIT_FAILURE);
 		}
 
 		if (pid) { /* The parent */
 
+			parent_close_error_log();
 			if (ProxySQL_daemonize_phase3()==false) {
 				goto gotofork;
 			}
 
 		} else { /* The daemon */
 
+			// we open the files also on the child process
+			// this is required if the child process was created after a crash
+			parent_open_error_log();
 			GloVars.global.start_time=monotonic_time();
 			GloVars.install_signal_handler();
 		}
