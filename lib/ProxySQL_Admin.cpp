@@ -5499,9 +5499,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_users() {
 		// upgrade is required
 		proxy_warning("Detected version pre-1.4 of table mysql_users\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_users in progress\n");
-		// drop any existing table with suffix _v130
-		configdb->execute("DROP TABLE IF EXISTS mysql_users_v130");
-		// rename current table to add suffix _v130
+		// drop any existing table with suffix _v140
+		configdb->execute("DROP TABLE IF EXISTS mysql_users_v140");
+		// rename current table to add suffix _v140
 		configdb->execute("ALTER TABLE mysql_users RENAME TO mysql_users_v140");
 		// create new table
 		configdb->build_table((char *)"mysql_users",(char *)ADMIN_SQLITE_TABLE_MYSQL_USERS,false);
