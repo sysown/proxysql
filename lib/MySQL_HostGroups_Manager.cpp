@@ -238,7 +238,8 @@ void MySrvC::connect_error(int err_num) {
 		case 1044: // access denied
 		case 1045: // access denied
 		case 1049: //Unknown databas
-               case 1226: // do not increase counter to avoid Shunning if user has max_user_connections restriction
+		case 1203: // User %s already has more than 'max_user_connections' active connections
+		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
 			return;
 			break;
 		default:
