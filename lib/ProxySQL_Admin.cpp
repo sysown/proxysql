@@ -1354,6 +1354,9 @@ void ProxySQL_Admin::flush_configdb() { // see #923
 	configdb=new SQLite3DB();
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	__attach_db(admindb, configdb, (char *)"disk");
+	// Fully synchronous is not required. See to #1055
+	// https://sqlite.org/pragma.html#pragma_synchronous
+	configdb->execute("PRAGMA disk.synchronous=0");
 	wrunlock();
 }
 
@@ -2652,6 +2655,9 @@ bool ProxySQL_Admin::init() {
 
 	configdb=new SQLite3DB();
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	// Fully synchronous is not required. See to #1055
+	// https://sqlite.org/pragma.html#pragma_synchronous
+	configdb->execute("PRAGMA synchronous=0");
 
 	monitordb = new SQLite3DB();
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
@@ -2685,6 +2691,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_config,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 #ifdef DEBUG
@@ -2870,6 +2877,8 @@ ProxySQL_Admin::~ProxySQL_Admin() {
 	delete (re2::RE2::Options *)match_regexes.opt;
 };
 
+// This function is used only used to export what collations are available
+// it is mostly informative
 void ProxySQL_Admin::dump_mysql_collations() {
 	const CHARSET_INFO * c = compiled_charsets;
 	char buf[1024];
@@ -2881,8 +2890,9 @@ void ProxySQL_Admin::dump_mysql_collations() {
 		++c;
 	} while (c[0].nr != 0);
 	admindb->execute("INSERT OR REPLACE INTO mysql_collations SELECT Id, Collation, Charset, 'Yes' FROM mysql_collations JOIN (SELECT MIN(Id) minid FROM mysql_collations GROUP BY Charset) t ON t.minid=mysql_collations.Id");
-	admindb->execute("DELETE FROM disk.mysql_collations");
-	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
+	// the table is not required to be present on disk. Removing it due to #1055
+//	admindb->execute("DELETE FROM disk.mysql_collations");
+//	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
 }
 
 void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
