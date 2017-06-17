@@ -3292,6 +3292,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return true;
 	}
 
+	if (qpo->OK_msg) {
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,0,0,setStatus,0,qpo->OK_msg);
+		l_free(pkt->size,pkt->ptr);
+		RequestEnd(NULL);
+		return true;
+	}
+
 	if (qpo->error_msg) {
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
