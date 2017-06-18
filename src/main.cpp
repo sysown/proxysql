@@ -769,11 +769,15 @@ int main(int argc, const char * argv[]) {
 	if (glovars.proxy_restart_on_error) {
 gotofork:
 		if (laststart) {
-			//daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
-			parent_open_error_log();
-			proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
-			parent_close_error_log();
-			sleep(glovars.proxy_restart_delay);
+			int currenttime=time(NULL);
+			if (currenttime == laststart) { /// we do not want to restart multiple times in the same second
+				// if restart is too frequent, something really bad is going on
+				//daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+				parent_open_error_log();
+				proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
+				parent_close_error_log();
+				sleep(glovars.proxy_restart_delay);
+			}
 		}
 		laststart=time(NULL);
 		pid = fork();
