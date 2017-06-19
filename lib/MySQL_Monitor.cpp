@@ -178,9 +178,17 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 	unsigned long long now = monotonic_time();
 	std::lock_guard<std::mutex> lock(mutex);
 	*(unsigned long long*)my->net.buff = now;
-	auto it = my_connections.emplace(std::piecewise_construct,
-		std::forward_as_tuple(hostname, port), std::forward_as_tuple()).first;
-	it->second.push_back(my);
+	//this doesn't work on old compilers
+//	auto it = my_connections.emplace(std::piecewise_construct,
+//		std::forward_as_tuple(hostname, port), std::forward_as_tuple()).first;
+//	it->second.push_back(my);
+	// code for old compilers (gcc 4.7 in debian7)
+	auto it = my_connections.find(std::make_pair(hostname, port));
+	if (it != my_connections.end()) {
+		it->second.push_back(my);
+	} else {
+		my_connections[std::make_pair(hostname,port)].push_back(my);
+	}
 }
 
 MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl, int g) {
