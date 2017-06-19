@@ -1405,18 +1405,27 @@ void MySQL_Connection::async_free_result() {
 		query.ptr=NULL;
 		query.length=0;
 	}
-	if (query.stmt_result) {
-		mysql_free_result(query.stmt_result);
-		query.stmt_result=NULL;
-	}
-	if (query.stmt) {
-		if (query.stmt->mysql) {
-			mysql_stmt_free_result(query.stmt);
+	if (userinfo) {
+		// if userinfo is NULL , the connection is being destroyed
+		// because it is reset on destructor ( ~MySQL_Connection() )
+		// therefore this section is skipped completely
+		// this should prevent bug #1046
+		if (query.stmt_result) {
+			mysql_free_result(query.stmt_result);
+			query.stmt_result=NULL;
 		}
-	}
-	if (mysql_result) {
-		mysql_free_result(mysql_result);
-		mysql_result=NULL;
+		if (query.stmt) {
+			if (query.stmt->mysql) {
+				if (query.stmt->mysql == mysql) { // extra check
+					mysql_stmt_free_result(query.stmt);
+				}
+			}
+			query.stmt=NULL;
+		}
+		if (mysql_result) {
+			mysql_free_result(mysql_result);
+			mysql_result=NULL;
+		}
 	}
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
