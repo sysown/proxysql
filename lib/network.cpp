@@ -4,7 +4,7 @@
  * create a socket and listen on a specified IP and port
  * returns the socket
  */
-int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
+int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport, bool linger) {
 	int rc, arg_on = 1;
 	struct addrinfo hints;
 	memset(&hints,0,sizeof(hints));
@@ -15,6 +15,7 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
         struct addrinfo *next, *ai;
         char port_string[NI_MAXSERV];
         int sd = -1;
+        struct linger nolinger = { .l_onoff = 1, .l_linger = 0 };
 
         snprintf(port_string, sizeof(port_string), "%d", port);
 	rc = getaddrinfo(ip, port_string, &hints, &ai);
@@ -39,6 +40,14 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
                         freeaddrinfo(ai);
                         return -1;
                 }
+
+                if (linger)
+                        if (setsockopt(sd, SOL_SOCKET, SO_LINGER, (struct linger *)&nolinger, sizeof(nolinger)) == -1) {
+                                proxy_error("setsockopt() SO_LINGER: %s\n", gai_strerror(errno));
+                                close(sd);
+                                freeaddrinfo(ai);
+                                return -1;
+                        }
 
 #ifdef SO_REUSEPORT
   		if (reuseport) {

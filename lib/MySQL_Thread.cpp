@@ -116,28 +116,25 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
         }
 
 #ifdef SO_REUSEPORT
-	if (GloVars.global.reuseport==false) {
-		s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, GloVars.global.reuseport, GloVars.global.linger) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+	if (atoi(port)==0) {
+		s = listen_on_unix(address, PROXYSQL_LISTEN_LEN);
 	} else {
-		if (atoi(port)==0) {
-			s = listen_on_unix(address, PROXYSQL_LISTEN_LEN);
-		} else {
-			// for TCP we will use SO_REUSEPORT
-			int *l_perthrsocks=(int *)malloc(sizeof(int)*num_threads);
-			unsigned int i;
-			for (i=0;i<num_threads;i++) {
-				s=listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
-				ioctl_FIONBIO(s,1);
-				iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
-				ifaces->add(ifi);
-				l_perthrsocks[i]=s;
-			}
-			*perthrsocks=l_perthrsocks;
-			s=0;
+		// for TCP we will use SO_REUSEPORT
+		int *l_perthrsocks=(int *)malloc(sizeof(int)*num_threads);
+		unsigned int i;
+		for (i=0;i<num_threads;i++) {
+			s=listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
+			ioctl_FIONBIO(s,1);
+			iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
+			ifaces->add(ifi);
+			l_perthrsocks[i]=s;
 		}
+		*perthrsocks=l_perthrsocks;
+		s=0;
 	}
 #else
-	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
+	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, GloVars.global.reuseport, GloVars.global.linger) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
 #endif /* SO_REUSEPORT */
 	if (s==-1) return s;
 	if (s>0) {
