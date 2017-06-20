@@ -92,7 +92,7 @@
 extern "C" {
 #endif /* __cplusplus */
 
-int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport=false);
+int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport=false, bool linger=false);
 int listen_on_unix(char *, int);
 int connect_socket(char *, int);
 int config_file_is_readable(char *);

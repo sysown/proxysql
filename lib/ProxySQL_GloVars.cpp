@@ -52,6 +52,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.nostart=false;
 	global.foreground=false;
 	global.monitor=true;
+       global.linger=false;
 #ifdef IDLE_THREADS
 	global.idle_threads=false;
 #endif /* IDLE_THREADS */
@@ -81,6 +82,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #ifdef SO_REUSEPORT
 	opt->add((const char *)"",0,0,0,(const char *)"Use SO_REUSEPORT",(const char *)"-r",(const char *)"--reuseport");
 #endif /* SO_REUSEPORT */
+       opt->add((const char *)"",0,0,0,(const char *)"Use SO_LINGER",(const char *)"-L",(const char *)"--nolinger");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
