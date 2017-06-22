@@ -1854,6 +1854,16 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
 	}
+
+	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
+		l_free(query_length,query);
+		char *q=(char *)"SELECT '%s' AS 'version()'";
+		query_length=strlen(q)+20;
+		query=(char *)l_alloc(query_length);
+		sprintf(query,q,PROXYSQL_VERSION);
+		goto __run_query;
+	}
+
 	if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT 'max_allowed_packet' Variable_name,'4194304' Value UNION ALL SELECT 'sql_mode', 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION' UNION ALL SELECT 'system_time_zone', 'UTC' UNION ALL SELECT 'time_zone','SYSTEM'";
