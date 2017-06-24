@@ -327,6 +327,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.frontend_init_db=0;
 	status.frontend_set_names=0;
 	status.frontend_use_db=0;
+	pthread_mutex_init(&readonly_mutex, NULL);
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_init(&lock, NULL);
@@ -507,6 +508,7 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 
 bool MySQL_HostGroups_Manager::commit() {
 
+	wrlock();
 	// purge table
 	purge_mysql_servers_table();
 
@@ -519,7 +521,6 @@ bool MySQL_HostGroups_Manager::commit() {
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
   char *query=NULL;
-	wrlock();
 	query=(char *)"SELECT mem_pointer, t1.hostgroup_id, t1.hostname, t1.port FROM mysql_servers t1 LEFT OUTER JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE t2.hostgroup_id IS NULL";
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
@@ -532,6 +533,11 @@ bool MySQL_HostGroups_Manager::commit() {
 			MySrvC *mysrvc=(MySrvC *)ptr;
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 			mysrvc->ConnectionsFree->drop_all_connections();
+			char *q1="DELETE FROM mysql_servers WHERE mem_pointer=%lld";
+			char *q2=(char *)malloc(strlen(q1)+32);
+			sprintf(q2,q1,ptr);
+			mydb->execute(q2);
+			free(q2);
 		}
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
@@ -1499,9 +1505,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
 
 void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
 	// define queries
-	const char *Q1=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
+	const char *Q1=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d AND status<>3";
 	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=writer_hostgroup OR reader_hostgroup=hostgroup_id) AND hostname='%s' AND port=%d ) LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
-	const char *Q2=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
+	const char *Q2A=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) AND status='OFFLINE_HARD'";
+	const char *Q2B=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
 	const char *Q3B=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q4=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
@@ -1509,6 +1516,8 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	if (GloAdmin==NULL) {
 		return;
 	}
+
+	pthread_mutex_lock(&readonly_mutex);
 
 	// define a buffer that will be used for all queries
 	char *query=(char *)malloc(strlen(hostname)*2+strlen(Q3A)+64);
@@ -1540,7 +1549,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				// the server has read_only=0 , but we can't find any writer, so we perform a swap
 				GloAdmin->mysql_servers_wrlock();
 				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
-				sprintf(query,Q2,hostname,port);
+				sprintf(query,Q2B,hostname,port);
 				admindb->execute(query);
 				if (mysql_thread___monitor_writer_is_also_reader) {
 					sprintf(query,Q3A,hostname,port);
@@ -1571,7 +1580,9 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
 					GloAdmin->mysql_servers_wrlock();
 					GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
-					sprintf(query,Q2,hostname,port);
+					sprintf(query,Q2A,hostname,port);
+					admindb->execute(query);
+					sprintf(query,Q2B,hostname,port);
 					admindb->execute(query);
 					if (mysql_thread___monitor_writer_is_also_reader) {
 						sprintf(query,Q3A,hostname,port);
@@ -1603,6 +1614,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	}
 
 __exit_read_only_action:
+	pthread_mutex_unlock(&readonly_mutex);
 	if (resultset) {
 		delete resultset;
 	}

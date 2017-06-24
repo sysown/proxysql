@@ -154,6 +154,7 @@ class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
+	pthread_mutex_t readonly_mutex;
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_t lock;
 #else
