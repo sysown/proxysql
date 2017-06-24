@@ -101,7 +101,7 @@ char *trim_spaces_and_quotes_in_place(char *str) {
 		return str;
 	// Trim trailing space
 	end = str + strlen(str) - 1;
-	while(end > str && (isspace(*end) || *end=='\"' || *end=='\'')) end--;
+	while(end > str && (isspace(*end) || *end=='\"' || *end=='\'' || *end==';')) end--;
 	// Write new null terminator
 	*(end+1) = 0;
 	return str;
