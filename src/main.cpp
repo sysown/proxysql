@@ -188,6 +188,7 @@ std::thread *MyMon_thread;
 
 MySQL_Logger *GloMyLogger;
 
+SQLite3_Server *GloSQLite3Server;
 
 void * mysql_worker_thread_func(void *arg) {
 
@@ -363,6 +364,14 @@ void ProxySQL_Main_init_MySQL_Monitor_module() {
 //	GloMyMon = new MySQL_Monitor();
 	MyMon_thread = new std::thread(&MySQL_Monitor::run,GloMyMon);
 	GloMyMon->print_version();
+}
+
+
+void ProxySQL_Main_init_SQLite3Server() {
+	// start SQLite3Server
+	GloSQLite3Server = new SQLite3_Server();
+	GloSQLite3Server->init();
+	GloSQLite3Server->print_version();
 }
 
 void ProxySQL_Main_join_all_threads() {
@@ -584,6 +593,13 @@ void ProxySQL_Main_init_phase3___start_all() {
 			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
 #endif
 		}
+	if (1) { // always trye for now
+		cpu_timer t;
+		ProxySQL_Main_init_SQLite3Server();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
+#endif
+	}
 }
 
 
