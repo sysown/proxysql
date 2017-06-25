@@ -372,7 +372,7 @@ int MySQL_Data_Stream::write_to_net_poll() {
 	if (active==0) return rc;
 	proxy_debug(PROXY_DEBUG_NET,1,"Session=%p, DataStream=%p --\n", sess, this);
 	if (queue_data(queueOUT)) {
-		if (sess->admin==false) {
+		if (sess->session_type == PROXYSQL_SESSION_MYSQL) {
 			if (poll_fds_idx>-1) { // NOTE: attempt to force writes
 				if (net_failure==false)
 					rc=write_to_net();
@@ -381,7 +381,7 @@ int MySQL_Data_Stream::write_to_net_poll() {
 			rc=write_to_net();
 		}
 	}
-	if (fd>0 && sess->admin==false) set_pollout();
+	if (fd>0 && sess->session_type == PROXYSQL_SESSION_MYSQL) set_pollout();
 	return rc;
 }
 

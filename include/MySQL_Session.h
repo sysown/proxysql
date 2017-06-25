@@ -3,6 +3,17 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+enum proxysql_session_type {
+	PROXYSQL_SESSION_MYSQL,
+	PROXYSQL_SESSION_ADMIN,
+	PROXYSQL_SESSION_STATS,
+	PROXYSQL_SESSION_SQLITE,
+	PROXYSQL_SESSION_CLICKHOUSE,
+	PROXYSQL_SESSION_MYSQL_EMU,
+
+	PROXYSQL_SESSION_NONE
+};
+
 // these structs will be used for various regex hardcoded
 // their initial use will be for sql_log_bin , sql_mode and time_zone
 // issues #509 , #815 and #816
@@ -148,16 +159,17 @@ class MySQL_Session
 	int transaction_persistent_hostgroup;
 	int to_process;
 	int pending_connect;
+	enum proxysql_session_type session_type;
 
 	// bool
 	bool autocommit;
 	bool killed;
-	bool admin;
+	//bool admin;
 	bool max_connections_reached;
 	bool client_authenticated;
 	bool connections_handler;
 	bool mirror;
-	bool stats;
+	//bool stats;
 	bool schema_locked;
 	bool transaction_persistent;
 	bool session_fast_forward;
@@ -187,7 +199,7 @@ class MySQL_Session
 	}
 	int handler();
 
-	void (*admin_func) (MySQL_Session *arg, ProxySQL_Admin *, PtrSize_t *pkt);
+	void (*handler_function) (MySQL_Session *arg, void *, PtrSize_t *pkt);
 	MySQL_Backend * find_backend(int);
 	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
