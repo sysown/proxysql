@@ -1268,7 +1268,11 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	(*myds)->sess->user_max_connections=max_connections;
 	if (password==NULL) {
 		// this is a workaround for bug #603
-		if ((*myds)->sess->admin==true) {
+		if (
+			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
+		|| 
+			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS) 
+		) {
 			if (strcmp((const char *)user,mysql_thread___monitor_username)==0) {
 				proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
 				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {

@@ -1641,8 +1641,9 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 }
 
 
-void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *pkt) {
+void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
+	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -1671,7 +1672,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 
 	{
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length,!sess->stats);
+		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length, ( sess->session_type == PROXYSQL_SESSION_ADMIN ? true : false )  );
 	}
 
 
@@ -1700,7 +1701,7 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 		goto __run_query;
 	}
 
-	if (sess->stats==false) {
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
 			pthread_mutex_lock(&admin_mutex);
@@ -2239,7 +2240,7 @@ __end_show_commands:
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		if (sess->stats==false) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			query=l_strdup("SELECT \"admin\" AS 'DATABASE()'");
 		} else {
 			query=l_strdup("SELECT \"stats\" AS 'DATABASE()'");
@@ -2251,7 +2252,7 @@ __end_show_commands:
 	// see issue #1022
 	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		if (sess->stats==false) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			query=l_strdup("SELECT \"admin\" AS 'name'");
 		} else {
 			query=l_strdup("SELECT \"stats\" AS 'name'");
@@ -2260,7 +2261,7 @@ __end_show_commands:
 		goto __run_query;
 	}
 
-	if (sess->stats==true) {
+	if (sess->session_type == PROXYSQL_SESSION_STATS) { // no admin
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
 			||
@@ -2275,7 +2276,7 @@ __end_show_commands:
 __run_query:
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (sess->stats==false) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			if (SPA->get_read_only()) { // disable writes if the admin interface is in read_only mode
 				SPA->admindb->execute("PRAGMA query_only = ON");
 				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -2318,8 +2319,8 @@ void *child_mysql(void *arg) {
 	mysql_thr->refresh_variables();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
 	sess->thread=mysql_thr;
-	sess->admin=true;
-	sess->admin_func=admin_session_handler;
+	sess->session_type = PROXYSQL_SESSION_ADMIN;
+	sess->handler_function=admin_session_handler;
 	MySQL_Data_Stream *myds=sess->client_myds;
 
 	fds[0].fd=client;
