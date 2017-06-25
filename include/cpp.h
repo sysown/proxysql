@@ -14,6 +14,7 @@
 #include "configfile.hpp"
 #include "query_processor.h"
 #include "proxysql_admin.h"
+#include "SQLite3_Server.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
 #include "MySQL_PreparedStatement.h"
