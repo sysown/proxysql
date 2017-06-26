@@ -3384,18 +3384,20 @@ void ProxySQL_Admin::stats___memory_metrics() {
 	free(query);
 #ifndef NOJEM
 	{
+		uint64_t epoch = 1;
 		size_t allocated = 0, resident = 0, active = 0, mapped = 0 , metadata = 0, retained = 0 , sz = sizeof(size_t);
+		mallctl("epoch", &epoch, &sz, &epoch, sz);
 		mallctl("stats.resident", &resident, &sz, NULL, 0);
 		mallctl("stats.active", &active, &sz, NULL, 0);
 		mallctl("stats.allocated", &allocated, &sz, NULL, 0);
 		mallctl("stats.mapped", &mapped, &sz, NULL, 0);
 		mallctl("stats.metadata", &metadata, &sz, NULL, 0);
 		mallctl("stats.retained", &retained, &sz, NULL, 0);
-		float frag_pct = ((float)active / allocated)*100 - 100;
-		size_t frag_bytes = active - allocated;
-		float rss_pct = ((float)resident / allocated)*100 - 100;
-		size_t rss_bytes = resident - allocated;
-		float metadata_pct = ((float)metadata / resident)*100;
+//		float frag_pct = ((float)active / allocated)*100 - 100;
+//		size_t frag_bytes = active - allocated;
+//		float rss_pct = ((float)resident / allocated)*100 - 100;
+//		size_t rss_bytes = resident - allocated;
+//		float metadata_pct = ((float)metadata / resident)*100;
 		vn=(char *)"jemalloc_resident";
 		sprintf(bu,"%lu",resident);
 		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
