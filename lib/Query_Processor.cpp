@@ -667,6 +667,31 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	return result;
 }
 
+unsigned long Query_Processor::get_query_digests_total_size() {
+	unsigned long ret=0;
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&digest_rwlock);
+#else
+	spin_rdlock(&digest_rwlock);
+#endif
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+		ret += sizeof(QP_query_digest_stats);
+		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+		if (qds->username)
+			ret += strlen(qds->username) + 1;
+		if (qds->schemaname)
+			ret += strlen(qds->schemaname) + 1;
+		if (qds->digest_text)
+			ret += strlen(qds->digest_text) + 1;
+	}
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&digest_rwlock);
+#else
+	spin_rdunlock(&digest_rwlock);
+#endif
+	return ret;
+}
+
 SQLite3_result * Query_Processor::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result=new SQLite3_result(11);

@@ -223,6 +223,9 @@ class Query_Processor {
 	SQLite3_result * get_stats_commands_counters();
 	SQLite3_result * get_query_digests();
 	SQLite3_result * get_query_digests_reset();
+
+	unsigned long get_query_digests_total_size();
+
 };
 
 typedef Query_Processor * create_Query_Processor_t();

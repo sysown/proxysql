@@ -63,6 +63,7 @@ class MySQL_Authentication {
 	void set_all_inactive(enum cred_username_type usertype);
 	void remove_inactives(enum cred_username_type usertype);
 	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
+	unsigned int memory_usage();
 };
 
 #endif /* __CLASS_MYSQL_AUTHENTICATION_H */

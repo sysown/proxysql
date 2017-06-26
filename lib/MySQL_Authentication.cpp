@@ -138,6 +138,43 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	return true;
 };
 
+
+unsigned int MySQL_Authentication::memory_usage() {
+	unsigned int ret=0;
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&creds_frontends.lock);
+	pthread_rwlock_rdlock(&creds_backends.lock);
+#else
+	spin_rdlock(&creds_frontends.lock);
+	spin_rdlock(&creds_backends.lock);
+#endif
+	unsigned i=0;
+	for (i=0; i<creds_frontends.cred_array->len; i++) {
+		account_details_t *ado=(account_details_t *)creds_frontends.cred_array->index(i);
+		ret += sizeof(account_details_t);
+		if (ado->username) ret += strlen(ado->username) + 1;
+		if (ado->password) ret += strlen(ado->password) + 1;
+		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
+		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
+	}
+	for (i=0; i<creds_backends.cred_array->len; i++) {
+		account_details_t *ado=(account_details_t *)creds_backends.cred_array->index(i);
+		ret += sizeof(account_details_t);
+		if (ado->username) ret += strlen(ado->username) + 1;
+		if (ado->password) ret += strlen(ado->password) + 1;
+		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
+		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
+	}
+#ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&creds_frontends.lock);
+	pthread_rwlock_unlock(&creds_backends.lock);
+#else
+	spin_rdunlock(&creds_frontends.lock);
+	spin_rdunlock(&creds_backends.lock);
+#endif
+	return ret;
+}
+
 int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complete) {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&creds_frontends.lock);

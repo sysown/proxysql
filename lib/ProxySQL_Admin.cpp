@@ -239,6 +239,8 @@ pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define STATS_SQLITE_TABLE_MYSQL_GLOBAL "CREATE TABLE stats_mysql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
+#define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
+
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
 #endif /* DEBUG */
@@ -1368,6 +1370,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_query_digest=false;
 	bool stats_mysql_query_digest_reset=false;
 	bool stats_mysql_global=false;
+	bool stats_memory_metrics=false;
 	bool stats_mysql_commands_counters=false;
 	bool stats_mysql_query_rules=false;
 	bool stats_mysql_users=false;
@@ -1392,6 +1395,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_query_digest_reset=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_global"))
 		{ stats_mysql_global=true; refresh=true; }
+	if (strstr(query_no_space,"stats_memory_metrics"))
+		{ stats_memory_metrics=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_connection_pool_reset"))
 		{
 			stats_mysql_connection_pool_reset=true; refresh=true;
@@ -1450,6 +1455,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_global)
 			stats___mysql_global();
+		if (stats_memory_metrics)
+			stats___memory_metrics();
 		if (stats_mysql_query_rules)
 			stats___mysql_query_rules();
 		if (stats_mysql_commands_counters)
@@ -2717,6 +2724,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
+	insert_into_tables_defs(tables_defs_stats,"stats_memory_metrics", STATS_SQLITE_TABLE_MEMORY_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_users", STATS_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES); // workaround for issue #708
 
@@ -3349,6 +3357,106 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	}
 #endif /* DEBUG */
 	return false;
+}
+
+void ProxySQL_Admin::stats___memory_metrics() {
+	if (!GloMTH) return;
+	SQLite3_result * resultset = NULL;
+
+	int highwater;
+	int current;
+	char bu[32];
+	char *vn=NULL;
+	char *query=NULL;
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_memory_metrics");
+	char *a=(char *)"INSERT INTO stats_memory_metrics VALUES (\"%s\",\"%s\")";
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+	sqlite3_status(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
+	vn=(char *)"SQLite3_memory_bytes";
+	sprintf(bu,"%d",current);
+	query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+	sprintf(query,a,vn,bu);
+	statsdb->execute(query);
+	free(query);
+#ifndef NOJEM
+	{
+		size_t allocated = 0, resident = 0, active = 0, mapped = 0 , metadata = 0, retained = 0 , sz = sizeof(size_t);
+		mallctl("stats.resident", &resident, &sz, NULL, 0);
+		mallctl("stats.active", &active, &sz, NULL, 0);
+		mallctl("stats.allocated", &allocated, &sz, NULL, 0);
+		mallctl("stats.mapped", &mapped, &sz, NULL, 0);
+		mallctl("stats.metadata", &metadata, &sz, NULL, 0);
+		mallctl("stats.retained", &retained, &sz, NULL, 0);
+		float frag_pct = ((float)active / allocated)*100 - 100;
+		size_t frag_bytes = active - allocated;
+		float rss_pct = ((float)resident / allocated)*100 - 100;
+		size_t rss_bytes = resident - allocated;
+		float metadata_pct = ((float)metadata / resident)*100;
+		vn=(char *)"jemalloc_resident";
+		sprintf(bu,"%lu",resident);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"jemalloc_active";
+		sprintf(bu,"%lu",active);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"jemalloc_allocated";
+		sprintf(bu,"%lu",allocated);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"jemalloc_mapped";
+		sprintf(bu,"%lu",mapped);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"jemalloc_metadata";
+		sprintf(bu,"%lu",metadata);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		vn=(char *)"jemalloc_retained";
+		sprintf(bu,"%lu",retained);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+	}
+#endif
+	{
+		if (GloMyAuth) {
+			unsigned long mu = GloMyAuth->memory_usage();
+			vn=(char *)"Auth_memory";
+			sprintf(bu,"%lu",mu);
+			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+		}
+	}
+	{
+		if (GloQPro) {
+			unsigned long mu = GloQPro->get_query_digests_total_size();
+			vn=(char *)"query_digest_memory";
+			sprintf(bu,"%lu",mu);
+			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+		}
+	}
+	statsdb->execute("COMMIT");
 }
 
 void ProxySQL_Admin::stats___mysql_global() {
