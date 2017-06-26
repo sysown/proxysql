@@ -73,9 +73,9 @@ static void * HGCU_thread_run() {
 		int i;
 		for (i=0;i<(int)l;i++) {
 			myconn=(MySQL_Connection *)conn_array->index(i);
-			if (myconn->mysql->net.vio) {
+			if (myconn->mysql->net.vio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->password, myconn->userinfo->password, myconn->userinfo->schemaname);
-				if (myconn->mysql->net.vio==0) {
+				if (myconn->mysql->net.vio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
 				}
 			} else {
@@ -103,12 +103,12 @@ static void * HGCU_thread_run() {
 			usleep(50);
 			for (i=0;i<(int)conn_array->len;i++) {
 				myconn=(MySQL_Connection *)conn_array->index(i);
-				if (myconn->mysql->net.vio) {
+				if (myconn->mysql->net.vio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 					statuses[i]=wait_for_mysql(myconn->mysql, statuses[i]);
-					if (myconn->mysql->net.vio) {
+					if (myconn->mysql->net.vio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 						if ((statuses[i] & MYSQL_WAIT_TIMEOUT) == 0) {
 							statuses[i]=mysql_change_user_cont(&ret[i], myconn->mysql, statuses[i]);
-							if (myconn->mysql->net.vio==0) {
+							if (myconn->mysql->net.vio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL ) {
 								statuses[i]=0; ret[i]=1;
 							}
 						}
