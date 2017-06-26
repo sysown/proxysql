@@ -164,7 +164,19 @@ class PtrSizeArray {
 	PtrSize_t * index(unsigned int i) {
 		return &pdata[i];
 	}
-
+	unsigned int total_size(unsigned int _min_size=0) {
+		unsigned int intsize=0;
+		unsigned int i=0;
+		for (i = 0 ; i < len ; i++) {
+			PtrSize_t *pts = index(i);
+			if (pts->size > _min_size) {
+				intsize += pts->size;
+			} else {
+				intsize += _min_size;
+			}
+		}
+		return intsize;
+	}
 };
 #endif /* __CLASS_PTR_ARRAY_H */
 

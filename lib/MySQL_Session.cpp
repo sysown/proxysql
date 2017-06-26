@@ -3826,6 +3826,17 @@ void MySQL_Session::Memory_Stats() {
 		if (client_myds->myconn) {
 			internal+=sizeof(MySQL_Connection);
 		}
+		if (client_myds->PSarrayIN) {
+			internal += client_myds->PSarrayIN->total_size();
+		}
+		if (client_myds->PSarrayIN) {
+			if (session_fast_forward==true) {
+				internal += client_myds->PSarrayOUT->total_size();
+			} else {
+				internal += client_myds->PSarrayOUT->total_size(RESULTSET_BUFLEN);
+				internal += client_myds->resultset->total_size(RESULTSET_BUFLEN);
+			}
+		}
 	}
 	for (i=0; i < mybes->len; i++) {
 		MySQL_Backend *_mybe=(MySQL_Backend *)mybes->index(i);
