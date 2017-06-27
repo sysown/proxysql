@@ -10,6 +10,8 @@
 #define PROXYSQL_VERSION_COMMENT_LEN 81
 #define SELECT_LAST_INSERT_ID "SELECT LAST_INSERT_ID()"
 #define SELECT_LAST_INSERT_ID_LEN 23
+#define SELECT_LAST_INSERT_ID_LIMIT1 "SELECT LAST_INSERT_ID() LIMIT 1"
+#define SELECT_LAST_INSERT_ID_LIMIT1_LEN 31
 
 #define EXPMARIA
 
@@ -571,7 +573,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return true;
 	}
 
-	if (pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
+	if (
+		(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
+		||
+		(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+	) {
 		char buf[16];
 		sprintf(buf,"%u",last_insert_id);
 		unsigned int nTrx=NumActiveTransactions();
