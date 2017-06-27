@@ -157,6 +157,9 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 	}
+	ret += sizeof(creds_group_t);
+	ret += sizeof(PtrArray);
+	ret += (creds_frontends.cred_array->size * sizeof(void *));
 	for (i=0; i<creds_backends.cred_array->len; i++) {
 		account_details_t *ado=(account_details_t *)creds_backends.cred_array->index(i);
 		ret += sizeof(account_details_t);
@@ -165,6 +168,9 @@ unsigned int MySQL_Authentication::memory_usage() {
 		if (ado->sha1_pass) ret += SHA_DIGEST_LENGTH;
 		if (ado->default_schema) ret += strlen(ado->default_schema) + 1;
 	}
+	ret += sizeof(creds_group_t);
+	ret += sizeof(PtrArray);
+	ret += (creds_backends.cred_array->size * sizeof(void *));
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);

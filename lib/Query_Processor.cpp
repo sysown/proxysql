@@ -684,6 +684,12 @@ unsigned long Query_Processor::get_query_digests_total_size() {
 		if (qds->digest_text)
 			ret += strlen(qds->digest_text) + 1;
 	}
+#if !defined(__FreeBSD__) && !defined(__APPLE__)
+	ret += ((sizeof(uint64_t) + sizeof(void *) + sizeof(std::_Rb_tree_node_base)) * digest_umap.size() );
+#else
+	ret += ((sizeof(uint64_t) + sizeof(void *) + 32) * digest_umap.size() );
+#endif
+
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
 #else
