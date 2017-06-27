@@ -1632,3 +1632,11 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	}
 	return 1;
 }
+
+void MySQL_Connection::reset() {
+	status_flags=0;
+	reusable=true;
+	options.last_set_autocommit=-1;
+	delete local_stmts;
+	local_stmts=new MySQL_STMTs_local(false);
+}
