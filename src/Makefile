@@ -41,7 +41,7 @@ ifeq ($(UNAME_S),Darwin)
 	LDIRS+= -L/usr/local/lib
 endif
 
-MYCPPFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG)
+MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG)
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
@@ -73,10 +73,10 @@ _OBJ = main.o proxysql_global.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 $(ODIR)/%.o: %.cpp
-	$(CXX) -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS) -Wall
+	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
 proxysql: $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
-	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCPPFLAGS) $(CPPFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 
 $(ODIR):
 	mkdir $(ODIR)

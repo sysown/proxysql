@@ -36,11 +36,11 @@ LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
 ODIR= obj
 
 #CC=gcc
-#CPP=g++
+#CXX=g++
 #CC=clang
 
 #CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
-#CPPFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
+#CXXFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
 NOJEM=-DNOJEM
@@ -54,27 +54,27 @@ NOJEM=-DNOJEM
 endif
 
 MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
-MYCPPFLAGS=-std=c++11 $(MYCFLAGS)
+MYCXXFLAGS=-std=c++11 $(MYCFLAGS)
 
 default: libproxysql.a
 .PHONY: default
 
 _OBJ = c_tokenizer.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
-_OBJ_CPP = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo
-OBJ_CPP = $(patsubst %,$(ODIR)/%,$(_OBJ_CPP))
+_OBJ_CXX = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo
+OBJ_CXX = $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 
 %.ko: %.cpp
-	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
 $(ODIR)/%.o: %.c
 	$(CC) -fPIC -c -o $@ $< $(MYCFLAGS) $(CFLAGS)
 
 $(ODIR)/%.oo: %.cpp
-	$(CXX) -fPIC -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS)
+	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o 
-	ar rcs $@ $(OBJ) $(OBJ_CPP) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o
+	ar rcs $@ $(OBJ) $(OBJ_CXX) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o
 
 $(ODIR):
 	mkdir $(ODIR)
