@@ -74,7 +74,7 @@ static void * HGCU_thread_run() {
 		for (i=0;i<(int)l;i++) {
 			myconn=(MySQL_Connection *)conn_array->index(i);
 			if (myconn->mysql->net.vio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
-				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->password, myconn->userinfo->password, myconn->userinfo->schemaname);
+				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname);
 				if (myconn->mysql->net.vio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
 				}
