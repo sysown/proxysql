@@ -122,7 +122,7 @@ static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
 static volatile int load_main_=0;
 static volatile bool nostart_=false;
 */
-static int __SQLite3_Server_refresh_interval=0;
+static int __SQLite3_Server_refresh_interval=1000;
 /*
 static bool proxysql_mysql_paused=false;
 static int old_wait_timeout;
@@ -134,6 +134,7 @@ extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
+extern SQLite3_Server *GloSQLite3Server;
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -247,6 +248,7 @@ pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 */
 /*
 static char * admin_variables_names[]= {
+	(char *)"version",
   (char *)"admin_credentials",
   (char *)"stats_credentials",
   (char *)"mysql_ifaces",
@@ -266,10 +268,6 @@ static char * admin_variables_names[]= {
 static char * SQLite3_Server_variables_names[] = {
 	(char *)"mysql_ifaces",
 	(char *)"read_only",
-	(char *)"version",
-#ifdef DEBUG
-	(char *)"debug",
-#endif // DEBUG
   NULL
 };
 
@@ -1816,7 +1814,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		run_query=false;
 		goto __run_query;
 	}
-
+*/
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
@@ -1866,7 +1864,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
 	}
-
+/*
 	if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT 'max_allowed_packet' Variable_name,'4194304' Value UNION ALL SELECT 'sql_mode', 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION' UNION ALL SELECT 'system_time_zone', 'UTC' UNION ALL SELECT 'time_zone','SYSTEM'";
@@ -2052,12 +2050,12 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		}
 		goto __run_query;
 	}
-
+*/
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
 
-
+/*
 	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'version'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'version'"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT 'version' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-version'";
@@ -2066,7 +2064,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
 	}
-
+*/
 
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -2075,6 +2073,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+/*
 	if (query_no_space_length==strlen("SHOW CHARSET") && !strncasecmp("SHOW CHARSET",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT Charset, Collation AS 'Default collation' FROM mysql_collations WHERE `Default`='Yes'");
@@ -2088,6 +2087,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
+*/
 
 	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
 		strA=query_no_space+17;
@@ -2130,7 +2130,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_length=l+1;
 		goto __run_query;
 	}
-
+/*
 	if (query_no_space_length==strlen("SHOW MYSQL USERS") && !strncasecmp("SHOW MYSQL USERS",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM mysql_users ORDER BY username, active DESC, username ASC");
@@ -2179,6 +2179,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		GloAdmin->stats___mysql_global();
 		goto __run_query;
 	}
+*/
 
 	strA=(char *)"SHOW CREATE TABLE ";
 	strB=(char *)"SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),'CREATE TABLE %s (','CREATE TABLE %s ('||X'0A20202020') AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";
@@ -2224,6 +2225,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		goto __run_query;
 	}
 
+/*
 	if (query_no_space_length==strlen("SHOW FULL PROCESSLIST") && !strncasecmp("SHOW FULL PROCESSLIST",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM stats_mysql_processlist");
@@ -2237,16 +2239,19 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
-
+*/
 __end_show_commands:
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
+		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
+/*
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			query=l_strdup("SELECT \"admin\" AS 'DATABASE()'");
 		} else {
 			query=l_strdup("SELECT \"stats\" AS 'DATABASE()'");
 		}
+*/
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -2254,31 +2259,36 @@ __end_show_commands:
 	// see issue #1022
 	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
+		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
+/*
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			query=l_strdup("SELECT \"admin\" AS 'name'");
 		} else {
 			query=l_strdup("SELECT \"stats\" AS 'name'");
 		}
+*/
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (sess->session_type == PROXYSQL_SESSION_STATS) { // no admin
+	if (sess->session_type == PROXYSQL_SESSION_SQLITE) { // no admin
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
 			||
 			(strncasecmp("ATTACH",query_no_space,6)==0)
 		) {
 			proxy_error("[WARNING]: Commands executed from stats interface in Admin Module: \"%s\"\n", query_no_space);
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Command not allowed");
+			GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Command not allowed");
 			run_query=false;
 		}
 	}
 
-*/
-/*
+
 __run_query:
 	if (run_query) {
+		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+/*
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			if (SPA->get_read_only()) { // disable writes if the admin interface is in read_only mode
@@ -2293,14 +2303,24 @@ __run_query:
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
 		}
+*/
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
-*/
 }
 
+
+SQLite3_Session::SQLite3_Session() {
+	sessdb = new SQLite3DB();
+    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
+}
+
+SQLite3_Session::~SQLite3_Session() {
+	delete sessdb;
+	sessdb = NULL;
+}
 
 static void *child_mysql(void *arg) {
 
@@ -2320,6 +2340,10 @@ static void *child_mysql(void *arg) {
 	pthread_mutex_unlock(&sock_mutex);
 	MySQL_Thread *mysql_thr=new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
+
+	SQLite3_Session *sqlite_sess = new SQLite3_Session();
+	mysql_thr->gen_args = (void *)sqlite_sess;
+
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
@@ -2359,6 +2383,7 @@ static void *child_mysql(void *arg) {
 	}
 
 __exit_child_mysql:
+	delete sqlite_sess;
 	delete mysql_thr;
 	return NULL;
 }
@@ -2545,6 +2570,11 @@ __end_while_pool:
 #endif /* DEBUG */
 #define PROXYSQL_SQLITE3_SERVER_VERSION "0.7.0625" DEB
 
+SQLite3_Server::~SQLite3_Server() {
+	delete sessdb;
+	sessdb = NULL;
+};
+
 SQLite3_Server::SQLite3_Server() {
 #ifdef DEBUG
 		if (glovars.has_debug==false) {
@@ -2560,6 +2590,8 @@ SQLite3_Server::SQLite3_Server() {
 	//Initialize locker
 	pthread_rwlock_init(&rwlock,NULL);
 
+	sessdb = new SQLite3DB();
+    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
 
 	variables.mysql_ifaces=strdup("127.0.0.1:6030");
 /*
@@ -3085,17 +3117,17 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	free(varnames);
 }
 */
-/*
-char **ProxySQL_Admin::get_variables_list() {
-	size_t l=sizeof(admin_variables_names)/sizeof(char *);
+char **SQLite3_Server::get_variables_list() {
+	size_t l=sizeof(SQLite3_Server_variables_names)/sizeof(char *);
 	unsigned int i;
 	char **ret=(char **)malloc(sizeof(char *)*l);
 	for (i=0;i<l;i++) {
-		ret[i]=(i==l-1 ? NULL : strdup(admin_variables_names[i]));
+		ret[i]=(i==l-1 ? NULL : strdup(SQLite3_Server_variables_names[i]));
 	}
 	return ret;
 }
 
+/*
 
 // Returns true if the given name is the name of an existing admin variable
 bool ProxySQL_Admin::has_variable(const char *name) {
@@ -3182,59 +3214,10 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 	free_tokenizer( &tok );
 }
 
-bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
+*/
+bool SQLite3_Server::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
 	size_t vallen=strlen(value);
 
-	if (!strcasecmp(name,"admin_credentials")) {
-		if (vallen) {
-			bool update_creds=false;
-			if ((variables.admin_credentials==NULL) || strcasecmp(variables.admin_credentials,value) ) update_creds=true;
-			if (update_creds && variables.admin_credentials) {
-#ifdef DEBUG
-				delete_credentials((char *)"admin",variables.admin_credentials);
-#else
-				delete_credentials(variables.admin_credentials);
-#endif // DEBUG
-			}
-			free(variables.admin_credentials);
-			variables.admin_credentials=strdup(value);
-			if (update_creds && variables.admin_credentials) {
-#ifdef DEBUG
-				add_credentials((char *)"admin",variables.admin_credentials, ADMIN_HOSTGROUP);
-#else
-				add_credentials(variables.admin_credentials, ADMIN_HOSTGROUP);
-#endif // DEBUG
-			}
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"stats_credentials")) {
-		if (vallen) {
-			bool update_creds=false;
-			if ((variables.stats_credentials==NULL) || strcasecmp(variables.stats_credentials,value) ) update_creds=true;
-			if (update_creds && variables.stats_credentials) {
-#ifdef DEBUG
-				delete_credentials((char *)"stats",variables.stats_credentials);
-#else
-				delete_credentials(variables.stats_credentials);
-#endif // DEBUG
-			}
-			free(variables.stats_credentials);
-			variables.stats_credentials=strdup(value);
-			if (update_creds && variables.stats_credentials) {
-#ifdef DEBUG
-				add_credentials((char *)"admin",variables.stats_credentials, STATS_HOSTGROUP);
-#else
-				add_credentials(variables.stats_credentials, STATS_HOSTGROUP);
-#endif // DEBUG
-			}
-			return true;
-		} else {
-			return false;
-		}
-	}
 	if (!strcasecmp(name,"mysql_ifaces")) {
 		if (vallen) {
 			bool update_creds=false;
@@ -3250,93 +3233,19 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			return false;
 		}
 	}
-	if (!strcasecmp(name,"telnet_admin_ifaces")) {
-		if (vallen) {
-			bool update_creds=false;
-			if ((variables.telnet_admin_ifaces==NULL) || strcasecmp(variables.telnet_admin_ifaces,value) ) update_creds=true;
-			if (variables.telnet_admin_ifaces)
-				free(variables.telnet_admin_ifaces);
-			variables.telnet_admin_ifaces=strdup(value);
-			if (update_creds && variables.telnet_admin_ifaces) {
-				S_amll.update_ifaces(variables.telnet_admin_ifaces, &S_amll.ifaces_telnet_admin);
-			}
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"telnet_stats_ifaces")) {
-		if (vallen) {
-			bool update_creds=false;
-			if ((variables.telnet_stats_ifaces==NULL) || strcasecmp(variables.telnet_stats_ifaces,value) ) update_creds=true;
-			if (variables.telnet_stats_ifaces)
-				free(variables.telnet_stats_ifaces);
-			variables.telnet_stats_ifaces=strdup(value);
-			if (update_creds && variables.telnet_stats_ifaces) {
-				S_amll.update_ifaces(variables.telnet_stats_ifaces, &S_amll.ifaces_telnet_stats);
-			}
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"refresh_interval")) {
-		int intv=atoi(value);
-		if (intv > 100 && intv < 100000) {
-			variables.refresh_interval=intv;
-			__admin_refresh_interval=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"version")) {
-		if (strcasecmp(value,(char *)PROXYSQL_VERSION)==0) {
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"hash_passwords")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.hash_passwords=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.hash_passwords=false;
-			return true;
-		}
-		return false;
-	}
 	if (!strcasecmp(name,"read_only")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.admin_read_only=true;
+			variables.read_only=true;
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.admin_read_only=false;
+			variables.read_only=false;
 			return true;
 		}
 		return false;
 	}
-#ifdef DEBUG
-	if (!strcasecmp(name,"debug")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.debug=true;
-			GloVars.global.gdbg=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.debug=false;
-			GloVars.global.gdbg=false;
-			return true;
-		}
-		return false;
-	}
-#endif // DEBUG
 	return false;
 }
-*/
 
 /*
 void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {

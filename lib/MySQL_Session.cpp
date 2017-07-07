@@ -26,6 +26,8 @@ extern MySQL_STMT_Manager *GloMyStmt;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 #endif
 
+extern SQLite3_Server *GloSQLite3Server;
+
 Session_Regex::Session_Regex(char *p) {
 	s=strdup(p);
 	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
@@ -1958,12 +1960,19 @@ __get_pkts_from_client:
 									mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
-									if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+									switch (session_type) {
+										case PROXYSQL_SESSION_ADMIN:
+										case PROXYSQL_SESSION_STATS:
 										// this is processed by the admin module
-										handler_function(this, (void *)GloAdmin, &pkt);
-										l_free(pkt.size,pkt.ptr);
-									} else {
-										assert(0);
+											handler_function(this, (void *)GloAdmin, &pkt);
+											l_free(pkt.size,pkt.ptr);
+											break;
+										case PROXYSQL_SESSION_SQLITE:
+											handler_function(this, (void *)GloSQLite3Server, &pkt);
+											l_free(pkt.size,pkt.ptr);
+											break;
+										default:
+											assert(0);
 									}
 								}
 								break;
@@ -3030,7 +3039,13 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	if ( 
 		(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) 
 		&&
-		( (default_hostgroup<0 && session_type == PROXYSQL_SESSION_ADMIN) || (default_hostgroup>=0 && session_type == PROXYSQL_SESSION_MYSQL) || strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 ) // Do not delete this line. See bug #492
+		(
+			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
+			||
+			(default_hostgroup>=0 && session_type == PROXYSQL_SESSION_MYSQL)
+			||
+			strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0 
+		) // Do not delete this line. See bug #492
 	)	{
 		if (session_type == PROXYSQL_SESSION_ADMIN) {
 			if ( (default_hostgroup<0) || (strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0) ) {

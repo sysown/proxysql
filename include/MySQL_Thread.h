@@ -13,6 +13,7 @@
 
 #define ADMIN_HOSTGROUP	-2
 #define STATS_HOSTGROUP	-3
+#define SQLITE_HOSTGROUP -4
 
 
 #define MYSQL_DEFAULT_SQL_MODE	""
@@ -177,6 +178,8 @@ class MySQL_Thread
 	int nfds;
 
 	public:
+
+	void *gen_args;	// this is a generic pointer to create any sort of structure
 
 	ProxySQL_Poll mypolls;
 	pthread_t thread_id;

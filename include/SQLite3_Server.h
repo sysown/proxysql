@@ -43,9 +43,17 @@ class ProxySQL_External_Scheduler {
 };
 */
 
+class SQLite3_Session {
+	public:
+	SQLite3DB *sessdb;
+	SQLite3_Session();
+	~SQLite3_Session();
+};
+
 class SQLite3_Server {
 	private:
 	volatile int main_shutdown;
+	SQLite3DB *sessdb;
 /*
 	std::vector<table_def_t *> *tables_defs_admin;
 	std::vector<table_def_t *> *tables_defs_stats;
@@ -72,7 +80,7 @@ class SQLite3_Server {
 		char *mysql_ifaces;
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
-		bool admin_read_only;
+		bool read_only;
 		bool hash_passwords;
 		char * admin_version;
 #ifdef DEBUG
@@ -107,9 +115,11 @@ class SQLite3_Server {
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
+*/
 	char **get_variables_list();
 	char *get_variable(char *name);
 	bool set_variable(char *name, char *value);
+/*
 	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
