@@ -156,6 +156,7 @@ class MySQL_Connection {
 
 	void async_free_result();
 	bool IsActiveTransaction();
+	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);

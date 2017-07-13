@@ -2287,6 +2287,8 @@ __run_skip_1a:
 		if (curtime > last_maintenance_time + maintenance_interval) {
 			last_maintenance_time=curtime;
 			maintenance_loop=true;
+			servers_table_version_previous = servers_table_version_current;
+			servers_table_version_current = MyHGM->get_servers_table_version();
 		} else {
 			maintenance_loop=false;
 		}
@@ -2776,6 +2778,12 @@ void MySQL_Thread::process_all_sessions() {
 						if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
 					}
 				}
+				if (servers_table_version_current != servers_table_version_previous) { // bug fix for #1085
+					// Immediatelly kill all client connections using an OFFLINE node
+					if (sess->HasOfflineBackends()) {
+						sess->killed=true;
+					}
+				}
 			} else {
 				if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 					sess->killed=true;
@@ -2955,6 +2963,9 @@ MySQL_Thread::MySQL_Thread() {
 
 	last_maintenance_time=0;
 	maintenance_loop=true;
+
+	servers_table_version_previous=0;
+	servers_table_version_current=0;
 
 	status_variables.stmt_prepare=0;
 	status_variables.stmt_execute=0;

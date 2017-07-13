@@ -1138,6 +1138,22 @@ int MySQL_Connection::async_connect(short event) {
 }
 
 
+bool MySQL_Connection::IsServerOffline() {
+	bool ret=false;
+	if (parent==NULL)
+		return ret;
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	if (
+		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		||
+		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
+	) {
+		ret=true;
+	}
+	return ret;
+}
 
 // Returns:
 // 0 when the query is completed

@@ -148,6 +148,8 @@ class MySQL_Thread
 {
 
 	private:
+	unsigned int servers_table_version_previous;
+	unsigned int servers_table_version_current;
   unsigned long long last_processing_idles;
 	MySQL_Connection **my_idle_conns;
   bool processing_idles;
