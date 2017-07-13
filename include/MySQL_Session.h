@@ -135,7 +135,7 @@ class MySQL_Session
 	char * default_schema;
 
 	uint32_t thread_session_id;
-	unsigned int last_insert_id;
+	unsigned long long last_insert_id;
 	enum session_status status;
 	int healthy;
 	int user_max_connections;
