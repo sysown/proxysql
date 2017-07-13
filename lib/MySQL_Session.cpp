@@ -305,6 +305,9 @@ MySQL_Session::MySQL_Session() {
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_MODE( *)(:|)=( *)");
 	match_regexes[2]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)TIME_ZONE( *)(:|)=( *)");
+
+	last_insert_id=0; // #1093
+
 }
 
 MySQL_Session::~MySQL_Session() {
