@@ -165,6 +165,7 @@ class MySQL_Connection {
 			}
 		return ret;
 	}
+	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);

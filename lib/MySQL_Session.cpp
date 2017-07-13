@@ -3755,6 +3755,23 @@ unsigned int MySQL_Session::NumActiveTransactions() {
 	return ret;
 }
 
+bool MySQL_Session::HasOfflineBackends() {
+	bool ret=false;
+	if (mybes==0) return ret;
+	MySQL_Backend *_mybe;
+	unsigned int i;
+	for (i=0; i < mybes->len; i++) {
+		_mybe=(MySQL_Backend *)mybes->index(i);
+		if (_mybe->server_myds)
+			if (_mybe->server_myds->myconn)
+				if (_mybe->server_myds->myconn->IsServerOffline()) {
+					ret=true;
+					return ret;
+				}
+	}
+	return ret;
+}
+
 int MySQL_Session::FindOneActiveTransaction() {
 	int ret=-1;
 	if (mybes==0) return ret;
