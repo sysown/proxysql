@@ -99,9 +99,9 @@ deps/libmicrohttpd/libmicrohttpd-0.9.52/
 
 #clickhouse
 deps/clickhouse-cpp/clickhouse-cpp/
-dep/cityhash/cityhash/
-dep/lz4/lz4-1.7.5/
-dep/lz4/lz4/
+deps/cityhash/cityhash/
+deps/lz4/lz4-1.7.5/
+deps/lz4/lz4/
 
 #re2
 deps/re2/re2/

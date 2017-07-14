@@ -81,8 +81,7 @@ $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
 proxysql: $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
-#	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_DIR)/clickhouse/libclickhouse-cpp-lib.a $(CITYHASH_DIR)/libcityhash.a $(LZ4_DIR)/liblz4.a $(MYCPPFLAGS) $(CPPFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
-	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_DIR)/clickhouse/libclickhouse-cpp-lib.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_DIR)/clickhouse/libclickhouse-cpp-lib.a $(LZ4_DIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 
 $(ODIR):
 	mkdir $(ODIR)
