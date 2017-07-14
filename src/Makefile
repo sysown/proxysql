@@ -29,6 +29,11 @@ PCRE_LDIR=$(PCRE_PATH)/.libs
 
 SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
 
+
+CLICKHOUSE_CPP_DIR=$(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
+CITYHASH_DIR=$(DEPS_PATH)/cityhash/cityhash/src/.libs
+LZ4_DIR=$(DEPS_PATH)/lz4/lz4
+
 IDIR=../include
 LDIR=../lib
 IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR)
@@ -76,7 +81,8 @@ $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCPPFLAGS) $(CPPFLAGS) -Wall
 
 proxysql: $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
-	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCPPFLAGS) $(CPPFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
+#	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_DIR)/clickhouse/libclickhouse-cpp-lib.a $(CITYHASH_DIR)/libcityhash.a $(LZ4_DIR)/liblz4.a $(MYCPPFLAGS) $(CPPFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_DIR)/clickhouse/libclickhouse-cpp-lib.a $(MYCPPFLAGS) $(CPPFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 
 $(ODIR):
 	mkdir $(ODIR)
