@@ -9,9 +9,15 @@ MYCFLAGS=-O2
 MYJEOPT=--enable-xmalloc --enable-munmap --enable-prof
 endif
 
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4
 .PHONY: default
 
+
+lz4/lz4/liblz4.a:
+	cd lz4 && rm -rf lz4-1.7.5
+	cd lz4 && tar -zxf lz4-1.7.5.tar.gz
+	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
+lz4: lz4/lz4/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp
@@ -109,5 +115,6 @@ cleanall:
 	cd pcre && rm -rf pcre-8.39
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
+	cd lz4 && rm -rf lz4-1.7.5 || true
 .PHONY: cleanall
 
