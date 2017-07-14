@@ -63,6 +63,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #ifdef DEBUG
 	global.gdb=0;
 #endif
+
+	global.sqlite3_server=false;
+	global.clickhouse_server=false;
 	opt=new ez::ezOptionParser();
 	opt->overview="High Performance Advanced Proxy for MySQL";
 	opt->syntax="proxysql [OPTIONS]";
@@ -90,6 +93,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,0,0,(const char *)"Create auxiliary threads to handle idle connections",(const char *)"--idle-threads");
 #endif /* IDLE_THREADS */
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
+
+	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
+	opt->add((const char *)"",0,0,0,(const char *)"Enable ClickHouse Server",(const char *)"--clickhouse-server");
 
 	confFile=new ProxySQL_ConfigFile();
 };
@@ -156,6 +162,14 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.idle_threads=true;
 	}
 #endif /* IDLE_THREADS */
+
+	if (opt->isSet("--sqlite3-server")) {
+		global.sqlite3_server=true;
+	}
+	if (opt->isSet("--clickhouse-server")) {
+		global.clickhouse_server=true;
+	}
+
 
 	config_file=GloVars.__cmd_proxysql_config_file;
 

@@ -4,6 +4,8 @@
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_Threads_Handler *GloMTH;
 
+extern ClickHouse_Authentication *GloClickHouseAuth;
+
 #ifdef max_allowed_packet
 #undef max_allowed_packet
 #endif
@@ -1089,7 +1091,12 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
 	void *sha1_pass=NULL;
-	password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+	enum proxysql_session_type session_type = (*myds)->sess->session_type;
+	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+		password=GloClickHouseAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+	} else {
+		password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+	}
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
 	if (password==NULL) {
 		ret=false;
@@ -1146,7 +1153,12 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	cur+=pass_len;
 	db=(char *)pkt+cur;
 	void *sha1_pass=NULL;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+	enum proxysql_session_type session_type = (*myds)->sess->session_type;
+	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+	} else {
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+	}
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
@@ -1162,6 +1174,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 					ret=true;
 				}
 			} else {
+				if (session_type == PROXYSQL_SESSION_MYSQL) {
 					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 					if (ret) {
 						if (sha1_pass==NULL) {
@@ -1172,6 +1185,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 						userinfo->sha1_pass=sha1_pass_hex(reply);
 					}
 				}
+			}
 		}
 		if (_ret_use_ssl==true) {
 			// if we reached here, use_ssl is false , but _ret_use_ssl is true
@@ -1258,7 +1272,12 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	bool transaction_persistent;
 	bool fast_forward;
 	int max_connections;
-	password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+	enum proxysql_session_type session_type = (*myds)->sess->session_type;
+	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+	} else {
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+	}
 	//assert(default_hostgroup>=0);
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->default_schema=default_schema; // just the pointer is passed
@@ -1301,14 +1320,16 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 					ret=true;
 				}
 			} else {
-				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
-				if (ret) {
-					if (sha1_pass==NULL) {
-						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+				if (session_type == PROXYSQL_SESSION_MYSQL) {
+					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+					if (ret) {
+						if (sha1_pass==NULL) {
+							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						}
+						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+						userinfo->sha1_pass=sha1_pass_hex(reply);
 					}
-					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-					userinfo->sha1_pass=sha1_pass_hex(reply);
 					}
 				}
 			}
