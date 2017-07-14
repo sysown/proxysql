@@ -275,6 +275,7 @@ MySQL_Session::MySQL_Session() {
 
 	init(); // we moved this out to allow CHANGE_USER
 
+	last_insert_id=0; // #1093
 }
 
 void MySQL_Session::init() {

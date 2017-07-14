@@ -4215,6 +4215,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid) {
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	MySrvC *mysrvc=NULL;
 	mysrvc=(MySrvC *)c->parent;
+	// reset insert_id #1093
+	c->mysql->insert_id = 0;
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			cached_connections->add(c);
