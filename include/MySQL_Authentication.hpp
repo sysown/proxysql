@@ -6,6 +6,8 @@
 
 #define PROXYSQL_AUTH_PTHREAD_MUTEX
 
+#ifndef ACCOUNT_DETAILS_T
+#define ACCOUNT_DETAILS_T
 typedef struct _account_details_t {
 	char *username;
 	char *password;
@@ -23,6 +25,9 @@ typedef struct _account_details_t {
 	bool __active;
 } account_details_t;
 
+typedef std::map<uint64_t, account_details_t *> umap_auth;
+#endif // ACCOUNT_DETAILS_T
+
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else
@@ -30,10 +35,11 @@ typedef struct _account_details_t {
 #endif /* DEBUG */
 #define MYSQL_AUTHENTICATION_VERSION "0.2.0902" DEB
 
-typedef std::map<uint64_t, account_details_t *> umap_auth;
 
 class PtrArray;
 
+#ifndef CREDS_GROUPS_T
+#define CREDS_GROUPS_T
 typedef struct _creds_group_t {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_t lock;
@@ -43,6 +49,7 @@ typedef struct _creds_group_t {
 	umap_auth bt_map;
 	PtrArray *cred_array;
 } creds_group_t;
+#endif // CREDS_GROUPS_T
 
 class MySQL_Authentication {
 	private:

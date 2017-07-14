@@ -176,6 +176,7 @@ int socket_fd;
 
 Query_Cache *GloQC;
 MySQL_Authentication *GloMyAuth;
+ClickHouse_Authentication *GloClickHouseAuth;
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH;
@@ -192,6 +193,7 @@ std::thread *MyMon_thread;
 MySQL_Logger *GloMyLogger;
 
 SQLite3_Server *GloSQLite3Server;
+ClickHouse_Server *GloClickHouseServer;
 
 
 ProxySQL_Cluster *GloProxyCluster = NULL;
@@ -327,6 +329,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloQPro=NULL;
 	GloMTH=NULL;
 	GloMyAuth=NULL;
+	GloClickHouseAuth=NULL;
 	GloMyMon=NULL;
 	GloMyLogger=NULL;
 	GloMyStmt=NULL;
@@ -404,6 +407,13 @@ void ProxySQL_Main_init_SQLite3Server() {
 	GloSQLite3Server->print_version();
 }
 
+void ProxySQL_Main_init_ClickHouseServer() {
+	// start SQServer
+	GloClickHouseServer = new ClickHouse_Server();
+	GloClickHouseServer->init();
+	GloClickHouseServer->print_version();
+}
+
 void ProxySQL_Main_join_all_threads() {
 	cpu_timer t;
 	if (GloMTH) {
@@ -467,6 +477,30 @@ void ProxySQL_Main_shutdown_all_modules() {
 		GloQPro=NULL;
 #ifdef DEBUG
 		std::cerr << "GloQPro shutdown in ";
+#endif
+	}
+	if (GloClickHouseAuth) {
+		cpu_timer t;
+		delete GloClickHouseAuth;
+		GloClickHouseAuth=NULL;
+#ifdef DEBUG
+		std::cerr << "GloClickHouseAuth shutdown in ";
+#endif
+	}
+	if (GloClickHouseServer) {
+		cpu_timer t;
+		delete GloClickHouseServer;
+		GloClickHouseServer=NULL;
+#ifdef DEBUG
+		std::cerr << "GloClickHouseServer shutdown in ";
+#endif
+	}
+	if (GloSQLite3Server) {
+		cpu_timer t;
+		delete GloSQLite3Server;
+		GloSQLite3Server=NULL;
+#ifdef DEBUG
+		std::cerr << "GloSQLite3Server shutdown in ";
 #endif
 	}
 	if (GloMyAuth) {
@@ -624,11 +658,18 @@ void ProxySQL_Main_init_phase3___start_all() {
 			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
 #endif
 		}
-	if (1) { // always trye for now
+	if ( GloVars.global.sqlite3_server == true ) {
 		cpu_timer t;
 		ProxySQL_Main_init_SQLite3Server();
 #ifdef DEBUG
 		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
+#endif
+	}
+	if ( GloVars.global.clickhouse_server == true ) {
+		cpu_timer t;
+		ProxySQL_Main_init_ClickHouseServer();
+#ifdef DEBUG
+		std::cerr << "Main phase3 : ClickHouse Server initialized in ";
 #endif
 	}
 }
