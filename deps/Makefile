@@ -13,11 +13,11 @@ default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse
 .PHONY: default
 
 
-cityhash/cityhash/libcityhash.a:
+cityhash/cityhash/src/.libs/libcityhash.a:
 	cd cityhash && rm -rf cityhash || true
 	cd cityhash && tar -zxf cityhash.tar.gz
 	cd cityhash/cityhash && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
-cityhash: cityhash/cityhash/libcityhash.a
+cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
 lz4/lz4/liblz4.a:
 	cd lz4 && rm -rf lz4-1.7.5 || true
