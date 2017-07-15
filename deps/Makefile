@@ -9,18 +9,24 @@ MYCFLAGS=-O2
 MYJEOPT=--enable-xmalloc --enable-munmap --enable-prof
 endif
 
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash
 .PHONY: default
 
 
+cityhash/cityhash/libcityhash.a:
+	cd cityhash && rm -rf cityhash || true
+	cd cityhash && tar -zxf cityhash.tar.gz
+	cd cityhash/cityhash && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+cityhash: cityhash/cityhash/libcityhash.a
+
 lz4/lz4/liblz4.a:
-	cd lz4 && rm -rf lz4-1.7.5
+	cd lz4 && rm -rf lz4-1.7.5 || true
 	cd lz4 && tar -zxf lz4-1.7.5.tar.gz
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
 lz4: lz4/lz4/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
-	cd clickhouse-cpp && rm -rf clickhouse-cpp
+	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp.tar.gz
 	cd clickhouse-cpp/clickhouse-cpp && cmake .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
