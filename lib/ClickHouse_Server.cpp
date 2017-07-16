@@ -50,6 +50,128 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
+#include "clickhouse/client.h"
+
+using namespace clickhouse;
+
+__thread MySQL_Session * clickhouse_thread___mysql_sess;
+
+//static void ClickHouse_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
+inline void ClickHouse_to_MySQL(const Block& block) {
+	MySQL_Session *sess = clickhouse_thread___mysql_sess;
+	MySQL_Protocol *myprot=NULL;
+	myprot=&sess->client_myds->myprot;
+
+	assert(myprot);
+	MySQL_Data_Stream *myds=myprot->get_myds();
+	myds->DSS=STATE_QUERY_SENT_DS;
+	int columns=block.GetColumnCount();
+	ClickHouse_Session *clickhouse_sess = (ClickHouse_Session *)sess->thread->gen_args;
+	int sid=clickhouse_sess->sid;
+	if (clickhouse_sess->transfer_started==false) {
+		clickhouse_sess->transfer_started=true;
+		sid=1;
+		columns=block.GetColumnCount();
+		//int rows=block.GetRowCount();
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,block.GetColumnCount()); sid++;
+		for (Block::Iterator bi(block); bi.IsValid(); bi.Next()) {
+			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)bi.Name().c_str(),(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL);
+			sid++;
+		}
+/*
+	for (size_t i = 0; i < block.GetColumnCount(); ++i) {
+		std::cout << block[i]->Type()->GetCode() << "\n";
+	}
+*/
+		myds->DSS=STATE_COLUMN_DEFINITION;
+		unsigned int nTrx=0;
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		//if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus ); sid++;
+	}
+	char **p=(char **)malloc(sizeof(char*)*columns);
+	unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*columns);
+	int rows=block.GetRowCount();
+	for (int r=0; r<rows; r++) {
+		for (int i=0; i<columns; i++) {
+			clickhouse::Type::Code cc = block[i]->Type()->GetCode();
+			string s;
+			switch (cc) {
+				case clickhouse::Type::Code::Int8:
+					s=std::to_string(block[i]->As<ColumnInt8>()->At(r));
+					break;
+				case clickhouse::Type::Code::UInt8:
+					s=std::to_string(block[i]->As<ColumnUInt8>()->At(r));
+					break;
+				case clickhouse::Type::Code::Int16:
+					s=std::to_string(block[i]->As<ColumnInt16>()->At(r));
+					break;
+				case clickhouse::Type::Code::UInt16:
+					s=std::to_string(block[i]->As<ColumnUInt16>()->At(r));
+					break;
+				case clickhouse::Type::Code::Int32:
+					s=std::to_string(block[i]->As<ColumnInt32>()->At(r));
+					break;
+				case clickhouse::Type::Code::UInt32:
+					s=std::to_string(block[i]->As<ColumnUInt32>()->At(r));
+					break;
+				case clickhouse::Type::Code::Int64:
+					s=std::to_string(block[i]->As<ColumnInt64>()->At(r));
+					break;
+				case clickhouse::Type::Code::UInt64:
+					s=std::to_string(block[i]->As<ColumnUInt64>()->At(r));
+					break;
+				case clickhouse::Type::Code::String:
+					s=block[i]->As<ColumnString>()->At(r);
+					break;
+				case clickhouse::Type::Code::FixedString:
+					s=block[i]->As<ColumnFixedString>()->At(r);
+					break;
+				case clickhouse::Type::Code::Date:
+					{
+						std::time_t t=block[i]->As<ColumnDate>()->At(r);
+						struct tm *tm = localtime(&t);
+						char date[20];
+						memset(date,0,sizeof(date));
+						strftime(date, sizeof(date), "%Y-%m-%d", tm);
+						s=date;
+					}
+					break;
+				case clickhouse::Type::Code::DateTime:
+					{
+						std::time_t t=block[i]->As<ColumnDateTime>()->At(r);
+						struct tm *tm = localtime(&t);
+						char date[20];
+						memset(date,0,sizeof(date));
+						strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", tm);
+						s=date;
+					}
+					break;
+				default:
+					break;
+			}
+      l[i]=s.length();
+      p[i]=strdup((char *)s.c_str());
+    }
+    myprot->generate_pkt_row(true,NULL,NULL,sid,columns,l,p); sid++;
+		for (int i=0; i<columns; i++) {
+			free(p[i]);
+		}
+    }
+    myds->DSS=STATE_ROW;
+		clickhouse_sess->sid=sid;
+    //myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus ); sid++;
+    //myds->DSS=STATE_SLEEP;
+    free(l);
+    free(p);
+}
+
+
+
+
+
+
+
 static void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
 	unsigned char ch;
 	size_t i, j;
@@ -134,7 +256,7 @@ extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
-extern ClickHouse_Server *GloSQLite3Server;
+extern ClickHouse_Server *GloClickHouseServer;
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -1818,7 +1940,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			query=l_strdup("SELECT '(ProxySQL Admin Module)'");
+			query=l_strdup("SELECT '(ProxySQL ClickHouse Module)'");
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
@@ -2065,14 +2187,14 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		goto __run_query;
 	}
 */
-
+/*
 	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
-
+*/
 /*
 	if (query_no_space_length==strlen("SHOW CHARSET") && !strncasecmp("SHOW CHARSET",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -2088,7 +2210,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		goto __run_query;
 	}
 */
-
+/*
 	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
 		strA=query_no_space+17;
 		strAl=strlen(strA);
@@ -2130,6 +2252,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		query_length=l+1;
 		goto __run_query;
 	}
+*/
 /*
 	if (query_no_space_length==strlen("SHOW MYSQL USERS") && !strncasecmp("SHOW MYSQL USERS",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -2180,7 +2303,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		goto __run_query;
 	}
 */
-
+/*
 	strA=(char *)"SHOW CREATE TABLE ";
 	strB=(char *)"SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),'CREATE TABLE %s (','CREATE TABLE %s ('||X'0A20202020') AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";
 	strAl=strlen(strA);
@@ -2213,14 +2336,14 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		query_length=l+1;
 		goto __run_query;
 	}
-
+*/
 	if (
 		(query_no_space_length==strlen("SHOW DATABASES") && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
 		||
 		(query_no_space_length==strlen("SHOW SCHEMAS") && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
 	) {
 		l_free(query_length,query);
-		query=l_strdup("PRAGMA DATABASE_LIST");
+		query=l_strdup("SELECT name FROM system.databases");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
@@ -2244,7 +2367,7 @@ __end_show_commands:
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
+		query=l_strdup("SELECT 'main' AS DATABASE");
 /*
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			query=l_strdup("SELECT \"admin\" AS 'DATABASE()'");
@@ -2278,16 +2401,18 @@ __end_show_commands:
 			(strncasecmp("ATTACH",query_no_space,6)==0)
 		) {
 			proxy_error("[WARNING]: Commands executed from stats interface in Admin Module: \"%s\"\n", query_no_space);
-			GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Command not allowed");
+			GloClickHouseServer->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Command not allowed");
 			run_query=false;
 		}
 	}
 
 
 __run_query:
+/*
 	if (run_query) {
 		ClickHouse_Session *sqlite_sess = (ClickHouse_Session *)sess->thread->gen_args;
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+*/
 /*
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
@@ -2304,22 +2429,157 @@ __run_query:
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
 		}
 */
+/*
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
+*/
+	if (run_query) {
+		ClickHouse_Session *clickhouse_sess = (ClickHouse_Session *)sess->thread->gen_args;
+		bool supported_command = false;
+		bool expected_resultset = true;
+		if (supported_command == false && strncasecmp("SELECT ",query_no_space,7) == 0) {
+			supported_command = true;
+			expected_resultset = true;
+		}
+
+		if (supported_command == false && strncasecmp("INSERT ",query_no_space,7) == 0) {
+			if (strcasestr(query_no_space,"VALUES")==NULL) {
+				if (strcasestr(query_no_space,"SELECT")) {
+					supported_command = true;
+					expected_resultset = false;
+				}
+			}
+		}
+
+		if (supported_command == false && strncasecmp("SET ",query_no_space,4) == 0) {
+			supported_command = true;
+			expected_resultset = false;
+		}
+		if (supported_command == false && strncasecmp("USE ",query_no_space,4) == 0) {
+			supported_command = true;
+			expected_resultset = false;
+		}
+		if (supported_command == false) {
+			if (
+				(strncasecmp("CREATE ",query_no_space,7) == 0)
+				|| (strncasecmp("ALTER ",query_no_space,6) == 0)
+				|| (strncasecmp("DROP ",query_no_space,5) == 0)
+				|| (strncasecmp("RENAME ",query_no_space,7) == 0)
+			) {
+				supported_command = true;
+				expected_resultset = false;
+			}
+		}
+		if (supported_command == false) {
+			if (
+				(strncasecmp("SHOW ",query_no_space,5) == 0)
+				|| (strncasecmp("DESC ",query_no_space,5) == 0)
+				|| (strncasecmp("DESCRIBE ",query_no_space,9) == 0)
+			) {
+				supported_command = true;
+				expected_resultset = true;
+			}
+		}
+
+/*
+			if (strncasecmp("CREATE",query_no_space,6)) {
+				if (strncasecmp("DROP",query_no_space,4)) {
+					if (strncasecmp("SHOW",query_no_space,4)) {
+  						MySQL_Protocol *myprot=NULL;
+  						myprot=&sess->client_myds->myprot;
+  						assert(myprot);
+		  				MySQL_Data_Stream *myds=myprot->get_myds();
+  						myds->DSS=STATE_QUERY_SENT_DS;
+    					myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)"Command not supported");
+		    			myds->DSS=STATE_SLEEP;
+					}
+				}
+			}
+*/
+		if (supported_command == false) {
+  			MySQL_Protocol *myprot=NULL;
+  			myprot=&sess->client_myds->myprot;
+			assert(myprot);
+			MySQL_Data_Stream *myds=myprot->get_myds();
+			myds->DSS=STATE_QUERY_SENT_DS;
+			myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)"Command not supported");
+			myds->DSS=STATE_SLEEP;
+		} else {
+		
+		try {
+			clickhouse_thread___mysql_sess = sess;
+			//clickhouse_thread___started=false;
+//			clickhouse::ClientOptions co;
+//			co.SetHost("localhost");
+//			co.SetCompressionMethod(CompressionMethod::None);
+			//clickhouse::Client client(ClientOptions().SetHost("localhost"));
+//			clickhouse::Client client(co);
+			//Block block;
+			if (expected_resultset) {
+				clickhouse_sess->client->Select(query, [](const Block& block) { ClickHouse_to_MySQL(block); } );
+		
+  				MySQL_Protocol *myprot=NULL;
+  				myprot=&sess->client_myds->myprot; assert(myprot);
+  				MySQL_Data_Stream *myds=myprot->get_myds();
+  			//myds->DSS=STATE_QUERY_SENT_DS;
+
+				if (clickhouse_sess->transfer_started) {
+    				myprot->generate_pkt_EOF(true,NULL,NULL,clickhouse_sess->sid,0, 2); clickhouse_sess->sid++;
+				} else {
+					myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"");
+				}
+  				myds->DSS=STATE_SLEEP;
+				clickhouse_sess->transfer_started=false;
+			} else {
+				clickhouse::Query myq(query);
+				clickhouse_sess->client->Execute(myq);
+				//clickhouse_sess->client->SendQuery(query);
+  				MySQL_Protocol *myprot=NULL;
+  				myprot=&sess->client_myds->myprot; assert(myprot);
+  				MySQL_Data_Stream *myds=myprot->get_myds();
+				myds->DSS=STATE_QUERY_SENT_DS;
+				myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"");
+  				myds->DSS=STATE_SLEEP;
+				clickhouse_sess->transfer_started=false;
+			}
+		} catch (const std::exception& e) {
+  			MySQL_Protocol *myprot=NULL;
+  			myprot=&sess->client_myds->myprot;
+			assert(myprot);
+			MySQL_Data_Stream *myds=myprot->get_myds();
+			myds->DSS=STATE_QUERY_SENT_DS;
+			std::stringstream buffer;
+			buffer << e.what();
+    		myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)buffer.str().c_str());
+			myds->DSS=STATE_SLEEP;
+			std::cerr << "Exception in query for ClickHouse: " << e.what() << std::endl;
+			sess->set_unhealthy();
+			//clickhouse_thread___refresh_interval=0;
+		}
+		}
+		l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
+		l_free(query_length,query);
+	}
 }
 
 
 ClickHouse_Session::ClickHouse_Session() {
 	sessdb = new SQLite3DB();
     sessdb->open((char *)"file:mem_sqlitedb_clickhouse?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
+	transfer_started = false;
+	co.SetHost("localhost");
+	co.SetCompressionMethod(CompressionMethod::None);
+	client = new clickhouse::Client(co);
 }
 
 ClickHouse_Session::~ClickHouse_Session() {
 	delete sessdb;
 	sessdb = NULL;
+	delete client;
+	client = NULL;
 }
 
 static void *child_mysql(void *arg) {
@@ -2348,7 +2608,7 @@ static void *child_mysql(void *arg) {
 	mysql_thr->refresh_variables();
 	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
 	sess->thread=mysql_thr;
-	sess->session_type = PROXYSQL_SESSION_SQLITE;
+	sess->session_type = PROXYSQL_SESSION_CLICKHOUSE;
 	sess->handler_function=ClickHouse_Server_session_handler;
 	MySQL_Data_Stream *myds=sess->client_myds;
 

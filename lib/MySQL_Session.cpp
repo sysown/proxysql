@@ -27,6 +27,7 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern SQLite3_Server *GloSQLite3Server;
 
 extern ClickHouse_Authentication *GloClickHouseAuth;
+extern ClickHouse_Server *GloClickHouseServer;
 
 Session_Regex::Session_Regex(char *p) {
 	s=strdup(p);
@@ -578,9 +579,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		}
 	}
 
-	if (pkt->size>(5+4) && strncasecmp((char *)"USE ",(char *)pkt->ptr+5,4)==0) {
-		handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(pkt);
-		return true;
+	if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
+		if (pkt->size>(5+4) && strncasecmp((char *)"USE ",(char *)pkt->ptr+5,4)==0) {
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(pkt);
+			return true;
+		}
 	}
 
 	if (pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0) {
@@ -1882,6 +1885,29 @@ __get_pkts_from_client:
 							NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
 						}
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+						if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+							if ((enum_mysql_command)c == _MYSQL_COM_INIT_DB) {
+								PtrSize_t _new_pkt;
+								_new_pkt.ptr=malloc(pkt.size+4); // USE + space
+								memcpy(_new_pkt.ptr , pkt.ptr, 4);
+								unsigned char *_c=(unsigned char *)_new_pkt.ptr;
+								_c+=4; *_c=0x03;
+								_c+=1; *_c='U';
+								_c+=1; *_c='S';
+								_c+=1; *_c='E';
+								_c+=1; *_c=' ';
+//								(unsigned char *)_new_pkt.ptr[4]=0x03;
+//								(unsigned char *)_new_pkt.ptr[5]='U';
+//								(unsigned char *)_new_pkt.ptr[6]='S';
+//								(unsigned char *)_new_pkt.ptr[7]='E';
+//								(unsigned char *)_new_pkt.ptr[8]=' ';
+								memcpy(_new_pkt.ptr+9 , pkt.ptr+5, pkt.size-5);
+								l_free(pkt.size,pkt.ptr);
+								pkt.size+=4;
+								pkt.ptr = _new_pkt.ptr;
+								c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+							}
+						}
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
 								__sync_add_and_fetch(&thread->status_variables.queries,1);
@@ -1966,6 +1992,10 @@ __get_pkts_from_client:
 											break;
 										case PROXYSQL_SESSION_SQLITE:
 											handler_function(this, (void *)GloSQLite3Server, &pkt);
+											l_free(pkt.size,pkt.ptr);
+											break;
+										case PROXYSQL_SESSION_CLICKHOUSE:
+											handler_function(this, (void *)GloClickHouseServer, &pkt);
 											l_free(pkt.size,pkt.ptr);
 											break;
 										default:
@@ -3030,6 +3060,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		&&
 		(
 			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
+			||
+			(default_hostgroup == 0 && session_type == PROXYSQL_SESSION_CLICKHOUSE)
 			||
 			(default_hostgroup>=0 && session_type == PROXYSQL_SESSION_MYSQL)
 			||

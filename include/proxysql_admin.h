@@ -133,6 +133,12 @@ class ProxySQL_Admin {
 	void add_credentials(char *credentials, int hostgroup_id);
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
+
+	void __refresh_clickhouse_users();
+	void __add_active_clickhouse_users(char *user=NULL);
+	void __delete_inactive_clickhouse_users();
+	
+
 	public:
 	struct {
 		void *opt;
@@ -170,8 +176,8 @@ class ProxySQL_Admin {
 	void flush_mysql_users__from_disk_to_memory();
 	void flush_mysql_servers__from_memory_to_disk();
 	void flush_mysql_servers__from_disk_to_memory();
-	void flush_mysql_query_rules__from_memory_to_disk();	
-	void flush_mysql_query_rules__from_disk_to_memory();	
+	void flush_mysql_query_rules__from_memory_to_disk();
+	void flush_mysql_query_rules__from_disk_to_memory();
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
@@ -215,6 +221,12 @@ class ProxySQL_Admin {
 	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
 
 	void flush_configdb(); // 923
+
+
+	void init_clickhouse_users();
+	void flush_clickhouse_users__from_memory_to_disk();
+	void flush_clickhouse_users__from_disk_to_memory();
+	void save_clickhouse_users_runtime_to_database(bool _runtime);
 
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

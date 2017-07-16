@@ -28,7 +28,7 @@ lz4: lz4/lz4/liblz4.a
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp.tar.gz
-	cd clickhouse-cpp/clickhouse-cpp && cmake .
+	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
