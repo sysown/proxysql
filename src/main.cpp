@@ -412,6 +412,9 @@ void ProxySQL_Main_init_ClickHouseServer() {
 	GloClickHouseServer = new ClickHouse_Server();
 	GloClickHouseServer->init();
 	GloClickHouseServer->print_version();
+	GloClickHouseAuth = new ClickHouse_Authentication();
+	GloClickHouseAuth->print_version();
+	GloAdmin->init_clickhouse_users();
 }
 
 void ProxySQL_Main_join_all_threads() {

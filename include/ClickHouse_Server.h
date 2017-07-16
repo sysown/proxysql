@@ -6,11 +6,17 @@
 #include "cpp.h"
 #include <vector>
 
+#include "clickhouse/client.h"
+
 class ClickHouse_Session {
    public:
 	SQLite3DB *sessdb;
+	bool transfer_started;
+	uint8_t sid;	
 	ClickHouse_Session();
 	~ClickHouse_Session();
+	clickhouse::ClientOptions co;
+	clickhouse::Client *client;
 };
 
 class ClickHouse_Server {
