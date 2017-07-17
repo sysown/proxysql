@@ -132,6 +132,7 @@ class MySQL_Protocol {
 
 	// prepared statements
 	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info);
+	void generate_STMT_PREPARE_RESPONSE_OK(uint8_t sequence_id, uint32_t stmt_id);
 
 	//stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, uint16_t num_params);
 	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta);

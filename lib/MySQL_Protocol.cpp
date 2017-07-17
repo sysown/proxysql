@@ -786,7 +786,7 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	hdr.pkt_length=12;
 	memcpy(okpack,&hdr,sizeof(mysql_hdr)); // copy header
 	okpack[4]=0;
-	okpack[13]=0;
+	okpack[15]=0;
 	memcpy(okpack+5,&stmt_info->statement_id,sizeof(uint32_t));
 	memcpy(okpack+9,&stmt_info->num_columns,sizeof(uint16_t));
 	memcpy(okpack+11,&stmt_info->num_params,sizeof(uint16_t));

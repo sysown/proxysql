@@ -3298,6 +3298,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool prepared) {
+	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	if (qpo->new_query) {
 		// the query was rewritten
 		l_free(pkt->size,pkt->ptr);	// free old pkt
@@ -3380,16 +3381,18 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				delete opt2;
 				if (rc && ( i==0 || i==1) ) {
 					//fprintf(stderr,"sql_log_bin=%d\n", i);
-					client_myds->DSS=STATE_QUERY_SENT_NET;
-					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-					if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
-					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-					client_myds->DSS=STATE_SLEEP;
-					status=WAITING_CLIENT_DATA;
-					l_free(pkt->size,pkt->ptr);
-					RequestEnd(NULL);
 					client_myds->myconn->options.sql_log_bin=i;
-					return true;
+					if (command_type == _MYSQL_COM_QUERY) {
+						client_myds->DSS=STATE_QUERY_SENT_NET;
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
+						l_free(pkt->size,pkt->ptr);
+						RequestEnd(NULL);
+						return true;
+					}
 				} else {
 					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
 					return false;
@@ -3407,14 +3410,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				delete opt2;
 				if (rc) {
 					//fprintf(stderr,"sql_mode='%s'\n", s.c_str());
-					client_myds->DSS=STATE_QUERY_SENT_NET;
-					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-					if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
-					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-					client_myds->DSS=STATE_SLEEP;
-					status=WAITING_CLIENT_DATA;
-					l_free(pkt->size,pkt->ptr);
-					RequestEnd(NULL);
 					uint32_t sql_mode_int=SpookyHash::Hash32(s.c_str(),s.length(),10);
 					if (client_myds->myconn->options.sql_mode_int != sql_mode_int) {
 						//fprintf(stderr,"sql_mode_int='%u'\n", sql_mode_int);
@@ -3424,7 +3419,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						client_myds->myconn->options.sql_mode=strdup(s.c_str());
 					}
-					return true;
+					if (command_type == _MYSQL_COM_QUERY) {
+						client_myds->DSS=STATE_QUERY_SENT_NET;
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
+						l_free(pkt->size,pkt->ptr);
+						RequestEnd(NULL);
+						return true;
+					}
 				} else {
 					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
 					return false;
@@ -3442,14 +3447,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				delete opt2;
 				if (rc) {
 					//fprintf(stderr,"time_zone='%s'\n", s.c_str());
-					client_myds->DSS=STATE_QUERY_SENT_NET;
-					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-					if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-					client_myds->DSS=STATE_SLEEP;
-					status=WAITING_CLIENT_DATA;
-					l_free(pkt->size,pkt->ptr);
-					RequestEnd(NULL);
 					uint32_t time_zone_int=SpookyHash::Hash32(s.c_str(),s.length(),10);
 					if (client_myds->myconn->options.time_zone_int != time_zone_int) {
 						//fprintf(stderr,"time_zone_int='%u'\n", time_zone_int);
@@ -3459,7 +3456,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						client_myds->myconn->options.time_zone=strdup(s.c_str());
 					}
-					return true;
+					if (command_type == _MYSQL_COM_QUERY) {
+						client_myds->DSS=STATE_QUERY_SENT_NET;
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
+						l_free(pkt->size,pkt->ptr);
+						RequestEnd(NULL);
+						return true;
+					}
 				} else {
 					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
 					return false;
