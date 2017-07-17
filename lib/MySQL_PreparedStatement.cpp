@@ -363,7 +363,7 @@ void MySQL_STMTs_local::insert(uint32_t global_statement_id, MYSQL_STMT *stmt) {
 MySQL_STMT_Manager::MySQL_STMT_Manager() {
 	spinlock_rwlock_init(&rwlock);
 	next_statement_id =
-	    1;  // we initialize this as 1 because we 0 is not allowed
+		33;	// we initialize this as 33, leaving the first 32 reserved for special prepared statements (future use)
 }
 
 MySQL_STMT_Manager::~MySQL_STMT_Manager() {
