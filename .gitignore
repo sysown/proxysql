@@ -108,6 +108,10 @@ deps/protobuf/protobuf-2.6.1/
 deps/sqlite3/sqlite-amalgamation-3150000/
 deps/sqlite3/sqlite-amalgamation-3190200/
 
+deps/clickhouse-cpp
+deps/cityhash/cityhash/
+deps/lz4/lz4-1.7.5/
+
 test/.vagrant
 .DS_Store
 proxysql-tests.ini
