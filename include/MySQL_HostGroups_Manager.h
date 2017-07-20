@@ -181,6 +181,8 @@ class MySQL_HostGroups_Manager {
 	public:
 	struct {
 		unsigned int servers_table_version;
+		pthread_mutex_t servers_table_version_lock;
+		pthread_cond_t servers_table_version_cond;
 		unsigned long client_connections_aborted;
 		unsigned long client_connections_created;
 		int client_connections;
@@ -237,6 +239,7 @@ class MySQL_HostGroups_Manager {
 	void replication_lag_action(int, char*, unsigned int, int);
 	void read_only_action(char *hostname, int port, int read_only);
 	unsigned int get_servers_table_version();
+	void wait_servers_table_version(unsigned, unsigned);
 	void shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();

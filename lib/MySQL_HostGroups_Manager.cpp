@@ -324,6 +324,8 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.server_connections_aborted=0;
 	status.server_connections_created=0;
 	status.servers_table_version=0;
+	pthread_mutex_init(&status.servers_table_version_lock, NULL);
+	pthread_cond_init(&status.servers_table_version_cond, NULL);
 	status.myconnpoll_get=0;
 	status.myconnpoll_get_ok=0;
 	status.myconnpoll_get_ping=0;
@@ -399,6 +401,21 @@ void MySQL_HostGroups_Manager::wrunlock() {
 #endif
 }
 
+
+void MySQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	//ts.tv_sec += w;
+	unsigned int i = 0;
+	int rc = 0;
+	pthread_mutex_lock(&status.servers_table_version_lock);
+	while ((rc == 0 || rc == ETIMEDOUT) && (i < w) && (__sync_fetch_and_add(&glovars.shutdown,0)==0) && (__sync_fetch_and_add(&status.servers_table_version,0) < v)) {
+		i++;
+		ts.tv_sec += 1;
+		rc = pthread_cond_timedwait( &status.servers_table_version_cond, &status.servers_table_version_lock, &ts);
+	}
+	pthread_mutex_unlock(&status.servers_table_version_lock);
+}
 
 unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
@@ -682,6 +699,8 @@ bool MySQL_HostGroups_Manager::commit() {
 		generate_mysql_group_replication_hostgroups_table();
 	}
 	__sync_fetch_and_add(&status.servers_table_version,1);
+	pthread_cond_broadcast(&status.servers_table_version_cond);
+	pthread_mutex_unlock(&status.servers_table_version_lock);
 	wrunlock();
 	if (GloMTH) {
 		GloMTH->signal_all_threads(1);

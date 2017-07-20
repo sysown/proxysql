@@ -1708,6 +1708,31 @@ void admin_session_handler(MySQL_Session *sess, ProxySQL_Admin *pa, PtrSize_t *p
 	}
 
 	if (sess->stats==false) {
+		if ((query_no_space_length>13) && (!strncasecmp("PULL VERSION ", query_no_space, 13))) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PULL command\n");
+			if ((query_no_space_length>27) && (!strncasecmp("PULL VERSION MYSQL SERVERS ", query_no_space, 27))) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PULL VERSION MYSQL SERVERS command\n");
+				unsigned int wait_mysql_servers_version = 0;
+				unsigned int wait_timeout = 0;
+				int rc = sscanf(query_no_space+27,"%u %u",&wait_mysql_servers_version, &wait_timeout);
+				if (rc < 2) {
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid argument");
+					run_query=false;
+					goto __run_query;
+				} else {
+					MyHGM->wait_servers_table_version(wait_mysql_servers_version, wait_timeout);
+					l_free(query_length,query);
+					unsigned int curver = MyHGM->get_servers_table_version();
+					char buf[256];
+					sprintf(buf,"SELECT %u AS 'version'", curver);
+					query=l_strdup(buf);
+					query_length=strlen(query)+1;
+					//SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					//run_query=false;
+					goto __run_query;
+				}
+			}
+		}
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
 			pthread_mutex_lock(&admin_mutex);
