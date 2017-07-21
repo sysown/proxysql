@@ -2600,7 +2600,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		variables.mysql_ifaces=strdup(GloVars.__cmd_proxysql_admin_socket);
 	} else {
-		variables.mysql_ifaces=strdup("127.0.0.1:6032");
+		variables.mysql_ifaces=strdup("0.0.0.0:6032"); // changed. See isseu #1103
 	}
 	variables.telnet_admin_ifaces=NULL;
 	variables.telnet_stats_ifaces=NULL;

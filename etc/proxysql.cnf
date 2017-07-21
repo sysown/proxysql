@@ -11,7 +11,8 @@ datadir="/var/lib/proxysql"
 admin_variables=
 {
 	admin_credentials="admin:admin"
-	mysql_ifaces="127.0.0.1:6032;/tmp/proxysql_admin.sock"
+#	mysql_ifaces="127.0.0.1:6032;/tmp/proxysql_admin.sock"
+	mysql_ifaces="0.0.0.0:6032"
 #	refresh_interval=2000
 #	debug=true
 }
@@ -24,7 +25,8 @@ mysql_variables=
 	default_query_timeout=36000000
 	have_compress=true
 	poll_timeout=2000
-	interfaces="0.0.0.0:6033;/tmp/proxysql.sock"
+#	interfaces="0.0.0.0:6033;/tmp/proxysql.sock"
+	interfaces="0.0.0.0:6033"
 	default_schema="information_schema"
 	stacksize=1048576
 	server_version="5.5.30"

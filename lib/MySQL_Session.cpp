@@ -3051,9 +3051,68 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 				client_myds->DSS=STATE_SLEEP;
 			} else {
-				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
-				status=WAITING_CLIENT_DATA;
-				client_myds->DSS=STATE_CLIENT_AUTH_OK;
+				if (
+					( default_hostgroup==ADMIN_HOSTGROUP && strcmp(client_myds->myconn->userinfo->username,(char *)"admin")==0 )
+					||
+					( default_hostgroup==STATS_HOSTGROUP && strcmp(client_myds->myconn->userinfo->username,(char *)"stats")==0 )
+					||
+					( default_hostgroup < 0 && strcmp(client_myds->myconn->userinfo->username,(char *)"monitor")==0 )
+				) {
+					char *client_addr = NULL;
+					union {
+						struct sockaddr_in in;
+						struct sockaddr_in6 in6;
+					} custom_sockaddr;
+					struct sockaddr *addr=(struct sockaddr *)malloc(sizeof(custom_sockaddr));
+					socklen_t addrlen=sizeof(custom_sockaddr);
+					memset(addr, 0, sizeof(custom_sockaddr));
+					int rc = 0;
+					rc = getpeername(client_myds->fd, addr, &addrlen);
+					if (rc == 0) {
+						char buf[512];
+						switch (addr->sa_family) {
+							case AF_INET: {
+								struct sockaddr_in *ipv4 = (struct sockaddr_in *)addr;
+								inet_ntop(addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+								client_addr = strdup(buf);
+								break;
+							}
+							case AF_INET6: {
+								struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)addr;
+								inet_ntop(addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+								client_addr = strdup(buf);
+								break;
+							}
+							default:
+								client_addr = strdup((char *)"localhost");
+								break;
+						}
+					} else {
+						client_addr = strdup((char *)"");
+					}
+					if (
+						(strcmp(client_addr,(char *)"127.0.0.1")==0)
+						||
+						(strcmp(client_addr,(char *)"localhost")==0)
+					) {
+						// we are good!
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
+						status=WAITING_CLIENT_DATA;
+						client_myds->DSS=STATE_CLIENT_AUTH_OK;
+					} else {
+						char *a=(char *)"User '%s' can only connect locally";
+						char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username));
+						sprintf(b,a,client_myds->myconn->userinfo->username);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"42000", b);
+						free(b);
+					}
+					free(client_addr);
+				} else {
+					// we are good!
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
+					status=WAITING_CLIENT_DATA;
+					client_myds->DSS=STATE_CLIENT_AUTH_OK;
+				}
 			}
 		} else {
 			// use SSL
