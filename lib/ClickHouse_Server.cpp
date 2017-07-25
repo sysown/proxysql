@@ -2403,10 +2403,34 @@ __end_show_commands:
 			proxy_error("[WARNING]: Commands executed from stats interface in Admin Module: \"%s\"\n", query_no_space);
 			GloClickHouseServer->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Command not allowed");
 			run_query=false;
+			goto __run_query;
 		}
 	}
 
-
+	if (sess->session_type == PROXYSQL_SESSION_CLICKHOUSE) { // no admin
+		if (
+			(strncasecmp("SHOW SESSION VARIABLES",query_no_space,22)==0)
+			||
+			(strncasecmp("SHOW VARIABLES",query_no_space,14)==0)
+		) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT name AS Variable_Name FROM system.tables WHERE 1=0");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+		if (
+			(strncasecmp("SET NAMES",query_no_space,9)==0)
+			||
+			(strncasecmp("SET AUTOCOMMIT",query_no_space,14)==0)
+			||
+			(strncasecmp("SET SESSION TRANSACTION ISOLATION LEVEL",query_no_space,39)==0)
+		) {
+			GloClickHouseServer->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			run_query=false;
+			goto __run_query;
+		}
+	}
+	
 __run_query:
 /*
 	if (run_query) {
