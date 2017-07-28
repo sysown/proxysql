@@ -123,7 +123,7 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 	if (schemaname) {
 		_l=strlen(schemaname); // bug fix for #609
 	}
-	if ((schemaname==NULL) || (strncmp(_new,schemaname, (l > _l ? l : _l) ))) {
+	if ((schemaname==NULL) || (l != _l) || (strncmp(_new,schemaname, l ))) {
 		if (schemaname) {
 			free(schemaname);
 			schemaname=NULL;
