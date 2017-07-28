@@ -48,6 +48,7 @@ NUMBER_WRITERS="${3:-0}"
 WRITER_IS_READER="${4:-1}"
 ERR_FILE="${5:-/dev/null}"
 
+RELOAD=0
 
 if [ "$1" = '-h' -o "$1" = '--help'  -o -z "$1" ]
 then
@@ -129,6 +130,8 @@ do
       else
         NUMBER_WRITERS_ONLINE=$(( $NUMBER_WRITERS_ONLINE + 1 ))
         change_server_status $HOSTGROUP_WRITER_ID "$server" $port "OFFLINE_SOFT" "max write nodes reached (${NUMBER_WRITERS})"
+        RELOAD=1
+
       fi
   fi
 
@@ -139,10 +142,12 @@ do
       if [ $NUMBER_WRITERS_ONLINE -lt $NUMBER_WRITERS ]; then
         NUMBER_WRITERS_ONLINE=$(( $NUMBER_WRITERS_ONLINE + 1 ))
         change_server_status $HOSTGROUP_WRITER_ID "$server" $port "ONLINE" "{NUMBER_WRITERS_ONLINE} of ${NUMBER_WRITERS} write nodes"
+        RELOAD=1
       else
         NUMBER_WRITERS_ONLINE=$(( $NUMBER_WRITERS_ONLINE + 1 ))
         if [ "$stat" != "OFFLINE_SOFT" ]; then
           change_server_status $HOSTGROUP_WRITER_ID "$server" $port "OFFLINE_SOFT" "max write nodes reached (${NUMBER_WRITERS})"
+          RELOAD=1
         else
            echo "`date` server $hostgroup:$server:$port is already OFFLINE_SOFT, max write nodes reached (${NUMBER_WRITERS})" >> ${ERR_FILE}
 
@@ -151,12 +156,14 @@ do
     # we do not have to limit
     elif [ $NUMBER_WRITERS -eq 0 ] ; then
       change_server_status $HOSTGROUP_WRITER_ID "$server" $port "ONLINE" "Changed state, marking write node ONLINE"
+      RELOAD=1
     fi
   fi
 
   # WSREP status is not ok, but the node is marked online, we should put it offline
   if [ "${WSREP_STATUS}" != "4" -a "$stat" = "ONLINE" ]; then
     change_server_status $HOSTGROUP_WRITER_ID "$server" $port "OFFLINE_SOFT" "WSREP status is ${WSREP_STATUS} which is not ok"
+    RELOAD=1
   elif [ "${WSREP_STATUS}" != "4" -a "$stat" = "OFFLINE_SOFT" ]; then
     echo "`date` server $hostgroup:$server:$port is already OFFLINE_SOFT, WSREP status is ${WSREP_STATUS} which is not ok" >> ${ERR_FILE}
   fi
@@ -209,10 +216,12 @@ if [ ${HOSTGROUP_READER_ID} -ne -1 ]; then
 
         if [ "${WSREP_STATUS}" = "4" -a "$stat" != "ONLINE" ] ; then
           change_server_status $HOSTGROUP_READER_ID "$server" $port "ONLINE" "marking ONLINE write node as read ONLINE state, not enough non-ONLINE readers found"
+          RELOAD=1
         fi
       else
         if [ "${WSREP_STATUS}" = "4" -a "$stat" == "ONLINE" ] ; then
           change_server_status $HOSTGROUP_READER_ID "$server" $port "OFFLINE_SOFT" "making ONLINE writer node as read OFFLINE_SOFT as well because writers should not be readers"
+          RELOAD=1
         fi
 
         if [ "${WSREP_STATUS}" = "4" -a "$stat" != "ONLINE" ] ; then
@@ -228,6 +237,7 @@ if [ ${HOSTGROUP_READER_ID} -ne -1 ]; then
       # WSREP status OK, but node is not marked ONLINE
       if [ "${WSREP_STATUS}" = "4" -a "$stat" != "ONLINE" ] ; then
         change_server_status $HOSTGROUP_READER_ID "$server" $port "ONLINE" "changed state, making read node ONLINE"
+        RELOAD=1
         OFFLINE_READERS_FOUND=$(( $OFFLINE_READERS_FOUND + 1 ))
       fi
     fi
@@ -235,6 +245,7 @@ if [ ${HOSTGROUP_READER_ID} -ne -1 ]; then
     # WSREP status is not ok, but the node is marked online, we should put it offline
     if [ "${WSREP_STATUS}" != "4" -a "$stat" = "ONLINE" ]; then
       change_server_status $HOSTGROUP_READER_ID "$server" $port "OFFLINE_SOFT" "WSREP status is ${WSREP_STATUS} which is not ok"
+      RELOAD=1
     elif [ "${WSREP_STATUS}" != "4" -a "$stat" = "OFFLINE_SOFT" ]; then
       echo "`date` server $hostgroup:$server:$port is already OFFLINE_SOFT, WSREP status is ${WSREP_STATUS} which is not ok" >> ${ERR_FILE}
     fi
@@ -264,6 +275,7 @@ if [ ${NUMBER_WRITERS_ONLINE} -eq 0 ]; then
         if [ "${WSREP_STATUS}" = "2" -a "$stat" != "ONLINE" ]
         then
           change_server_status $HOSTGROUP_WRITER_ID "$server" $port "ONLINE" "WSREP status is DESYNC/DONOR, as this is the only node we will put this one online"
+          RELOAD=1
           cnt=$(( $cnt + 1 ))
         fi
         safety_cnt=$(( $safety_cnt + 1 ))
@@ -287,6 +299,7 @@ if [  ${HOSTGROUP_READER_ID} -ne -1 -a ${NUMBER_READERS_ONLINE} -eq 0 ]; then
         if [ "${WSREP_STATUS}" = "2" -a "$stat" != "ONLINE" ]
         then
           change_server_status $HOSTGROUP_READER_ID "$server" $port "ONLINE" "WSREP status is DESYNC/DONOR, as this is the only node we will put this one online"
+          RELOAD=1
           cnt=$(( $cnt + 1 ))
         fi
         safety_cnt=$(( $safety_cnt + 1 ))
@@ -296,7 +309,9 @@ fi
 
 
 
-echo "`date` ###### Loading mysql_servers config into runtime ######" >> ${ERR_FILE}
-$PROXYSQL_CMDLINE "LOAD MYSQL SERVERS TO RUNTIME;" 2>> ${ERR_FILE}
+if [ ${RELOAD} -ne 0 ] ; then
+    echo "`date` ###### Loading mysql_servers config into runtime ######" >> ${ERR_FILE}
+    $PROXYSQL_CMDLINE "LOAD MYSQL SERVERS TO RUNTIME;" 2>> ${ERR_FILE}
+fi
 
 exit 0
