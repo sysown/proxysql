@@ -564,7 +564,7 @@ bool MySQL_HostGroups_Manager::commit() {
 			MySrvC *mysrvc=(MySrvC *)ptr;
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 			mysrvc->ConnectionsFree->drop_all_connections();
-			char *q1="DELETE FROM mysql_servers WHERE mem_pointer=%lld";
+			char *q1=(char *)"DELETE FROM mysql_servers WHERE mem_pointer=%lld";
 			char *q2=(char *)malloc(strlen(q1)+32);
 			sprintf(q2,q1,ptr);
 			mydb->execute(q2);

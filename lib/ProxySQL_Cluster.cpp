@@ -350,7 +350,7 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_metrics() {
 		pta[0]=strdup(node->get_hostname());
 		sprintf(buf,"%d", node->get_port());
 		pta[1]=strdup(buf);
-		sprintf(buf,"%d", node->get_weight());
+		sprintf(buf,"%lu", node->get_weight());
 		pta[2]=strdup(buf);
 		pta[3]=strdup(node->get_comment());
 		ProxySQL_Node_Metrics *curr = node->get_metrics_curr();
@@ -396,7 +396,7 @@ SQLite3_result * ProxySQL_Cluster_Nodes::dump_table_proxysql_servers() {
 		pta[0]=strdup(node->get_hostname());
 		sprintf(buf,"%d", node->get_port());
 		pta[1]=strdup(buf);
-		sprintf(buf,"%d", node->get_weight());
+		sprintf(buf,"%lu", node->get_weight());
 		pta[2]=strdup(buf);
 		pta[3]=strdup(node->get_comment());
 		result->add_row(pta);

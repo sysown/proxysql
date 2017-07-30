@@ -3302,7 +3302,7 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"telnet_admin_ifaces")) return s_strdup(variables.telnet_admin_ifaces);
 	if (!strcasecmp(name,"telnet_stats_ifaces")) return s_strdup(variables.telnet_stats_ifaces);
 	if (!strcasecmp(name,"cluster_check_interval_ms")) {
-		sprintf(intbuf,"%lu",variables.cluster_check_interval_ms);
+		sprintf(intbuf,"%d",variables.cluster_check_interval_ms);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"refresh_interval")) {
@@ -3913,15 +3913,11 @@ void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 	//if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_proxysql_servers_metrics");
-	char *a=(char *)"INSERT INTO stats_proxysql_servers_metrics VALUES (\"%s\",\"%s\",)";
-	// make sure that the caller has called mysql_servers_wrlock()
-	char *query=NULL;
 	SQLite3_result *resultset=NULL;
 	resultset=GloProxyCluster->get_stats_proxysql_servers_metrics();
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;
-		//sqlite3_stmt *statement32=NULL;
 		sqlite3 *mydb3=statsdb->get_db();
 		char *query1=NULL;
 		query1=(char *)"INSERT INTO stats_proxysql_servers_metrics VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
