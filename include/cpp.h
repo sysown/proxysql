@@ -17,6 +17,7 @@
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
 #include "MySQL_PreparedStatement.h"
+#include "ProxySQL_Cluster.hpp" // cluster
 #undef swap
 #undef min
 #undef max

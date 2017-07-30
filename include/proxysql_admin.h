@@ -84,6 +84,9 @@ class ProxySQL_Admin {
 		bool admin_read_only;
 		bool hash_passwords;
 		char * admin_version;
+		char * cluster_username;
+		char * cluster_password;
+		int cluster_check_interval_ms;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -198,6 +201,8 @@ class ProxySQL_Admin {
 	void stats___mysql_global();
 	void stats___mysql_users();
 
+	void stats___proxysql_servers_metrics();
+
 	int Read_Global_Variables_from_configfile(const char *prefix);
 	int Read_MySQL_Users_from_configfile();
 	int Read_MySQL_Query_Rules_from_configfile();
@@ -216,6 +221,12 @@ class ProxySQL_Admin {
 	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
 
 	void flush_configdb(); // 923
+
+	// Cluster
+	void load_proxysql_servers_to_runtime();
+	void flush_proxysql_servers__from_memory_to_disk();
+	void flush_proxysql_servers__from_disk_to_memory();
+	void save_proxysql_servers_runtime_to_database(bool);
 
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

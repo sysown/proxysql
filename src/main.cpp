@@ -189,6 +189,9 @@ std::thread *MyMon_thread;
 MySQL_Logger *GloMyLogger;
 
 
+
+ProxySQL_Cluster *GloProxyCluster = NULL;
+
 void * mysql_worker_thread_func(void *arg) {
 
 //	__thr_sfp=l_mem_init();
@@ -314,9 +317,12 @@ void ProxySQL_Main_init_main_modules() {
 
 
 void ProxySQL_Main_init_Admin_module() {
+	// cluster module needs to be initialized before
+	GloProxyCluster = new ProxySQL_Cluster();
+	GloProxyCluster->init();
+	GloProxyCluster->print_version();
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->init();
-//	GloAdmin->flush_error_log();
 	GloAdmin->print_version();
 }
 
