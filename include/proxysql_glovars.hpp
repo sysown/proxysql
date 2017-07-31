@@ -54,6 +54,11 @@ class ProxySQL_GlobalVariables {
 		char *server_version;
 		int poll_timeout;
 	};
+	struct {
+		unsigned long stack_memory_mysql_threads;
+		unsigned long stack_memory_admin_threads;
+		unsigned long stack_memory_cluster_threads;
+	} statuses;
 	ProxySQL_GlobalVariables();
 	~ProxySQL_GlobalVariables();
 	void process_opts_pre();

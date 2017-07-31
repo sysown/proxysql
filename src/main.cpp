@@ -195,6 +195,15 @@ ProxySQL_Cluster *GloProxyCluster = NULL;
 void * mysql_worker_thread_func(void *arg) {
 
 //	__thr_sfp=l_mem_init();
+
+	pthread_attr_t thread_attr;
+	size_t tmp_stack_size=0;
+	if (!pthread_attr_init(&thread_attr)) {
+		if (!pthread_attr_getstacksize(&thread_attr , &tmp_stack_size )) {
+			__sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads,tmp_stack_size);
+		}
+	}
+
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
@@ -208,11 +217,20 @@ void * mysql_worker_thread_func(void *arg) {
 	//delete worker;
 	delete worker;
 //	l_mem_destroy(__thr_sfp);
+	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_mysql_threads,tmp_stack_size);
 	return NULL;
 }
 
 #ifdef IDLE_THREADS
 void * mysql_worker_thread_func_idles(void *arg) {
+
+	pthread_attr_t thread_attr;
+	size_t tmp_stack_size=0;
+	if (!pthread_attr_init(&thread_attr)) {
+		if (!pthread_attr_getstacksize(&thread_attr , &tmp_stack_size )) {
+			__sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads,tmp_stack_size);
+		}
+	}
 
 //	__thr_sfp=l_mem_init();
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
@@ -229,6 +247,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	//delete worker;
 	delete worker;
 //	l_mem_destroy(__thr_sfp);
+
+	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_mysql_threads,tmp_stack_size);
+
 	return NULL;
 }
 #endif // IDLE_THREADS

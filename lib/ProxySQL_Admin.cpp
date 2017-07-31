@@ -2446,6 +2446,14 @@ __run_query:
 
 void *child_mysql(void *arg) {
 
+	pthread_attr_t thread_attr;
+	size_t tmp_stack_size=0;
+	if (!pthread_attr_init(&thread_attr)) {
+		if (!pthread_attr_getstacksize(&thread_attr , &tmp_stack_size )) {
+			__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
+		}
+	}
+
 	int client = *(int *)arg;
 
 	GloMTH->wrlock();
@@ -2502,6 +2510,9 @@ void *child_mysql(void *arg) {
 
 __exit_child_mysql:
 	delete mysql_thr;
+
+	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
+
 	return NULL;
 }
 
@@ -3651,6 +3662,30 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			statsdb->execute(query);
 			free(query);
 		}
+	}
+	{
+		unsigned long mu;
+		mu =  __sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads,0);
+		vn=(char *)"stack_memory_mysql_threads";
+		sprintf(bu,"%lu",mu);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		mu =  __sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads,0);
+		vn=(char *)"stack_memory_admin_threads";
+		sprintf(bu,"%lu",mu);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+		mu =  __sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads,0);
+		vn=(char *)"stack_memory_cluster_threads";
+		sprintf(bu,"%lu",mu);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
 	}
 	statsdb->execute("COMMIT");
 }

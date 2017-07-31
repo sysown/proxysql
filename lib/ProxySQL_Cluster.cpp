@@ -22,6 +22,15 @@ typedef struct _proxy_node_address_t {
 
 
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
+
+	pthread_attr_t thread_attr;
+	size_t tmp_stack_size=0;
+	if (!pthread_attr_init(&thread_attr)) {
+		if (!pthread_attr_getstacksize(&thread_attr , &tmp_stack_size )) {
+			__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads,tmp_stack_size);
+		}
+	}
+
 	proxy_node_address_t * node = (proxy_node_address_t *)args;
 	mysql_thread_init();
 	pthread_detach(pthread_self());
@@ -95,6 +104,9 @@ __exit_monitor_thread:
 	//pthread_exit(0);
 	mysql_thread_end();
 	//GloProxyCluster->thread_ending(node->thrid);
+
+	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_cluster_threads,tmp_stack_size);
+
 	return NULL;
 }
 
