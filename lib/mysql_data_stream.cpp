@@ -107,6 +107,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	poll_fds_idx=-1;
 	resultset_length=0;
 
+	revents = 0;
+
 	PSarrayIN=NULL;
 	PSarrayOUT=NULL;
 	resultset=NULL;
