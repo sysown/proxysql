@@ -3454,7 +3454,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			GloProxyCluster->set_username(variables.cluster_username);
 			return true;
 		} else {
-			return false;
+			return true;
 		}
 	}
 	if (!strcasecmp(name,"cluster_password")) {
@@ -3464,7 +3464,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			GloProxyCluster->set_password(variables.cluster_password);
 			return true;
 		} else {
-			return false;
+			return true;
 		}
 	}
 	if (!strcasecmp(name,"telnet_admin_ifaces")) {
