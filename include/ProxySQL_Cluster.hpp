@@ -4,6 +4,7 @@
 #include "cpp.h"
 #include "thread.h"
 #include "wqueue.h"
+#include <vector>
 
 #define PROXYSQL_NODE_METRICS_LEN	5
 
