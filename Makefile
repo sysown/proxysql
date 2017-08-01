@@ -54,7 +54,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 
-packages: centos6.7 centos7 centos6.7-dbg centos7-dbg centos5 centos5-dbg ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg
+packages: centos6.7 centos7 centos6.7-dbg centos7-dbg centos5 centos5-dbg ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg debian9 debian9-dbg
 .PHONY: packages
 
 centos5: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
@@ -93,6 +93,9 @@ debian7: binaries/proxysql_${CURVER}-debian7_amd64.deb
 debian8: binaries/proxysql_${CURVER}-debian8_amd64.deb
 .PHONY: debian8
 
+debian9: binaries/proxysql_${CURVER}-debian9_amd64.deb
+.PHONY: debian9
+
 ubuntu14-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb
 .PHONY: ubuntu14-dbg
 
@@ -104,6 +107,9 @@ debian7-dbg: binaries/proxysql_${CURVER}-dbg-debian7_amd64.deb
 
 debian8-dbg: binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb
 .PHONY: debian8-dbg
+
+debian9-dbg: binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb
+.PHONY: debian9-dbg
 
 
 binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm:
@@ -335,6 +341,21 @@ binaries/proxysql_${CURVER}-debian8_amd64.deb:
 	docker stop debian8_build
 	docker rm debian8_build
 
+binaries/proxysql_${CURVER}-debian9_amd64.deb:
+	docker stop debian9_build || true
+	docker rm debian9_build || true
+	docker create --name debian9_build renecannao/proxysql:build-debian9 bash -c "while : ; do sleep 10 ; done"
+	docker start debian9_build
+	docker exec debian9_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec debian9_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT}"
+	docker cp docker/images/proxysql/debian-9-build/proxysql.ctl debian9_build:/opt/proxysql/
+	sleep 2
+	docker exec debian9_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	sleep 2
+	docker cp debian9_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-debian9_amd64.deb
+	docker stop debian9_build
+	docker rm debian9_build
+
 binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb:
 	docker stop ubuntu14_build || true
 	docker rm ubuntu14_build || true
@@ -394,6 +415,21 @@ binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb:
 	docker cp debian8_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb
 	docker stop debian8_build
 	docker rm debian8_build
+
+binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb:
+	docker stop debian9_build || true
+	docker rm debian9_build || true
+	docker create --name debian9_build renecannao/proxysql:build-debian8 bash -c "while : ; do sleep 10 ; done"
+	docker start debian9_build
+	docker exec debian9_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	docker exec debian9_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT} debug"
+	docker cp docker/images/proxysql/debian-9-build/proxysql.ctl debian9_build:/opt/proxysql/
+	sleep 2
+	docker exec debian9_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	sleep 2
+	docker cp debian9_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb
+	docker stop debian9_build
+	docker rm debian9_build
 
 
 .PHONY: cleanall
