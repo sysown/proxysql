@@ -2544,7 +2544,8 @@ __run_skip_1a:
 							if (mysql_sessions->len > 1) {
 								// take the last element and adjust the map
 								MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
-								sessmap[mysess_last->thread_session_id]=sess_pos;
+								if (mysess->thread_session_id != mysess_last->thread_session_id)
+									sessmap[mysess_last->thread_session_id]=sess_pos;
 							}
 							unregister_session(sess_pos);
 							resume_mysql_sessions->add(mysess);
@@ -2588,8 +2589,9 @@ __run_skip_1a:
 						sessmap.erase(mysess->thread_session_id);
 						if (mysql_sessions->len > 1) {
 						// take the last element and adjust the map
-						MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
-							sessmap[mysess_last->thread_session_id]=sess_pos;
+							MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+							if (mysess->thread_session_id != mysess_last->thread_session_id)
+								sessmap[mysess_last->thread_session_id]=sess_pos;
 						}
 						unregister_session(sess_pos);
 						resume_mysql_sessions->add(mysess);
