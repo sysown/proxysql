@@ -7,7 +7,7 @@
 
 Summary: A high-performance MySQL proxy
 Name: proxysql
-Version: 1.3.9
+Version: 1.3.10
 Release: 1
 License: GPL+
 Group: Development/Tools
