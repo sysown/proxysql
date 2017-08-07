@@ -268,11 +268,12 @@ MySQL_Session::MySQL_Session() {
 	active_transactions=0;
 
 	match_regexes=NULL;
+/*
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_MODE( *)(:|)=( *)");
 	match_regexes[2]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)TIME_ZONE( *)(:|)=( *)");
-
+*/
 	init(); // we moved this out to allow CHANGE_USER
 
 	last_insert_id=0; // #1093
@@ -328,6 +329,7 @@ MySQL_Session::~MySQL_Session() {
 	assert(qpo);
 	delete qpo;
 	{
+/*
 		Session_Regex *sr=NULL;
 		sr=match_regexes[0];
 		delete sr;
@@ -336,6 +338,7 @@ MySQL_Session::~MySQL_Session() {
 		sr=match_regexes[2];
 		delete sr;
 	free(match_regexes);
+*/
 	match_regexes=NULL;
 	}
 	if (mirror) {
@@ -3391,7 +3394,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			int rc;
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
-			if (match_regexes[0]->match(dig)) {
+			if (match_regexes && match_regexes[0]->match(dig)) {
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 				opt2->set_case_sensitive(false);
 				char *pattern=(char *)"(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_LOG_BIN *(?:|:)= *(\\d+) *(?:(|;|-- .*|#.*))$";
@@ -3419,7 +3422,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					return false;
 				}
 			}
-			if (match_regexes[1]->match(dig)) {
+			if (match_regexes && match_regexes[1]->match(dig)) {
 				// set sql_mode
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 				opt2->set_case_sensitive(false);
@@ -3456,7 +3459,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					return false;
 				}
 			}
-			if (match_regexes[2]->match(dig)) {
+			if (match_regexes && match_regexes[2]->match(dig)) {
 				// set time_zone
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 				opt2->set_case_sensitive(false);

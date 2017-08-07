@@ -2049,6 +2049,20 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___ssl_p2s_cert) { free(mysql_thread___ssl_p2s_cert); mysql_thread___ssl_p2s_cert=NULL; }
 	if (mysql_thread___ssl_p2s_key) { free(mysql_thread___ssl_p2s_key); mysql_thread___ssl_p2s_key=NULL; }
 	if (mysql_thread___ssl_p2s_cipher) { free(mysql_thread___ssl_p2s_cipher); mysql_thread___ssl_p2s_cipher=NULL; }
+
+
+	if (match_regexes) {
+		Session_Regex *sr=NULL;
+		sr=match_regexes[0];
+		delete sr;
+		sr=match_regexes[1];
+		delete sr;
+		sr=match_regexes[2];
+		delete sr;
+		free(match_regexes);
+		match_regexes=NULL;
+	}
+
 }
 
 MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd) {
@@ -2107,6 +2121,13 @@ bool MySQL_Thread::init() {
 	ioctl_FIONBIO(pipefd[1],1);
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
 	assert(i==0);
+
+	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
+	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
+	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_MODE( *)(:|)=( *)");
+	match_regexes[2]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)TIME_ZONE( *)(:|)=( *)");
+
+
 	return true;
 }
 
@@ -2139,6 +2160,7 @@ void MySQL_Thread::register_session(MySQL_Session *_sess, bool up_start) {
 	}
 	mysql_sessions->add(_sess);
 	_sess->thread=this;
+	_sess->match_regexes=match_regexes;
 	if (up_start)
 		_sess->start_time=curtime;
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Registered new session\n", _sess->thread, _sess);
@@ -3132,6 +3154,8 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.ConnPool_get_conn_success=0;
 	status_variables.ConnPool_get_conn_failure=0;
 	status_variables.active_transactions=0;
+
+	match_regexes=NULL;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
@@ -3160,10 +3184,10 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		// there are more than 1 thread . We pause for a little bit to avoid all connections to be handled by the same thread
 #ifdef SO_REUSEPORT
 		if (GloVars.global.reuseport==false) { // only if reuseport is not enabled
-			usleep(10+rand()%50);
+			//usleep(10+rand()%50);
 		}
 #else
-		usleep(10+rand()%50);
+		//usleep(10+rand()%50);
 #endif /* SO_REUSEPORT */
 	}
 	c=accept(myds->fd, addr, &addrlen);

@@ -109,7 +109,6 @@ class MySQL_Session
 	// it is an attempt to start simplifying the complexing of handler()
 	PtrSize_t *pktH;
 
-	Session_Regex **match_regexes;
 
 	public:
 	void * operator new(size_t);
@@ -166,6 +165,8 @@ class MySQL_Session
 
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
+
+	Session_Regex **match_regexes;
 
 	MySQL_Session();
 	~MySQL_Session();

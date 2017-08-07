@@ -171,6 +171,8 @@ class MySQL_Thread
 	std::map<unsigned int, unsigned int> sessmap;
 #endif // IDLE_THREADS
 
+	Session_Regex **match_regexes;
+
 	protected:
 	int nfds;
 
