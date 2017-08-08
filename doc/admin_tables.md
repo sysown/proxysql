@@ -453,7 +453,7 @@ The `stats_mysql_query_digest_reset` table is identical in content and structure
 
 ## stats_mysql_global
 
-Here is the statement used to create the `stats_mysql_query_global` table:
+Here is the statement used to create the `stats_mysql_global` table:
 
 ```sql
 CREATE TABLE stats_mysql_global (
