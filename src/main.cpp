@@ -2,6 +2,9 @@
 #include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
+#ifdef __FreeBSD__
+#include <fcntl.h>
+#endif
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
