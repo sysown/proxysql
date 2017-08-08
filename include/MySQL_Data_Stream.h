@@ -73,6 +73,7 @@ class MySQL_Data_Stream
 
 	PtrSize_t multi_pkt;
 
+	unsigned long long pause_until;
 	unsigned long long wait_until;
 	unsigned long long killed_at;
 	unsigned long long max_connect_time;
@@ -135,6 +136,7 @@ class MySQL_Data_Stream
 	int write_to_net();
 	int write_to_net_poll();
 	bool available_data_out();	
+	void remove_pollout();
 	void set_pollout();	
 	void mysql_free();
 

@@ -103,6 +103,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	connect_retries_on_failure=0;
 	max_connect_time=0;
 	wait_until=0;
+	pause_until=0;
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
@@ -350,6 +351,12 @@ bool MySQL_Data_Stream::available_data_out() {
 		return true;
 	}
 	return false;
+}
+
+void MySQL_Data_Stream::remove_pollout() {
+	struct pollfd *_pollfd;
+	_pollfd=&mypolls->fds[poll_fds_idx];
+	_pollfd->events = 0;
 }
 
 void MySQL_Data_Stream::set_pollout() {
