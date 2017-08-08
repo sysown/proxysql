@@ -394,7 +394,7 @@ Each row represents a backend server within a hostgroup. The fields have the fol
 * Queries - the number of queries routed towards this particular backend server
 * Bytes_data_sent - the amount of data sent to the backend. This does not include metadata (packets' headers)
 * Bytes_data_recv - the amount of data received from the backend. This does not include metadata (packets' headers, OK/ERR packets, fields' description, etc)
-* Latency_ms - the currently ping time in milliseconds, as reported from Monitor
+* Latency_ms (Latency_us since v1.3.3 and v1.4.0, [issue #882](https://github.com/sysown/proxysql/issues/882)) - the currently ping time in microseconds, as reported from Monitor
 
 
 ## stats_mysql_query_digest and stats_mysql_query_digest_reset
