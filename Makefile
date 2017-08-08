@@ -460,6 +460,8 @@ else
 endif
 endif
 endif
+	install -m 0644 doc/manpage/proxysql.1 /usr/share/man/man1
+	gzip /usr/share/man/man1/proxysql.1
 .PHONY: install
 
 uninstall:

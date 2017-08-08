@@ -1,0 +1,82 @@
+.TH PROXYSQL 1
+.SH NAME
+proxysql \- High Performance Advanced Proxy for MySQL
+.SH SYNOPSIS
+.B proxysql
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B proxysql
+is a high performance, high availability, protocol aware proxy for
+MySQL and forks (like Percona Server and MariaDB).
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " "\fIARG\fR
+Configuration file.
+By default, the proxy looks for the config file in the following locations (in this exact order):
+.RS
+.IP \[bu] 2
+`proxysql.cnf`, in the directory of the proxysql binary
+.IP \[bu]
+`proxysql.cfg`, in the directory of the proxysql binary
+.IP \[bu]
+`/etc/proxysql.cnf`
+.IP \[bu]
+`/etc/proxysql.cfg`
+.RE
+.IP
+ This setting allows you to override the configuration file, and specify a custom location.
+.TP
+.BR \-D ", " \-\-datadir " "\fIARG\fR
+The data directory is where the proxy keeps its running files:
+.RS
+.IP \[bu] 2
+the SQLite database which stores the runtime configuration for the proxy
+.IP \[bu]
+the pidfile
+.IP \[bu]
+the log files
+.RE
+.TP
+.BR \-e ", " \-\-exit-on-error
+Do not restart ProxySQL if crashes.
+.TP
+.BR \-f ", " \-\-foreground
+Run the daemon process in the foreground.
+.TP
+.BR \-h ", " \-help ", " \-\-help ", " \-\-usage
+Display usage instructions.
+.TP
+.BR \-M ", " \-\-no-monitor
+Do not start Monitor Module.
+.TP
+.BR \-n ", " \-\-no-start
+Starts only the admin service, which helps to configure the daemon. This will
+not accept any traffic until the daemon is started from the admin interface.
+.TP
+.BR \-r ", " \-\-reuseport
+Use SO_REUSEPORT.
+.TP
+.BR \-S ", " \-\-admin-socket " "\fIARG\fR
+Administration Unix Socket.
+.TP
+.BR \-V ", " \-\-version
+Print the current version of ProxySQL.
+.TP
+.BR \-\-initial
+Reset the admin database with the content from the configuration file.
+.TP
+.BR \-\-reload
+Merge the configuration from the config file with the current runtime database.
+.SH SEE ALSO
+https://github.com/sysown/proxysql/tree/master/doc -- Online documentation
+.SH FILES
+.TP
+.BR /etc/proxysql.cnf
+Configuration file.
+.SH AUTHOR
+Written by René Cannaò.
+.SH BUG REPORTS
+If you find a bug, please report it at <https://github.com/sysown/proxysql/issues>
+.SH COPYRIGHT
+Copyright (C) 2013-2017 René Cannaò.
+This program is free and without warranty.
