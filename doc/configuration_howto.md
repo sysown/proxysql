@@ -236,7 +236,7 @@ reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND read
 UNIQUE (reader_hostgroup))
 1 row in set (0.00 sec)
 
-Admin> INSERT INTO mysql_replication_hostgroups VALUES (1,2);
+Admin> INSERT INTO mysql_replication_hostgroups VALUES (1,2,'group comment');
 Query OK, 1 row affected (0.00 sec)
 ```
 
