@@ -1,0 +1,16 @@
+[Unit]
+Description=High Performance Advanced Proxy for MySQL
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/proxysql -c /etc/proxysql.cnf
+PIDFile=/var/run/proxysql/proxysql.pid
+#ExecReload=
+
+ExecStop=/bin/kill ${MAINPID}
+KillSignal=KILL
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
