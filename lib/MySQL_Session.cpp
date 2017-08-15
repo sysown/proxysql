@@ -3185,19 +3185,23 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(PtrSize_
 	}	
 }
 
+
+// Note: as commented in issue #546 and #547 , some clients ignore the status of CLIENT_MULTI_STATEMENTS
+// therefore tracking it is not needed, unless in future this should become a security enhancement,
+// returning errors to all clients trying to send multi-statements .
+// see also #1140
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *pkt) {
 	char v;
 	v=*((char *)pkt->ptr+3);
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_SET_OPTION packet , value %d\n", v);
-	// FIXME: ProxySQL doesn't support yet CLIENT_MULTI_STATEMENTS 
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	if (v==1) {
-		unsigned int nTrx=NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+	unsigned int nTrx=NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+	if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+	if (v==1) { // disabled. MYSQL_OPTION_MULTI_STATEMENTS_OFF == 1
 		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0, setStatus );
-	} else {
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"");
+	} else { // enabled, MYSQL_OPTION_MULTI_STATEMENTS_ON == 0
+		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0, setStatus );
 	}
 	client_myds->DSS=STATE_SLEEP;
 	l_free(pkt->size,pkt->ptr);
