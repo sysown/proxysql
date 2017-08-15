@@ -14,6 +14,8 @@ class ClickHouse_Session {
 	bool transfer_started;
 	uint8_t sid;	
 	ClickHouse_Session();
+	bool init();
+	bool connected;
 	~ClickHouse_Session();
 	clickhouse::ClientOptions co;
 	clickhouse::Client *client;
@@ -53,10 +55,9 @@ class ClickHouse_Server {
 		bool debug;
 #endif  // DEBUG
 	} variables;
+
+	void dump_mysql_collations();
 	/*
-
-
-	    void dump_mysql_collations();
 	    void insert_into_tables_defs(std::vector<table_def_t *> *, const char
 	*table_name, const char *table_def);
 	    void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
