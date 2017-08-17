@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "SpookyV2.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
@@ -698,6 +699,69 @@ bool MySQL_HostGroups_Manager::commit() {
 		mydb->execute("DELETE FROM mysql_group_replication_hostgroups");
 		generate_mysql_group_replication_hostgroups_table();
 	}
+
+
+	if ( GloAdmin && GloAdmin->checksum_variables.checksum_mysql_servers ) {
+		uint64_t hash1, hash2;
+		SpookyHash myhash;
+		char buf[80];
+		myhash.Init(19,3);
+		MySrvC *mysrvc=NULL;
+		for (unsigned int i=0; i<MyHostGroups->len; i++) {
+			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+			for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+				mysrvc=myhgc->mysrvs->idx(j);
+				// hostgroup
+				sprintf(buf,"%u",mysrvc->myhgc->hid);
+				myhash.Update(buf,strlen(buf));
+				// hoatname
+				if (mysrvc->address) {
+					myhash.Update(mysrvc->address,strlen(mysrvc->address));
+				} else { myhash.Update("",0); }
+				// port
+				sprintf(buf,"%u",mysrvc->port);
+				myhash.Update(buf,strlen(buf));
+				// status
+				sprintf(buf,"%u",mysrvc->status);
+				myhash.Update(buf,strlen(buf));
+				// weight
+				sprintf(buf,"%u",mysrvc->weight);
+				myhash.Update(buf,strlen(buf));
+				// compression
+				sprintf(buf,"%u",mysrvc->compression);
+				myhash.Update(buf,strlen(buf));
+				// max_connections
+				sprintf(buf,"%u",mysrvc->max_connections);
+				myhash.Update(buf,strlen(buf));
+				// max_replication_lag
+				sprintf(buf,"%u",mysrvc->max_replication_lag);
+				myhash.Update(buf,strlen(buf));
+				// use_ssl
+				sprintf(buf,"%u",mysrvc->use_ssl);
+				myhash.Update(buf,strlen(buf));
+				// max_latency_ms
+				sprintf(buf,"%u",mysrvc->max_latency_us);
+				myhash.Update(buf,strlen(buf));
+				if (mysrvc->comment) {
+					myhash.Update(mysrvc->comment,strlen(mysrvc->comment));
+				} else { myhash.Update("",0); }
+			}
+		}
+		myhash.Final(&hash1, &hash2);
+		uint32_t d32[2];
+		memcpy(&d32,&hash1,sizeof(hash1));
+		sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+		pthread_mutex_lock(&GloVars.checksum_mutex);
+		GloVars.checksums_values.mysql_servers.set_checksum(buf);
+		GloVars.checksums_values.mysql_servers.version++;
+		//struct timespec ts;
+		//clock_gettime(CLOCK_REALTIME, &ts);
+		time_t t = time(NULL);
+		GloVars.checksums_values.mysql_servers.epoch = t;
+		GloVars.epoch_version = t;
+		pthread_mutex_unlock(&GloVars.checksum_mutex);
+	}
+
 	__sync_fetch_and_add(&status.servers_table_version,1);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
@@ -725,6 +789,8 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 		}
 	}
 }
+
+
 
 void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	int rc;

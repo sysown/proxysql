@@ -37,6 +37,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 
 	//char *query1 = (char *)"SELECT 1"; // in future this will be used for "light check"
 	char *query2 = (char *)"SELECT * FROM stats_mysql_global ORDER BY Variable_Name";
+	char *query3 = (char *)"SELECT * FROM runtime_checksums_values ORDER BY name";
 	char *username = NULL;
 	char *password = NULL;
 	bool rc_bool = true;
@@ -54,6 +55,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		GloProxyCluster->get_credentials(&username, &password);
 		// TODO: add options, like timeout
 		if (strlen(username)) { // do not monitor if the username is empty
+			unsigned int timeout = 1;
+			unsigned int timeout_long = 60;
+			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
+			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, 0); 
 			char *query = query2;
 			if (rc_conn) {
@@ -67,6 +73,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us); 
 						mysql_free_result(result);
 						unsigned long long elapsed_time_ms = elapsed_time_us / 1000;
+/*
 						int e_ms = (int)elapsed_time_ms;
 						//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
 						int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
@@ -75,8 +82,28 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								usleep((ci-e_ms)*1000); // remember, usleep is in us
 							}
 						}
+*/
+						query = query3;
+						unsigned long long before_query_time2=monotonic_time();
+						rc_query = mysql_query(conn,query);
+						if ( rc_query == 0 ) {
+							MYSQL_RES *result = mysql_store_result(conn);
+							unsigned long long after_query_time2=monotonic_time();
+							unsigned long long elapsed_time_us2 = (after_query_time2 - before_query_time2);
+							rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
+							mysql_free_result(result);
+							unsigned long long elapsed_time_ms2 = elapsed_time_us2 / 1000;
+							int e_ms = (int)elapsed_time_ms + int(elapsed_time_ms2);
+							//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
+							int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
+							if (ci > e_ms) {
+								if (rc_bool) {
+									usleep((ci-e_ms)*1000); // remember, usleep is in us
+								}
+							}
+						}
+
 					}
-					
 				}
 				if (glovars.shutdown == 0) {
 					// we arent' shutting down, but the query failed
@@ -204,6 +231,47 @@ ProxySQL_Node_Metrics * ProxySQL_Node_Entry::get_metrics_prev() {
 	return m;
 }
 
+void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(_r))) {
+		if (strcmp(row[0],"admin_variables")==0) {
+			checksums_values.admin_variables.version = atoll(row[1]);
+			checksums_values.admin_variables.epoch = atoll(row[2]);
+			strcpy(checksums_values.admin_variables.checksum, row[3]);
+			continue;
+		}
+		if (strcmp(row[0],"mysql_query_rules")==0) {
+			checksums_values.mysql_query_rules.version = atoll(row[1]);
+			checksums_values.mysql_query_rules.epoch = atoll(row[2]);
+			strcpy(checksums_values.mysql_query_rules.checksum, row[3]);
+			continue;
+		}
+		if (strcmp(row[0],"mysql_servers")==0) {
+			checksums_values.mysql_servers.version = atoll(row[1]);
+			checksums_values.mysql_servers.epoch = atoll(row[2]);
+			strcpy(checksums_values.mysql_servers.checksum, row[3]);
+			continue;
+		}
+		if (strcmp(row[0],"mysql_users")==0) {
+			checksums_values.mysql_users.version = atoll(row[1]);
+			checksums_values.mysql_users.epoch = atoll(row[2]);
+			strcpy(checksums_values.mysql_users.checksum, row[3]);
+			continue;
+		}
+		if (strcmp(row[0],"mysql_variables")==0) {
+			checksums_values.mysql_variables.version = atoll(row[1]);
+			checksums_values.mysql_variables.epoch = atoll(row[2]);
+			strcpy(checksums_values.mysql_variables.checksum, row[3]);
+			continue;
+		}
+		if (strcmp(row[0],"proxysql_servers")==0) {
+			checksums_values.proxysql_servers.version = atoll(row[1]);
+			checksums_values.proxysql_servers.epoch = atoll(row[2]);
+			strcpy(checksums_values.proxysql_servers.checksum, row[3]);
+			continue;
+		}
+	}
+}
 void ProxySQL_Node_Entry::set_metrics(MYSQL_RES *_r, unsigned long long _response_time) {
 	MYSQL_ROW row;
 	metrics_idx_prev = metrics_idx;	
@@ -324,6 +392,21 @@ void ProxySQL_Cluster_Nodes::load_servers_list(SQLite3_result *resultset) {
 }
 
 // if it returns false , the node doesn't exist anymore and the monitor should stop
+bool ProxySQL_Cluster_Nodes::Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r) {
+	bool ret = false;
+	uint64_t hash_ = generate_hash(_h, _p);
+	pthread_mutex_lock(&mutex);
+	std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator ite = umap_proxy_nodes.find(hash_);
+	if (ite != umap_proxy_nodes.end()) {
+		ProxySQL_Node_Entry * node = ite->second;
+		node->set_checksums(_r);
+		ret = true;
+	}
+	pthread_mutex_unlock(&mutex);
+	return ret;
+}
+
+// if it returns false , the node doesn't exist anymore and the monitor should stop
 bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time) {
 	bool ret = false;
 	uint64_t hash_ = generate_hash(_h, _p);
@@ -336,6 +419,78 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 	}
 	pthread_mutex_unlock(&mutex);
 	return ret;
+}
+
+SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
+	const int colnum=6;
+	SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"hostname");
+	result->add_column_definition(SQLITE_TEXT,"port");
+	result->add_column_definition(SQLITE_TEXT,"name");
+	result->add_column_definition(SQLITE_TEXT,"version");
+	result->add_column_definition(SQLITE_TEXT,"epoch");
+	result->add_column_definition(SQLITE_TEXT,"checksum");
+
+	char buf[32];
+	int k;
+	pthread_mutex_lock(&mutex);
+	unsigned long long curtime = monotonic_time();
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value * vals[6];
+		vals[0] = &node->checksums_values.admin_variables;
+		vals[1] = &node->checksums_values.mysql_query_rules;
+		vals[2] = &node->checksums_values.mysql_servers;
+		vals[3] = &node->checksums_values.mysql_users;
+		vals[4] = &node->checksums_values.mysql_variables;
+		vals[5] = &node->checksums_values.proxysql_servers;
+		for (int i=0; i<6 ; i++) {
+			ProxySQL_Checksum_Value *v = vals[i];
+			char **pta=(char **)malloc(sizeof(char *)*colnum);
+			pta[0]=strdup(node->get_hostname());
+			sprintf(buf,"%d", node->get_port());
+			pta[1]=strdup(buf);
+
+			switch (i) {
+				case 0:
+					pta[2]=strdup((char *)"admin_variables");
+					break;
+				case 1:
+					pta[2]=strdup((char *)"mysql_query_rules");
+					break;
+				case 2:
+					pta[2]=strdup((char *)"mysql_servers");
+					break;
+				case 3:
+					pta[2]=strdup((char *)"mysql_users");
+					break;
+				case 4:
+					pta[2]=strdup((char *)"mysql_variables");
+					break;
+				case 5:
+					pta[2]=strdup((char *)"proxysql_servers");
+					break;
+				default:
+					break;
+			}
+			sprintf(buf,"%llu", v->version);
+			pta[3]=strdup(buf);
+			sprintf(buf,"%llu", v->epoch);
+			pta[4]=strdup(buf);
+			pta[5]=strdup(v->checksum);
+
+
+			result->add_row(pta);
+			for (k=0; k<colnum; k++) {
+				if (pta[k])
+					free(pta[k]);
+				}
+			free(pta);
+		}
+		it++;
+	}
+	pthread_mutex_unlock(&mutex);
+	return result;
 }
 
 SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_metrics() {
@@ -351,12 +506,12 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_metrics() {
 	result->add_column_definition(SQLITE_TEXT,"Queries");
 	result->add_column_definition(SQLITE_TEXT,"Client_Connections_connected");
 	result->add_column_definition(SQLITE_TEXT,"Client_Connections_created");
-	
+
 	char buf[32];
 	int k;
 	pthread_mutex_lock(&mutex);
 	unsigned long long curtime = monotonic_time();
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {	
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		char **pta=(char **)malloc(sizeof(char *)*colnum);
 		pta[0]=strdup(node->get_hostname());
@@ -379,7 +534,7 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_metrics() {
 		pta[8]=strdup(buf);
 		sprintf(buf,"%llu", curr->Client_Connections_created);
 		pta[9]=strdup(buf);
-		
+
 		result->add_row(pta);
 		for (k=0; k<colnum; k++) {
 		if (pta[k])

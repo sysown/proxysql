@@ -111,7 +111,7 @@ class ProxySQL_Admin {
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
-	void __add_active_users(enum cred_username_type usertype, char *user=NULL);
+	void __add_active_users(enum cred_username_type usertype, char *user=NULL, uint64_t *hash1 = NULL);
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void add_admin_users();
 	void __refresh_users();
@@ -141,6 +141,11 @@ class ProxySQL_Admin {
 		void *opt;
 		void **re;
 	} match_regexes;
+	struct {
+		bool checksum_mysql_query_rules;
+		bool checksum_mysql_servers;
+		bool checksum_mysql_users;
+	} checksum_variables;
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
 		__add_active_users(usertype, user);
 	}
@@ -201,6 +206,7 @@ class ProxySQL_Admin {
 	void stats___mysql_global();
 	void stats___mysql_users();
 
+	void stats___proxysql_servers_checksums();
 	void stats___proxysql_servers_metrics();
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
@@ -227,6 +233,7 @@ class ProxySQL_Admin {
 	void flush_proxysql_servers__from_memory_to_disk();
 	void flush_proxysql_servers__from_disk_to_memory();
 	void save_proxysql_servers_runtime_to_database(bool);
+	void dump_checksums_values_table();
 
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

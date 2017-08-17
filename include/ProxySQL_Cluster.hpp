@@ -39,6 +39,7 @@ class ProxySQL_Node_Entry {
 	int metrics_idx_prev;
 	int metrics_idx;
 	ProxySQL_Node_Metrics **metrics;
+
 	public:
 	uint64_t get_hash();
 	ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char *_comment);
@@ -52,6 +53,7 @@ class ProxySQL_Node_Entry {
 	}
 	void set_comment(char *a); // note, this is strdup()
 	void set_metrics(MYSQL_RES *_r, unsigned long long _response_time);
+	void set_checksums(MYSQL_RES *_r);
 	char *get_hostname() { // note, NO strdup()
 		return hostname;
 	}
@@ -60,6 +62,14 @@ class ProxySQL_Node_Entry {
 	}
 	ProxySQL_Node_Metrics * get_metrics_curr();
 	ProxySQL_Node_Metrics * get_metrics_prev();
+	struct {
+		ProxySQL_Checksum_Value admin_variables;
+		ProxySQL_Checksum_Value mysql_variables;
+		ProxySQL_Checksum_Value mysql_query_rules;
+		ProxySQL_Checksum_Value mysql_servers;
+		ProxySQL_Checksum_Value mysql_users;
+		ProxySQL_Checksum_Value proxysql_servers;
+	} checksums_values;
 };
 
 class ProxySQL_Cluster_Nodes {
@@ -74,7 +84,9 @@ class ProxySQL_Cluster_Nodes {
 	~ProxySQL_Cluster_Nodes();
 	void load_servers_list(SQLite3_result *);
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
+	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
 	SQLite3_result * dump_table_proxysql_servers();
+	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
 };
 
@@ -101,8 +113,14 @@ class ProxySQL_Cluster {
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time) {
 		return nodes.Update_Node_Metrics(_h, _p, _r, _response_time);
 	}
+	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r) {
+		return nodes.Update_Node_Checksums(_h, _p, _r);
+	}
 	SQLite3_result *dump_table_proxysql_servers() {
 		return nodes.dump_table_proxysql_servers();
+	}
+	SQLite3_result * get_stats_proxysql_servers_checksums() {
+		return nodes.stats_proxysql_servers_checksums();
 	}
 	SQLite3_result * get_stats_proxysql_servers_metrics() {
 		return nodes.stats_proxysql_servers_metrics();

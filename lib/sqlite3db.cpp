@@ -252,7 +252,7 @@ void SQLite3DB::wrunlock() {
 #endif
 }
 
-int64_t SQLite3_result::raw_checksum() {
+uint64_t SQLite3_result::raw_checksum() {
 	if (this->rows_count==0) return 0;
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
@@ -276,6 +276,7 @@ int64_t SQLite3_result::raw_checksum() {
 char *SQLite3_result::checksum() {
 	uint64_t hash1=raw_checksum();
 	char buf[128];
+	memset(buf,'0',128);
 	uint32_t d32[2];
 	memcpy(&d32,&hash1,sizeof(hash1));
 	sprintf(buf,"0x%X%X", d32[0], d32[1]);

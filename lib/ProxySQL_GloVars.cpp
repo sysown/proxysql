@@ -65,6 +65,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #endif /* SO_REUSEPORT */
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
+	pthread_mutex_init(&checksum_mutex,NULL);
+	epoch_version = 0;
 #ifdef DEBUG
 	global.gdb=0;
 #endif
