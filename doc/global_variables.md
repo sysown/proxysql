@@ -161,6 +161,12 @@ ProxySQL tracks the status of `autocommit` as specified by the client, and ensur
 
 Default value: `false`
 
+### `mysql-autocommit_false_not_reusable`
+
+If this variable is set, ProxySQL will not put the connection with `autocommit=false` back to the pool. Should be used with `mysql-enforce_autocommit_on_reads=false` for those who have not implemented read/write split to avoid the `SELECT` statements getting a connection previously used by a statement with `autocommit=false` set.
+
+Default value: `false`
+
 ### `mysql-eventslog_filename`
 
 If this variable is set, ProxySQL will log all traffic to the specified filename. Note that the log file is not a text file, but a binary log with encodided traffic.

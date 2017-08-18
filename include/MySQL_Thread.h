@@ -356,6 +356,7 @@ class MySQL_Threads_Handler
 //		bool stmt_multiplexing;
 		bool forward_autocommit;
 		bool enforce_autocommit_on_reads;
+		bool autocommit_false_not_reusable;
 		int max_allowed_packet;
 		int max_transaction_time;
 		int threshold_query_length;

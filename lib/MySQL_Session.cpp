@@ -2587,7 +2587,11 @@ handler_again:
 							myconn->multiplex_delayed=false;
 							myds->wait_until=0;
 							myds->DSS=STATE_NOT_INITIALIZED;
-							myds->return_MySQL_Connection_To_Pool();
+							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==true) {
+								myds->destroy_MySQL_Connection_From_Pool(true);
+							} else {
+								myds->return_MySQL_Connection_To_Pool();
+							}
 						}
 						if (transaction_persistent==true) {
 							transaction_persistent_hostgroup=-1;
@@ -2771,7 +2775,11 @@ handler_again:
 							RequestEnd(myds);
 							if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								myds->DSS=STATE_NOT_INITIALIZED;
-								myds->return_MySQL_Connection_To_Pool();
+								if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==true) {
+									myds->destroy_MySQL_Connection_From_Pool(true);
+								} else {
+									myds->return_MySQL_Connection_To_Pool();
+								}
 							} else {
 								myconn->async_state_machine=ASYNC_IDLE;
 								myds->DSS=STATE_MARIADB_GENERIC;
