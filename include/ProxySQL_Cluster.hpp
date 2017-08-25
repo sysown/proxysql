@@ -8,6 +8,18 @@
 
 #define PROXYSQL_NODE_METRICS_LEN	5
 
+class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
+	public:
+	time_t last_updated;
+	time_t last_changed;
+	unsigned int diff_check;
+	ProxySQL_Checksum_Value_2() {
+		ProxySQL_Checksum_Value();
+		last_changed = 0;
+		last_updated = 0;
+		diff_check = 0;
+	}
+};
 
 class ProxySQL_Node_Metrics {
 	public:
@@ -63,13 +75,14 @@ class ProxySQL_Node_Entry {
 	ProxySQL_Node_Metrics * get_metrics_curr();
 	ProxySQL_Node_Metrics * get_metrics_prev();
 	struct {
-		ProxySQL_Checksum_Value admin_variables;
-		ProxySQL_Checksum_Value mysql_variables;
-		ProxySQL_Checksum_Value mysql_query_rules;
-		ProxySQL_Checksum_Value mysql_servers;
-		ProxySQL_Checksum_Value mysql_users;
-		ProxySQL_Checksum_Value proxysql_servers;
+		ProxySQL_Checksum_Value_2 admin_variables;
+		ProxySQL_Checksum_Value_2 mysql_variables;
+		ProxySQL_Checksum_Value_2 mysql_query_rules;
+		ProxySQL_Checksum_Value_2 mysql_servers;
+		ProxySQL_Checksum_Value_2 mysql_users;
+		ProxySQL_Checksum_Value_2 proxysql_servers;
 	} checksums_values;
+	uint64_t global_checksum;
 };
 
 class ProxySQL_Cluster_Nodes {
@@ -84,6 +97,7 @@ class ProxySQL_Cluster_Nodes {
 	~ProxySQL_Cluster_Nodes();
 	void load_servers_list(SQLite3_result *);
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
+	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r);
 	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
@@ -100,6 +114,7 @@ class ProxySQL_Cluster {
 	char *cluster_password;
 	public:
 	int cluster_check_interval_ms;
+	int cluster_check_status_frequency;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();
 	void init() {};
@@ -113,7 +128,10 @@ class ProxySQL_Cluster {
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time) {
 		return nodes.Update_Node_Metrics(_h, _p, _r, _response_time);
 	}
-	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r) {
+	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r) {
+		return nodes.Update_Global_Checksum(_h, _p, _r);
+	}
+	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r = NULL) {
 		return nodes.Update_Node_Checksums(_h, _p, _r);
 	}
 	SQLite3_result *dump_table_proxysql_servers() {

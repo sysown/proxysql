@@ -582,7 +582,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		||
 		(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
 	) {
-		char buf[16];
+		char buf[32];
 		sprintf(buf,"%llu",last_insert_id);
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -604,6 +604,8 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
 		myds->DSS=STATE_SLEEP;
 		l_free(pkt->size,pkt->ptr);
+		free(p);
+		free(l);
 		return true;
 	}
 	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {

@@ -35,12 +35,13 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	mysql_thread_init();
 	pthread_detach(pthread_self());
 
-	//char *query1 = (char *)"SELECT 1"; // in future this will be used for "light check"
+	char *query1 = (char *)"SELECT GLOBAL_CHECKSUM()"; // in future this will be used for "light check"
 	char *query2 = (char *)"SELECT * FROM stats_mysql_global ORDER BY Variable_Name";
 	char *query3 = (char *)"SELECT * FROM runtime_checksums_values ORDER BY name";
 	char *username = NULL;
 	char *password = NULL;
 	bool rc_bool = true;
+	int cluster_check_status_frequency_count = 0;
 	MYSQL *conn = mysql_init(NULL);
 //		goto __exit_monitor_thread;
 	if (conn==NULL) {
@@ -50,6 +51,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	while (glovars.shutdown == 0 && rc_bool == true) {
 		MYSQL * rc_conn = NULL;
 		int rc_query = 0;
+		bool update_checksum = false;
 		if (username) { free(username); }
 		if (password) { free(password); }
 		GloProxyCluster->get_credentials(&username, &password);
@@ -60,19 +62,23 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, 0); 
-			char *query = query2;
+			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
+			rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, 0);
+			//char *query = query1;
 			if (rc_conn) {
 				while ( glovars.shutdown == 0 && rc_query == 0 && rc_bool == true) {
-					unsigned long long before_query_time=monotonic_time();
-					rc_query = mysql_query(conn,query);
+					unsigned long long start_time=monotonic_time();
+					//unsigned long long before_query_time=monotonic_time();
+					rc_query = mysql_query(conn,query1);
 					if ( rc_query == 0 ) {
 						MYSQL_RES *result = mysql_store_result(conn);
-						unsigned long long after_query_time=monotonic_time();
-						unsigned long long elapsed_time_us = (after_query_time - before_query_time);
-						rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us); 
+						//unsigned long long after_query_time=monotonic_time();
+						//unsigned long long elapsed_time_us = (after_query_time - before_query_time);
+						update_checksum = GloProxyCluster->Update_Global_Checksum(node->hostname, node->port, result);
 						mysql_free_result(result);
-						unsigned long long elapsed_time_ms = elapsed_time_us / 1000;
+						// FIXME: update metrics are not updated for now. We only check checksum
+						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us); 
+						//unsigned long long elapsed_time_ms = elapsed_time_us / 1000;
 /*
 						int e_ms = (int)elapsed_time_ms;
 						//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
@@ -83,26 +89,61 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							}
 						}
 */
-						query = query3;
-						unsigned long long before_query_time2=monotonic_time();
-						rc_query = mysql_query(conn,query);
-						if ( rc_query == 0 ) {
-							MYSQL_RES *result = mysql_store_result(conn);
-							unsigned long long after_query_time2=monotonic_time();
-							unsigned long long elapsed_time_us2 = (after_query_time2 - before_query_time2);
-							rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
-							mysql_free_result(result);
-							unsigned long long elapsed_time_ms2 = elapsed_time_us2 / 1000;
-							int e_ms = (int)elapsed_time_ms + int(elapsed_time_ms2);
-							//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
-							int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
-							if (ci > e_ms) {
-								if (rc_bool) {
-									usleep((ci-e_ms)*1000); // remember, usleep is in us
+						//query = query3;
+						//unsigned long long before_query_time2=monotonic_time();
+						if (update_checksum) {
+							rc_query = mysql_query(conn,query3);
+							if ( rc_query == 0 ) {
+								MYSQL_RES *result = mysql_store_result(conn);
+								//unsigned long long after_query_time2=monotonic_time();
+								//unsigned long long elapsed_time_us2 = (after_query_time2 - before_query_time2);
+								rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
+								mysql_free_result(result);
+								//unsigned long long elapsed_time_ms2 = elapsed_time_us2 / 1000;
+								//int e_ms = (int)elapsed_time_ms + int(elapsed_time_ms2);
+								//fprintf(stderr,"Elapsed time = %d ms\n", e_ms);
+								//int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
+								//if (ci > e_ms) {
+								//	if (rc_bool) {
+								//		tts = 1;
+								//		//usleep((ci-e_ms)*1000); // remember, usleep is in us
+								//	}
+								//}
+							}
+						} else {
+							GloProxyCluster->Update_Node_Checksums(node->hostname, node->port);
+							//int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
+							//if (ci > elapsed_time_ms) {
+							//	if (rc_bool) {
+							//		usleep((ci-elapsed_time_ms)*1000); // remember, usleep is in us
+							//	}
+							//}
+						}
+						if (rc_query == 0) {
+							cluster_check_status_frequency_count++;
+							int freq = __sync_fetch_and_add(&GloProxyCluster->cluster_check_status_frequency,0);
+							if (freq && cluster_check_status_frequency_count >= freq) {
+								cluster_check_status_frequency_count = 0;
+								unsigned long long before_query_time=monotonic_time();
+								rc_query = mysql_query(conn,query2);
+								if ( rc_query == 0 ) {
+									MYSQL_RES *result = mysql_store_result(conn);
+									unsigned long long after_query_time=monotonic_time();
+									unsigned long long elapsed_time_us = (after_query_time - before_query_time);
+									rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us); 
+									mysql_free_result(result);
 								}
 							}
 						}
-
+					}
+					unsigned long long end_time=monotonic_time();
+					if (rc_query == 0) {
+						unsigned long long elapsed_time = (end_time - start_time);
+						unsigned long long e_ms = elapsed_time / 1000;
+						int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
+						if ((unsigned) ci > e_ms) {
+							usleep((ci-e_ms)*1000); // remember, usleep is in us
+						}
 					}
 				}
 				if (glovars.shutdown == 0) {
@@ -157,6 +198,7 @@ void ProxySQL_Node_Metrics::reset() {
 
 ProxySQL_Node_Entry::ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char * _comment) {
 	hash = 0;
+	global_checksum = 0;
 	hostname = NULL;
 	if (_hostname) {
 		hostname = strdup(_hostname);
@@ -233,45 +275,136 @@ ProxySQL_Node_Metrics * ProxySQL_Node_Entry::get_metrics_prev() {
 
 void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	MYSQL_ROW row;
-	while ((row = mysql_fetch_row(_r))) {
+	time_t now = time(NULL);
+	pthread_mutex_lock(&GloVars.checksum_mutex);
+	while ( _r && (row = mysql_fetch_row(_r))) {
 		if (strcmp(row[0],"admin_variables")==0) {
 			checksums_values.admin_variables.version = atoll(row[1]);
 			checksums_values.admin_variables.epoch = atoll(row[2]);
-			strcpy(checksums_values.admin_variables.checksum, row[3]);
+			checksums_values.admin_variables.last_updated = now;
+			if (strcmp(checksums_values.admin_variables.checksum, row[3])) {
+				strcpy(checksums_values.admin_variables.checksum, row[3]);
+				checksums_values.admin_variables.last_changed = now;
+				checksums_values.admin_variables.diff_check = 1;
+			} else {
+				checksums_values.admin_variables.diff_check++;
+			}
+			if (strcmp(checksums_values.admin_variables.checksum, GloVars.checksums_values.admin_variables.checksum) == 0) {
+				checksums_values.admin_variables.diff_check = 0;
+			}
 			continue;
 		}
 		if (strcmp(row[0],"mysql_query_rules")==0) {
 			checksums_values.mysql_query_rules.version = atoll(row[1]);
 			checksums_values.mysql_query_rules.epoch = atoll(row[2]);
-			strcpy(checksums_values.mysql_query_rules.checksum, row[3]);
+			checksums_values.mysql_query_rules.last_updated = now;
+			if (strcmp(checksums_values.mysql_query_rules.checksum, row[3])) {
+				strcpy(checksums_values.mysql_query_rules.checksum, row[3]);
+				checksums_values.mysql_query_rules.last_changed = now;
+				checksums_values.mysql_query_rules.diff_check = 1;
+			} else {
+				checksums_values.mysql_query_rules.diff_check++;
+			}
+			if (strcmp(checksums_values.mysql_query_rules.checksum, GloVars.checksums_values.mysql_query_rules.checksum) == 0) {
+				checksums_values.mysql_query_rules.diff_check = 0;
+			}
 			continue;
 		}
 		if (strcmp(row[0],"mysql_servers")==0) {
 			checksums_values.mysql_servers.version = atoll(row[1]);
 			checksums_values.mysql_servers.epoch = atoll(row[2]);
-			strcpy(checksums_values.mysql_servers.checksum, row[3]);
+			checksums_values.mysql_servers.last_updated = now;
+			if (strcmp(checksums_values.mysql_servers.checksum, row[3])) {
+				strcpy(checksums_values.mysql_servers.checksum, row[3]);
+				checksums_values.mysql_servers.last_changed = now;
+				checksums_values.mysql_servers.diff_check = 1;
+			} else {
+				checksums_values.mysql_servers.diff_check++;
+			}
+			if (strcmp(checksums_values.mysql_servers.checksum, GloVars.checksums_values.mysql_servers.checksum) == 0) {
+				checksums_values.mysql_servers.diff_check = 0;
+			}
 			continue;
 		}
 		if (strcmp(row[0],"mysql_users")==0) {
 			checksums_values.mysql_users.version = atoll(row[1]);
 			checksums_values.mysql_users.epoch = atoll(row[2]);
-			strcpy(checksums_values.mysql_users.checksum, row[3]);
+			checksums_values.mysql_users.last_updated = now;
+			if (strcmp(checksums_values.mysql_users.checksum, row[3])) {
+				strcpy(checksums_values.mysql_users.checksum, row[3]);
+				checksums_values.mysql_users.last_changed = now;
+				checksums_values.mysql_users.diff_check = 1;
+			} else {
+				checksums_values.mysql_users.diff_check++;
+			}
+			if (strcmp(checksums_values.mysql_users.checksum, GloVars.checksums_values.mysql_users.checksum) == 0) {
+				checksums_values.mysql_users.diff_check = 0;
+			}
 			continue;
 		}
 		if (strcmp(row[0],"mysql_variables")==0) {
 			checksums_values.mysql_variables.version = atoll(row[1]);
 			checksums_values.mysql_variables.epoch = atoll(row[2]);
-			strcpy(checksums_values.mysql_variables.checksum, row[3]);
+			checksums_values.mysql_variables.last_updated = now;
+			if (strcmp(checksums_values.mysql_variables.checksum, row[3])) {
+				strcpy(checksums_values.mysql_variables.checksum, row[3]);
+				checksums_values.mysql_variables.last_changed = now;
+				checksums_values.mysql_variables.diff_check = 1;
+			} else {
+				checksums_values.mysql_variables.diff_check++;
+			}
+			if (strcmp(checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.checksum) == 0) {
+				checksums_values.mysql_variables.diff_check = 0;
+			}
 			continue;
 		}
 		if (strcmp(row[0],"proxysql_servers")==0) {
 			checksums_values.proxysql_servers.version = atoll(row[1]);
 			checksums_values.proxysql_servers.epoch = atoll(row[2]);
-			strcpy(checksums_values.proxysql_servers.checksum, row[3]);
+			checksums_values.proxysql_servers.last_updated = now;
+			if (strcmp(checksums_values.proxysql_servers.checksum, row[3])) {
+				strcpy(checksums_values.proxysql_servers.checksum, row[3]);
+				checksums_values.proxysql_servers.last_changed = now;
+				checksums_values.proxysql_servers.diff_check = 1;
+			} else {
+				checksums_values.proxysql_servers.diff_check++;
+			}
+			if (strcmp(checksums_values.proxysql_servers.checksum, GloVars.checksums_values.proxysql_servers.checksum) == 0) {
+				checksums_values.proxysql_servers.diff_check = 0;
+			}
 			continue;
 		}
 	}
+	if (_r == NULL) {
+		ProxySQL_Checksum_Value_2 *v = NULL;
+		v = &checksums_values.admin_variables;
+		v->last_updated = now;
+		if (v->diff_check)
+			v->diff_check++;
+		v = &checksums_values.mysql_query_rules;
+		v->last_updated = now;
+		if (v->diff_check)
+			v->diff_check++;
+		v = &checksums_values.mysql_servers;
+		v->last_updated = now;
+		if (v->diff_check)
+			v->diff_check++;
+		v = &checksums_values.mysql_users;
+		v->last_updated = now;
+		if (v->diff_check)
+			v->diff_check++;
+		v = &checksums_values.mysql_variables;
+		v->last_updated = now;
+		if (v->diff_check)
+			v->diff_check++;
+		v = &checksums_values.proxysql_servers;
+		v->last_updated = now;
+		if (v->diff_check)
+			v->diff_check++;
+	}
+	pthread_mutex_unlock(&GloVars.checksum_mutex);
 }
+
 void ProxySQL_Node_Entry::set_metrics(MYSQL_RES *_r, unsigned long long _response_time) {
 	MYSQL_ROW row;
 	metrics_idx_prev = metrics_idx;	
@@ -405,6 +538,30 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Checksums(char * _h, uint16_t _p, MYSQL
 	pthread_mutex_unlock(&mutex);
 	return ret;
 }
+// if it returns true , the checksum changed
+bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r) {
+	bool ret = true;
+	uint64_t hash_ = generate_hash(_h, _p);
+	pthread_mutex_lock(&mutex);
+	std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator ite = umap_proxy_nodes.find(hash_);
+	if (ite != umap_proxy_nodes.end()) {
+		ProxySQL_Node_Entry * node = ite->second;
+		MYSQL_ROW row;
+		//time_t now = time(NULL);
+		//pthread_mutex_lock(&GloVars.checksum_mutex);
+		while ((row = mysql_fetch_row(_r))) {
+			unsigned long long v = atoll(row[0]);
+			if (v == node->global_checksum) {
+				ret = false;
+			} else {
+				node->global_checksum = v;
+			}
+		}
+		//pthread_mutex_unlock(&GloVars.checksum_mutex);
+	}
+	pthread_mutex_unlock(&mutex);
+	return ret;
+}
 
 // if it returns false , the node doesn't exist anymore and the monitor should stop
 bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time) {
@@ -422,7 +579,7 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 }
 
 SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
-	const int colnum=6;
+	const int colnum=9;
 	SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"hostname");
 	result->add_column_definition(SQLITE_TEXT,"port");
@@ -430,14 +587,17 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
 	result->add_column_definition(SQLITE_TEXT,"version");
 	result->add_column_definition(SQLITE_TEXT,"epoch");
 	result->add_column_definition(SQLITE_TEXT,"checksum");
+	result->add_column_definition(SQLITE_TEXT,"last_changed");
+	result->add_column_definition(SQLITE_TEXT,"last_updated");
+	result->add_column_definition(SQLITE_TEXT,"diff_check");
 
 	char buf[32];
 	int k;
 	pthread_mutex_lock(&mutex);
-	unsigned long long curtime = monotonic_time();
+	//unsigned long long curtime = monotonic_time();
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
-		ProxySQL_Checksum_Value * vals[6];
+		ProxySQL_Checksum_Value_2 * vals[6];
 		vals[0] = &node->checksums_values.admin_variables;
 		vals[1] = &node->checksums_values.mysql_query_rules;
 		vals[2] = &node->checksums_values.mysql_servers;
@@ -445,7 +605,7 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
 		vals[4] = &node->checksums_values.mysql_variables;
 		vals[5] = &node->checksums_values.proxysql_servers;
 		for (int i=0; i<6 ; i++) {
-			ProxySQL_Checksum_Value *v = vals[i];
+			ProxySQL_Checksum_Value_2 *v = vals[i];
 			char **pta=(char **)malloc(sizeof(char *)*colnum);
 			pta[0]=strdup(node->get_hostname());
 			sprintf(buf,"%d", node->get_port());
@@ -478,6 +638,12 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
 			sprintf(buf,"%llu", v->epoch);
 			pta[4]=strdup(buf);
 			pta[5]=strdup(v->checksum);
+			sprintf(buf,"%ld", v->last_changed);
+			pta[6]=strdup(buf);
+			sprintf(buf,"%ld", v->last_updated);
+			pta[7]=strdup(buf);
+			sprintf(buf,"%u", v->diff_check);
+			pta[8]=strdup(buf);
 
 
 			result->add_row(pta);
@@ -583,6 +749,7 @@ ProxySQL_Cluster::ProxySQL_Cluster() {
 	cluster_username = strdup((char *)"");
 	cluster_password = strdup((char *)"");
 	cluster_check_interval_ms = 1000;
+	cluster_check_status_frequency = 10;
 }
 
 ProxySQL_Cluster::~ProxySQL_Cluster() {

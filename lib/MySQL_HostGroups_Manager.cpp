@@ -758,6 +758,8 @@ bool MySQL_HostGroups_Manager::commit() {
 		//clock_gettime(CLOCK_REALTIME, &ts);
 		time_t t = time(NULL);
 		GloVars.checksums_values.mysql_servers.epoch = t;
+		GloVars.checksums_values.updates_cnt++;
+		GloVars.generate_global_checksum();
 		GloVars.epoch_version = t;
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}

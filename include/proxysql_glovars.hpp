@@ -95,7 +95,11 @@ class ProxySQL_GlobalVariables {
 		ProxySQL_Checksum_Value mysql_users;
 		ProxySQL_Checksum_Value mysql_variables;
 		ProxySQL_Checksum_Value proxysql_servers;
+		uint64_t global_checksum;
+		unsigned long long updates_cnt;
+		unsigned long long dumped_at;
 	} checksums_values;
+	uint64_t generate_global_checksum();
 	ProxySQL_GlobalVariables();
 	~ProxySQL_GlobalVariables();
 	void process_opts_pre();

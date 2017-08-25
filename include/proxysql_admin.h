@@ -87,6 +87,7 @@ class ProxySQL_Admin {
 		char * cluster_username;
 		char * cluster_password;
 		int cluster_check_interval_ms;
+		int cluster_check_status_frequency;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
