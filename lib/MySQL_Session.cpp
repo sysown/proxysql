@@ -2587,7 +2587,7 @@ handler_again:
 							myconn->multiplex_delayed=false;
 							myds->wait_until=0;
 							myds->DSS=STATE_NOT_INITIALIZED;
-							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==true) {
+							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
 								myds->destroy_MySQL_Connection_From_Pool(true);
 							} else {
 								myds->return_MySQL_Connection_To_Pool();
@@ -2775,7 +2775,7 @@ handler_again:
 							RequestEnd(myds);
 							if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								myds->DSS=STATE_NOT_INITIALIZED;
-								if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==true) {
+								if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
 									myds->destroy_MySQL_Connection_From_Pool(true);
 								} else {
 									myds->return_MySQL_Connection_To_Pool();
