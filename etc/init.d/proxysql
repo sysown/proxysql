@@ -64,7 +64,7 @@ initial() {
 }
 
 reload() {
-	OPTS="--initial $OPTS"
+	OPTS="--reload $OPTS"
 	start
 }
 
