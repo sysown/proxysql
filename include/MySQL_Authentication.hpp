@@ -30,7 +30,7 @@ typedef struct _account_details_t {
 #endif /* DEBUG */
 #define MYSQL_AUTHENTICATION_VERSION "0.2.0902" DEB
 
-typedef std::unordered_map<uint64_t, account_details_t *> umap_auth;
+typedef std::map<uint64_t, account_details_t *> umap_auth;
 
 class PtrArray;
 
@@ -49,6 +49,7 @@ class MySQL_Authentication {
 	creds_group_t creds_backends;
 	creds_group_t creds_frontends;
 	bool _reset(enum cred_username_type usertype);
+	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
 	public:
 	MySQL_Authentication();
 	~MySQL_Authentication();
@@ -64,6 +65,7 @@ class MySQL_Authentication {
 	void remove_inactives(enum cred_username_type usertype);
 	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
 	unsigned int memory_usage();
+	uint64_t get_runtime_checksum();
 };
 
 #endif /* __CLASS_MYSQL_AUTHENTICATION_H */

@@ -51,6 +51,9 @@ class ProxySQL_Node_Entry {
 	int metrics_idx_prev;
 	int metrics_idx;
 	ProxySQL_Node_Metrics **metrics;
+//	void pull_mysql_query_rules_from_peer();
+//	void pull_mysql_servers_from_peer();
+//	void pull_proxysql_servers_from_peer();
 
 	public:
 	uint64_t get_hash();
@@ -95,13 +98,17 @@ class ProxySQL_Cluster_Nodes {
 	public:
 	ProxySQL_Cluster_Nodes();
 	~ProxySQL_Cluster_Nodes();
-	void load_servers_list(SQLite3_result *);
+	void load_servers_list(SQLite3_result *, bool _lock);
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
 	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r);
 	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
+	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port);
+	void get_peer_to_sync_mysql_servers(char **host, uint16_t *port);
+	void get_peer_to_sync_mysql_users(char **host, uint16_t *port);
+	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port);
 };
 
 
@@ -113,14 +120,26 @@ class ProxySQL_Cluster {
 	char *cluster_username;
 	char *cluster_password;
 	public:
+	pthread_mutex_t update_mysql_query_rules_mutex;
+	pthread_mutex_t update_mysql_servers_mutex;
+	pthread_mutex_t update_mysql_users_mutex;
+	pthread_mutex_t update_proxysql_servers_mutex;
 	int cluster_check_interval_ms;
 	int cluster_check_status_frequency;
+	int cluster_mysql_query_rules_diffs_before_sync;
+	int cluster_mysql_servers_diffs_before_sync;
+	int cluster_mysql_users_diffs_before_sync;
+	int cluster_proxysql_servers_diffs_before_sync;
+	bool cluster_mysql_query_rules_save_to_disk;
+	bool cluster_mysql_servers_save_to_disk;
+	bool cluster_mysql_users_save_to_disk;
+	bool cluster_proxysql_servers_save_to_disk;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();
 	void init() {};
 	void print_version();
-	void load_servers_list(SQLite3_result *r) {
-		nodes.load_servers_list(r);
+	void load_servers_list(SQLite3_result *r, bool _lock = true) {
+		nodes.load_servers_list(r, _lock);
 	}
 	void get_credentials(char **, char **);
 	void set_username(char *);
@@ -145,5 +164,9 @@ class ProxySQL_Cluster {
 	}
 	void thread_ending(pthread_t);
 	void join_term_thread();
+	void pull_mysql_query_rules_from_peer();
+	void pull_mysql_servers_from_peer();
+	void pull_mysql_users_from_peer();
+	void pull_proxysql_servers_from_peer();
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */

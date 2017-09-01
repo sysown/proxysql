@@ -282,6 +282,14 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_password",
 	(char *)"cluster_check_interval_ms",
 	(char *)"cluster_check_status_frequency",
+	(char *)"cluster_mysql_query_rules_diffs_before_sync",
+	(char *)"cluster_mysql_servers_diffs_before_sync",
+	(char *)"cluster_mysql_users_diffs_before_sync",
+	(char *)"cluster_proxysql_servers_diffs_before_sync",
+	(char *)"cluster_mysql_query_rules_save_to_disk",
+	(char *)"cluster_mysql_servers_save_to_disk",
+	(char *)"cluster_mysql_users_save_to_disk",
+	(char *)"cluster_proxysql_servers_save_to_disk",
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
 	(char *)"checksum_mysql_users",
@@ -1272,6 +1280,34 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved ProxySQL servers from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS FROM CONFIG") && !strncasecmp("LOAD PROXYSQL SERVERS FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					int rows=0;
+					rows=SPA->Read_ProxySQL_Servers_from_configfile();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
 			return false;
 		}
 
@@ -2791,9 +2827,17 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.cluster_password=strdup((char *)"");
 	variables.cluster_check_interval_ms=1000;
 	variables.cluster_check_status_frequency=10;
+	variables.cluster_mysql_query_rules_diffs_before_sync = 3;
+	variables.cluster_mysql_servers_diffs_before_sync = 3;
+	variables.cluster_mysql_users_diffs_before_sync = 3;
+	variables.cluster_proxysql_servers_diffs_before_sync = 3;
 	checksum_variables.checksum_mysql_query_rules = true;
 	checksum_variables.checksum_mysql_servers = true;
 	checksum_variables.checksum_mysql_users = true;
+	variables.cluster_mysql_query_rules_save_to_disk = true;
+	variables.cluster_mysql_servers_save_to_disk = true;
+	variables.cluster_mysql_users_save_to_disk = true;
+	variables.cluster_proxysql_servers_save_to_disk = true;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -3010,6 +3054,7 @@ bool ProxySQL_Admin::init() {
 				Read_MySQL_Users_from_configfile();
 				Read_MySQL_Query_Rules_from_configfile();
 				Read_Scheduler_from_configfile();
+				Read_ProxySQL_Servers_from_configfile();
 				__insert_or_replace_disktable_select_maintable();
 			} else {
 				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {
@@ -3019,6 +3064,7 @@ bool ProxySQL_Admin::init() {
 					Read_Global_Variables_from_configfile("admin");
 					Read_Global_Variables_from_configfile("mysql");
 					Read_Scheduler_from_configfile();
+					Read_ProxySQL_Servers_from_configfile();
 					__insert_or_replace_disktable_select_maintable();
 				}
 			}
@@ -3378,6 +3424,34 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.cluster_check_status_frequency);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"cluster_mysql_query_rules_diffs_before_sync")) {
+		sprintf(intbuf,"%d",variables.cluster_mysql_query_rules_diffs_before_sync);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_mysql_servers_diffs_before_sync")) {
+		sprintf(intbuf,"%d",variables.cluster_mysql_servers_diffs_before_sync);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_mysql_users_diffs_before_sync")) {
+		sprintf(intbuf,"%d",variables.cluster_mysql_users_diffs_before_sync);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_proxysql_servers_diffs_before_sync")) {
+		sprintf(intbuf,"%d",variables.cluster_proxysql_servers_diffs_before_sync);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
+		return strdup((variables.cluster_mysql_query_rules_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_mysql_servers_save_to_disk")) {
+		return strdup((variables.cluster_mysql_servers_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_mysql_users_save_to_disk")) {
+		return strdup((variables.cluster_mysql_users_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_proxysql_servers_save_to_disk")) {
+		return strdup((variables.cluster_proxysql_servers_save_to_disk ? "true" : "false"));
+	}
 	if (!strcasecmp(name,"refresh_interval")) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
 		return strdup(intbuf);
@@ -3598,6 +3672,46 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"cluster_mysql_query_rules_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			variables.cluster_mysql_query_rules_diffs_before_sync=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_mysql_servers_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			variables.cluster_mysql_servers_diffs_before_sync=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_mysql_users_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			variables.cluster_mysql_users_diffs_before_sync=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_diffs_before_sync, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_proxysql_servers_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			variables.cluster_proxysql_servers_diffs_before_sync=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"version")) {
 		if (strcasecmp(value,(char *)PROXYSQL_VERSION)==0) {
 			return true;
@@ -3612,6 +3726,58 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.hash_passwords=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_mysql_query_rules_save_to_disk=true;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_mysql_query_rules_save_to_disk=false;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk, false);
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"cluster_mysql_servers_save_to_disk")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_mysql_servers_save_to_disk=true;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_mysql_servers_save_to_disk=false;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_save_to_disk, false);
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"cluster_mysql_users_save_to_disk")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_mysql_users_save_to_disk=true;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_mysql_users_save_to_disk=false;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_save_to_disk, false);
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"cluster_proxysql_servers_save_to_disk")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_proxysql_servers_save_to_disk=true;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_proxysql_servers_save_to_disk=false;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_save_to_disk, false);
 			return true;
 		}
 		return false;
@@ -4443,58 +4609,62 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 
 
 void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
-  admindb->execute("PRAGMA foreign_keys = OFF");
-  admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-  admindb->execute("INSERT OR IGNORE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-  admindb->execute("INSERT OR IGNORE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-  admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR IGNORE INTO main.scheduler SELECT * FROM disk.scheduler");
+	admindb->execute("INSERT OR IGNORE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
 #ifdef DEBUG
-  admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 #endif /* DEBUG */
-  admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
-  admindb->execute("PRAGMA foreign_keys = OFF");
-  admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-  admindb->execute("INSERT OR REPLACE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-  admindb->execute("INSERT OR REPLACE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-  admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
+	admindb->execute("INSERT OR REPLACE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
 #ifdef DEBUG
-  admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 #endif /* DEBUG */
-  admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
 void ProxySQL_Admin::__delete_disktable() {
-  admindb->execute("DELETE FROM disk.mysql_servers");
-  admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
-  admindb->execute("DELETE FROM disk.mysql_users");
+	admindb->execute("DELETE FROM disk.mysql_servers");
+	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
+	admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("DELETE FROM disk.mysql_query_rules");
 	admindb->execute("DELETE FROM disk.global_variables");
 	admindb->execute("DELETE FROM disk.scheduler");
+	admindb->execute("DELETE FROM disk.proxysql_servers");
 #ifdef DEBUG
-  admindb->execute("DELETE FROM disk.debug_levels");
+	admindb->execute("DELETE FROM disk.debug_levels");
 #endif /* DEBUG */
 }
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
-  admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-  admindb->execute("INSERT OR REPLACE INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
-  admindb->execute("INSERT OR REPLACE INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
-  admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
-  admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO disk.scheduler SELECT * FROM main.scheduler");
+	admindb->execute("INSERT OR REPLACE INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
 #ifdef DEBUG
-  admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
+	admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
 #endif /* DEBUG */
 }
 
@@ -4597,6 +4767,10 @@ void ProxySQL_Admin::init_mysql_servers() {
 	mysql_servers_wrunlock();
 }
 
+void ProxySQL_Admin::init_proxysql_servers() {
+	load_proxysql_servers_to_runtime();
+}
+
 void ProxySQL_Admin::init_mysql_query_rules() {
 	load_mysql_query_rules_to_runtime();
 }
@@ -4623,19 +4797,24 @@ void ProxySQL_Admin::__refresh_users() {
 	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
 	GloMyAuth->set_all_inactive(USERNAME_FRONTEND);
 	add_admin_users();
-	uint64_t hashB, hashF;
-	if (calculate_checksum) {
-		__add_active_users(USERNAME_BACKEND, NULL, &hashB);
-		__add_active_users(USERNAME_FRONTEND, NULL, &hashF);
-	} else {
+
+//	uint64_t hashB, hashF;
+//	if (calculate_checksum) {
+//		__add_active_users(USERNAME_BACKEND, NULL, &hashB);
+//		__add_active_users(USERNAME_FRONTEND, NULL, &hashF);
+//	} else {
 		__add_active_users(USERNAME_BACKEND);
 		__add_active_users(USERNAME_FRONTEND);
-	}
+//	}
 	GloMyAuth->remove_inactives(USERNAME_BACKEND);
 	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
+	uint64_t hash1 = 0;
+	if (calculate_checksum) {
+	}
 	set_variable((char *)"admin_credentials",(char *)"");
 	if (calculate_checksum) {
-		uint64_t hash1 = hashB + hashF; // overflow allowed
+		hash1 = GloMyAuth->get_runtime_checksum();
+		//uint64_t hash1 = hashB + hashF; // overflow allowed
 		uint32_t d32[2];
 		char buf[20];
 		memcpy(&d32, &hash1, sizeof(hash1));
@@ -4693,6 +4872,7 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
+	bool empty = true;
 	SpookyHash myhash;
 	if (hash1) {
 		myhash.Init(19,3);
@@ -4731,6 +4911,7 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 			SQLite3_row *r=new SQLite3_row(cols);
 			r->add_fields(statement);
 			if (hash1) {
+				empty = false;
 				for (int i=0; i<cols;i++) {
 					if (r->fields[i]) {
 						myhash.Update(r->fields[i],r->sizes[i]);
@@ -4800,6 +4981,9 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 		uint64_t h1, h2;
 		myhash.Final(&h1, &h2);
 		*hash1 = h1;
+		if (empty) {
+			*hash1 = 0;
+		}
 	}
 #else
 	if (resultset) delete resultset;
@@ -5366,7 +5550,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	int affected_rows=0;
 	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, comment FROM main.mysql_query_rules WHERE active=1";
+	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, comment FROM main.mysql_query_rules WHERE active=1 ORDER BY rule_id";
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -5886,7 +6070,11 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			int use_ssl=0;
 			int max_latency_ms=0;
 			std::string comment="";
-			if (server.lookupValue("address", address)==false) continue;
+			if (server.lookupValue("address", address)==false) {
+				if (server.lookupValue("hostname", address)==false) {
+					continue;
+				}
+			}
 			if (server.lookupValue("port", port)==false) continue;
 			if (server.lookupValue("hostgroup", hostgroup)==false) continue;
 			server.lookupValue("status", status);
@@ -5933,6 +6121,47 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			char *o=escape_string_single_quotes(o1, false);
 			char *query=(char *)malloc(strlen(q)+strlen(o)+32);
 			sprintf(query,q, writer_hostgroup, reader_hostgroup, o);
+			//fprintf(stderr, "%s\n", query);
+			admindb->execute(query);
+			if (o!=o1) free(o);
+			free(o1);
+			free(query);
+			rows++;
+		}
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
+int ProxySQL_Admin::Read_ProxySQL_Servers_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg->getRoot();
+	int i;
+	int rows=0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	if (root.exists("proxysql_servers")==true) {
+		const Setting &mysql_servers = root["proxysql_servers"];
+		int count = mysql_servers.getLength();
+		//fprintf(stderr, "Found %d servers\n",count);
+		char *q=(char *)"INSERT OR REPLACE INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %d, %d, '%s')";
+		for (i=0; i< count; i++) {
+			const Setting &server = mysql_servers[i];
+			std::string address;
+			int port;
+			int weight=0;
+			std::string comment="";
+			if (server.lookupValue("address", address)==false) {
+				if (server.lookupValue("hostname", address)==false) {
+					continue;
+				}
+			}
+			if (server.lookupValue("port", port)==false) continue;
+			server.lookupValue("weight", weight);
+			server.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			char *query=(char *)malloc(strlen(q)+strlen(address.c_str())+strlen(o)+128);
+			sprintf(query, q, address.c_str(), port, weight, o);
+			proxy_info("Cluster: Adding ProxySQL Servers %s:%d from config file\n", address.c_str(), port);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
@@ -6422,19 +6651,19 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 	return next_run;
 }
 
-void ProxySQL_Admin::load_proxysql_servers_to_runtime() {
+void ProxySQL_Admin::load_proxysql_servers_to_runtime(bool _lock) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT hostname,port,weight,comment FROM proxysql_servers";
+	char *query=(char *)"SELECT hostname, port, weight, comment FROM proxysql_servers ORDER BY hostname, port";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		GloProxyCluster->load_servers_list(resultset);
+		GloProxyCluster->load_servers_list(resultset, _lock);
 //		if (checksum_variables.checksum_mysql_query_rules) {
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			uint64_t hash1 = resultset->raw_checksum();

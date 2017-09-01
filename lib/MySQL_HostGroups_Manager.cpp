@@ -702,14 +702,19 @@ bool MySQL_HostGroups_Manager::commit() {
 
 
 	if ( GloAdmin && GloAdmin->checksum_variables.checksum_mysql_servers ) {
-		uint64_t hash1, hash2;
+		uint64_t hash1=0, hash2=0;
 		SpookyHash myhash;
 		char buf[80];
-		myhash.Init(19,3);
+		bool init = false;
+/* removing all this code, because we need them ordered
 		MySrvC *mysrvc=NULL;
 		for (unsigned int i=0; i<MyHostGroups->len; i++) {
 			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 			for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+				if (init == false) {
+					init = true;
+					myhash.Init(19,3);
+				}
 				mysrvc=myhgc->mysrvs->idx(j);
 				// hostgroup
 				sprintf(buf,"%u",mysrvc->myhgc->hid);
@@ -747,7 +752,69 @@ bool MySQL_HostGroups_Manager::commit() {
 				} else { myhash.Update("",0); }
 			}
 		}
-		myhash.Final(&hash1, &hash2);
+*/
+		{
+			mydb->execute("DELETE FROM mysql_servers");
+			generate_mysql_servers_table();
+			char *error=NULL;
+			int cols=0;
+			int affected_rows=0;
+			SQLite3_result *resultset=NULL;
+			char *query=(char *)"SELECT * FROM mysql_servers WHERE ORDER BY hostgroup_id, hostname, port";
+			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			if (resultset) {
+				if (resultset->rows_count) {
+					if (init == false) {
+						init = true;
+						myhash.Init(19,3);
+					}
+					uint64_t hash1_ = resultset->raw_checksum();
+					myhash.Update(&hash1_, sizeof(hash1_));
+				}
+				delete resultset;
+			}
+		}
+		{
+			char *error=NULL;
+			int cols=0;
+			int affected_rows=0;
+			SQLite3_result *resultset=NULL;
+			char *query=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
+			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			if (resultset) {
+				if (resultset->rows_count) {
+					if (init == false) {
+						init = true;
+						myhash.Init(19,3);
+					}
+					uint64_t hash1_ = resultset->raw_checksum();
+					myhash.Update(&hash1_, sizeof(hash1_));
+				}
+				delete resultset;
+			}
+		}
+		{
+			char *error=NULL;
+			int cols=0;
+			int affected_rows=0;
+			SQLite3_result *resultset=NULL;
+			char *query=(char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup";
+			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			if (resultset) {
+				if (resultset->rows_count) {
+					if (init == false) {
+						init = true;
+						myhash.Init(19,3);
+					}
+					uint64_t hash1_ = resultset->raw_checksum();
+					myhash.Update(&hash1_, sizeof(hash1_));
+				}
+				delete resultset;
+			}
+		}
+		if (init == true) {
+			myhash.Final(&hash1, &hash2);
+		}
 		uint32_t d32[2];
 		memcpy(&d32,&hash1,sizeof(hash1));
 		sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
