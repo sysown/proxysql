@@ -63,6 +63,11 @@ initial() {
 	start
 }
 
+reload() {
+	OPTS="--reload $OPTS"
+	start
+}
+
 start() {
   echo -n "Starting ProxySQL: "
 	mkdir $DATADIR 2>/dev/null
@@ -175,6 +180,9 @@ case "$1" in
 	initial)
 		initial
 	;;
+	reload)
+		reload
+	;;
 	stop)
 		stop
 	;;
@@ -186,7 +194,7 @@ case "$1" in
 		start
 	;;
 	*)
-		echo "Usage: ProxySQL {start|stop|status|restart|initial}"
+		echo "Usage: ProxySQL {start|stop|status|reload|restart|initial}"
 		exit 1
 	;;
 esac
