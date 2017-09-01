@@ -918,7 +918,7 @@ bool MySQL_Session::handler_again___verify_backend_sql_log_bin() {
 bool MySQL_Session::handler_again___verify_backend_sql_mode() {
 	if (mybe->server_myds->myconn->options.sql_mode_int==0) {
 		// it is the first time we use this backend. Set sql_mode to default
-		if (mybe->server_myds->myconn->options.sql_mode==NULL) {
+		if (mybe->server_myds->myconn->options.sql_mode) {
 			free(mybe->server_myds->myconn->options.sql_mode);
 			mybe->server_myds->myconn->options.sql_mode=NULL;
 		}

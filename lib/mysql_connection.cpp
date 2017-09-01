@@ -1659,6 +1659,13 @@ void MySQL_Connection::reset() {
 	status_flags=0;
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
+	{ // bug #1160
+		options.sql_mode_int = 0;
+		if (options.sql_mode) {
+			free(options.sql_mode);
+			options.sql_mode = NULL;
+		}
+	}
 	delete local_stmts;
 #ifndef PROXYSQL_STMT_V14
 	local_stmts=new MySQL_STMTs_local(false);
