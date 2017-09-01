@@ -1665,6 +1665,11 @@ void MySQL_Connection::reset() {
 			free(options.sql_mode);
 			options.sql_mode = NULL;
 		}
+		options.time_zone_int = 0;
+		if (options.time_zone) {
+			free(options.time_zone);
+			options.time_zone = NULL;
+		}
 	}
 	delete local_stmts;
 #ifndef PROXYSQL_STMT_V14

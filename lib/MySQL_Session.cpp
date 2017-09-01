@@ -961,7 +961,7 @@ bool MySQL_Session::handler_again___verify_backend_sql_mode() {
 bool MySQL_Session::handler_again___verify_backend_time_zone() {
 	if (mybe->server_myds->myconn->options.time_zone_int==0) {
 		// it is the first time we use this backend. Set time_zone to default
-		if (mybe->server_myds->myconn->options.time_zone==NULL) {
+		if (mybe->server_myds->myconn->options.time_zone) {
 			free(mybe->server_myds->myconn->options.time_zone);
 			mybe->server_myds->myconn->options.time_zone=NULL;
 		}
