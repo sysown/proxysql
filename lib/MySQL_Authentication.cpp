@@ -90,7 +90,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	// few changes will follow, due to issue #802
 	account_details_t *ad=NULL;
@@ -273,7 +273,7 @@ int MySQL_Authentication::increase_frontend_user_connections(char *username, int
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::unordered_map<uint64_t, account_details_t *>::iterator it;
+	std::map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
 		account_details_t *ad=it->second;
@@ -306,7 +306,7 @@ void MySQL_Authentication::decrease_frontend_user_connections(char *username) {
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::unordered_map<uint64_t, account_details_t *>::iterator it;
+	std::map<uint64_t, account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
 		account_details_t *ad=it->second;
@@ -338,7 +338,7 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 #else
 		spin_wrlock(&cg.lock);
 #endif
-	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
@@ -376,7 +376,7 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
@@ -410,7 +410,7 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 #else
 	spin_rdlock(&cg.lock);
 #endif
-	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
@@ -446,7 +446,7 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::unordered_map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, account_details_t *>::iterator lookup;
 
 	while (cg.bt_map.size()) {
 		lookup = cg.bt_map.begin();
@@ -475,4 +475,36 @@ bool MySQL_Authentication::reset() {
 	_reset(USERNAME_BACKEND);
 	_reset(USERNAME_FRONTEND);
 	return true;
+}
+
+
+uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
+	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	std::map<uint64_t, account_details_t *>::iterator it;
+	if (cg.bt_map.size() == 0) {
+		return 0;
+	}
+	SpookyHash myhash;
+	myhash.Init(13,4);
+	for (it = cg.bt_map.begin(); it != cg.bt_map.end(); ) {
+		account_details_t *ad=it->second;
+		myhash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
+		myhash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
+		myhash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
+		myhash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
+		myhash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
+		myhash.Update(&ad->max_connections,sizeof(ad->max_connections));
+		myhash.Update(ad->username,strlen(ad->username));
+		myhash.Update(ad->password,strlen(ad->password));
+		it++;
+	}
+	uint64_t hash1, hash2;
+	myhash.Final(&hash1, &hash2);
+	return hash1;
+}
+
+uint64_t MySQL_Authentication::get_runtime_checksum() {
+	uint64_t hashB = _get_runtime_checksum(USERNAME_BACKEND);
+	uint64_t hashF = _get_runtime_checksum(USERNAME_FRONTEND);
+	return hashB+hashF;
 }

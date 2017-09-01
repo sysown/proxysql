@@ -8,6 +8,33 @@ namespace ez {
 class ezOptionParser;
 };
 
+class ProxySQL_Checksum_Value {
+	public:
+	char *checksum;
+	unsigned long long version;
+	unsigned long long epoch;
+	ProxySQL_Checksum_Value() {
+		checksum = (char *)malloc(20);
+		memset(checksum,0,20);
+		version = 0;
+		epoch = 0;
+	}
+	void set_checksum(char *c) {
+		memset(checksum,0,20);
+		strncpy(checksum,c,18);
+		for (int i=2; i<18; i++) {
+			if (checksum[i]==' ' || checksum[i]==0) {
+				checksum[i]='0';
+			}
+		}
+
+	}
+	~ProxySQL_Checksum_Value() {
+		free(checksum);
+		checksum = NULL;
+	}
+};
+
 class ProxySQL_GlobalVariables {
 	public:
 	ez::ezOptionParser *opt;
@@ -48,7 +75,7 @@ class ProxySQL_GlobalVariables {
 		char *pidfile;
 		bool restart_on_error;
 		int restart_delay;
-		SSL_CTX *ssl_ctx;	
+		SSL_CTX *ssl_ctx;
 	} global;
 	struct mysql {
 		char *server_version;
@@ -59,6 +86,20 @@ class ProxySQL_GlobalVariables {
 		unsigned long stack_memory_admin_threads;
 		unsigned long stack_memory_cluster_threads;
 	} statuses;
+	pthread_mutex_t checksum_mutex;
+	time_t epoch_version;
+	struct {
+		ProxySQL_Checksum_Value admin_variables;
+		ProxySQL_Checksum_Value mysql_query_rules;
+		ProxySQL_Checksum_Value mysql_servers;
+		ProxySQL_Checksum_Value mysql_users;
+		ProxySQL_Checksum_Value mysql_variables;
+		ProxySQL_Checksum_Value proxysql_servers;
+		uint64_t global_checksum;
+		unsigned long long updates_cnt;
+		unsigned long long dumped_at;
+	} checksums_values;
+	uint64_t generate_global_checksum();
 	ProxySQL_GlobalVariables();
 	~ProxySQL_GlobalVariables();
 	void process_opts_pre();

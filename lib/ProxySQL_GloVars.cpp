@@ -3,7 +3,7 @@
 #include "cpp.h"
 #include <string>
 #include <sys/utsname.h>
-
+#include "SpookyV2.h"
 
 static void term_handler(int sig) {
   proxy_warning("Received TERM signal: shutdown in progress...\n");
@@ -65,6 +65,11 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #endif /* SO_REUSEPORT */
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
+	pthread_mutex_init(&checksum_mutex,NULL);
+	epoch_version = 0;
+	checksums_values.updates_cnt = 0;
+	checksums_values.dumped_at = 0;
+	checksums_values.global_checksum = 0;
 #ifdef DEBUG
 	global.gdb=0;
 #endif
@@ -261,3 +266,45 @@ void ProxySQL_GlobalVariables::process_opts_post() {
   }
 #endif
 };
+
+
+uint64_t ProxySQL_GlobalVariables::generate_global_checksum() {
+	SpookyHash myhash;
+	myhash.Init(9,5);
+	ProxySQL_Checksum_Value *v = NULL;
+	v = &checksums_values.admin_variables;
+	if (v->version) {
+		myhash.Update(v->checksum,strlen(v->checksum));
+		myhash.Update(&v->version,sizeof(v->version));
+	}
+	v = &checksums_values.mysql_query_rules;
+	if (v->version) {
+		myhash.Update(v->checksum,strlen(v->checksum));
+		myhash.Update(&v->version,sizeof(v->version));
+	}
+	v = &checksums_values.mysql_servers;
+	if (v->version) {
+		myhash.Update(v->checksum,strlen(v->checksum));
+		myhash.Update(&v->version,sizeof(v->version));
+	}
+	v = &checksums_values.mysql_users;
+	if (v->version) {
+		myhash.Update(v->checksum,strlen(v->checksum));
+		myhash.Update(&v->version,sizeof(v->version));
+	}
+	v = &checksums_values.mysql_variables;
+	if (v->version) {
+		myhash.Update(v->checksum,strlen(v->checksum));
+		myhash.Update(&v->version,sizeof(v->version));
+	}
+	v = &checksums_values.proxysql_servers;
+	if (v->version) {
+		myhash.Update(v->checksum,strlen(v->checksum));
+		myhash.Update(&v->version,sizeof(v->version));
+	}
+	uint64_t h1, h2;
+	myhash.Final(&h1, &h2);
+	h1 = h1/2; // ugly way to make it signed within LLONG_MAX
+	checksums_values.global_checksum = h1;
+	return h1;
+}

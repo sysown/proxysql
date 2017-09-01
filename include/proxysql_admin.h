@@ -87,6 +87,15 @@ class ProxySQL_Admin {
 		char * cluster_username;
 		char * cluster_password;
 		int cluster_check_interval_ms;
+		int cluster_check_status_frequency;
+		int cluster_mysql_query_rules_diffs_before_sync;
+		int cluster_mysql_servers_diffs_before_sync;
+		int cluster_mysql_users_diffs_before_sync;
+		int cluster_proxysql_servers_diffs_before_sync;
+		bool cluster_mysql_query_rules_save_to_disk;
+		bool cluster_mysql_servers_save_to_disk;
+		bool cluster_mysql_users_save_to_disk;
+		bool cluster_proxysql_servers_save_to_disk;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -111,7 +120,7 @@ class ProxySQL_Admin {
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
-	void __add_active_users(enum cred_username_type usertype, char *user=NULL);
+	void __add_active_users(enum cred_username_type usertype, char *user=NULL, uint64_t *hash1 = NULL);
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void add_admin_users();
 	void __refresh_users();
@@ -141,6 +150,11 @@ class ProxySQL_Admin {
 		void *opt;
 		void **re;
 	} match_regexes;
+	struct {
+		bool checksum_mysql_query_rules;
+		bool checksum_mysql_servers;
+		bool checksum_mysql_users;
+	} checksum_variables;
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
 		__add_active_users(usertype, user);
 	}
@@ -159,6 +173,7 @@ class ProxySQL_Admin {
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();
+	void init_proxysql_servers();
 	void save_mysql_users_runtime_to_database(bool _runtime);
 	void save_mysql_servers_runtime_to_database(bool);
 	void admin_shutdown();
@@ -201,6 +216,7 @@ class ProxySQL_Admin {
 	void stats___mysql_global();
 	void stats___mysql_users();
 
+	void stats___proxysql_servers_checksums();
 	void stats___proxysql_servers_metrics();
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
@@ -208,6 +224,7 @@ class ProxySQL_Admin {
 	int Read_MySQL_Query_Rules_from_configfile();
 	int Read_MySQL_Servers_from_configfile();
 	int Read_Scheduler_from_configfile();
+	int Read_ProxySQL_Servers_from_configfile();
 
 	void flush_error_log();
 	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
@@ -223,10 +240,11 @@ class ProxySQL_Admin {
 	void flush_configdb(); // 923
 
 	// Cluster
-	void load_proxysql_servers_to_runtime();
+	void load_proxysql_servers_to_runtime(bool _lock=true);
 	void flush_proxysql_servers__from_memory_to_disk();
 	void flush_proxysql_servers__from_disk_to_memory();
 	void save_proxysql_servers_runtime_to_database(bool);
+	void dump_checksums_values_table();
 
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
