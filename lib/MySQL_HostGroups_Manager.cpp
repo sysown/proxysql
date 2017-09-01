@@ -1363,11 +1363,11 @@ unsigned int MySrvList::cnt() {
 
 MySrvC * MySrvList::idx(unsigned int i) { return (MySrvC *)servers->index(i); }
 
-MySQL_Connection * MySrvConnList::get_random_MyConn() {
+MySQL_Connection * MySrvConnList::get_random_MyConn(bool ff) {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int l=conns_length();
-	if (l) {
+	if (l && ff==false) {
 		if (l>32768) {
 			i=rand()%l;
 		} else {
@@ -1386,14 +1386,14 @@ MySQL_Connection * MySrvConnList::get_random_MyConn() {
 	return NULL; // never reach here
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, bool ff) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	MySrvC *mysrvc=myhgc->get_random_MySrvC();
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
-		conn=mysrvc->ConnectionsFree->get_random_MyConn();
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(ff);
 		mysrvc->ConnectionsUsed->add(conn);
 		status.myconnpoll_get_ok++;
 	}

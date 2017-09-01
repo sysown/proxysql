@@ -3631,7 +3631,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		int i=100;
 		while (i) {
 			if (mc==NULL) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward);
 			}
 			if (mc) {
 				mybe->server_myds->attach_connection(mc);
@@ -3643,9 +3643,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		i--;
 		}
 #else
-		mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+		if (session_fast_forward == false) {
+			mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+		}
 		if (mc==NULL) {
-			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id);
+			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward);
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
 		}
