@@ -469,7 +469,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				||
 				(v->epoch > own_version) // epoch is newer
 			) {
-				if (v->diff_check > diff_mqr) {
+				if (v->diff_check >= diff_mqr) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_mysql_query_rules_from_peer();
 				}
@@ -490,7 +490,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				||
 				(v->epoch > own_version) // epoch is newer
 			) {
-				if (v->diff_check > diff_ms) {
+				if (v->diff_check >= diff_ms) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_mysql_servers_from_peer();
 				}
@@ -511,7 +511,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				||
 				(v->epoch > own_version) // epoch is newer
 			) {
-				if (v->diff_check > diff_mu) {
+				if (v->diff_check >= diff_mu) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_mysql_users_from_peer();
 				}
@@ -532,7 +532,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				||
 				(v->epoch > own_version) // epoch is newer
 			) {
-				if (v->diff_check > diff_ps) {
+				if (v->diff_check >= diff_ps) {
 					proxy_info("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_proxysql_servers_from_peer();
 				}
