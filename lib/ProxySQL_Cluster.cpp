@@ -467,7 +467,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (
 				(own_version == 1) // we just booted
 				||
-				(v->epoch > own_version) // epoch is newer
+				(v->epoch > own_epoch) // epoch is newer
 			) {
 				if (v->diff_check >= diff_mqr) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
@@ -488,7 +488,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (
 				(own_version == 1) // we just booted
 				||
-				(v->epoch > own_version) // epoch is newer
+				(v->epoch > own_epoch) // epoch is newer
 			) {
 				if (v->diff_check >= diff_ms) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
@@ -509,7 +509,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (
 				(own_version == 1) // we just booted
 				||
-				(v->epoch > own_version) // epoch is newer
+				(v->epoch > own_epoch) // epoch is newer
 			) {
 				if (v->diff_check >= diff_mu) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
@@ -530,7 +530,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (
 				(own_version == 1) // we just booted
 				||
-				(v->epoch > own_version) // epoch is newer
+				(v->epoch > own_epoch) // epoch is newer
 			) {
 				if (v->diff_check >= diff_ps) {
 					proxy_info("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
