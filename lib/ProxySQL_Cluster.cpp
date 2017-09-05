@@ -775,7 +775,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 					}
 					mysql_free_result(result);
 
-					rc_query = mysql_query(conn,"SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups");
+					rc_query = mysql_query(conn,"SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups");
 					if ( rc_query == 0 ) {
 						MYSQL_RES *result = mysql_store_result(conn);
 						GloAdmin->admindb->execute("DELETE FROM mysql_replication_hostgroups");
