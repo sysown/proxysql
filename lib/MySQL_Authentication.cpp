@@ -484,19 +484,26 @@ uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type use
 	if (cg.bt_map.size() == 0) {
 		return 0;
 	}
+	bool foundany = false;
 	SpookyHash myhash;
 	myhash.Init(13,4);
 	for (it = cg.bt_map.begin(); it != cg.bt_map.end(); ) {
 		account_details_t *ad=it->second;
-		myhash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
-		myhash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
-		myhash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
-		myhash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
-		myhash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
-		myhash.Update(&ad->max_connections,sizeof(ad->max_connections));
-		myhash.Update(ad->username,strlen(ad->username));
-		myhash.Update(ad->password,strlen(ad->password));
+		if (ad->default_hostgroup >= 0) {
+			foundany = true;
+			myhash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
+			myhash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
+			myhash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
+			myhash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
+			myhash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
+			myhash.Update(&ad->max_connections,sizeof(ad->max_connections));
+			myhash.Update(ad->username,strlen(ad->username));
+			myhash.Update(ad->password,strlen(ad->password));
+		}
 		it++;
+	}
+	if (foundany == false) {
+		return 0;
 	}
 	uint64_t hash1, hash2;
 	myhash.Final(&hash1, &hash2);
