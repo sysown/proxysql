@@ -577,43 +577,43 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 					MYSQL_RES *result = mysql_store_result(conn);
 					GloAdmin->admindb->execute("DELETE FROM mysql_query_rules");
 					MYSQL_ROW row;
-					char *q = (char *)"INSERT INTO mysql_query_rules (rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)";
+					char *q = (char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)";
 					sqlite3_stmt *statement1 = NULL;
 					sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 					rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
 					assert(rc==SQLITE_OK);
 					while ((row = mysql_fetch_row(result))) {
 						rc=sqlite3_bind_int64(statement1, 1, atoll(row[0])); assert(rc==SQLITE_OK); // rule_id
-						rc=sqlite3_bind_text(statement1, 2, row[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // username
-						rc=sqlite3_bind_text(statement1, 3, row[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // schemaname
-						rc=sqlite3_bind_int64(statement1, 4, atoll(row[3])); assert(rc==SQLITE_OK); // flagIN
-						rc=sqlite3_bind_text(statement1, 5, row[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // client_addr
-						rc=sqlite3_bind_text(statement1, 6, row[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // proxy_addr
-						rc=sqlite3_bind_int64(statement1, 7, atoll(row[6])); assert(rc==SQLITE_OK); // proxy_port
-						rc=sqlite3_bind_text(statement1, 8, row[7], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // digest
-						rc=sqlite3_bind_text(statement1, 9, row[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // match_digest
-						rc=sqlite3_bind_text(statement1, 10, row[9], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // match_pattern
-						rc=sqlite3_bind_int64(statement1, 11, atoll(row[10])); assert(rc==SQLITE_OK); // negate_match_pattern
-						rc=sqlite3_bind_text(statement1, 12, row[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // re_modifiers
-						rc=sqlite3_bind_int64(statement1, 13, atoll(row[12])); assert(rc==SQLITE_OK); // flagOUT
-						rc=sqlite3_bind_text(statement1, 14, row[13], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // replace_pattern
-						rc=sqlite3_bind_int64(statement1, 15, atoll(row[14])); assert(rc==SQLITE_OK); // destination_hostgroup
-						rc=sqlite3_bind_int64(statement1, 16, atoll(row[15])); assert(rc==SQLITE_OK); // cache_ttl
-						rc=sqlite3_bind_int64(statement1, 17, atoll(row[16])); assert(rc==SQLITE_OK); // reconnect
-						rc=sqlite3_bind_int64(statement1, 18, atoll(row[17])); assert(rc==SQLITE_OK); // timeout
-						rc=sqlite3_bind_int64(statement1, 19, atoll(row[18])); assert(rc==SQLITE_OK); // retries
-						rc=sqlite3_bind_int64(statement1, 20, atoll(row[19])); assert(rc==SQLITE_OK); // delay
-						rc=sqlite3_bind_int64(statement1, 21, atoll(row[20])); assert(rc==SQLITE_OK); // next_query_flagIN
-						rc=sqlite3_bind_int64(statement1, 22, atoll(row[21])); assert(rc==SQLITE_OK); // mirror_flagOUT
-						rc=sqlite3_bind_int64(statement1, 23, atoll(row[22])); assert(rc==SQLITE_OK); // mirror_hostgroup
-						rc=sqlite3_bind_text(statement1, 24, row[23], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // error_msg
-						rc=sqlite3_bind_text(statement1, 25, row[24], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // OK_msg
-						rc=sqlite3_bind_int64(statement1, 26, atoll(row[25])); assert(rc==SQLITE_OK); // sticky_conn
-						rc=sqlite3_bind_int64(statement1, 27, atoll(row[26])); assert(rc==SQLITE_OK); // multiplex
-						rc=sqlite3_bind_int64(statement1, 28, atoll(row[27])); assert(rc==SQLITE_OK); // log
-						rc=sqlite3_bind_int64(statement1, 29, atoll(row[28])); assert(rc==SQLITE_OK); // apply
-						rc=sqlite3_bind_text(statement1, 30, row[29], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
-
+						rc=sqlite3_bind_int64(statement1, 2, 1); assert(rc==SQLITE_OK); // active
+						rc=sqlite3_bind_text(statement1, 3, row[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // username
+						rc=sqlite3_bind_text(statement1, 4, row[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // schemaname
+						rc=sqlite3_bind_text(statement1, 5, row[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // flagIN
+						rc=sqlite3_bind_text(statement1, 6, row[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // client_addr
+						rc=sqlite3_bind_text(statement1, 7, row[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // proxy_addr
+						rc=sqlite3_bind_text(statement1, 8, row[6], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // proxy_port
+						rc=sqlite3_bind_text(statement1, 9, row[7], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // digest
+						rc=sqlite3_bind_text(statement1, 10, row[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // match_digest
+						rc=sqlite3_bind_text(statement1, 11, row[9], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // match_pattern
+						rc=sqlite3_bind_text(statement1, 12, row[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // negate_match_pattern
+						rc=sqlite3_bind_text(statement1, 13, row[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // re_modifiers
+						rc=sqlite3_bind_text(statement1, 14, row[12], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // flagOUT
+						rc=sqlite3_bind_text(statement1, 15, row[13], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // replace_pattern
+						rc=sqlite3_bind_text(statement1, 16, row[14], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // destination_hostgroup
+						rc=sqlite3_bind_text(statement1, 17, row[15], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cache_ttl
+						rc=sqlite3_bind_text(statement1, 18, row[16], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // reconnect
+						rc=sqlite3_bind_text(statement1, 19, row[17], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // timeout
+						rc=sqlite3_bind_text(statement1, 20, row[18], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // retries
+						rc=sqlite3_bind_text(statement1, 21, row[19], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // delay
+						rc=sqlite3_bind_text(statement1, 22, row[20], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // next_query_flagIN
+						rc=sqlite3_bind_text(statement1, 23, row[21], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_flagOUT
+						rc=sqlite3_bind_text(statement1, 24, row[22], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_hostgroup
+						rc=sqlite3_bind_text(statement1, 25, row[23], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // error_msg
+						rc=sqlite3_bind_text(statement1, 26, row[24], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // OK_msg
+						rc=sqlite3_bind_text(statement1, 27, row[25], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // sticky_conn
+						rc=sqlite3_bind_text(statement1, 28, row[26], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // multiplex
+						rc=sqlite3_bind_text(statement1, 29, row[27], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // log
+						rc=sqlite3_bind_text(statement1, 30, row[28], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // apply
+						rc=sqlite3_bind_text(statement1, 31, row[29], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
 						SAFE_SQLITE3_STEP(statement1);
 						rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 						rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
