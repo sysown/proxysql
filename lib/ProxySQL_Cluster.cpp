@@ -1102,8 +1102,8 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uin
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		proxy_info("Cluster: detected peer %s:%d with mysql_query_rules version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
-	proxy_info("Cluster: detected peer %s:%d with mysql_query_rules version %llu, epoch %llu\n", hostname, p, version, epoch);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_t *port) {
@@ -1133,8 +1133,8 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		proxy_info("Cluster: detected peer %s:%d with mysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
-	proxy_info("Cluster: detected peer %s:%d with mysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t *port) {
@@ -1164,8 +1164,8 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		proxy_info("Cluster: detected peer %s:%d with mysql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
-	proxy_info("Cluster: detected peer %s:%d with mysql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port) {
@@ -1195,8 +1195,8 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		proxy_info("Cluster: detected peer %s:%d with proxysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
-	proxy_info("Cluster: detected peer %s:%d with proxysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
 }
 
 SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
