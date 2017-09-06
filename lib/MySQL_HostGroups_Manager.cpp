@@ -760,7 +760,7 @@ bool MySQL_HostGroups_Manager::commit() {
 			int cols=0;
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_servers WHERE ORDER BY hostgroup_id, hostname, port";
+			char *query=(char *)"SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
 			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			if (resultset) {
 				if (resultset->rows_count) {
