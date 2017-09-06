@@ -518,7 +518,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_mu*10)) == 0) {
-					proxy_warning("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mu*10));
+					proxy_warning("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL USERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mu*10));
 			}
 		}
 	}
@@ -620,7 +620,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 					}
 					mysql_free_result(result);
 					proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d completed\n", hostname, port);
-					proxy_info("Cluster: Loading to runtime MySQL Servers from peer %s:%d\n", hostname, port);
+					proxy_info("Cluster: Loading to runtime MySQL Query Rules from peer %s:%d\n", hostname, port);
 					GloAdmin->load_mysql_query_rules_to_runtime();
 					if (__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk,0) == true) {
 						proxy_info("Cluster: Saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
