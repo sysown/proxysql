@@ -553,7 +553,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
-		bool rc_bool = true;
+		// bool rc_bool = true;
 		MYSQL *rc_conn;
 		int rc_query;
 		int rc;
@@ -622,7 +622,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 					proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d completed\n", hostname, port);
 					proxy_info("Cluster: Loading to runtime MySQL Query Rules from peer %s:%d\n", hostname, port);
 					GloAdmin->load_mysql_query_rules_to_runtime();
-					if (__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk,0) == true) {
+					if (GloProxyCluster->cluster_mysql_query_rules_save_to_disk == true) {
 						proxy_info("Cluster: Saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 						GloAdmin->flush_mysql_query_rules__from_memory_to_disk();
 					}
@@ -652,7 +652,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
-		bool rc_bool = true;
+		// bool rc_bool = true;
 		MYSQL *rc_conn;
 		int rc_query;
 		int rc;
@@ -703,7 +703,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d completed\n", hostname, port);
 					proxy_info("Cluster: Loading to runtime MySQL Users from peer %s:%d\n", hostname, port);
 					GloAdmin->init_users();
-					if (__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk,0) == true) {
+					if (GloProxyCluster->cluster_mysql_query_rules_save_to_disk == true) {
 						proxy_info("Cluster: Saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 						GloAdmin->flush_mysql_users__from_memory_to_disk();
 					}
@@ -733,7 +733,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
-		bool rc_bool = true;
+		// bool rc_bool = true;
 		MYSQL *rc_conn;
 		int rc_query;
 		MYSQL *conn = mysql_init(NULL);
@@ -802,7 +802,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 						proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d completed\n", hostname, port);
 						proxy_info("Cluster: Loading to runtime MySQL Servers from peer %s:%d\n", hostname, port);
 						GloAdmin->load_mysql_servers_to_runtime();
-						if (__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_save_to_disk,0) == true) {
+						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_mysql_servers__from_memory_to_disk();
 						}
@@ -836,7 +836,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
-		bool rc_bool = true;
+		// bool rc_bool = true;
 		MYSQL *rc_conn;
 		int rc_query;
 		MYSQL *conn = mysql_init(NULL);
@@ -880,7 +880,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d completed\n", hostname, port);
 					proxy_info("Cluster: Loading to runtime ProxySQL Servers from peer %s:%d\n", hostname, port);
 					GloAdmin->load_proxysql_servers_to_runtime(false);
-					if (__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_save_to_disk,0) == true) {
+					if (GloProxyCluster->cluster_proxysql_servers_save_to_disk == true) {
 						proxy_info("Cluster: Saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
 						GloAdmin->flush_proxysql_servers__from_memory_to_disk();
 					}
