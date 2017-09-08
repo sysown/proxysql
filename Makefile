@@ -60,7 +60,7 @@ packages: centos6.7 centos7 centos6.7-dbg centos7-dbg centos5 centos5-dbg ubuntu
 centos5: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
 .PHONY: centos5
 
-centos5-dbg: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
+centos5-dbg: binaries/proxysql-${CURVER}-1-dbg-centos5.x86_64.rpm
 .PHONY: centos5-dbg
 
 centos6.7: binaries/proxysql-${CURVER}-1-centos67.x86_64.rpm
@@ -509,7 +509,7 @@ binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb:
 	sleep 2
 	docker exec debian9_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
 	sleep 2
-	docker cp debian9_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb
+	docker cp debian9_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb
 	docker stop debian9_build
 	docker rm debian9_build
 
