@@ -751,7 +751,8 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
-				rc_query = mysql_query(conn,"SELECT hostgroup_id, hostname, port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers");
+				GloAdmin->mysql_servers_wrlock();
+				rc_query = mysql_query(conn,"SELECT hostgroup_id, hostname, port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'");
 				if ( rc_query == 0 ) {
 					MYSQL_RES *result = mysql_store_result(conn);
 					GloAdmin->admindb->execute("DELETE FROM mysql_servers");
@@ -811,6 +812,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 				} else {
 					proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				}
+				GloAdmin->mysql_servers_wrunlock();
 			} else {
 				proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 			}
