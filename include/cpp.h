@@ -10,13 +10,17 @@
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Protocol.h"
 #include "MySQL_Authentication.hpp"
+#ifdef PROXYSQLCLICKHOUSE
 #include "ClickHouse_Authentication.hpp"
+#endif /* PROXYSQLCLICKHOUSE */
 #include "fileutils.hpp"
 #include "configfile.hpp"
 #include "query_processor.h"
 #include "proxysql_admin.h"
 #include "SQLite3_Server.h"
+#ifdef PROXYSQLCLICKHOUSE
 #include "ClickHouse_Server.h"
+#endif /* PROXYSQLCLICKHOUSE */
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
 #include "MySQL_PreparedStatement.h"

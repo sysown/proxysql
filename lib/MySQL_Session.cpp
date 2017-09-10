@@ -28,8 +28,10 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
+#ifdef PROXYSQLCLICKHOUSE
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
+#endif /* PROXYSQLCLICKHOUSE */
 
 Session_Regex::Session_Regex(char *p) {
 	s=strdup(p);
@@ -321,9 +323,11 @@ MySQL_Session::~MySQL_Session() {
 	if (client_myds) {
 		if (client_authenticated) {
 			switch (session_type) {
+#ifdef PROXYSQLCLICKHOUSE
 				case PROXYSQL_SESSION_CLICKHOUSE:
 					GloClickHouseAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
 					break;
+#endif /* PROXYSQLCLICKHOUSE */
 				default:
 					GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
 					break;
@@ -2006,10 +2010,12 @@ __get_pkts_from_client:
 											handler_function(this, (void *)GloSQLite3Server, &pkt);
 											l_free(pkt.size,pkt.ptr);
 											break;
+#ifdef PROXYSQLCLICKHOUSE
 										case PROXYSQL_SESSION_CLICKHOUSE:
 											handler_function(this, (void *)GloClickHouseServer, &pkt);
 											l_free(pkt.size,pkt.ptr);
 											break;
+#endif /* PROXYSQLCLICKHOUSE */
 										default:
 											assert(0);
 									}
@@ -3108,9 +3114,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					case PROXYSQL_SESSION_MYSQL:
 						free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 						break;
+#ifdef PROXYSQLCLICKHOUSE
 					case PROXYSQL_SESSION_CLICKHOUSE:
 						free_users=GloClickHouseAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 						break;
+#endif /* PROXYSQLCLICKHOUSE */
 					default:
 						assert(0);
 						break;

@@ -77,7 +77,9 @@ class ProxySQL_GlobalVariables {
 		int restart_delay;
 		SSL_CTX *ssl_ctx;	
 		bool sqlite3_server;
+#ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
+#endif /* PROXYSQLCLICKHOUSE */
 	} global;
 	struct mysql {
 		char *server_version;

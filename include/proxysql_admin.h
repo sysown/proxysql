@@ -146,9 +146,12 @@ class ProxySQL_Admin {
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 
+#ifdef PROXYSQLCLICKHOUSE
+	// ClickHouse
 	void __refresh_clickhouse_users();
 	void __add_active_clickhouse_users(char *user=NULL);
 	void __delete_inactive_clickhouse_users();
+#endif /* PROXYSQLCLICKHOUSE */
 	
 
 	public:
@@ -252,11 +255,13 @@ class ProxySQL_Admin {
 	void save_proxysql_servers_runtime_to_database(bool);
 	void dump_checksums_values_table();
 
+#ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
 	void init_clickhouse_users();
 	void flush_clickhouse_users__from_memory_to_disk();
 	void flush_clickhouse_users__from_disk_to_memory();
 	void save_clickhouse_users_runtime_to_database(bool _runtime);
+#endif /* PROXYSQLCLICKHOUSE */
 
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

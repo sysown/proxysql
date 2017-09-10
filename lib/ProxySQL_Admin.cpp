@@ -142,8 +142,10 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
 
 extern ProxySQL_Cluster *GloProxyCluster;
+#ifdef PROXYSQLCLICKHOUSE
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
+#endif /* PROXYSQLCLICKHOUSE */
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -268,6 +270,7 @@ pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CHECKSUMS "CREATE TABLE stats_proxysql_servers_checksums (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , name VARCHAR NOT NULL , version INT NOT NULL , epoch INT NOT NULL , checksum VARCHAR NOT NULL , changed_at INT NOT NULL , updated_at INT NOT NULL , diff_check INT NOT NULL , PRIMARY KEY (hostname, port, name) )"
 
+#ifdef PROXYSQLCLICKHOUSE
 // ClickHouse Tables
 
 #define ADMIN_SQLITE_TABLE_CLICKHOUSE_USERS_141 "CREATE TABLE clickhouse_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username))"
@@ -275,6 +278,7 @@ pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define ADMIN_SQLITE_TABLE_CLICKHOUSE_USERS ADMIN_SQLITE_TABLE_CLICKHOUSE_USERS_141
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_CLICKHOUSE_USERS "CREATE TABLE runtime_clickhouse_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username))"
+#endif /* PROXYSQLCLICKHOUSE */
 
 
 
@@ -938,6 +942,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			}
 		}
 	}
+#ifdef PROXYSQLCLICKHOUSE
 	if ( ( GloVars.global.clickhouse_server == true ) && (query_no_space_length>22) && ( (!strncasecmp("SAVE CLICKHOUSE USERS ", query_no_space, 22)) || (!strncasecmp("LOAD CLICKHOUSE USERS ", query_no_space, 22))) ) {
 		if (
 			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS TO MEMORY") && !strncasecmp("LOAD CLICKHOUSE USERS TO MEMORY",query_no_space, query_no_space_length))
@@ -1004,6 +1009,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 
 	if ((query_no_space_length>17) && ( (!strncasecmp("SAVE MYSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD MYSQL USERS ", query_no_space, 17))) ) {
 
@@ -1594,7 +1600,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
 
+#ifdef PROXYSQLCLICKHOUSE
 	bool runtime_clickhouse_users = false;
+#endif /* PROXYSQLCLICKHOUSE */
 
 	bool monitor_mysql_server_group_replication_log=false;
 
@@ -1666,9 +1674,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				runtime_checksums_values=true; refresh=true;
 			}
 
+#ifdef PROXYSQLCLICKHOUSE
 			if (( GloVars.global.clickhouse_server == true ) && strstr(query_no_space,"runtime_clickhouse_users")) {
 				runtime_clickhouse_users=true; refresh=true;
 			}
+#endif /* PROXYSQLCLICKHOUSE */
 
 		}
 	}
@@ -1741,10 +1751,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (runtime_checksums_values) {
 				dump_checksums_values_table();
 			}
-
+#ifdef PROXYSQLCLICKHOUSE
 			if (runtime_clickhouse_users) {
 				save_clickhouse_users_runtime_to_database(true);
 			}
+#endif /* PROXYSQLCLICKHOUSE */
 
 		}
 		if (monitor_mysql_server_group_replication_log) {
@@ -3048,11 +3059,13 @@ bool ProxySQL_Admin::init() {
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
+#ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
 	if (GloVars.global.clickhouse_server) {
 		insert_into_tables_defs(tables_defs_admin,"clickhouse_users", ADMIN_SQLITE_TABLE_CLICKHOUSE_USERS);
 		insert_into_tables_defs(tables_defs_admin,"runtime_clickhouse_users", ADMIN_SQLITE_TABLE_RUNTIME_CLICKHOUSE_USERS);
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
@@ -3066,10 +3079,12 @@ bool ProxySQL_Admin::init() {
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
+#ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
 	if (GloVars.global.clickhouse_server) {
 		insert_into_tables_defs(tables_defs_config,"clickhouse_users", ADMIN_SQLITE_TABLE_CLICKHOUSE_USERS);
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
@@ -4720,9 +4735,11 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 #ifdef DEBUG
 	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 #endif /* DEBUG */
+#ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
  		admindb->execute("INSERT OR IGNORE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -4739,9 +4756,11 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 #ifdef DEBUG
 	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 #endif /* DEBUG */
+#ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
  		admindb->execute("INSERT OR REPLACE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -4756,9 +4775,11 @@ void ProxySQL_Admin::__delete_disktable() {
 #ifdef DEBUG
 	admindb->execute("DELETE FROM disk.debug_levels");
 #endif /* DEBUG */
+#ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
 		admindb->execute("DELETE FROM disk.clickhouse_users");
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 }
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
@@ -4774,9 +4795,11 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 #ifdef DEBUG
 	admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
 #endif /* DEBUG */
+#ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
  		admindb->execute("INSERT OR REPLACE INTO disk.clickhouse_users SELECT * FROM main.clickhouse_users");
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 }
 
 
@@ -4798,6 +4821,7 @@ void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+#ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::flush_clickhouse_users__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -4815,6 +4839,7 @@ void ProxySQL_Admin::flush_clickhouse_users__from_memory_to_disk() {
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 void ProxySQL_Admin::flush_scheduler__from_disk_to_memory() {
 	admindb->wrlock();
@@ -4890,11 +4915,13 @@ void ProxySQL_Admin::init_users() {
 	pthread_mutex_unlock(&users_mutex);
 }
 
+#ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::init_clickhouse_users() {
 	pthread_mutex_lock(&users_mutex);
 	__refresh_clickhouse_users();
 	pthread_mutex_unlock(&users_mutex);
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 void ProxySQL_Admin::init_mysql_servers() {
 	mysql_servers_wrlock();
@@ -4965,6 +4992,7 @@ void ProxySQL_Admin::__refresh_users() {
 	}
 }
 
+#ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::__refresh_clickhouse_users() {
 	//__delete_inactive_clickhouse_users(USERNAME_BACKEND);
 	__delete_inactive_clickhouse_users();
@@ -4977,6 +5005,7 @@ void ProxySQL_Admin::__refresh_clickhouse_users() {
 	GloClickHouseAuth->remove_inactives(USERNAME_FRONTEND);
 	//set_variable((char *)"admin_credentials",(char *)"");
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
 	assert(myprot);
@@ -5015,6 +5044,7 @@ void ProxySQL_Admin::__delete_inactive_users(enum cred_username_type usertype) {
 	free(query);
 }
 
+#ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::__delete_inactive_clickhouse_users() {
 	char *error=NULL;
 	int cols=0;
@@ -5035,6 +5065,7 @@ void ProxySQL_Admin::__delete_inactive_clickhouse_users() {
 	if (resultset) delete resultset;
 	//free(query);
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 #define ADDUSER_STMT_RAW
 void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *__user, uint64_t *hash1) {
@@ -5160,6 +5191,7 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 	free(query);
 }
 
+#ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::__add_active_clickhouse_users(char *__user) {
 	char *error=NULL;
 	int cols=0;
@@ -5259,6 +5291,7 @@ void ProxySQL_Admin::__add_active_clickhouse_users(char *__user) {
 #endif
 	free(query);
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 
 void ProxySQL_Admin::dump_checksums_values_table() {
@@ -5422,6 +5455,7 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 	free(ads);
 }
 
+#ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 	char *query=NULL;
 	if (_runtime) {
@@ -5524,6 +5558,7 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 	}
 	free(ads);
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 void ProxySQL_Admin::stats___mysql_users() {
 	account_details_t **ads=NULL;

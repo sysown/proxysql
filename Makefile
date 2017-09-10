@@ -10,7 +10,7 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
-CURVER?=1.4.2
+CURVER?=1.4.3
 MAKEOPT="-j 4"
 DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
@@ -24,6 +24,13 @@ default: build_deps build_lib build_src
 
 .PHONY: debug
 debug: build_deps_debug build_lib_debug build_src_debug
+
+.PHONY: clickhouse
+default: build_deps_clickhouse build_lib_clickhouse build_src_clickhouse
+
+.PHONY: debug_clickhouse
+debug: build_deps_debug_clickhouse build_lib_debug_clickhouse build_src_debug_clickhouse
+
 
 .PHONY: build_deps
 build_deps:
@@ -48,6 +55,31 @@ build_lib_debug: build_deps_debug
 .PHONY: build_src_debug
 build_src_debug: build_deps build_lib_debug
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_deps_clickhouse
+build_deps_clickhouse:
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_deps_debug_clickhouse
+build_deps_debug_clickhouse:
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_clickhouse
+build_lib_clickhouse: build_deps_clickhouse
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_debug_clickhouse
+build_lib_debug_clickhouse: build_deps_debug_clickhouse
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_clickhouse
+build_src_clickhouse: build_deps build_lib
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_debug_clickhouse
+build_src_debug_clickhouse: build_deps build_lib_debug_clickhouse
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
 
 .PHONY: clean
 clean:

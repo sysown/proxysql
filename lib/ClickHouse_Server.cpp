@@ -1,3 +1,4 @@
+#ifdef PROXYSQLCLICKHOUSE
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
@@ -3025,3 +3026,4 @@ void * waitpid_thread(void *arg) {
 	return NULL;
 }
 */
+#endif /* PROXYSQLCLICKHOUSE */

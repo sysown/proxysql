@@ -1,3 +1,4 @@
+#ifdef PROXYSQLCLICKHOUSE
 #include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -433,3 +434,4 @@ bool ClickHouse_Authentication::reset() {
 	_reset(USERNAME_FRONTEND);
 	return true;
 }
+#endif /* PROXYSQLCLICKHOUSE */

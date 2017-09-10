@@ -9,7 +9,12 @@ MYCFLAGS=-O2
 MYJEOPT=--enable-xmalloc --enable-munmap --enable-prof
 endif
 
+PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
+ifeq ($(PROXYSQLCLICKHOUSE),1)
 default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash
+else
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre
+endif
 .PHONY: default
 
 

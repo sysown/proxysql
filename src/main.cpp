@@ -176,7 +176,9 @@ int socket_fd;
 
 Query_Cache *GloQC;
 MySQL_Authentication *GloMyAuth;
+#ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth;
+#endif /* PROXYSQLCLICKHOUSE */
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH;
@@ -193,7 +195,9 @@ std::thread *MyMon_thread;
 MySQL_Logger *GloMyLogger;
 
 SQLite3_Server *GloSQLite3Server;
+#ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Server *GloClickHouseServer;
+#endif /* PROXYSQLCLICKHOUSE */
 
 
 ProxySQL_Cluster *GloProxyCluster = NULL;
@@ -329,7 +333,9 @@ void ProxySQL_Main_init_main_modules() {
 	GloQPro=NULL;
 	GloMTH=NULL;
 	GloMyAuth=NULL;
+#ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
+#endif /* PROXYSQLCLICKHOUSE */
 	GloMyMon=NULL;
 	GloMyLogger=NULL;
 	GloMyStmt=NULL;
@@ -406,7 +412,7 @@ void ProxySQL_Main_init_SQLite3Server() {
 	GloSQLite3Server->init();
 	GloSQLite3Server->print_version();
 }
-
+#ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Main_init_ClickHouseServer() {
 	// start SQServer
 	GloClickHouseServer = new ClickHouse_Server();
@@ -416,6 +422,7 @@ void ProxySQL_Main_init_ClickHouseServer() {
 	GloClickHouseAuth->print_version();
 	GloAdmin->init_clickhouse_users();
 }
+#endif /* PROXYSQLCLICKHOUSE */
 
 void ProxySQL_Main_join_all_threads() {
 	cpu_timer t;
@@ -482,6 +489,7 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloQPro shutdown in ";
 #endif
 	}
+#ifdef PROXYSQLCLICKHOUSE
 	if (GloClickHouseAuth) {
 		cpu_timer t;
 		delete GloClickHouseAuth;
@@ -498,6 +506,7 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloClickHouseServer shutdown in ";
 #endif
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 	if (GloSQLite3Server) {
 		cpu_timer t;
 		delete GloSQLite3Server;
@@ -668,6 +677,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
 #endif
 	}
+#ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
 		cpu_timer t;
 		ProxySQL_Main_init_ClickHouseServer();
@@ -675,6 +685,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : ClickHouse Server initialized in ";
 #endif
 	}
+#endif /* PROXYSQLCLICKHOUSE */
 }
 
 
