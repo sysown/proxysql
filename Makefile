@@ -86,7 +86,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 
-packages: centos6.7 centos7 centos6.7-dbg centos7-dbg centos5 centos5-dbg ubuntu12 ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg debian9 debian9-dbg
+packages: centos6.7 centos7 centos6.7-dbg centos7-dbg centos5 centos5-dbg ubuntu12 ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg debian9 debian9-dbg ubuntu16-clickhouse
 .PHONY: packages
 
 centos5: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
@@ -136,6 +136,9 @@ ubuntu14-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb
 
 ubuntu16-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb
 .PHONY: ubuntu16-dbg
+
+ubuntu16-clickhouse: binaries/proxysql_${CURVER}-clickhouse-ubuntu16_amd64.deb
+.PHONY: ubuntu16-clickhouse
 
 debian7-dbg: binaries/proxysql_${CURVER}-dbg-debian7_amd64.deb
 .PHONY: debian7-dbg
@@ -491,6 +494,23 @@ binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb:
 	docker exec ubuntu16_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
 	sleep 2
 	docker cp ubuntu16_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb
+	docker stop ubuntu16_build
+	docker rm ubuntu16_build
+
+binaries/proxysql_${CURVER}-clickhouse-ubuntu16_amd64.deb:
+	docker stop ubuntu16_build || true
+	docker rm ubuntu16_build || true
+	docker create --name ubuntu16_build renecannao/proxysql:build-ubuntu16 bash -c "while : ; do sleep 10 ; done"
+	docker start ubuntu16_build
+	docker exec ubuntu16_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	sleep 2
+	docker exec ubuntu16_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} ${MAKEOPT} clickhouse"
+	sleep 2
+	docker cp docker/images/proxysql/ubuntu-16.04-build/proxysql.ctl ubuntu16_build:/opt/proxysql/
+	sleep 2
+	docker exec ubuntu16_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	sleep 2
+	docker cp ubuntu16_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-clickhouse-ubuntu16_amd64.deb
 	docker stop ubuntu16_build
 	docker rm ubuntu16_build
 
