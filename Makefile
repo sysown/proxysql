@@ -26,7 +26,7 @@ default: build_deps build_lib build_src
 debug: build_deps_debug build_lib_debug build_src_debug
 
 .PHONY: clickhouse
-default: build_deps_clickhouse build_lib_clickhouse build_src_clickhouse
+clickhouse: build_deps_clickhouse build_lib_clickhouse build_src_clickhouse
 
 .PHONY: debug_clickhouse
 debug: build_deps_debug_clickhouse build_lib_debug_clickhouse build_src_debug_clickhouse
