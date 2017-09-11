@@ -389,8 +389,10 @@ static char * admin_variables_names[]= {
 */
 
 static char * ClickHouse_Server_variables_names[] = {
+	(char *)"hostname",
 	(char *)"mysql_ifaces",
 	(char *)"read_only",
+	(char *)"port",
   NULL
 };
 
@@ -1937,8 +1939,13 @@ ClickHouse_Session::ClickHouse_Session() {
 
 bool ClickHouse_Session::init() {
 	bool ret=false;
+	char *hostname = NULL;
+	char *port = NULL;
+	hostname = GloClickHouseServer->get_variable(hostname);
+	port = GloClickHouseServer->get_variable(port);
 	try {
-		co.SetHost("localhost");
+		co.SetHost(hostname);
+		co.SetPort(atoi(port));
 		co.SetCompressionMethod(CompressionMethod::None);
 		client = new clickhouse::Client(co);
 		ret=true;
@@ -1947,6 +1954,12 @@ bool ClickHouse_Session::init() {
 		ret=false;
 	}
 	connected = ret;
+	if (hostname) {
+		free(hostname);
+	}
+	if (port) {
+		free(port);
+	}
 	return ret;
 }
 
@@ -2248,7 +2261,9 @@ ClickHouse_Server::ClickHouse_Server() {
 	SQLite_General_DB->execute((char *)"INSERT INTO show_engines VALUES ('ClickHouse','DEFAULT','ProxySQL frontend to ClickHouse','YES','NO','NO')");
 
 
-	variables.mysql_ifaces=strdup("127.0.0.1:6090");
+	variables.mysql_ifaces=strdup("0.0.0.0:6090");
+	variables.hostname = strdup("127.0.0.1");
+	variables.port = 9000;
 /*
 
 	variables.admin_credentials=strdup("admin:admin");
@@ -2782,36 +2797,41 @@ char **ClickHouse_Server::get_variables_list() {
 	return ret;
 }
 
-/*
 
-// Returns true if the given name is the name of an existing admin variable
-bool ProxySQL_Admin::has_variable(const char *name) {
-	size_t no_vars = sizeof(admin_variables_names) / sizeof(char *);
+// Returns true if the given name is the name of an existing clickhouse variable
+bool ClickHouse_Server::has_variable(const char *name) {
+	size_t no_vars = sizeof(ClickHouse_Server_variables_names) / sizeof(char *);
 	for (unsigned int i = 0; i < no_vars-1 ; ++i) {
-		size_t var_len = strlen(admin_variables_names[i]);
-		if (strlen(name) == var_len && !strncmp(name, admin_variables_names[i], var_len)) {
+		size_t var_len = strlen(ClickHouse_Server_variables_names[i]);
+		if (strlen(name) == var_len && !strncmp(name, ClickHouse_Server_variables_names[i], var_len)) {
 			return true;
 		}
 	}
 	return false;
 }
 
-char * ProxySQL_Admin::get_variable(char *name) {
+char * ClickHouse_Server::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
+/*
 	if (!strcasecmp(name,"version")) return s_strdup(variables.admin_version);
 	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
 	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
+*/
+	if (!strcasecmp(name,"hostname")) return s_strdup(variables.hostname);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
+/*
 	if (!strcasecmp(name,"telnet_admin_ifaces")) return s_strdup(variables.telnet_admin_ifaces);
 	if (!strcasecmp(name,"telnet_stats_ifaces")) return s_strdup(variables.telnet_stats_ifaces);
-	if (!strcasecmp(name,"refresh_interval")) {
-		sprintf(intbuf,"%d",variables.refresh_interval);
+*/
+	if (!strcasecmp(name,"port")) {
+		sprintf(intbuf,"%d",variables.port);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"read_only")) {
-		return strdup((variables.admin_read_only ? "true" : "false"));
+		return strdup((variables.read_only ? "true" : "false"));
 	}
+/*
 	if (!strcasecmp(name,"hash_passwords")) {
 		return strdup((variables.hash_passwords ? "true" : "false"));
 	}
@@ -2820,9 +2840,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		return strdup((variables.debug ? "true" : "false"));
 	}
 #endif // DEBUG
+*/
 	return NULL;
 }
-*/
 
 /*
 #ifdef DEBUG
@@ -2899,6 +2919,25 @@ bool ClickHouse_Server::set_variable(char *name, char *value) {  // this is the 
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"hostname")) {
+		if (vallen) {
+			free(variables.hostname);
+			variables.hostname=strdup(value);
+			return true;
+		} else {
+			return true;
+		}
+	}
+	if (!strcasecmp(name,"port")) {
+		int intv=atoi(value);
+		if (intv > 0 && intv < 65536) {
+			variables.port=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+
 	return false;
 }
 

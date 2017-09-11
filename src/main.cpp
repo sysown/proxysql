@@ -417,6 +417,7 @@ void ProxySQL_Main_init_ClickHouseServer() {
 	// start SQServer
 	GloClickHouseServer = new ClickHouse_Server();
 	GloClickHouseServer->init();
+	GloAdmin->init_clickhouse_variables();
 	GloClickHouseServer->print_version();
 	GloClickHouseAuth = new ClickHouse_Authentication();
 	GloClickHouseAuth->print_version();

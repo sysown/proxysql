@@ -22,7 +22,10 @@ class ClickHouse_Session {
 };
 
 class ClickHouse_Server {
-   private:
+	public:
+	void wrlock();
+	void wrunlock();
+	private:
 	volatile int main_shutdown;
 	SQLite3DB *SQLite_General_DB;
 	/*
@@ -38,8 +41,6 @@ class ClickHouse_Server {
 
 	pthread_rwlock_t rwlock;
 
-	void wrlock();
-	void wrunlock();
 
 	struct {
 		// char *admin_credentials;
@@ -50,10 +51,12 @@ class ClickHouse_Server {
 		// char *telnet_stats_ifaces;
 		bool read_only;
 		// bool hash_passwords;
-		char *version;
+//		char *version;
 #ifdef DEBUG
 		bool debug;
 #endif  // DEBUG
+		char *hostname;
+		uint16_t port;
 	} variables;
 
 	void dump_mysql_collations();
@@ -88,9 +91,6 @@ class ClickHouse_Server {
 	replace);
 
 	*/
-	char **get_variables_list();
-	char *get_variable(char *name);
-	bool set_variable(char *name, char *value);
 	/*
 	    void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool
 	replace);
@@ -130,12 +130,17 @@ class ClickHouse_Server {
 	    int pipefd[2];
 	*/
 	void print_version();
+	char **get_variables_list();
+	char *get_variable(char *name);
+	bool set_variable(char *name, char *value);
 	bool init();
 	/*
 	    bool get_read_only() { return variables.admin_read_only; }
 	    bool set_read_only(bool ro) { variables.admin_read_only=ro; return
 	   variables.admin_read_only; }
+*/
 	    bool has_variable(const char *name);
+/*
 	    void init_users();
 	    void init_mysql_servers();
 	    void init_mysql_query_rules();

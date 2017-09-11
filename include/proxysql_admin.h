@@ -151,6 +151,8 @@ class ProxySQL_Admin {
 	void __refresh_clickhouse_users();
 	void __add_active_clickhouse_users(char *user=NULL);
 	void __delete_inactive_clickhouse_users();
+	void flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace);
 #endif /* PROXYSQLCLICKHOUSE */
 	
 
@@ -257,6 +259,9 @@ class ProxySQL_Admin {
 
 #ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
+	void init_clickhouse_variables();
+	void load_clickhouse_variables_to_runtime() { flush_clickhouse_variables___database_to_runtime(admindb, true); }
+	void save_clickhouse_variables_from_runtime() { flush_clickhouse_variables___runtime_to_database(admindb, true, true, false); }
 	void init_clickhouse_users();
 	void flush_clickhouse_users__from_memory_to_disk();
 	void flush_clickhouse_users__from_disk_to_memory();

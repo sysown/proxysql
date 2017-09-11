@@ -1106,6 +1106,102 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 	}
+#ifdef PROXYSQLCLICKHOUSE
+	if ((query_no_space_length>26) && ( (!strncasecmp("SAVE CLICKHOUSE VARIABLES ", query_no_space, 26)) || (!strncasecmp("LOAD CLICKHOUSE VARIABLES ", query_no_space, 26))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO MEMORY") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO MEM") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES FROM DISK") && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'clickhouse-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM MEMORY") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM MEM") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES TO DISK") && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'clickhouse-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES FROM MEMORY") && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES FROM MEM") && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO RUNTIME") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO RUN") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->load_clickhouse_variables_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded clickhouse variables to RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+/*
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					int rows=0;
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					rows=SPA->Read_Global_Variables_from_configfile("mysql");
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
+			return false;
+		}
+*/
+		if (
+			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES TO MEMORY") && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES TO MEM") && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM RUNTIME") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM RUN") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->save_clickhouse_variables_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved clickhouse variables from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+	}
+#endif /* PROXYSQLCLICKHOUSE */
+
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21))) ) {
 
 		if (
@@ -1728,6 +1824,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
+#ifdef PROXYSQLCLICKHOUSE
+				flush_clickhouse_variables___runtime_to_database(admindb, false, false, false, true);
+#endif /* PROXYSQLCLICKHOUSE */
 			}
 			if (runtime_mysql_servers) {
 				mysql_servers_wrlock();
@@ -3186,6 +3285,9 @@ bool ProxySQL_Admin::init() {
 	}
 	flush_admin_variables___database_to_runtime(admindb,true);
 	flush_mysql_variables___database_to_runtime(admindb,true);
+#ifdef PROXYSQLCLICKHOUSE
+	flush_clickhouse_variables___database_to_runtime(admindb,true);
+#endif /* PROXYSQLCLICKHOUSE */
 
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);
@@ -3214,6 +3316,15 @@ bool ProxySQL_Admin::init() {
 #endif
 	return true;
 };
+
+
+
+#ifdef PROXYSQLCLICKHOUSE
+void ProxySQL_Admin::init_clickhouse_variables() {
+	flush_clickhouse_variables___runtime_to_database(configdb, false, false, false);
+	flush_clickhouse_variables___runtime_to_database(admindb, false, true, false);
+}
+#endif /* CLICKHOUSE */
 
 
 void ProxySQL_Admin::admin_shutdown() {
@@ -3431,6 +3542,131 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 	}
 	if (resultset) delete resultset;
 }
+
+#ifdef PROXYSQLCLICKHOUSE
+void ProxySQL_Admin::flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d\n", replace);
+	if (
+		(GloVars.global.clickhouse_server == false)
+		||
+		( GloClickHouseServer == NULL )
+	) {
+		return;
+	}
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT substr(variable_name,12) vn, variable_value FROM global_variables WHERE variable_name LIKE 'clickhouse-%'";
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	} else {
+		GloClickHouseServer->wrlock();
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			bool rc=GloClickHouseServer->set_variable(r->fields[0],r->fields[1]);
+			if (rc==false) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+				if (replace) {
+					char *val=GloClickHouseServer->get_variable(r->fields[0]);
+					char q[1000];
+					if (val) {
+						if (strcmp(val,r->fields[1])) {
+							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"clickhouse-%s\",\"%s\")",r->fields[0],val);
+							db->execute(q);
+						}
+						free(val);
+					} else {
+						if (strcmp(r->fields[0],(char *)"session_debug")==0) {
+							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"clickhouse-%s\"",r->fields[0]);
+							db->execute(q);
+						} else {
+							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+						}
+						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"clickhouse-%s\"",r->fields[0]);
+						db->execute(q);
+					}
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+			}
+		}
+		//GloClickHouse->commit();
+		GloClickHouseServer->wrunlock();
+	}
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (GloVars.global.clickhouse_server == false) {
+		return;
+	}
+	if (onlyifempty) {
+		char *error=NULL;
+	  int cols=0;
+	  int affected_rows=0;
+	  SQLite3_result *resultset=NULL;
+	  char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'clickhouse-%'";
+	  db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int matching_rows=0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				matching_rows+=atoi(r->fields[0]);
+			}
+	  }
+	  if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has ClickHouse variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting ClickHouse variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'clickhouse-%'");
+	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'clickhouse-%'");
+	}
+	char *a;
+	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"clickhouse-%s\",\"%s\")";
+  if (replace) {
+    a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"clickhouse-%s\",\"%s\")";
+  } else {
+    a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"clickhouse-%s\",\"%s\")";
+  }
+  int l=strlen(a)+200;
+	GloClickHouseServer->wrlock();
+	char **varnames=GloClickHouseServer->get_variables_list();
+	for (int i=0; varnames[i]; i++) {
+		char *val=GloClickHouseServer->get_variable(varnames[i]);
+		l+=( varnames[i] ? strlen(varnames[i]) : 6);
+		l+=( val ? strlen(val) : 6);
+		char *query=(char *)malloc(l);
+		sprintf(query, a, varnames[i], val);
+		if (runtime) {
+			db->execute(query);
+			sprintf(query, b, varnames[i], val);
+		}
+		db->execute(query);
+		if (val)
+			free(val);
+		free(query);
+	}
+	GloClickHouseServer->wrunlock();
+	for (int i=0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+}
+#endif /* PROXYSQLCLICKHOUSE */
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
