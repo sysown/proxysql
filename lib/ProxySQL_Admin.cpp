@@ -147,6 +147,9 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
 
+extern SQLite3_Server *GloSQLite3Server;
+
+
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 int rc, arg_on=1, arg_off=0;
@@ -663,6 +666,12 @@ bool is_valid_global_variable(const char *var_name) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
 		return true;
+	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server->has_variable(var_name + 13)) {
+		return true;
+#ifdef PROXYSQLCLICKHOUSE
+	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer->has_variable(var_name + 11)) {
+		return true;
+#endif /* PROXYSQLCLICKHOUSE */
 	} else {
 		return false;
 	}
@@ -1105,6 +1114,99 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
+	}
+	if ((query_no_space_length>28) && ( (!strncasecmp("SAVE SQLITESERVER VARIABLES ", query_no_space, 28)) || (!strncasecmp("LOAD SQLITESERVER VARIABLES ", query_no_space, 28))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO MEMORY") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO MEM") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES FROM DISK") && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'sqliteserver-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM MEMORY") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM MEM") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES TO DISK") && !strncasecmp("SAVE SQLITESERVER VARIABLES TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			l_free(*ql,*q);
+			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'sqliteserver-%'");
+			*ql=strlen(*q)+1;
+			return true;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES FROM MEMORY") && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES FROM MEM") && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO RUNTIME") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO RUN") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->load_sqliteserver_variables_to_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded SQLiteServer variables to RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+/*
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					int rows=0;
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					rows=SPA->Read_Global_Variables_from_configfile("mysql");
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
+			return false;
+		}
+*/
+		if (
+			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES TO MEMORY") && !strncasecmp("SAVE SQLITESERVER VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES TO MEM") && !strncasecmp("SAVE SQLITESERVER VARIABLES TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM RUNTIME") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM RUN") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->save_sqliteserver_variables_from_runtime();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved SQLiteServer variables from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
 	}
 #ifdef PROXYSQLCLICKHOUSE
 	if ((query_no_space_length>26) && ( (!strncasecmp("SAVE CLICKHOUSE VARIABLES ", query_no_space, 26)) || (!strncasecmp("LOAD CLICKHOUSE VARIABLES ", query_no_space, 26))) ) {
@@ -1827,6 +1929,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 #ifdef PROXYSQLCLICKHOUSE
 				flush_clickhouse_variables___runtime_to_database(admindb, false, false, false, true);
 #endif /* PROXYSQLCLICKHOUSE */
+				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
 			}
 			if (runtime_mysql_servers) {
 				mysql_servers_wrlock();
@@ -3288,6 +3391,7 @@ bool ProxySQL_Admin::init() {
 #ifdef PROXYSQLCLICKHOUSE
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 #endif /* PROXYSQLCLICKHOUSE */
+	flush_sqliteserver_variables___database_to_runtime(admindb,true);
 
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);
@@ -3321,11 +3425,17 @@ bool ProxySQL_Admin::init() {
 
 #ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::init_clickhouse_variables() {
-	flush_clickhouse_variables___runtime_to_database(configdb, false, false, false);
-	flush_clickhouse_variables___runtime_to_database(admindb, false, true, false);
+//	flush_clickhouse_variables___runtime_to_database(configdb, false, false, false);
+//	flush_clickhouse_variables___runtime_to_database(admindb, false, true, false);
+	flush_clickhouse_variables___database_to_runtime(admindb,true);
 }
 #endif /* CLICKHOUSE */
 
+void ProxySQL_Admin::init_sqliteserver_variables() {
+//	flush_sqliteserver_variables___runtime_to_database(configdb, false, false, false);
+//	flush_sqliteserver_variables___runtime_to_database(admindb, false, true, false);
+	flush_sqliteserver_variables___database_to_runtime(admindb,true);
+}
 
 void ProxySQL_Admin::admin_shutdown() {
 	int i;
@@ -3542,6 +3652,130 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 	}
 	if (resultset) delete resultset;
 }
+
+void ProxySQL_Admin::flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing SQLiteServer variables. Replace:%d\n", replace);
+	if (
+		(GloVars.global.sqlite3_server == false)
+		||
+		( GloSQLite3Server == NULL )
+	) {
+		return;
+	}
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT substr(variable_name,14) vn, variable_value FROM global_variables WHERE variable_name LIKE 'sqliteserver-%'";
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	} else {
+		GloSQLite3Server->wrlock();
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			bool rc=GloSQLite3Server->set_variable(r->fields[0],r->fields[1]);
+			if (rc==false) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+				if (replace) {
+					char *val=GloSQLite3Server->get_variable(r->fields[0]);
+					char q[1000];
+					if (val) {
+						if (strcmp(val,r->fields[1])) {
+							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"sqliteserver-%s\",\"%s\")",r->fields[0],val);
+							db->execute(q);
+						}
+						free(val);
+					} else {
+						if (strcmp(r->fields[0],(char *)"session_debug")==0) {
+							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"sqliteserver-%s\"",r->fields[0]);
+							db->execute(q);
+						} else {
+							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+						}
+						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"sqliteserver-%s\"",r->fields[0]);
+						db->execute(q);
+					}
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+			}
+		}
+		//GloClickHouse->commit();
+		GloSQLite3Server->wrunlock();
+	}
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (GloVars.global.sqlite3_server == false) {
+		return;
+	}
+	if (onlyifempty) {
+		char *error=NULL;
+	  int cols=0;
+	  int affected_rows=0;
+	  SQLite3_result *resultset=NULL;
+	  char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'sqliteserver-%'";
+	  db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int matching_rows=0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				matching_rows+=atoi(r->fields[0]);
+			}
+	  }
+	  if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has ClickHouse variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting ClickHouse variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'sqliteserver-%'");
+	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'sqliteserver-%'");
+	}
+	char *a;
+	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"sqliteserver-%s\",\"%s\")";
+  if (replace) {
+    a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"sqliteserver-%s\",\"%s\")";
+  } else {
+    a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"sqliteserver-%s\",\"%s\")";
+  }
+  int l=strlen(a)+200;
+	GloSQLite3Server->wrlock();
+	char **varnames=GloSQLite3Server->get_variables_list();
+	for (int i=0; varnames[i]; i++) {
+		char *val=GloSQLite3Server->get_variable(varnames[i]);
+		l+=( varnames[i] ? strlen(varnames[i]) : 6);
+		l+=( val ? strlen(val) : 6);
+		char *query=(char *)malloc(l);
+		sprintf(query, a, varnames[i], val);
+		if (runtime) {
+			db->execute(query);
+			sprintf(query, b, varnames[i], val);
+		}
+		db->execute(query);
+		if (val)
+			free(val);
+		free(query);
+	}
+	GloSQLite3Server->wrunlock();
+	for (int i=0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+}
+
 
 #ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace) {

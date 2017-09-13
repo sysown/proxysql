@@ -410,6 +410,7 @@ void ProxySQL_Main_init_SQLite3Server() {
 	// start SQLite3Server
 	GloSQLite3Server = new SQLite3_Server();
 	GloSQLite3Server->init();
+	GloAdmin->init_sqliteserver_variables();
 	GloSQLite3Server->print_version();
 }
 #ifdef PROXYSQLCLICKHOUSE

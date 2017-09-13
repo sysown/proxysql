@@ -154,6 +154,9 @@ class ProxySQL_Admin {
 	void flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace);
 #endif /* PROXYSQLCLICKHOUSE */
+
+	void flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
 	
 
 	public:
@@ -256,6 +259,11 @@ class ProxySQL_Admin {
 	void flush_proxysql_servers__from_disk_to_memory();
 	void save_proxysql_servers_runtime_to_database(bool);
 	void dump_checksums_values_table();
+
+	// SQLite Server
+	void init_sqliteserver_variables();
+	void load_sqliteserver_variables_to_runtime() { flush_sqliteserver_variables___database_to_runtime(admindb, true); }
+	void save_sqliteserver_variables_from_runtime() { flush_sqliteserver_variables___runtime_to_database(admindb, true, true, false); }
 
 #ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse

@@ -70,8 +70,6 @@ class SQLite3_Server {
 	
 
 
-	void wrlock();
-	void wrunlock();
 
 	struct {
 		char *admin_credentials;
@@ -116,9 +114,6 @@ class SQLite3_Server {
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 */
-	char **get_variables_list();
-	char *get_variable(char *name);
-	bool set_variable(char *name, char *value);
 /*
 	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
@@ -154,12 +149,17 @@ class SQLite3_Server {
 	SQLite3DB *monitordb;	// in memory
 	int pipefd[2];
 */
+	char **get_variables_list();
+	char *get_variable(char *name);
+	bool set_variable(char *name, char *value);
+	bool has_variable(const char *name);
 	void print_version();
 	bool init();
+	void wrlock();
+	void wrunlock();
 /*
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
-	bool has_variable(const char *name);
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();

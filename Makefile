@@ -73,7 +73,7 @@ build_lib_debug_clickhouse: build_deps_debug_clickhouse
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_clickhouse
-build_src_clickhouse: build_deps build_lib
+build_src_clickhouse: build_deps_clickhouse build_lib_clickhouse
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug_clickhouse

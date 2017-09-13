@@ -3127,47 +3127,45 @@ char **SQLite3_Server::get_variables_list() {
 	return ret;
 }
 
-/*
 
 // Returns true if the given name is the name of an existing admin variable
-bool ProxySQL_Admin::has_variable(const char *name) {
-	size_t no_vars = sizeof(admin_variables_names) / sizeof(char *);
+bool SQLite3_Server::has_variable(const char *name) {
+	size_t no_vars = sizeof(SQLite3_Server_variables_names) / sizeof(char *);
 	for (unsigned int i = 0; i < no_vars-1 ; ++i) {
-		size_t var_len = strlen(admin_variables_names[i]);
-		if (strlen(name) == var_len && !strncmp(name, admin_variables_names[i], var_len)) {
+		size_t var_len = strlen(SQLite3_Server_variables_names[i]);
+		if (strlen(name) == var_len && !strncmp(name, SQLite3_Server_variables_names[i], var_len)) {
 			return true;
 		}
 	}
 	return false;
 }
 
-char * ProxySQL_Admin::get_variable(char *name) {
+char * SQLite3_Server::get_variable(char *name) {
 #define INTBUFSIZE  4096
 	char intbuf[INTBUFSIZE];
-	if (!strcasecmp(name,"version")) return s_strdup(variables.admin_version);
-	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
-	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
+//	if (!strcasecmp(name,"version")) return s_strdup(variables.admin_version);
+//	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
+//	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
-	if (!strcasecmp(name,"telnet_admin_ifaces")) return s_strdup(variables.telnet_admin_ifaces);
-	if (!strcasecmp(name,"telnet_stats_ifaces")) return s_strdup(variables.telnet_stats_ifaces);
-	if (!strcasecmp(name,"refresh_interval")) {
-		sprintf(intbuf,"%d",variables.refresh_interval);
-		return strdup(intbuf);
-	}
+//	if (!strcasecmp(name,"telnet_admin_ifaces")) return s_strdup(variables.telnet_admin_ifaces);
+//	if (!strcasecmp(name,"telnet_stats_ifaces")) return s_strdup(variables.telnet_stats_ifaces);
+//	if (!strcasecmp(name,"refresh_interval")) {
+//		sprintf(intbuf,"%d",variables.refresh_interval);
+//		return strdup(intbuf);
+//	}
 	if (!strcasecmp(name,"read_only")) {
-		return strdup((variables.admin_read_only ? "true" : "false"));
+		return strdup((variables.read_only ? "true" : "false"));
 	}
-	if (!strcasecmp(name,"hash_passwords")) {
-		return strdup((variables.hash_passwords ? "true" : "false"));
-	}
-#ifdef DEBUG
-	if (!strcasecmp(name,"debug")) {
-		return strdup((variables.debug ? "true" : "false"));
-	}
-#endif // DEBUG
-	return NULL;
+//	if (!strcasecmp(name,"hash_passwords")) {
+//		return strdup((variables.hash_passwords ? "true" : "false"));
+//	}
+//#ifdef DEBUG
+//	if (!strcasecmp(name,"debug")) {
+//		return strdup((variables.debug ? "true" : "false"));
+//	}
+//#endif // DEBUG
+//	return NULL;
 }
-*/
 
 /*
 #ifdef DEBUG
