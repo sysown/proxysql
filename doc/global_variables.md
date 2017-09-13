@@ -28,7 +28,7 @@ Next, we're going to explain each type of variable in detail.
 
 ### `admin-admin_credentials`
 
-This is a colon separated user:password pair, that can be used to authenticate to the admin interface with read-write rights. For read-only credentials that can be used to connect to the admin, see the variable `admin-stats_credentials`. Note that the admin interface listens on a separate port from the main ProxySQL thread. This port is controlled through the variable `admin-mysql_ifaces`.
+This is a colon separated user:password pair, that can be used to authenticate to the admin interface with read-write rights. For read-only credentials that can be used to connect to the admin, see the variable `admin-stats_credentials`. Note that the admin interface listens on a separate port from the main ProxySQL thread. This port is controlled through the variable `admin-mysql_ifaces`. You can specify multiple username and password pairings seprated by a semicolon ";"
 
 Default value: `admin:admin`.
 
