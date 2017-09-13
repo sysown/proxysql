@@ -3425,15 +3425,15 @@ bool ProxySQL_Admin::init() {
 
 #ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::init_clickhouse_variables() {
-//	flush_clickhouse_variables___runtime_to_database(configdb, false, false, false);
-//	flush_clickhouse_variables___runtime_to_database(admindb, false, true, false);
+	flush_clickhouse_variables___runtime_to_database(configdb, false, false, false);
+	flush_clickhouse_variables___runtime_to_database(admindb, false, true, false);
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 }
 #endif /* CLICKHOUSE */
 
 void ProxySQL_Admin::init_sqliteserver_variables() {
-//	flush_sqliteserver_variables___runtime_to_database(configdb, false, false, false);
-//	flush_sqliteserver_variables___runtime_to_database(admindb, false, true, false);
+	flush_sqliteserver_variables___runtime_to_database(configdb, false, false, false);
+	flush_sqliteserver_variables___runtime_to_database(admindb, false, true, false);
 	flush_sqliteserver_variables___database_to_runtime(admindb,true);
 }
 
