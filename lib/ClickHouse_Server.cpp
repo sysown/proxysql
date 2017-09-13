@@ -1941,8 +1941,8 @@ bool ClickHouse_Session::init() {
 	bool ret=false;
 	char *hostname = NULL;
 	char *port = NULL;
-	hostname = GloClickHouseServer->get_variable("hostname");
-	port = GloClickHouseServer->get_variable("port");
+	hostname = GloClickHouseServer->get_variable((char *)"hostname");
+	port = GloClickHouseServer->get_variable((char *)"port");
 	try {
 		co.SetHost(hostname);
 		co.SetPort(atoi(port));
