@@ -2594,6 +2594,7 @@ SQLite3_Server::SQLite3_Server() {
     sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
 
 	variables.mysql_ifaces=strdup("127.0.0.1:6030");
+	variables.read_only=false;
 /*
 
 	variables.admin_credentials=strdup("admin:admin");

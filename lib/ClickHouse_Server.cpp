@@ -913,6 +913,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 				!strncasecmp("SET AUTOCOMMIT", query_no_space, 14) ||
 				!strncasecmp("SET NAMES ", query_no_space, 10) ||
 				!strncasecmp("SET CHARACTER", query_no_space, 13) ||
+				!strncasecmp("SET COLLATION", query_no_space, 13) ||
 				!strncasecmp("SET SQL_AUTO_", query_no_space, 13) ||
 				!strncasecmp("SET SQL_SAFE_", query_no_space, 13) ||
 				!strncasecmp("SET SESSION TRANSACTION", query_no_space, 23)
@@ -997,8 +998,8 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 				l_free(query_length,query);
 				query=l_strdup("SELECT Charset, Collation AS 'Default collation' FROM mysql_collations WHERE `Default`='Yes'");
 				query_length=strlen(query)+1;
-            	run_query_sqlite = true;
-    	        goto __run_query_sqlite;	
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
 			}
 			if (
 				(pkt->size==(strlen("show collation")+5) && strncasecmp((char *)"show collation",(char *)pkt->ptr+5,pkt->size-5)==0)
@@ -1006,8 +1007,8 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 				l_free(query_length,query);
 				query=l_strdup("SELECT * FROM mysql_collations");
 				query_length=strlen(query)+1;
-            	run_query_sqlite = true;
-    	        goto __run_query_sqlite;	
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
 			}
 			if (
 				(pkt->size==(strlen("SHOW FULL TABLES FROM `default`")+5) && strncasecmp((char *)"SHOW FULL TABLES FROM `default`",(char *)pkt->ptr+5,pkt->size-5)==0)
@@ -1015,9 +1016,119 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 				l_free(query_length,query);
 				query=l_strdup("SELECT name, 'BASE TABLE' AS Table_type FROM system.tables WHERE database = 'default'");
 				query_length=strlen(query)+1;
-            	run_query = true;
-    	        goto __run_query;	
+				run_query = true;
+				goto __run_query;
 			}
+		}
+		if (
+			(pkt->size==(strlen("SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS")+5) && strncasecmp((char *)"SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT Charset AS CHARACTER_SET_NAME , Collation AS DEFAULT_COLLATE_NAME, 'UTF-8 Unicode' AS DESCRIPTION , 3 AS LEN FROM mysql_collations WHERE `Default`='Yes'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+
+		if (
+			(pkt->size==(strlen("SELECT @@character_set_results")+5) && strncasecmp((char *)"SELECT @@character_set_results",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT 'utf8' AS '@@character_set_results'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+		if (
+			(pkt->size==(strlen("SELECT @@collation_server")+5) && strncasecmp((char *)"SELECT @@collation_server",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT 'utf8_general_ci' AS '@@collation_server'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+		if (
+			(pkt->size==(strlen("SELECT @@have_profiling")+5) && strncasecmp((char *)"SELECT @@have_profiling",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT 'NO' AS '@@have_profiling'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+		if (
+			(pkt->size==(strlen("SELECT @@lower_case_table_names")+5) && strncasecmp((char *)"SELECT @@lower_case_table_names",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT '0' AS '@@lower_case_table_names'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+		if (
+			(pkt->size==(strlen("SELECT @@version, @@version_comment")+5) && strncasecmp((char *)"SELECT @@version, @@version_comment",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT '5.7.19-ProxySQL-ClickHouse' AS '@@version', '(ProxySQL-ClickHouse)' AS '@@version_comment'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+		if (
+			(pkt->size==(strlen("SELECT @@storage_engine;")+5) && strncasecmp((char *)"SELECT @@storage_engine;",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT 'MergeTree' AS '@@storage_engine'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+		if (
+			(pkt->size==(strlen("SELECT @@storage_engine;")+5) && strncasecmp((char *)"SELECT @@storage_engine;",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT 'MergeTree' AS '@@storage_engine'");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+		}
+
+		if (query_no_space_length==strlen((char *)"SELECT CURRENT_USER()")) {
+			if (!strncasecmp((char *)"SELECT CURRENT_USER()", query_no_space, query_no_space_length)) {
+				l_free(query_length,query);
+				char *query1=(char *)"SELECT \"%s\" AS 'CURRENT_USER()'";
+				char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
+				sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+				query=l_strdup(query2);
+				query_length=strlen(query2)+1;
+				free(query2);
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+			}
+		}
+		if (query_no_space_length==strlen((char *)"SELECT USER()")) {
+			if (!strncasecmp((char *)"SELECT USER()", query_no_space, query_no_space_length)) {
+				l_free(query_length,query);
+				char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
+				char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
+				sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+				query=l_strdup(query2);
+				query_length=strlen(query2)+1;
+				free(query2);
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
+			}
+		}
+
+		if (
+			(pkt->size==(strlen("SELECT * FROM INFORMATION_SCHEMA.COLLATIONS")+5) && strncasecmp((char *)"SELECT * FROM INFORMATION_SCHEMA.COLLATIONS",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+				l_free(query_length,query);
+				query=l_strdup("SELECT Collation AS COLLATION_NAME, Charset AS CHARACTER_SET_NAME, Id AS ID, 'Default' AS IS_DEFAULT, 'Yes' AS IS_COMPILED, '3' AS SORTLEN FROM mysql_collations");
+				query_length=strlen(query)+1;
+				run_query_sqlite = true;
+				goto __run_query_sqlite;
 		}
 		if (
 			!strncasecmp("/*!40101 SET ", query_no_space, 13)
@@ -1026,6 +1137,44 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			run_query=false;
 			goto __run_query;
 		}
+
+		if (
+			(
+				(query_no_space_length > 40) &&
+				strncasecmp("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SC",query_no_space,strlen("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SC") == 0))
+		) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT 'utf8_general_ci' AS DEFAULT_COLLATION_NAME");
+			query_length=strlen(query)+1;
+            run_query_sqlite = true;
+            goto __run_query_sqlite;
+		}
+		if (
+			(
+				(query_no_space_length > 50) &&
+				//(strncasecmp("SELECT \*,\n       ",query_no_space,strlen("SELECT \*,\n       ") == 0)) &&
+				(strstr(query_no_space,"CAST(BIN_NAME AS CHAR CHARACTER SET utf8) AS SCHEMA_NAME")) &&
+				(strstr(query_no_space,"BINARY s.SCHEMA_NAME AS BIN_NAME,")) &&
+				(strstr(query_no_space,"s.DEFAULT_COLLATION_NAME")) &&
+				(strstr(query_no_space,"FROM `information_schema`.SCHEMATA s")) &&
+				(strstr(query_no_space,"GROUP BY BINARY s.SCHEMA_NAME, s.DEFAULT_COLLATION_NAME"))
+			)
+		) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT name AS BIN_NAME, 'utf8_general_ci' AS DEFAULT_COLLATION_NAME, name AS SCHEMA_NAME FROM system.databases");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+
+		if (
+			(pkt->size==(strlen("SELECT `SCHEMA_NAME` FROM `INFORMATION_SCHEMA`.`SCHEMATA`")+5) && strncasecmp((char *)"SELECT `SCHEMA_NAME` FROM `INFORMATION_SCHEMA`.`SCHEMATA`",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT name AS SCHEMA_NAME FROM system.databases");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+
 		if (
 			(pkt->size==(strlen("SELECT version()")+5) && strncasecmp((char *)"SELECT version()",(char *)pkt->ptr+5,pkt->size-5)==0)
 		) {
@@ -1049,6 +1198,26 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			free(q);
             run_query_sqlite = true;
             goto __run_query_sqlite;	
+		}
+		if (
+			(pkt->size==(strlen((char *)"SELECT logfile_group_name FROM information_schema.FILES")+5) && strncasecmp((char *)"SELECT logfile_group_name FROM information_schema.FILES",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT ' ' AS logfile_group_name FROM global_variables WHERE 1=0";
+			query=l_strdup(q);
+			query_length=strlen(query)+1;
+            run_query_sqlite = true;
+            goto __run_query_sqlite;
+		}
+		if (
+			(pkt->size==(strlen((char *)"SELECT tablespace_name FROM information_schema.FILES")+5) && strncasecmp((char *)"SELECT tablespace_name FROM information_schema.FILES",(char *)pkt->ptr+5,pkt->size-5)==0)
+		) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT ' ' AS tablespace_name FROM global_variables WHERE 1=0";
+			query=l_strdup(q);
+			query_length=strlen(query)+1;
+            run_query_sqlite = true;
+            goto __run_query_sqlite;
 		}
 		if (
 			(pkt->size==(strlen("SELECT CONNECTION_ID()")+5) && strncasecmp((char *)"SELECT CONNECTION_ID()",(char *)pkt->ptr+5,pkt->size-5)==0)
@@ -1665,6 +1834,23 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		goto __run_query;
 	}
 
+	if ((query_no_space_length>24) && (!strncasecmp("SHOW TABLE STATUS FROM `", query_no_space, 24))) {
+		strA=query_no_space+24;
+		strAl=strlen(strA);
+		strB=(char *)"SELECT name AS Name, engine AS Engine, '10' AS Version, 'Dynamic' AS Row_format, 0 AS Rows, 0 AS Avg_row_length, 0 AS Data_length, 0 AS Max_data_length, 0 AS Index_length, 0 AS Data_free, 'NULL' AS Auto_increment, metadata_modification_time AS Create_time, metadata_modification_time AS Update_time, metadata_modification_time AS Check_time, 'utf8_bin' AS Collation, 'NULL' AS Checksum, '' AS Create_options, '' AS Comment FROM system.tables WHERE database='%s";
+		strBl=strlen(strB);
+		int l=strBl+strAl-2;
+		char *b=(char *)l_alloc(l+1);
+		snprintf(b,l+1,strB,strA);
+		b[l-1]='\'';
+		b[l]=0;
+		l_free(query_length,query);
+		query=b;
+		printf("%s\n",query);
+		query_length=l+1;
+		goto __run_query;
+	}
+
 /*
 	if (query_no_space_length==strlen("SHOW FULL PROCESSLIST") && !strncasecmp("SHOW FULL PROCESSLIST",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -1681,6 +1867,20 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 	}
 */
 __end_show_commands:
+
+	if ((query_no_space_length>50) && (!strncasecmp("SELECT TABLE_NAME ", query_no_space, 18))) {
+		if (
+			(strstr(query_no_space,"information_schema.VIEWS"))
+		) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT name AS TABLE_NAME FROM system.tables WHERE 1=0";
+			//fprintf(stderr,"%s\n",q);
+			query=l_strdup(q);
+			query_length=strlen(query)+1;
+            goto __run_query;
+		}
+	}
+
 
 	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
@@ -1747,11 +1947,24 @@ __end_show_commands:
 		if (
 			(strncasecmp("SET NAMES",query_no_space,9)==0)
 			||
+			(strncasecmp("SET FOREIGN_KEY_CHECKS",query_no_space,22)==0)
+			||
 			(strncasecmp("SET AUTOCOMMIT",query_no_space,14)==0)
 			||
 			(strncasecmp("SET SESSION TRANSACTION ISOLATION LEVEL",query_no_space,39)==0)
 		) {
 			GloClickHouseServer->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			run_query=false;
+			goto __run_query;
+		}
+		if (
+			(strncasecmp("SHOW MASTER STATUS",query_no_space,18)==0)
+			||
+			(strncasecmp("SHOW SLAVE STATUS",query_no_space,17)==0)
+			||
+			(strncasecmp("SHOW MASTER LOGS",query_no_space,16)==0)
+		) {
+			GloClickHouseServer->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Access Denied");
 			run_query=false;
 			goto __run_query;
 		}
