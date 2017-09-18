@@ -11,7 +11,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 CURVER?=1.4.3
-MAKEOPT="-j 4"
+MAKEOPT=-j 4
 DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
@@ -86,7 +86,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 
-packages: centos6.7 centos7 centos6.7-dbg centos7-dbg centos5 centos5-dbg ubuntu12 ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg debian9 debian9-dbg ubuntu16-clickhouse
+packages: centos6.7 centos7 centos6.7-dbg centos7-dbg centos5 centos5-dbg ubuntu12 ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg debian9 debian9-dbg ubuntu16-clickhouse debian9-clickhouse centos7-clickhouse fedora24-clickhouse
 .PHONY: packages
 
 centos5: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
@@ -149,6 +149,14 @@ debian8-dbg: binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb
 debian9-dbg: binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb
 .PHONY: debian9-dbg
 
+debian9-clickhouse: binaries/proxysql_${CURVER}-clickhouse-debian9_amd64.deb
+.PHONY: debian9-clickhouse
+
+centos7-clickhouse: binaries/proxysql-${CURVER}-clickhouse-1-centos7.x86_64.rpm
+.PHONY: centos7-clickhouse
+
+fedora24-clickhouse: binaries/proxysql-${CURVER}-clickhouse-1-fedora24.x86_64.rpm
+.PHONY: fedora24-clickhouse
 
 binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm:
 	docker stop centos5_build || true
@@ -277,6 +285,33 @@ binaries/proxysql-${CURVER}-1-centos7.x86_64.rpm:
 	docker stop centos7_build
 	docker rm centos7_build
 
+binaries/proxysql-${CURVER}-clickhouse-1-centos7.x86_64.rpm:
+	docker stop centos7_build || true
+	docker rm centos7_build || true
+	docker create --name centos7_build renecannao/proxysql:build-centos7 bash -c "while : ; do sleep 10 ; done"
+	docker start centos7_build
+	docker exec centos7_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	sleep 2
+	docker exec centos7_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} clickhouse ${MAKEOPT}"
+	sleep 2
+	docker exec -it centos7_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	sleep 2
+	docker exec -it centos7_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
+	sleep 2
+	docker cp docker/images/proxysql/centos7-build/rpmmacros centos7_build:/root/.rpmmacros
+	sleep 2
+	docker cp docker/images/proxysql/centos7-build/proxysql.spec centos7_build:/root/rpmbuild/SPECS/proxysql.spec
+	sleep 10
+	docker exec -it centos7_build bash -c "cp /opt/proxysql/proxysql-${CURVER}.tar.gz /root/rpmbuild/SOURCES"
+	sleep 2
+	docker exec -it centos7_build bash -c "cd /root/rpmbuild; rpmbuild -ba SPECS/proxysql.spec --define \"version ${CURVER}\""
+	sleep 10
+	docker exec -it centos7_build bash -c "cp /root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm /root/rpm"
+	sleep 2
+	docker cp centos7_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries/proxysql-${CURVER}-clickhouse-1-centos7.x86_64.rpm
+	docker stop centos7_build
+	docker rm centos7_build
+
 binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm:
 	docker stop centos7_build || true
 	docker rm centos7_build || true
@@ -329,6 +364,33 @@ binaries/proxysql-${CURVER}-1-fedora24.x86_64.rpm:
 	docker exec -it fedora24_build bash -c "cp /root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm /root/rpm"
 	sleep 2
 	docker cp fedora24_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries/proxysql-${CURVER}-1-fedora24.x86_64.rpm
+	docker stop fedora24_build
+	docker rm fedora24_build
+
+binaries/proxysql-${CURVER}-clickhouse-1-fedora24.x86_64.rpm:
+	docker stop fedora24_build || true
+	docker rm fedora24_build || true
+	docker create --name fedora24_build renecannao/proxysql:build-fedora24 bash -c "while : ; do sleep 10 ; done"
+	docker start fedora24_build
+	docker exec fedora24_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	sleep 2
+	docker exec fedora24_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} clickhouse ${MAKEOPT}"
+	sleep 2
+	docker exec -it fedora24_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
+	sleep 2
+	docker exec -it fedora24_build bash -c "mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}"
+	sleep 2
+	docker cp docker/images/proxysql/fedora24-build/rpmmacros fedora24_build:/root/.rpmmacros
+	sleep 2
+	docker cp docker/images/proxysql/fedora24-build/proxysql.spec fedora24_build:/root/rpmbuild/SPECS/proxysql.spec
+	sleep 10
+	docker exec -it fedora24_build bash -c "cp /opt/proxysql/proxysql-${CURVER}.tar.gz /root/rpmbuild/SOURCES"
+	sleep 2
+	docker exec -it fedora24_build bash -c "cd /root/rpmbuild; rpmbuild -ba SPECS/proxysql.spec --define \"version ${CURVER}\""
+	sleep 10
+	docker exec -it fedora24_build bash -c "cp /root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm /root/rpm"
+	sleep 2
+	docker cp fedora24_build:/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm ./binaries/proxysql-${CURVER}-clickhouse-1-fedora24.x86_64.rpm
 	docker stop fedora24_build
 	docker rm fedora24_build
 
@@ -463,6 +525,23 @@ binaries/proxysql_${CURVER}-debian9_amd64.deb:
 	docker stop debian9_build
 	docker rm debian9_build
 
+binaries/proxysql_${CURVER}-clickhouse-debian9_amd64.deb:
+	docker stop debian9_build || true
+	docker rm debian9_build || true
+	docker create --name debian9_build renecannao/proxysql:build-debian9 bash -c "while : ; do sleep 10 ; done"
+	docker start debian9_build
+	docker exec debian9_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
+	sleep 2
+	docker exec debian9_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} clickhouse ${MAKEOPT}"
+	sleep 2
+	docker cp docker/images/proxysql/debian-9-build/proxysql.ctl debian9_build:/opt/proxysql/
+	sleep 2
+	docker exec debian9_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	sleep 2
+	docker cp debian9_build:/opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-clickhouse-debian9_amd64.deb
+	docker stop debian9_build
+	docker rm debian9_build
+
 binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb:
 	docker stop ubuntu14_build || true
 	docker rm ubuntu14_build || true
@@ -504,7 +583,7 @@ binaries/proxysql_${CURVER}-clickhouse-ubuntu16_amd64.deb:
 	docker start ubuntu16_build
 	docker exec ubuntu16_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
-	docker exec ubuntu16_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} ${MAKEOPT} clickhouse"
+	docker exec ubuntu16_build bash --login -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} clickhouse ${MAKEOPT}"
 	sleep 2
 	docker cp docker/images/proxysql/ubuntu-16.04-build/proxysql.ctl ubuntu16_build:/opt/proxysql/
 	sleep 2
