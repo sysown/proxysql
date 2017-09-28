@@ -56,6 +56,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
+	global.cputiming=false;
 	global.monitor=true;
 #ifdef IDLE_THREADS
 	global.idle_threads=false;
@@ -93,6 +94,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not start Monitor Module",(const char *)"-M",(const char *)"--no-monitor");
 	opt->add((const char *)"",0,0,0,(const char *)"Run in foreground",(const char *)"-f",(const char *)"--foreground");
+	opt->add((const char *)"",0,0,0,(const char *)"Measure CPU time",(const char *)"-p",(const char *)"--cpu-time");
 #ifdef SO_REUSEPORT
 	opt->add((const char *)"",0,0,0,(const char *)"Use SO_REUSEPORT",(const char *)"-r",(const char *)"--reuseport");
 #endif /* SO_REUSEPORT */
@@ -222,6 +224,10 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		proxy_warning("ProxySQL does not support daemonize in Darwin: running in foreground\n");
 		global.foreground=true;
 #endif
+	}
+
+	if (opt->isSet("-p")) {
+		global.cputiming=true;
 	}
 
 	if (opt->isSet("-M")) {

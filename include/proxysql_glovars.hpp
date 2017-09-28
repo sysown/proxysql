@@ -66,6 +66,7 @@ class ProxySQL_GlobalVariables {
 #endif /* IDLE_THREADS */
 		pthread_mutex_t start_mutex;
 		bool foreground;
+		bool cputiming;
 #ifdef DEBUG
 		int gdb;
 		debug_level *gdbg_lvl;
