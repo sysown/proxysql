@@ -283,6 +283,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"init_connect",
 	(char *)"default_sql_mode",
 	(char *)"default_time_zone",
+	(char *)"stats_time_backend_query",
+	(char *)"stats_time_query_processor",
 	NULL
 };
 
@@ -381,6 +383,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.autocommit_false_not_reusable=false;
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
+	variables.stats_time_backend_query=true;
+	variables.stats_time_query_processor=true;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms=1000;
@@ -624,6 +628,8 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+	if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
+	if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
 #ifdef IDLE_THREADS
 	if (!strcasecmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
@@ -966,6 +972,12 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_digests_lowercase")) {
 		return strdup((variables.query_digests_lowercase ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"stats_time_backend_query")) {
+		return strdup((variables.stats_time_backend_query ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"stats_time_query_processor")) {
+		return strdup((variables.stats_time_query_processor ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		return strdup((variables.sessions_sort ? "true" : "false"));
@@ -1776,6 +1788,28 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_digests_lowercase=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"stats_time_backend_query")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.stats_time_backend_query=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.stats_time_backend_query=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"stats_time_query_processor")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.stats_time_query_processor=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.stats_time_query_processor=false;
 			return true;
 		}
 		return false;
@@ -3101,6 +3135,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
+	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
+	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
 #ifdef IDLE_THREADS
 	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
@@ -3174,6 +3210,9 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.active_transactions=0;
 
 	match_regexes=NULL;
+
+	variables.stats_time_backend_query=true;
+	variables.stats_time_query_processor=true;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {

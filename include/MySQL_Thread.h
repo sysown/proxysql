@@ -227,6 +227,10 @@ class MySQL_Thread
 		unsigned int active_transactions;
 	} status_variables;
 
+	struct {
+		bool stats_time_backend_query;
+		bool stats_time_query_processor;
+	} variables;
 
 #ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
   pthread_mutex_t thread_mutex;
@@ -396,6 +400,8 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_key;
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
+		bool stats_time_backend_query;
+		bool stats_time_query_processor;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
