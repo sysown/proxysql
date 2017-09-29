@@ -640,7 +640,7 @@ bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned i
 			// we are writing within the buffer, do not add to PSarrayOUT
 		} else {
 			// we are writing outside the buffer, add to PSarrayOUT
-			myrs->PSarrayOUT->add(_ptr,size);
+			myrs->PSarrayOUT.add(_ptr,size);
 		}
 	}
 	return true;
@@ -755,7 +755,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 			// we are writing within the buffer, do not add to PSarrayOUT
 		} else {
 			// we are writing outside the buffer, add to PSarrayOUT
-			myrs->PSarrayOUT->add(_ptr,size);
+			myrs->PSarrayOUT.add(_ptr,size);
 		}
 	}
 	return true;
@@ -894,7 +894,7 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 			// we are writing within the buffer, do not add to PSarrayOUT
 		} else {
 			// we are writing outside the buffer, add to PSarrayOUT
-			myrs->PSarrayOUT->add(pkt.ptr,pkt.size);
+			myrs->PSarrayOUT.add(pkt.ptr,pkt.size);
 		}
 	} else {
 		unsigned int left=pkt.size;
@@ -910,7 +910,7 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 			myhdr.pkt_length=0xFFFFFF;
 			memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
 			// we are writing a large packet (over 16MB), we assume we are always outside the buffer
-			myrs->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+			myrs->PSarrayOUT.add(pkt2.ptr,pkt2.size);
 			copied+=0xFFFFFF;
 			left-=0xFFFFFF;
 		}
@@ -923,7 +923,7 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 		myhdr.pkt_length=left-sizeof(mysql_hdr);
 		memcpy(pkt2.ptr, &myhdr, sizeof(mysql_hdr));
 		// we are writing a large packet (over 16MB), we assume we are always outside the buffer
-		myrs->PSarrayOUT->add(pkt2.ptr,pkt2.size);
+		myrs->PSarrayOUT.add(pkt2.ptr,pkt2.size);
 	}
 	if (len) { *len=pkt.size+(pkt_sid-sequence_id)*sizeof(mysql_hdr); }
 	if (pkt.size >= (0xFFFFFF+sizeof(mysql_hdr))) {
@@ -1709,11 +1709,11 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	buffer_used=0;
 	myds=NULL;
 	sid=0;
-	PSarrayOUT = NULL;
+	//PSarrayOUT = NULL;
 	if (myprot) { // if myprot = NULL , this is a mirror
 		myds=myprot->get_myds();
 		sid=myds->pkt_sid+1;
-		PSarrayOUT = new PtrSizeArray(8);
+		//PSarrayOUT = new PtrSizeArray(8);
 	}
 	result=_res;
 	resultset_size=0;
@@ -1744,7 +1744,7 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
 		myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
 		sid++;
-		PSarrayOUT->add(pkt.ptr,pkt.size);
+		PSarrayOUT.add(pkt.ptr,pkt.size);
 		resultset_size+=pkt.size;
 	} else {
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
@@ -1791,7 +1791,7 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 			}
 			total_size+=sizeof(mysql_hdr);
 		}
-		PSarrayOUT->add(pkt.ptr,pkt.size);
+		PSarrayOUT.add(pkt.ptr,pkt.size);
 		resultset_size+=pkt.size;
 		}
 		add_eof();
@@ -1800,13 +1800,13 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 
 MySQL_ResultSet::~MySQL_ResultSet() {
 	PtrSize_t pkt;
-	if (PSarrayOUT) {
-		while (PSarrayOUT->len) {
-			PSarrayOUT->remove_index_fast(0,&pkt);
+	//if (PSarrayOUT) {
+		while (PSarrayOUT.len) {
+			PSarrayOUT.remove_index_fast(0,&pkt);
 			l_free(pkt.size, pkt.ptr);
 		}
-		delete PSarrayOUT;
-	}
+		//delete PSarrayOUT;
+	//}
 	if (buffer) {
 		free(buffer);
 		buffer=NULL;
@@ -1908,7 +1908,7 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 		} else {
 			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,mysql_errno(_mysql),sqlstate,mysql_error(_mysql));
 		}
-		PSarrayOUT->add(pkt.ptr,pkt.size);
+		PSarrayOUT.add(pkt.ptr,pkt.size);
 		sid++;
 		resultset_size+=pkt.size;
 	}
@@ -1918,9 +1918,9 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 	transfer_started=true;
 	if (myprot) {
-		PSarrayFinal->copy_add(PSarrayOUT,0,PSarrayOUT->len);
-		while (PSarrayOUT->len)
-			PSarrayOUT->remove_index(PSarrayOUT->len-1,NULL);
+		PSarrayFinal->copy_add(&PSarrayOUT,0,PSarrayOUT.len);
+		while (PSarrayOUT.len)
+			PSarrayOUT.remove_index(PSarrayOUT.len-1,NULL);
 	}
 	return resultset_completed;
 }
@@ -1933,7 +1933,7 @@ void MySQL_ResultSet::buffer_to_PSarrayOut(bool _last) {
 			buffer=(unsigned char *)realloc(buffer,buffer_used);
 		}
 	}
-	PSarrayOUT->add(buffer,buffer_used);
+	PSarrayOUT.add(buffer,buffer_used);
 	if (_last) {
 		buffer = NULL;
 	} else {
@@ -1946,13 +1946,13 @@ unsigned long long MySQL_ResultSet::current_size() {
 	unsigned long long intsize=0;
 	intsize+=sizeof(MySQL_ResultSet);
 	intsize+=RESULTSET_BUFLEN; // size of buffer
-	if (PSarrayOUT==NULL)	// see bug #699
+	if (PSarrayOUT.len==0)	// see bug #699
 		return intsize;
 	intsize+=sizeof(PtrSizeArray);
-	intsize+=(PSarrayOUT->size*sizeof(PtrSize_t *));
+	intsize+=(PSarrayOUT.size*sizeof(PtrSize_t *));
 	unsigned int i;
-	for (i=0; i<PSarrayOUT->len; i++) {
-		PtrSize_t *pkt=PSarrayOUT->index(i);
+	for (i=0; i<PSarrayOUT.len; i++) {
+		PtrSize_t *pkt=PSarrayOUT.index(i);
 		if (pkt->size>RESULTSET_BUFLEN) {
 			intsize+=pkt->size;
 		} else {
