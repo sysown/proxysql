@@ -589,7 +589,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count) {
+bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count, MySQL_ResultSet *myrs) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
@@ -601,7 +601,29 @@ bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned i
 	myhdr.pkt_id=sequence_id;
 	myhdr.pkt_length=count_len;
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
+//  unsigned char *_ptr=(unsigned char *)l_alloc(size);
+  unsigned char *_ptr = NULL;
+	if (myrs) {
+		if ( size<=(RESULTSET_BUFLEN-myrs->buffer_used) ) {
+			// there is space in the buffer, add the data to it
+			_ptr = myrs->buffer + myrs->buffer_used;
+			myrs->buffer_used += size;
+		} else {
+			// there is no space in the buffer, we flush the buffer and recreate it
+			myrs->buffer_to_PSarrayOut();
+			// now we can check again if there is space in the buffer
+			if ( size<=(RESULTSET_BUFLEN-myrs->buffer_used) ) {
+				// there is space in the NEW buffer, add the data to it
+				_ptr = myrs->buffer + myrs->buffer_used;
+				myrs->buffer_used += size;
+			} else {
+				// a new buffer is not enough to store the new row
+				_ptr=(unsigned char *)l_alloc(size);
+			}
+		}
+	} else {
+		_ptr=(unsigned char *)l_alloc(size);
+	}
   memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
   int l=sizeof(mysql_hdr);
 
@@ -613,6 +635,14 @@ bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned i
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
 #endif
+	if (myrs) {
+		if (_ptr >= myrs->buffer && _ptr < myrs->buffer+RESULTSET_BUFLEN) {
+			// we are writing within the buffer, do not add to PSarrayOUT
+		} else {
+			// we are writing outside the buffer, add to PSarrayOUT
+			myrs->PSarrayOUT->add(_ptr,size);
+		}
+	}
 	return true;
 }
 
@@ -1695,9 +1725,9 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	if (myprot==NULL) {
 		return; // this is a mirror
 	}
-	myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields);
+	myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields,this);
 	sid++;
-	PSarrayOUT->add(pkt.ptr,pkt.size);
+	//PSarrayOUT->add(pkt.ptr,pkt.size);
 	resultset_size+=pkt.size;
 	// columns description
 	for (unsigned int i=0; i<num_fields; i++) {
@@ -1717,7 +1747,7 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 		PSarrayOUT->add(pkt.ptr,pkt.size);
 		resultset_size+=pkt.size;
 	} else {
-		if (RESULTSET_BUFLEN > (buffer_used + 9)) {
+		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
 		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, mysql->server_status|setStatus, this);
@@ -1848,14 +1878,20 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 void MySQL_ResultSet::add_eof() {
 	PtrSize_t pkt;
 	if (myprot) {
-		buffer_to_PSarrayOut();
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-		myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
-		PSarrayOUT->add(pkt.ptr,pkt.size);
+		//myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
+		//PSarrayOUT->add(pkt.ptr,pkt.size);
+		//sid++;
+		//resultset_size+=pkt.size;
+		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
+			buffer_to_PSarrayOut();
+		}
+		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, mysql->server_status|setStatus, this);
 		sid++;
-		resultset_size+=pkt.size;
+		resultset_size += 9;
+		buffer_to_PSarrayOut();
 	}
 	resultset_completed=true;
 }
