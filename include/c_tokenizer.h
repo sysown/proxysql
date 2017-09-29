@@ -5,6 +5,7 @@
 #ifndef C_TOKENIZER_H
 #define C_TOKENIZER_H
 
+#define PROXYSQL_TOKENIZER_BUFFSIZE	128
 
 #ifndef FIRST_COMMENT_MAX_LENGTH
 #define FIRST_COMMENT_MAX_LENGTH  1024
@@ -12,6 +13,8 @@
 
 typedef struct
 {
+	char        buffer[PROXYSQL_TOKENIZER_BUFFSIZE];
+	int         s_length;
 	char*       s;
 	const char* delimiters;
 	char*       current;
@@ -25,7 +28,8 @@ enum { TOKENIZER_EMPTIES_OK, TOKENIZER_NO_EMPTIES };
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
-tokenizer_t tokenizer( const char* s, const char* delimiters, int empties );
+//tokenizer_t tokenizer( const char* s, const char* delimiters, int empties );
+void tokenizer( tokenizer_t *, const char* s, const char* delimiters, int empties );
 const char* free_tokenizer( tokenizer_t* tokenizer );
 const char* tokenize( tokenizer_t* tokenizer );
 char * mysql_query_digest_and_first_comment(char *s , int len , char **first_comment, char *buf);

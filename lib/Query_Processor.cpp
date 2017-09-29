@@ -435,7 +435,8 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->negate_match_pattern=negate_match_pattern;
 	newQR->re_modifiers=0;
 	{
-		tokenizer_t tok = tokenizer( re_modifiers, ",", TOKENIZER_NO_EMPTIES );
+		tokenizer_t tok;
+		tokenizer( &tok, re_modifiers, ",", TOKENIZER_NO_EMPTIES );
 		const char* token;
 		for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
 			if (strncasecmp(token,(char *)"CASELESS",strlen((char *)"CASELESS"))==0) {
@@ -1277,7 +1278,8 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 	enum MYSQL_COM_QUERY_command ret=MYSQL_COM_QUERY_UNKNOWN;
 	char c1;
 
-  tokenizer_t tok = tokenizer( text, " ", TOKENIZER_NO_EMPTIES );
+  tokenizer_t tok;
+	tokenizer( &tok, text, " ", TOKENIZER_NO_EMPTIES );
   char* token=NULL;
 	token=(char *)tokenize(&tok);
 	if (token==NULL) {
@@ -1622,7 +1624,8 @@ __exit__query_parser_command_type:
 
 bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {
 	bool ret=false;
-	tokenizer_t tok = tokenizer( fc, ";", TOKENIZER_NO_EMPTIES );
+	tokenizer_t tok;
+	tokenizer( &tok, fc, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
 	for ( token = tokenize( &tok ) ; token ;  token = tokenize( &tok ) ) {
 		char *key=NULL;

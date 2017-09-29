@@ -29,7 +29,7 @@ class MySQL_ResultSet {
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	unsigned char *buffer;
 	unsigned int buffer_used;
-	void buffer_to_PSarrayOut();
+	void buffer_to_PSarrayOut(bool _last=false);
 	unsigned long long current_size();
 };
 

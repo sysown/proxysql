@@ -12,24 +12,36 @@ extern __thread int mysql_thread___query_digests_max_query_length;
 #define bool char
 extern __thread bool mysql_thread___query_digests_lowercase;
 
-tokenizer_t tokenizer( const char* s, const char* delimiters, int empties )
+void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
 
-	tokenizer_t result;
+	//tokenizer_t result;
 
-	result.s								 = (s && delimiters) ? strdup( s ) : NULL;
-	result.delimiters				= delimiters;
-	result.current					 = NULL;
-	result.next							= result.s;
-	result.is_ignore_empties = (empties != TOKENIZER_EMPTIES_OK);
+	result->s_length = ( (s && delimiters) ? strlen(s) : 0 );
+	result->s = NULL;
+	if (result->s_length) {
+		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+			result->s = strdup(s);
+		} else {
+			strcpy(result->buffer,s);
+			result->s = result->buffer;
+		}
+	}
+	result->delimiters				= delimiters;
+	result->current					 = NULL;
+	result->next							= result->s;
+	result->is_ignore_empties = (empties != TOKENIZER_EMPTIES_OK);
 
-	return result;
+	//return result;
 }
 
 const char* free_tokenizer( tokenizer_t* tokenizer )
 {
-	free( tokenizer->s );
-	return tokenizer->s = NULL;
+	if (tokenizer->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+		free(tokenizer->s);
+	}
+	tokenizer->s = NULL;
+	return NULL;
 }
 
 const char* tokenize( tokenizer_t* tokenizer )
@@ -65,7 +77,8 @@ void c_split_2(const char *in, const char *del, char **out1, char **out2) {
 	*out1=NULL;
 	*out2=NULL;
 	const char *t;
-	tokenizer_t tok = tokenizer( in, del, TOKENIZER_NO_EMPTIES );
+	tokenizer_t tok;
+	tokenizer( &tok, in, del, TOKENIZER_NO_EMPTIES );
 	for ( t=tokenize(&tok); t; t=tokenize(&tok)) {
 		if (*out1==NULL) { *out1=strdup(t); continue; }
 		if (*out2==NULL) { *out2=strdup(t); continue; }

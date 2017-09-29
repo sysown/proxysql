@@ -430,7 +430,8 @@ class admin_main_loop_listeners {
 		delete *ifd;
 		*ifd=new ifaces_desc();
 		int i=0;
-		tokenizer_t tok = tokenizer( list, ";", TOKENIZER_NO_EMPTIES );
+		tokenizer_t tok;
+		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
 		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
 			(*ifd)->add(token);
@@ -446,7 +447,8 @@ class admin_main_loop_listeners {
 		wrlock();
 		int i;
 		char **ifaces=*_ifaces;
-		tokenizer_t tok = tokenizer( list, ";", TOKENIZER_NO_EMPTIES );
+		tokenizer_t tok;
+		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
 		ifaces=reset_ifaces(ifaces);
 		i=0;
@@ -4070,7 +4072,8 @@ void ProxySQL_Admin::add_credentials(char *type, char *credentials, int hostgrou
 void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 #endif /* DEBUG */
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credentials: %s\n", type, credentials);
-	tokenizer_t tok = tokenizer( credentials, ";", TOKENIZER_NO_EMPTIES );
+	tokenizer_t tok;
+	tokenizer( &tok, credentials, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
 	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
 		char *user=NULL;
@@ -4092,7 +4095,8 @@ void ProxySQL_Admin::delete_credentials(char *type, char *credentials) {
 void ProxySQL_Admin::delete_credentials(char *credentials) {
 #endif /* DEBUG */
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Removing old %s credentials: %s\n", type, credentials);
-	tokenizer_t tok = tokenizer( credentials, ";", TOKENIZER_NO_EMPTIES );
+	tokenizer_t tok;
+	tokenizer( &tok, credentials, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
 	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
 		char *user=NULL;

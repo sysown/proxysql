@@ -1957,7 +1957,8 @@ void MySQL_Threads_Handler::start_listeners() {
 		GloMTH->set_variable((char *)"interfaces", (char *)"0.0.0.0:6033"); // changed. See isseu #1104
 	}
 	free(_tmp);
-	tokenizer_t tok = tokenizer( variables.interfaces, ";", TOKENIZER_NO_EMPTIES );
+	tokenizer_t tok;
+	tokenizer( &tok, variables.interfaces, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
 	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
 		listener_add((char *)token);
@@ -1968,7 +1969,8 @@ void MySQL_Threads_Handler::start_listeners() {
 void MySQL_Threads_Handler::stop_listeners() {
 	if (variables.interfaces==NULL || strlen(variables.interfaces)==0)
 		return;
-	tokenizer_t tok = tokenizer( variables.interfaces, ";", TOKENIZER_NO_EMPTIES );
+	tokenizer_t tok;
+	tokenizer( &tok, variables.interfaces, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
 	for (token = tokenize( &tok ); token; token = tokenize( &tok )) {
 		listener_del((char *)token);

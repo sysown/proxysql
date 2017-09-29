@@ -1891,7 +1891,7 @@ void MySQL_ResultSet::add_eof() {
 		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, mysql->server_status|setStatus, this);
 		sid++;
 		resultset_size += 9;
-		buffer_to_PSarrayOut();
+		buffer_to_PSarrayOut(true);
 	}
 	resultset_completed=true;
 }
@@ -1925,14 +1925,20 @@ bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 	return resultset_completed;
 }
 
-void MySQL_ResultSet::buffer_to_PSarrayOut() {
+void MySQL_ResultSet::buffer_to_PSarrayOut(bool _last) {
 	if (buffer_used==0)
 		return;	// exit immediately if the buffer is empty
 	if (buffer_used < RESULTSET_BUFLEN/2) {
-		buffer=(unsigned char *)realloc(buffer,buffer_used);
+		if (_last == false) {
+			buffer=(unsigned char *)realloc(buffer,buffer_used);
+		}
 	}
 	PSarrayOUT->add(buffer,buffer_used);
-	buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	if (_last) {
+		buffer = NULL;
+	} else {
+		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	}
 	buffer_used=0;
 }
 
