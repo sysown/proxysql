@@ -235,6 +235,7 @@ void MySQL_Session::operator delete(void *ptr) {
 
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
+	handler_ret = 0;
 	pause_until=0;
 	qpo=new Query_Processor_Output();
 	start_time=0;
@@ -1781,6 +1782,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 }
 
 int MySQL_Session::handler() {
+	handler_ret = 0;
 	bool wrong_pass=false;
 	if (to_process==0) return 0; // this should be redundant if the called does the same check
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
@@ -1808,7 +1810,8 @@ int MySQL_Session::handler() {
 			} else {
 				if (status==WAITING_CLIENT_DATA) {
 					// we are being called a second time with WAITING_CLIENT_DATA
-					return 0;
+					handler_ret = 0;
+					return handler_ret;
 				}
 			}
 		}
@@ -1838,7 +1841,8 @@ __get_pkts_from_client:
 						break;
 					default:
 						proxy_error("Detected not valid state client state: %d\n", client_myds->DSS);
-						return -1; //close connection
+						handler_ret = -1; //close connection
+						return handler_ret;
 						break;
 				}
 				break;
@@ -1941,7 +1945,8 @@ __get_pkts_from_client:
 											RequestEnd(NULL);
 											break;
 										} else {
-											return -1;
+											handler_ret = -1;
+											return handler_ret;
 										}
 									}
 									if (thread->variables.stats_time_query_processor) {
@@ -1960,7 +1965,8 @@ __get_pkts_from_client:
 										if (mirror==false) {
 											break;
 										} else {
-											return -1;
+											handler_ret = -1;
+											return handler_ret;
 										}
 									}
 									if (mirror==false) {
@@ -2282,7 +2288,8 @@ __get_pkts_from_client:
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 								l_free(pkt.size,pkt.ptr);
-								return -1;
+								handler_ret = -1;
+								return handler_ret;
 								break;
 							case _MYSQL_COM_PING:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(&pkt);
@@ -2305,7 +2312,8 @@ __get_pkts_from_client:
 							default:
 								proxy_error("RECEIVED AN UNKNOWN COMMAND: %d -- PLEASE REPORT A BUG\n", c);
 								l_free(pkt.size,pkt.ptr);
-								return -1; // immediately drop the connection
+								handler_ret = -1; // immediately drop the connection
+								return handler_ret;
 								// assert(0); // see issue #859
 								break;
 						}
@@ -2333,7 +2341,8 @@ __get_pkts_from_client:
 								proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 							}
 						}
-						return -1;
+						handler_ret = -1;
+						return handler_ret;
 						break;
 			}
 				
@@ -2344,7 +2353,8 @@ __get_pkts_from_client:
 			case NONE:
 			default:
 				proxy_error("Unexpected packet from client, disconnecting the client\n");
-				return -1;
+				handler_ret = -1;
+				return handler_ret;
 				break;
 		}
 	}
@@ -2396,8 +2406,10 @@ handler_again:
 		case PINGING_SERVER:
 			{
 				int rc=handler_again___status_PINGING_SERVER();
-				if (rc==-1) // if the ping fails, we destroy the session
-					return -1;
+				if (rc==-1) { // if the ping fails, we destroy the session
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2406,7 +2418,8 @@ handler_again:
 		case PROCESSING_QUERY:
 			//fprintf(stderr,"PROCESSING_QUERY\n");
 			if (pause_until > thread->curtime) {
-				return 0;
+				handler_ret = 0;
+				return handler_ret;
 			}
 			if (mysql_thread___connect_timeout_server_max) {
 				if (mybe->server_myds->max_connect_time==0)
@@ -2726,7 +2739,8 @@ handler_again:
 								}
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 							}
-							return -1;
+							handler_ret = -1;
+							return handler_ret;
 						}
 						int myerr=mysql_errno(myconn->mysql);
 						if (myerr > 2000) {
@@ -2762,7 +2776,8 @@ handler_again:
 								}
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
 							}
-							return -1;
+							handler_ret = -1;
+							return handler_ret;
 						} else {
 							proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
 
@@ -2770,7 +2785,8 @@ handler_again:
 							switch (myerr) {
 								case 1317:  // Query execution was interrupted
 									if (killed==true) { // this session is being kiled
-										return -1;
+										handler_ret = -1;
+										return handler_ret;
 									}
 									if (myds->killed_at) {
 										// we intentionally killed the query
@@ -2804,7 +2820,8 @@ handler_again:
 										}
 										NEXT_IMMEDIATE(CONNECTING_SERVER);
 									}
-									return -1;
+									//handler_ret = -1;
+									//return handler_ret;
 									break;
 								case 1153: // ER_NET_PACKET_TOO_LARGE
 									proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -2838,16 +2855,18 @@ handler_again:
 									break;
 							}
 							RequestEnd(myds);
-							if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								myds->DSS=STATE_NOT_INITIALIZED;
-								if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-									myds->destroy_MySQL_Connection_From_Pool(true);
+							if (myds->myconn) {
+								if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									myds->DSS=STATE_NOT_INITIALIZED;
+									if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+										myds->destroy_MySQL_Connection_From_Pool(true);
+									} else {
+										myds->return_MySQL_Connection_To_Pool();
+									}
 								} else {
-									myds->return_MySQL_Connection_To_Pool();
+									myconn->async_state_machine=ASYNC_IDLE;
+									myds->DSS=STATE_MARIADB_GENERIC;
 								}
-							} else {
-								myconn->async_state_machine=ASYNC_IDLE;
-								myds->DSS=STATE_MARIADB_GENERIC;
 							}
 						}
 					} else {
@@ -2892,8 +2911,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_CHANGING_USER_SERVER(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2902,8 +2923,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2912,8 +2935,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_CHANGING_CHARSET(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2922,8 +2947,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_SETTING_SQL_LOG_BIN(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2932,8 +2959,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_SETTING_SQL_MODE(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2942,8 +2971,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_SETTING_TIME_ZONE(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2952,8 +2983,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_SETTING_INIT_CONNECT(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -2962,8 +2995,10 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_CHANGING_SCHEMA(&rc))
 					goto handler_again;	// we changed status
-				if (rc==-1) // we have an error we can't handle
-					return -1;
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
 			}
 			break;
 
@@ -3001,9 +3036,11 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	if (wrong_pass==true) {
 		client_myds->array2buffer_full();
 		client_myds->write_to_net();
-		return -1;
+		handler_ret = -1;
+		return handler_ret;
 	}
-	return 0;
+	handler_ret = 0;
+	return handler_ret;
 }
 
 

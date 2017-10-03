@@ -64,6 +64,7 @@ class Query_Info {
 class MySQL_Session
 {
 	private:
+	int handler_ret;
 	std::stack<enum session_status> previous_status;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
