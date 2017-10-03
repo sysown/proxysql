@@ -1703,9 +1703,10 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	myprot=_myprot;
 	mysql=_my;
 	buffer=NULL;
-	if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
+	//if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
+	// removing the previous assumption. We allocate this buffer also for prepared statements
 		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
-	}
+	//}
 	buffer_used=0;
 	myds=NULL;
 	sid=0;
@@ -1741,20 +1742,21 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	unsigned int nTrx=myds->sess->NumActiveTransactions();
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
-		myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
-		sid++;
-		PSarrayOUT.add(pkt.ptr,pkt.size);
-		resultset_size+=pkt.size;
-	} else {
+//	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
+//		myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
+//		sid++;
+//		PSarrayOUT.add(pkt.ptr,pkt.size);
+//		resultset_size+=pkt.size;
+	//} else {
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
 		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, mysql->server_status|setStatus, this);
 		sid++;
 		resultset_size += 9;
-	}
+	//}
 	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
+		buffer_to_PSarrayOut();
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
 		if (r) {
