@@ -73,6 +73,7 @@ static void * HGCU_thread_run() {
 		my_bool *ret=(my_bool *)malloc(sizeof(my_bool)*l);
 		int i;
 		for (i=0;i<(int)l;i++) {
+			myconn->reset();
 			myconn=(MySQL_Connection *)conn_array->index(i);
 			if (myconn->mysql->net.vio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname);
@@ -88,7 +89,6 @@ static void * HGCU_thread_run() {
 			if (statuses[i]==0) {
 				myconn=(MySQL_Connection *)conn_array->remove_index_fast(i);
 				if (!ret[i]) {
-					myconn->reset();
 					MyHGM->push_MyConn_to_pool(myconn);
 				} else {
 					myconn->send_quit=false;
