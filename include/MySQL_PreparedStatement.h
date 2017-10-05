@@ -75,6 +75,7 @@ class MySQL_STMT_Global_info {
 	MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
 #else
 	MySQL_STMT_Global_info(uint64_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
+	void update_metadata(MYSQL_STMT *stmt);
 #endif
 	~MySQL_STMT_Global_info();
 };

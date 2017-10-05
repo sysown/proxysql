@@ -222,6 +222,192 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 	}
 }
 
+#ifdef PROXYSQL_STMT_V14
+void MySQL_STMT_Global_info::update_metadata(MYSQL_STMT *stmt) {
+	int i;
+	bool need_refresh = false;
+	if (
+		(num_params != stmt->param_count)
+		||
+		(num_columns != stmt->field_count)
+	) {
+		need_refresh = true;
+	}
+	for (i = 0; i < num_columns; i++) {
+		if (need_refresh == false) { // don't bother to check if need_refresh == true
+			bool ok = true;
+			MYSQL_FIELD *fs = &(stmt->fields[i]);
+			MYSQL_FIELD *fd = fields[i];
+			if (ok) {
+				ok = false;
+				if (fd->name == NULL && fs->name == NULL) {
+					ok = true;
+				} else {
+					if (fd->name && fs->name && strcmp(fd->name,fs->name)==0) {
+						ok = true;
+					}
+				}
+			}
+			if (ok) {
+				ok = false;
+				if (fd->org_name == NULL && fs->org_name == NULL) {
+					ok = true;
+				} else {
+					if (fd->org_name && fs->org_name && strcmp(fd->org_name,fs->org_name)==0) {
+						ok = true;
+					}
+				}
+			}
+			if (ok) {
+				ok = false;
+				if (fd->table == NULL && fs->table == NULL) {
+					ok = true;
+				} else {
+					if (fd->table && fs->table && strcmp(fd->table,fs->table)==0) {
+						ok = true;
+					}
+				}
+			}
+			if (ok) {
+				ok = false;
+				if (fd->org_table == NULL && fs->org_table == NULL) {
+					ok = true;
+				} else {
+					if (fd->org_table && fs->org_table && strcmp(fd->org_table,fs->org_table)==0) {
+						ok = true;
+					}
+				}
+			}
+			if (ok) {
+				ok = false;
+				if (fd->db == NULL && fs->db == NULL) {
+					ok = true;
+				} else {
+					if (fd->db && fs->db && strcmp(fd->db,fs->db)==0) {
+						ok = true;
+					}
+				}
+			}
+			if (ok) {
+				ok = false;
+				if (fd->catalog == NULL && fs->catalog == NULL) {
+					ok = true;
+				} else {
+					if (fd->catalog && fs->catalog && strcmp(fd->catalog,fs->catalog)==0) {
+						ok = true;
+					}
+				}
+			}
+			if (ok) {
+				ok = false;
+				if (fd->def == NULL && fs->def == NULL) {
+					ok = true;
+				} else {
+					if (fd->def && fs->def && strcmp(fd->def,fs->def)==0) {
+						ok = true;
+					}
+				}
+			}
+			if (ok == false) {
+				need_refresh = true;
+			}
+		}
+	}
+	if (need_refresh) {
+		proxy_warning("Updating metadata for stmt %lu , user %s, query %s\n", statement_id, username, query);
+// from here is copied from destructor
+		if (num_columns) {
+			uint16_t i;
+			for (i = 0; i < num_columns; i++) {
+				MYSQL_FIELD *f = fields[i];
+				if (f->name) {
+					free(f->name);
+					f->name = NULL;
+				}
+				if (f->org_name) {
+					free(f->org_name);
+					f->org_name = NULL;
+				}
+				if (f->table) {
+					free(f->table);
+					f->table = NULL;
+				}
+				if (f->org_table) {
+					free(f->org_table);
+					f->org_table = NULL;
+				}
+				if (f->db) {
+					free(f->db);
+					f->db = NULL;
+				}
+				if (f->catalog) {
+					free(f->catalog);
+					f->catalog = NULL;
+				}
+				if (f->def) {
+					free(f->def);
+					f->def = NULL;
+				}
+				free(fields[i]);
+			}
+			free(fields);
+			fields = NULL;
+		}
+		if (num_params) {
+			uint16_t i;
+			for (i = 0; i < num_params; i++) {
+				free(params[i]);
+			}
+			free(params);
+			params = NULL;
+		}
+// till here is copied from destructor
+
+// from here is copied from constructor
+		num_params = stmt->param_count;
+		num_columns = stmt->field_count;
+		fields = NULL;
+		if (num_columns) {
+			fields = (MYSQL_FIELD **)malloc(num_columns * sizeof(MYSQL_FIELD *));
+			uint16_t i;
+			for (i = 0; i < num_columns; i++) {
+				fields[i] = (MYSQL_FIELD *)malloc(sizeof(MYSQL_FIELD));
+				MYSQL_FIELD *fs = &(stmt->fields[i]);
+				MYSQL_FIELD *fd = fields[i];
+				// first copy all fields
+				memcpy(fd, fs, sizeof(MYSQL_FIELD));
+				// then duplicate strings
+				fd->name = (fs->name ? strdup(fs->name) : NULL);
+				fd->org_name = (fs->org_name ? strdup(fs->org_name) : NULL);
+				fd->table = (fs->table ? strdup(fs->table) : NULL);
+				fd->org_table = (fs->org_table ? strdup(fs->org_table) : NULL);
+				fd->db = (fs->db ? strdup(fs->db) : NULL);
+				fd->catalog = (fs->catalog ? strdup(fs->catalog) : NULL);
+				fd->def = (fs->def ? strdup(fs->def) : NULL);
+			}
+		}
+	
+		params = NULL;
+		if (num_params == 2) {
+			PROXY_TRACE();
+		}
+		if (num_params) {
+			params = (MYSQL_BIND **)malloc(num_params * sizeof(MYSQL_BIND *));
+			uint16_t i;
+			for (i = 0; i < num_params; i++) {
+				params[i] = (MYSQL_BIND *)malloc(sizeof(MYSQL_BIND));
+				// MYSQL_BIND *ps=&(stmt->params[i]);
+				// MYSQL_BIND *pd=params[i];
+				// copy all params
+				// memcpy(pd,ps,sizeof(MYSQL_BIND));
+				memset(params[i], 0, sizeof(MYSQL_BIND));
+			}
+		}
+// till here is copied from constructor
+	}
+}
+#endif
+
 MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
 	free(username);
 	free(schemaname);
@@ -772,6 +958,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 		// MySQL_STMT_Global_info *a=f->second;
 		// ret=a->statement_id;
 		ret = f->second;
+		ret->update_metadata(stmt);
 		//*is_new = false;
 	} else {
 		// FIXME: add a stack here too!!!

@@ -2692,6 +2692,14 @@ handler_again:
 					}
 				} else {
 					if (rc==-1) {
+						int myerr=mysql_errno(myconn->mysql);
+						char *errmsg = NULL;
+						if (myerr == 0) {
+							if (CurrentQuery.mysql_stmt) {
+								myerr = mysql_stmt_errno(CurrentQuery.mysql_stmt);
+								errmsg = strdup(mysql_stmt_error(CurrentQuery.mysql_stmt));
+							}
+						}
 						CurrentQuery.mysql_stmt=NULL; // immediately reset mysql_stmt
 						// the query failed
 						if (
@@ -2742,11 +2750,10 @@ handler_again:
 							handler_ret = -1;
 							return handler_ret;
 						}
-						int myerr=mysql_errno(myconn->mysql);
 						if (myerr > 2000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
 							if (myds->query_retries_on_failure > 0) {
 								myds->query_retries_on_failure--;
 								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -2770,16 +2777,27 @@ handler_again:
 									case PROCESSING_STMT_PREPARE:
 										previous_status.push(PROCESSING_STMT_PREPARE);
 										break;
+									case PROCESSING_STMT_EXECUTE:
+										previous_status.push(PROCESSING_STMT_EXECUTE);
+										break;
 									default:
 										assert(0);
 										break;
 								}
+								if (errmsg) {
+									free(errmsg);
+									errmsg = NULL;
+								}
 								NEXT_IMMEDIATE(CONNECTING_SERVER);
+							}
+							if (errmsg) {
+								free(errmsg);
+								errmsg = NULL;
 							}
 							handler_ret = -1;
 							return handler_ret;
 						} else {
-							proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
 
 							bool retry_conn=false;
 							switch (myerr) {
@@ -2817,6 +2835,10 @@ handler_again:
 										default:
 											assert(0);
 											break;
+										}
+										if (errmsg) {
+											free(errmsg);
+											errmsg = NULL;
 										}
 										NEXT_IMMEDIATE(CONNECTING_SERVER);
 									}
