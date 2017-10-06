@@ -791,6 +791,41 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 	if (s != map_stmt_id_to_info.end()) {
 		MySQL_STMT_Global_info *stmt_info = s->second;
 		stmt_info->ref_count_client += _v;
+			if (map_stmt_id_to_info.size() > (unsigned)mysql_thread___max_stmts_cache) {
+				int max_purge = map_stmt_id_to_info.size() / 20;  // purge up to 5%
+				int i = -1;
+				uint64_t *torem =
+				    (uint64_t *)malloc(max_purge * sizeof(uint64_t));
+				for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it =
+				         map_stmt_id_to_info.begin();
+				     it != map_stmt_id_to_info.end(); ++it) {
+					if (i == (max_purge - 1)) continue;
+					MySQL_STMT_Global_info *a = it->second;
+					if (__sync_add_and_fetch(&a->ref_count_client, 0) == 0) {
+						uint64_t hash = a->hash;
+						auto s2 = map_stmt_hash_to_info.find(hash);
+						if (s2 != map_stmt_hash_to_info.end()) {
+							map_stmt_hash_to_info.erase(s2);
+						}
+						// m.erase(it);
+						// delete a;
+						i++;
+						torem[i] = it->first;
+					}
+				}
+				while (i >= 0) {
+					uint64_t id = torem[i];
+					auto s3 = map_stmt_id_to_info.find(id);
+					MySQL_STMT_Global_info *a = s3->second;
+					if (a->ref_count_server == 0) {
+						free_stmt_ids.push(id);
+					}
+					map_stmt_id_to_info.erase(s3);
+					delete a;
+					i--;
+				}
+				free(torem);
+			}
 	}
 	if (lock)
 		pthread_rwlock_unlock(&rwlock_);
@@ -963,23 +998,23 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 	} else {
 		// FIXME: add a stack here too!!!
 		// we need to create a new one
-/*
+
 		bool free_id_avail = false;
 		free_id_avail = free_stmt_ids.size();
 
-		uint32_t next_id = 0;
+		uint64_t next_id = 0;
 		if (free_id_avail) {
 			next_id = free_stmt_ids.top();
 			free_stmt_ids.pop();
 		} else {
-			// next_id = next_statement_id;
-			// next_statement_id++;
-			__sync_fetch_and_add(&next_statement_id, 1);
+			next_id = next_statement_id;
+			next_statement_id++;
+			//__sync_fetch_and_add(&next_statement_id, 1);
 		}
-*/
-		next_statement_id++;
+
+		//next_statement_id++;
 		MySQL_STMT_Global_info *a =
-		    new MySQL_STMT_Global_info(next_statement_id, _h, u, s, q, ql, stmt, hash);
+		    new MySQL_STMT_Global_info(next_id, _h, u, s, q, ql, stmt, hash);
 		a->properties.cache_ttl = _cache_ttl;
 		a->properties.timeout = _timeout;
 		a->properties.delay = _delay;

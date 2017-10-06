@@ -295,6 +295,7 @@ class MySQL_STMT_Manager_v14 {
 	pthread_rwlock_t rwlock_;
 	std::map<uint64_t, MySQL_STMT_Global_info *> map_stmt_id_to_info;	// map using statement id
 	std::map<uint64_t, MySQL_STMT_Global_info *> map_stmt_hash_to_info;	// map using hashes
+	std::stack<uint64_t> free_stmt_ids;
 	public:
 	MySQL_STMT_Manager_v14();
 	~MySQL_STMT_Manager_v14();
