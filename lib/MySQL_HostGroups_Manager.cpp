@@ -76,7 +76,17 @@ static void * HGCU_thread_run() {
 			myconn->reset();
 			myconn=(MySQL_Connection *)conn_array->index(i);
 			if (myconn->mysql->net.vio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
-				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, myconn->userinfo->password, myconn->userinfo->schemaname);
+				MySQL_Connection_userinfo *userinfo = myconn->userinfo;
+				char *auth_password = NULL;
+				if (userinfo->password) {
+					if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
+						auth_password=userinfo->sha1_pass;
+					} else {
+						auth_password=userinfo->password;
+					}
+				}
+				//async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
+				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, auth_password, myconn->userinfo->schemaname);
 				if (myconn->mysql->net.vio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
 				}
@@ -1405,11 +1415,11 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < 100) {
+	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
 		// overall, the backend seems healthy and so it is the connection. Try to reset it
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 		to_del=false;
-		c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
+		//c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
 		queue.add(c);
 	} else {
 		// we lock only this part of the code because we need to remove the connection from ConnectionsUsed

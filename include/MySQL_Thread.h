@@ -392,6 +392,7 @@ class MySQL_Threads_Handler
 		uint16_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
+		int connpoll_reset_queue_length;
 		char *eventslog_filename;
 		int eventslog_filesize;
 		// SSL related, proxy to server

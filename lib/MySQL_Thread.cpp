@@ -283,6 +283,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"init_connect",
 	(char *)"default_sql_mode",
 	(char *)"default_time_zone",
+	(char *)"connpoll_reset_queue_length",
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	NULL
@@ -383,6 +384,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.autocommit_false_not_reusable=false;
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
+	variables.connpoll_reset_queue_length = 50;
 	variables.stats_time_backend_query=true;
 	variables.stats_time_query_processor=true;
 	variables.sessions_sort=true;
@@ -628,6 +630,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+	if (!strcasecmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
 	if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 	if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
@@ -789,6 +792,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"shun_on_failures")) {
 		sprintf(intbuf,"%d",variables.shun_on_failures);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"connpoll_reset_queue_length")) {
+		sprintf(intbuf,"%d",variables.connpoll_reset_queue_length);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"shun_recovery_time_sec")) {
@@ -1644,6 +1651,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 10 && intv <= 20000) {
 			variables.poll_timeout_on_failure=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"connpoll_reset_queue_length")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			variables.connpoll_reset_queue_length=intv;
 			return true;
 		} else {
 			return false;
