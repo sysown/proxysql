@@ -787,6 +787,13 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	memcpy(okpack+14,&stmt_info->warning_count,sizeof(uint16_t));
 	(*myds)->PSarrayOUT->add((void *)okpack,16);
 	sid++;
+	int setStatus = SERVER_STATUS_AUTOCOMMIT;
+	if (myds) {
+		setStatus = 0;
+		unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
+		setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
+		if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+	}
 	if (stmt_info->num_params) {
 		for (i=0; i<stmt_info->num_params; i++) {
 			generate_pkt_field(true,NULL,NULL,sid,
@@ -794,7 +801,7 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 				63,0,253,128,0,false,0,NULL); // NOTE: charset is 63 = binary !
 			sid++;
 		}
-		generate_pkt_EOF(true,NULL,NULL,sid,0,SERVER_STATUS_AUTOCOMMIT); // FIXME : for now we pass a very broken flag
+		generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
 		sid++;
 	}
 	if (stmt_info->num_columns) {
@@ -804,10 +811,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 				fd->db,
 				fd->table, fd->org_table,
 				fd->name, fd->org_name,
-				fd->charsetnr, field->length, fd->type, fd->flags, fd->decimals, false,0,NULL);
+				fd->charsetnr, fd->length, fd->type, fd->flags, fd->decimals, false,0,NULL);
 			sid++;
 		}
-		generate_pkt_EOF(true,NULL,NULL,sid,0,SERVER_STATUS_AUTOCOMMIT); // FIXME : for now we pass a very broken flag
+		generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
 		sid++;
 	}
 	return true;
