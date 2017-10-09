@@ -804,7 +804,7 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 				fd->db,
 				fd->table, fd->org_table,
 				fd->name, fd->org_name,
-				fd->charsetnr, 0, fd->type, fd->flags, fd->decimals, false,0,NULL);
+				fd->charsetnr, field->length, fd->type, fd->flags, fd->decimals, false,0,NULL);
 			sid++;
 		}
 		generate_pkt_EOF(true,NULL,NULL,sid,0,SERVER_STATUS_AUTOCOMMIT); // FIXME : for now we pass a very broken flag
