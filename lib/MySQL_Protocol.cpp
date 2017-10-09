@@ -1760,7 +1760,7 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, mysql->server_status|setStatus, this);
+		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, (mysql->server_status & SERVER_STATUS_IN_TRANS) |setStatus, this);
 		sid++;
 		resultset_size += 9;
 	//}
@@ -1899,7 +1899,7 @@ void MySQL_ResultSet::add_eof() {
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, mysql->server_status|setStatus, this);
+		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, (mysql->server_status & SERVER_STATUS_IN_TRANS) |setStatus, this);
 		sid++;
 		resultset_size += 9;
 		buffer_to_PSarrayOut(true);

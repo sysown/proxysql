@@ -3860,7 +3860,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
 				setStatus += SERVER_MORE_RESULTS_EXIST;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status|setStatus,mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, (mysql->server_status & SERVER_STATUS_IN_TRANS) |setStatus , mysql->warning_count,mysql->info);
 			client_myds->pkt_sid++;
 		} else {
 			// error
@@ -3908,7 +3908,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
 				setStatus += SERVER_MORE_RESULTS_EXIST;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id,mysql->server_status|setStatus,mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, (mysql->server_status & SERVER_STATUS_IN_TRANS) |setStatus,mysql->warning_count,mysql->info);
 			client_myds->pkt_sid++;
 		} else {
 			// error
