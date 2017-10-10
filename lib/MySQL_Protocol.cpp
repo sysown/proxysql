@@ -1751,6 +1751,7 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	unsigned int nTrx=myds->sess->NumActiveTransactions();
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+	setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 //	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
 //		myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
 //		sid++;
@@ -1760,7 +1761,7 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, (mysql->server_status & SERVER_STATUS_IN_TRANS) |setStatus, this);
+		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
 		sid++;
 		resultset_size += 9;
 	//}
@@ -1892,6 +1893,7 @@ void MySQL_ResultSet::add_eof() {
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 		//myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
 		//PSarrayOUT->add(pkt.ptr,pkt.size);
 		//sid++;
@@ -1899,7 +1901,7 @@ void MySQL_ResultSet::add_eof() {
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, (mysql->server_status & SERVER_STATUS_IN_TRANS) |setStatus, this);
+		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
 		sid++;
 		resultset_size += 9;
 		buffer_to_PSarrayOut(true);
