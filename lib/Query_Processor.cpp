@@ -577,7 +577,7 @@ SQLite3_result * Query_Processor::get_stats_commands_counters() {
 	result->add_column_definition(SQLITE_TEXT,"cnt_5s");
 	result->add_column_definition(SQLITE_TEXT,"cnt_10s");
 	result->add_column_definition(SQLITE_TEXT,"cnt_INFs");
-	for (int i=0;i<MYSQL_COM_QUERY___NONE;i++) {
+	for (int i=0 ; i < MYSQL_COM_QUERY__UNINITIALIZED ; i++) {
 		char **pta=commands_counters[i]->get_row();
 		result->add_row(pta);
 		commands_counters[i]->free_row(pta);
@@ -1278,14 +1278,23 @@ enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_pa
 	enum MYSQL_COM_QUERY_command ret=MYSQL_COM_QUERY_UNKNOWN;
 	char c1;
 
-  tokenizer_t tok;
+	tokenizer_t tok;
 	tokenizer( &tok, text, " ", TOKENIZER_NO_EMPTIES );
-  char* token=NULL;
+	char* token=NULL;
+__get_token:
 	token=(char *)tokenize(&tok);
 	if (token==NULL) {
 		goto __exit__query_parser_command_type;
 	}
-
+__remove_paranthesis:
+	if (token[0] == '(') {
+		if (strlen(token) > 1) {
+			token++;
+			goto __remove_paranthesis;
+		} else {
+			goto __get_token;
+		}
+	}
 	c1=token[0];
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", token, c1);
 	switch (c1) {

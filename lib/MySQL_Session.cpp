@@ -166,7 +166,7 @@ void Query_Info::end() {
 void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=(mysql_header ? len-5 : len);
 	QueryPointer=(mysql_header ? _p+5 : _p);
-	MyComQueryCmd=MYSQL_COM_QUERY_UNKNOWN;
+	MyComQueryCmd = MYSQL_COM_QUERY__UNINITIALIZED;
 }
 
 void Query_Info::query_parser_init() {
@@ -187,7 +187,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
 		MyComQueryCmd=stmt_info->MyComQueryCmd;
 	}
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
-	if (MyComQueryCmd==MYSQL_COM_QUERY_UNKNOWN) return 0; // this means that it was never initialized
+	if (MyComQueryCmd == MYSQL_COM_QUERY__UNINITIALIZED) return 0; // this means that it was never initialized
 	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
