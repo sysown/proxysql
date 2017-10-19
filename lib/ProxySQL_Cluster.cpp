@@ -538,7 +538,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				}
 			}
 		} else {
-			if (v->diff_check && (v->diff_check % (diff_ms*10)) == 0) {
+			if (v->diff_check && (v->diff_check % (diff_ps*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %llu. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));
 			}
 		}
