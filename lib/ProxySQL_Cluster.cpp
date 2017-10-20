@@ -1080,27 +1080,41 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
+	unsigned int diff_mqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync,0);
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_query_rules;
 		if (v->version > 1) {
-			if ( v->epoch > epoch && v->diff_check > 3) {
-				epoch = v->epoch;
-				version = v->version;
-				if (hostname) {
-					free(hostname);
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check > diff_mqr) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					hostname=strdup(node->get_hostname());
+					p = node->get_port();
 				}
-				hostname=strdup(node->get_hostname());
-				p = node->get_port();
 			}
 		}
 		it++;
 	}
 //	pthread_mutex_unlock(&mutex);
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with mysql_query_rules epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+		}
+	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
@@ -1111,27 +1125,41 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uin
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_t *port) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
+	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_servers;
 		if (v->version > 1) {
-			if ( v->epoch > epoch && v->diff_check > 3) {
-				epoch = v->epoch;
-				version = v->version;
-				if (hostname) {
-					free(hostname);
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check > diff_ms) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					hostname=strdup(node->get_hostname());
+					p = node->get_port();
 				}
-				hostname=strdup(node->get_hostname());
-				p = node->get_port();
 			}
 		}
 		it++;
 	}
 //	pthread_mutex_unlock(&mutex);
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with mysql_servers epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+		}
+	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
@@ -1142,27 +1170,41 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t *port) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
+	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_users;
 		if (v->version > 1) {
-			if ( v->epoch > epoch && v->diff_check > 3) {
-				epoch = v->epoch;
-				version = v->version;
-				if (hostname) {
-					free(hostname);
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check > diff_mu) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					hostname=strdup(node->get_hostname());
+					p = node->get_port();
 				}
-				hostname=strdup(node->get_hostname());
-				p = node->get_port();
 			}
 		}
 		it++;
 	}
 //	pthread_mutex_unlock(&mutex);
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with mysql_users epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+		}
+	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
@@ -1173,27 +1215,41 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
+	unsigned int diff_ps = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync,0);
 	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.proxysql_servers;
 		if (v->version > 1) {
-			if ( v->epoch > epoch && v->diff_check > 3) {
-				epoch = v->epoch;
-				version = v->version;
-				if (hostname) {
-					free(hostname);
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check > diff_ps) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					hostname=strdup(node->get_hostname());
+					p = node->get_port();
 				}
-				hostname=strdup(node->get_hostname());
-				p = node->get_port();
 			}
 		}
 		it++;
 	}
 //	pthread_mutex_unlock(&mutex);
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with proxysql_servers epoch %llu , but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+		}
+	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
