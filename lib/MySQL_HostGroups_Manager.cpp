@@ -320,6 +320,8 @@ MySrvList::~MySrvList() {
 MyHGC::MyHGC(int _hid) {
 	hid=_hid;
 	mysrvs=new MySrvList(this);
+	current_time_now = 0;
+	new_connections_now = 0;
 }
 
 
@@ -1387,11 +1389,24 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(bool ff) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return conn;
 	} else {
-		conn = new MySQL_Connection();
-		conn->parent=mysrvc;
-		__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
-		return  conn;
+		unsigned long long curtime = monotonic_time();
+		curtime = curtime / 1000 / 1000; // convert to second
+		MyHGC *_myhgc = mysrvc->myhgc;
+		if (curtime > _myhgc->current_time_now) {
+			_myhgc->current_time_now = curtime;
+			_myhgc->new_connections_now = 0;
+		}
+		_myhgc->new_connections_now++;
+		if (_myhgc->new_connections_now > (unsigned int) mysql_thread___throttle_connections_per_sec_to_hostgroup) {
+			__sync_fetch_and_add(&MyHGM->status.server_connections_delayed, 1);
+			return NULL;
+		} else {
+			conn = new MySQL_Connection();
+			conn->parent=mysrvc;
+			__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+			return  conn;
+		}
 	}
 	return NULL; // never reach here
 }
@@ -1404,8 +1419,10 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	MySrvC *mysrvc=myhgc->get_random_MySrvC();
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(ff);
-		mysrvc->ConnectionsUsed->add(conn);
-		status.myconnpoll_get_ok++;
+		if (conn) {
+			mysrvc->ConnectionsUsed->add(conn);
+			status.myconnpoll_get_ok++;
+		}
 	}
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, (conn ? conn->parent->address : "") , (conn ? conn->parent->port : 0 ));

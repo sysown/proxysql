@@ -232,6 +232,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
+	(char *)"throttle_connections_per_sec_to_hostgroup",
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
 	(char *)"forward_autocommit",
@@ -342,6 +343,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
 	variables.max_allowed_packet=4*1024*1024;
+	variables.throttle_connections_per_sec_to_hostgroup=1000000;
 	variables.max_transaction_time=4*3600*1000;
 	variables.hostgroup_manager_verbose=1;
 	variables.threshold_query_length=512*1024;
@@ -596,6 +598,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
 	if (!strcasecmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 	if (!strcasecmp(name,"max_allowed_packet")) return (int)variables.max_allowed_packet;
+	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) return (int)variables.throttle_connections_per_sec_to_hostgroup;
 	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
 	if (!strcasecmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
 	if (!strcasecmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
@@ -846,6 +849,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"max_allowed_packet")) {
 		sprintf(intbuf,"%d",variables.max_allowed_packet);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) {
+		sprintf(intbuf,"%d",variables.throttle_connections_per_sec_to_hostgroup);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"max_transaction_time")) {
@@ -1215,6 +1222,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 20*24*3600*1000) {
 			variables.max_transaction_time=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 100*1000*1000) {
+			variables.throttle_connections_per_sec_to_hostgroup=intv;
 			return true;
 		} else {
 			return false;
@@ -3058,6 +3074,7 @@ void MySQL_Thread::refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
 	mysql_thread___max_allowed_packet=GloMTH->get_variable_int((char *)"max_allowed_packet");
+	mysql_thread___throttle_connections_per_sec_to_hostgroup=GloMTH->get_variable_int((char *)"throttle_connections_per_sec_to_hostgroup");
 	mysql_thread___max_transaction_time=GloMTH->get_variable_int((char *)"max_transaction_time");
 	mysql_thread___threshold_query_length=GloMTH->get_variable_int((char *)"threshold_query_length");
 	mysql_thread___threshold_resultset_size=GloMTH->get_variable_int((char *)"threshold_resultset_size");
@@ -3375,6 +3392,13 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
 		// Connections
 		pta[0]=(char *)"Server_Connections_created";
 		sprintf(buf,"%lu",MyHGM->status.server_connections_created);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{
+		// Connections delayed
+		pta[0]=(char *)"Server_Connections_delayed";
+		sprintf(buf,"%lu",MyHGM->status.server_connections_delayed);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
