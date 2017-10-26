@@ -728,8 +728,9 @@ __exit_pull_mysql_users_from_peer:
 void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 	char * hostname = NULL;
 	uint16_t port = 0;
+	char * peer_checksum = NULL;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_servers_mutex);
-	nodes.get_peer_to_sync_mysql_servers(&hostname, &port);
+	nodes.get_peer_to_sync_mysql_servers(&hostname, &port, &peer_checksum);
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
@@ -748,66 +749,107 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started\n", hostname, port);
+			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
+				MYSQL_RES *result1 = NULL;
+				MYSQL_RES *result2 = NULL;
 				GloAdmin->mysql_servers_wrlock();
-				rc_query = mysql_query(conn,"SELECT hostgroup_id, hostname, port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'");
+				//rc_query = mysql_query(conn,"SELECT hostgroup_id, hostname, port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'");
+				rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_SERVERS); // for bug #1188 , ProxySQL Admin needs to know the exact query
 				if ( rc_query == 0 ) {
-					MYSQL_RES *result = mysql_store_result(conn);
-					GloAdmin->admindb->execute("DELETE FROM mysql_servers");
-					MYSQL_ROW row;
-					char *q=(char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (%s, \"%s\", %s, \"%s\", %s, %s, %s, %s, %s, %s, '%s')";
-					while ((row = mysql_fetch_row(result))) {
-						int i;
-						int l=0;
-						for (i=0; i<10; i++) {
-							l+=strlen(row[i]);
-						}
-						char *o=escape_string_single_quotes(row[10],false);
-						char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
+					result1 = mysql_store_result(conn);
 
-						sprintf(query,q,row[0],row[1],row[2],row[3],row[4],row[5],row[6],row[7],row[8],row[9],o);
-						if (o!=row[10]) { // there was a copy
-							free(o);
-						}
-						GloAdmin->admindb->execute(query);
-						free(query);
-					}
-					mysql_free_result(result);
-
-					rc_query = mysql_query(conn,"SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups");
+					//rc_query = mysql_query(conn,"SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups");
+					rc_query = mysql_query(conn,CLSUTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS);
 					if ( rc_query == 0 ) {
-						MYSQL_RES *result = mysql_store_result(conn);
-						GloAdmin->admindb->execute("DELETE FROM mysql_replication_hostgroups");
-						MYSQL_ROW row;
-						char *q=(char *)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment) VALUES (%s, %s, '%s')";
-						while ((row = mysql_fetch_row(result))) {
-							int i;
-							int l=0;
-							for (i=0; i<2; i++) {
-								l+=strlen(row[i]);
-							}
-							char *o=escape_string_single_quotes(row[2],false);
-							char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
-
-							sprintf(query,q,row[0],row[1],o);
-							if (o!=row[2]) { // there was a copy
-								free(o);
-							}
-							GloAdmin->admindb->execute(query);
-							free(query);
-						}
-						mysql_free_result(result);
+						result2 = mysql_store_result(conn);
 						proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d completed\n", hostname, port);
-						proxy_info("Cluster: Loading to runtime MySQL Servers from peer %s:%d\n", hostname, port);
-						GloAdmin->load_mysql_servers_to_runtime();
-						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
-							proxy_info("Cluster: Saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
-							GloAdmin->flush_mysql_servers__from_memory_to_disk();
+						proxy_info("Cluster: Fetching checksum for MySQL Servers from peer %s:%d before proceessing\n", hostname, port);
+						rc_query = mysql_query(conn,"SELECT * FROM runtime_checksums_values WHERE name='mysql_servers' LIMIT 1");
+						if ( rc_query == 0) {
+							MYSQL_RES *result3 = mysql_store_result(conn);
+							MYSQL_ROW row;
+							char *checks = NULL;
+							while ((row = mysql_fetch_row(result3))) {
+								if (checks) { // health check
+									free(checks);
+									checks = NULL;
+								}
+								if (row[3]) {
+									checks = strdup(row[3]); // checksum
+								}
+							}
+							if (checks) {
+								if(strcmp(checks,peer_checksum)==0) {
+									// we are OK to sync!
+									proxy_info("Cluster: Fetching checksum for MySQL Servers from peer %s:%d successful. Checksum: %s\n", hostname, port, checks);
+
+									proxy_info("Cluster: Writing mysql_servers table\n");
+									GloAdmin->admindb->execute("DELETE FROM mysql_servers");
+									MYSQL_ROW row;
+									char *q=(char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (%s, \"%s\", %s, %s, \"%s\", %s, %s, %s, %s, %s, '%s')";
+									while ((row = mysql_fetch_row(result1))) {
+										int i;
+										int l=0;
+										for (i=0; i<10; i++) {
+											l+=strlen(row[i]);
+										}
+										char *o=escape_string_single_quotes(row[10],false);
+										char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
+
+										sprintf(query,q,row[0],row[1],row[2],row[3],row[4],row[5],row[6],row[7],row[8],row[9],o);
+										if (o!=row[10]) { // there was a copy
+											free(o);
+										}
+										GloAdmin->admindb->execute(query);
+										free(query);
+									}
+
+									proxy_info("Cluster: Writing mysql_replication_hostgroups table\n");
+									GloAdmin->admindb->execute("DELETE FROM mysql_replication_hostgroups");
+									q=(char *)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment) VALUES (%s, %s, '%s')";
+									while ((row = mysql_fetch_row(result2))) {
+										int i;
+										int l=0;
+											for (i=0; i<2; i++) {
+											l+=strlen(row[i]);
+										}
+										char *o=escape_string_single_quotes(row[2],false);
+										char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
+										sprintf(query,q,row[0],row[1],o);
+										if (o!=row[2]) { // there was a copy
+											free(o);
+										}
+										GloAdmin->admindb->execute(query);
+										free(query);
+									}
+									//mysql_free_result(result2);
+
+									proxy_info("Cluster: Loading to runtime MySQL Servers from peer %s:%d\n", hostname, port);
+									GloAdmin->load_mysql_servers_to_runtime();
+									if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
+										proxy_info("Cluster: Saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
+										GloAdmin->flush_mysql_servers__from_memory_to_disk();
+									} else {
+										proxy_info("Cluster: Fetching checksum for MySQL Servers from peer %s:%d failed. Checksum: %s\n", hostname, port, checks);
+									}
+								}
+							}
+							if (result3) {
+								mysql_free_result(result3);
+							}
+						} else {
+							proxy_info("Cluster: Fetching checksum for MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+						}
+						if (result2) {
+							mysql_free_result(result2);
 						}
 					} else {
 						proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					}
+					if (result1) {
+						mysql_free_result(result1);
 					}
 				} else {
 					proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
@@ -1122,12 +1164,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uin
 	}
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_t *port) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
 	uint16_t p = 0;
+	char *pc = NULL;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
 	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
@@ -1140,9 +1183,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_
 				if (v->diff_check > diff_ms) {
 					epoch = v->epoch;
 					version = v->version;
+					if (pc) {
+						free(pc);
+					}
 					if (hostname) {
 						free(hostname);
 					}
+					pc = strdup(v->checksum);
 					hostname=strdup(node->get_hostname());
 					p = node->get_port();
 				}
@@ -1158,12 +1205,17 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_
 				free(hostname);
 				hostname = NULL;
 			}
+			if (pc) {
+				free(pc);
+				pc = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
 		proxy_info("Cluster: detected peer %s:%d with mysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
+		*peer_checksum = pc;
 	}
 }
 

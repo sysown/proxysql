@@ -160,6 +160,7 @@ class ProxySQL_Admin {
 	
 
 	public:
+	pthread_mutex_t sql_query_global_mutex;
 	struct {
 		void *opt;
 		void **re;

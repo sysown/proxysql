@@ -8,6 +8,9 @@
 
 #define PROXYSQL_NODE_METRICS_LEN	5
 
+#define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'"
+#define CLSUTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups"
+
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
 	time_t last_updated;
@@ -106,7 +109,7 @@ class ProxySQL_Cluster_Nodes {
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
 	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port);
-	void get_peer_to_sync_mysql_servers(char **host, uint16_t *port);
+	void get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum);
 	void get_peer_to_sync_mysql_users(char **host, uint16_t *port);
 	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port);
 };

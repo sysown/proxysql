@@ -2155,6 +2155,37 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		query_no_space[query_no_space_length]=0;
 	}
 
+	// add global mutex, see bug #1188
+	pthread_mutex_lock(&pa->sql_query_global_mutex);
+
+	// handle special queries from Cluster
+	// for bug #1188 , ProxySQL Admin needs to know the exact query
+	if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS))) {
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+			resultset=MyHGM->dump_table_mysql_servers();
+			if (resultset) {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				delete resultset;
+				fprintf(stderr,"hello\n");
+				run_query=false;
+				goto __run_query;
+			}
+		}
+	}
+	if (!strncasecmp(CLSUTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLSUTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+			resultset=MyHGM->dump_table_mysql_replication_hostgroups();
+			if (resultset) {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				delete resultset;
+				fprintf(stderr,"hello\n");
+				run_query=false;
+				goto __run_query;
+			}
+		}
+	}
 	{
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length, ( sess->session_type == PROXYSQL_SESSION_ADMIN ? true : false )  );
@@ -2835,6 +2866,7 @@ __run_query:
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
+	pthread_mutex_unlock(&pa->sql_query_global_mutex);
 }
 
 
@@ -3114,6 +3146,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	spinlock_rwlock_init(&mysql_servers_rwlock);
 #endif
 
+	pthread_mutex_init(&sql_query_global_mutex, NULL);
 
 
 	variables.admin_credentials=strdup("admin:admin");
