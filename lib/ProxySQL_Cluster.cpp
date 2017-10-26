@@ -798,7 +798,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 										char *o=escape_string_single_quotes(row[10],false);
 										char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
 
-										sprintf(query,q,row[0],row[1],row[2],row[3],row[4],row[5],row[6],row[7],row[8],row[9],o);
+										sprintf(query,q,row[0],row[1],row[2],row[3], ( strcmp(row[4],"SHUNNED")==0 ? "ONLINE" : row[4] ), row[5],row[6],row[7],row[8],row[9],o);
 										if (o!=row[10]) { // there was a copy
 											free(o);
 										}
