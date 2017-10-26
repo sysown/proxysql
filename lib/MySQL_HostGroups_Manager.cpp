@@ -1441,6 +1441,7 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 }
 
 void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
+	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 	int i,j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -1475,6 +1476,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 	}
 __exit_replication_lag_action:
 	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
 }
 
 void MySQL_HostGroups_Manager::drop_all_idle_connections() {
@@ -1695,6 +1697,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 		return;
 	}
 
+	// this prevents that multiple read_only_action() are executed at the same time
 	pthread_mutex_lock(&readonly_mutex);
 
 	// define a buffer that will be used for all queries
@@ -1706,6 +1709,8 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	wrlock();
+	// we run this query holding the mutex
+	// we minimum the time we hold the mutex, as connection pool is being locked
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	int num_rows=0;
