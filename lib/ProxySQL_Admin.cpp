@@ -6942,7 +6942,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			const Setting &server = mysql_servers[i];
 			std::string address;
 			std::string status="ONLINE";
-			int port;
+			int port=3306;
 			int hostgroup;
 			int weight=1;
 			int compression=0;
@@ -6956,7 +6956,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 					continue;
 				}
 			}
-			if (server.lookupValue("port", port)==false) continue;
+			server.lookupValue("port", port);
 			if (server.lookupValue("hostgroup", hostgroup)==false) continue;
 			server.lookupValue("status", status);
 			if (
