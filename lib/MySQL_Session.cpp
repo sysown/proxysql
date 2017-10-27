@@ -3253,6 +3253,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						(strcmp(client_addr,(char *)"127.0.0.1")==0)
 						||
 						(strcmp(client_addr,(char *)"localhost")==0)
+						||
+						(strcmp(client_addr,(char *)"::1")==0)
 					) {
 						// we are good!
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);

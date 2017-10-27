@@ -659,7 +659,6 @@ install: src/proxysql
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
 ifeq ($(SYSTEMD), 1)
 	install -m 0644 systemd/proxysql.service /usr/lib/systemd/system/
-	systemctl daemon-reload
 	systemctl enable proxysql.service
 else
 	install -m 0755 etc/init.d/proxysql /etc/init.d
