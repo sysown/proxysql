@@ -1403,7 +1403,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 					ret=true;
 				}
 			} else {
-				if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+				if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || PROXYSQL_SESSION_ADMIN || PROXYSQL_SESSION_STATS) {
 					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 					if (ret) {
 						if (sha1_pass==NULL) {
