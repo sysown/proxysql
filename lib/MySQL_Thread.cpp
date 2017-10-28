@@ -45,6 +45,17 @@ CHARSET_INFO * proxysql_find_charset_name(const char *name) {
 	return NULL;
 }
 
+CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename) {
+	CHARSET_INFO *c = (CHARSET_INFO *)compiled_charsets;
+	do {
+		if (!strcasecmp(c->csname, csname) && !strcasecmp(c->name, collatename)) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */

@@ -16,6 +16,7 @@
 #define EXPMARIA
 
 extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
+extern CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
@@ -676,16 +677,36 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 		}
 	}
-	if ( (pkt->size < 35) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
+	if ( (pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
-		char *name=trim_spaces_and_quotes_in_place(unstripped);
-		const CHARSET_INFO * c = proxysql_find_charset_name(name);
+		char *csname=trim_spaces_and_quotes_in_place(unstripped);
+		bool collation_specified = false;
+		unsigned int charsetnr = 0;
+		const CHARSET_INFO * c;
+		char * collation_name = NULL;
+		if (strcasestr(csname," COLLATE ")) {
+			collation_specified = true;
+			collation_name = strcasestr(csname," COLLATE ") + strlen(" COLLATE ");
+			char *_s=index(csname,' ');
+			*_s = '\0';
+			c = proxysql_find_charset_collate_names(csname,collation_name);
+		} else {
+			c = proxysql_find_charset_name(csname);
+		}
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		if (!c) {
-			char *m=(char *)"Unknown character set: '%s'";
-			char *errmsg=(char *)malloc(strlen(name)+strlen(m));
-			sprintf(errmsg,m,name);
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"#42000",errmsg);
+			char *m = NULL;
+			char *errmsg = NULL;
+			if (collation_specified) {
+				m=(char *)"Unknown character set '%s' or collation '%s'";
+				errmsg=(char *)malloc(strlen(csname)+strlen(collation_name)+strlen(m));
+				sprintf(errmsg,m,csname,collation_name);
+			} else {
+				m=(char *)"Unknown character set: '%s'";
+				errmsg=(char *)malloc(strlen(csname)+strlen(m));
+				sprintf(errmsg,m,csname);
+			}
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
 			free(errmsg);
 		} else {
 			client_myds->myconn->set_charset(c->nr);

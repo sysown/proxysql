@@ -69,11 +69,10 @@
      mysql->user= s_user;
      mysql->passwd= s_passwd;
      mysql->db= s_db;
-@@ -2395,6 +2404,36 @@
-     /* Clear pointers for better safety */
+@@ -2396,6 +2405,36 @@
      bzero((char*) &mysql->options,sizeof(mysql->options));
      mysql->net.vio= 0;
-+    if (mysql->free_me)
+     if (mysql->free_me)
 +      my_free((gptr) mysql);
 +  }
 +  DBUG_VOID_RETURN;
@@ -103,6 +102,42 @@
 +    /* Clear pointers for better safety */
 +    bzero((char*) &mysql->options,sizeof(mysql->options));
 +    mysql->net.vio= 0;
-     if (mysql->free_me)
++    if (mysql->free_me)
        my_free(mysql);
    }
+   DBUG_VOID_RETURN;
+@@ -3510,19 +3549,27 @@
+   DBUG_VOID_RETURN;
+ }
+ 
+-int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname)
++int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname, uint charsetnr)
+ {
+   const CHARSET_INFO *cs;
+   DBUG_ENTER("mysql_set_character_set");
+ 
+-  if (!csname)
++  if (!csname && !charsetnr)
+     goto error;
+ 
+-  if ((cs= mysql_find_charset_name(csname)))
+-  {
+-    char buff[64];
+-
+-    my_snprintf(buff, 63, "SET NAMES %s", cs->csname);
++  if (csname) {
++	cs = mysql_find_charset_name(csname);
++  } else {
++    cs = mysql_find_charset_nr(charsetnr); 
++  }
++  if (cs)
++  {
++    char buff[128];
++    if (csname) { // default behavior
++      my_snprintf(buff, 63, "SET NAMES %s", cs->csname);
++    } else {
++      my_snprintf(buff, 63, "SET NAMES %s COLLATE %s", cs->csname, cs->name);
++    }
+     if (!mysql_real_query(mysql, buff, (uint)strlen(buff)))
+     {
+       mysql->charset= cs;

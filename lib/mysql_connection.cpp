@@ -471,7 +471,7 @@ void MySQL_Connection::set_names_start() {
 		proxy_error("Not existing charset number %u\n", options.charset);
 		assert(0);
 	}
-	async_exit_status = mysql_set_character_set_start(&interr,mysql, c->csname);
+	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, options.charset);
 }
 
 void MySQL_Connection::set_names_cont(short event) {

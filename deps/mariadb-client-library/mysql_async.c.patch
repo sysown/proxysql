@@ -1,9 +1,31 @@
-@@ -805,7 +805,7 @@
-   int res;
- 
-   /* It is legitimate to have NULL sock argument, which will do nothing. */
--  if (sock)
-+  if (sock && sock->net.vio)
-   {
-     res= mysql_close_slow_part_start(sock);
-     /* If we need to block, return now and do the rest in mysql_close_cont(). */
+@@ -570,19 +570,20 @@
+ struct mysql_set_character_set_params {
+   MYSQL *mysql;
+   const char *csname;
++  uint charsetnr;
+ };
+ static void
+ mysql_set_character_set_start_internal(void *d)
+ {
+ MK_ASYNC_INTERNAL_BODY(
+   mysql_set_character_set,
+-  (parms->mysql, parms->csname),
++  (parms->mysql, parms->csname, parms->charsetnr),
+   parms->mysql,
+   int,
+   r_int)
+ }
+ int STDCALL
+-mysql_set_character_set_start(int *ret, MYSQL *mysql, const char *csname)
++mysql_set_character_set_start(int *ret, MYSQL *mysql, const char *csname, uint charsetnr)
+ {
+ MK_ASYNC_START_BODY(
+   mysql_set_character_set,
+@@ -591,6 +592,7 @@
+     WIN_SET_NONBLOCKING(mysql)
+     parms.mysql= mysql;
+     parms.csname= csname;
++    parms.charsetnr= charsetnr;
+   },
+   1,
+   r_int,
