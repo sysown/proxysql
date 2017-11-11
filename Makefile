@@ -668,7 +668,13 @@ else
 ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
 		chkconfig --level 0123456 proxysql on
 else
+ifeq ($(DISTRO),"Ubuntu")
 		update-rc.d proxysql defaults
+else
+ifeq ($(DISTRO),"Debian GNU/Linux")
+		update-rc.d proxysql defaults
+else
+		
 endif
 endif
 endif
@@ -690,8 +696,15 @@ ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
 		chkconfig --level 0123456 proxysql off
 		rm /etc/init.d/proxysql
 else
+ifeq ($(DISTRO),"Ubuntu")
 		rm /etc/init.d/proxysql
 		update-rc.d proxysql remove
+else
+ifeq ($(DISTRO),"Debian GNU/Linux")
+		rm /etc/init.d/proxysql
+		update-rc.d proxysql remove
+else
+		
 endif
 endif
 endif
