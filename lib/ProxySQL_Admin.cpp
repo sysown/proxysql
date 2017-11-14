@@ -23,6 +23,10 @@
 #include <fcntl.h>
 #include <sys/utsname.h>
 
+#include "platform.h"
+#include "microhttpd.h"
+
+
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -35,6 +39,10 @@
 #define READ_ONLY_OFF "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0e\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x03\x4f\x46\x46\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 
+
+struct MHD_Daemon *Admin_HTTP_Server;
+
+extern ProxySQL_Statistics *GloProxyStats;
 
 #ifdef __APPLE__
 #ifndef MSG_NOSIGNAL
@@ -149,7 +157,6 @@ extern ClickHouse_Server *GloClickHouseServer;
 
 extern SQLite3_Server *GloSQLite3Server;
 
-
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 int rc, arg_on=1, arg_off=0;
@@ -157,6 +164,11 @@ int rc, arg_on=1, arg_off=0;
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+
+static int http_handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr) {
+	return GloAdmin->AdminHTTPServer->handler(cls, connection, url, method, version, upload_data, upload_data_size, ptr);
+}
 
 #define LINESIZE	2048
 
@@ -287,12 +299,17 @@ pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 static char * admin_variables_names[]= {
-  (char *)"admin_credentials",
-  (char *)"stats_credentials",
-  (char *)"mysql_ifaces",
-  (char *)"telnet_admin_ifaces",
-  (char *)"telnet_stats_ifaces",
-  (char *)"refresh_interval",
+	(char *)"admin_credentials",
+	(char *)"stats_credentials",
+	(char *)"stats_mysql_connections",
+	(char *)"stats_mysql_connection_pool",
+	(char *)"stats_mysql_query_cache",
+	(char *)"stats_system_cpu",
+	(char *)"stats_system_memory",
+	(char *)"mysql_ifaces",
+	(char *)"telnet_admin_ifaces",
+	(char *)"telnet_stats_ifaces",
+	(char *)"refresh_interval",
 	(char *)"read_only",
 	(char *)"hash_passwords",
 	(char *)"version",
@@ -311,6 +328,8 @@ static char * admin_variables_names[]= {
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
 	(char *)"checksum_mysql_users",
+	(char *)"web_enabled",
+	(char *)"web_port",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -3053,6 +3072,23 @@ static void * admin_main_loop(void *arg)
 			fds[i].revents=0;
 		}
 __end_while_pool:
+		{
+			if (GloProxyStats->MySQL_Threads_Handler_timetoget(curtime)) {
+				if (GloMTH) {
+					SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus(false);
+					if (resultset) {
+						GloProxyStats->MySQL_Threads_Handler_sets(resultset);
+						delete resultset;
+					}
+				}
+			}
+			if (GloProxyStats->system_cpu_timetoget(curtime)) {
+				GloProxyStats->system_cpu_sets();
+			}
+			if (GloProxyStats->system_memory_timetoget(curtime)) {
+				GloProxyStats->system_memory_sets();
+			}
+		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
 			version=S_amll.get_version();
@@ -3177,6 +3213,22 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.cluster_mysql_servers_save_to_disk = true;
 	variables.cluster_mysql_users_save_to_disk = true;
 	variables.cluster_proxysql_servers_save_to_disk = true;
+	variables.stats_mysql_connection_pool = 60;
+	variables.stats_mysql_connections = 60;
+	variables.stats_mysql_query_cache = 60;
+	variables.stats_system_cpu = 60;
+	variables.stats_system_memory = 60;
+	GloProxyStats->variables.stats_mysql_connection_pool = 60;
+	GloProxyStats->variables.stats_mysql_connections = 60;
+	GloProxyStats->variables.stats_mysql_query_cache = 60;
+	GloProxyStats->variables.stats_system_cpu = 60;
+	GloProxyStats->variables.stats_system_memory = 60;
+
+	variables.web_enabled = true;
+	variables.web_enabled_old = false;
+	variables.web_port = 6080;
+	variables.web_port_old = variables.web_port;
+
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -3232,6 +3284,11 @@ void ProxySQL_Admin::print_version() {
 bool ProxySQL_Admin::init() {
 	cpu_timer cpt;
 
+	Admin_HTTP_Server = NULL;
+	AdminHTTPServer = new ProxySQL_HTTP_Server();
+	AdminHTTPServer->init();
+	AdminHTTPServer->print_version();
+
 	child_func[0]=child_mysql;
 	child_func[1]=child_telnet;
 	child_func[2]=child_telnet_also;
@@ -3272,6 +3329,17 @@ bool ProxySQL_Admin::init() {
 
 	monitordb = new SQLite3DB();
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+	statsdb_disk = new SQLite3DB();
+	statsdb_disk->open((char *)GloVars.statsdb_disk, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+//	char *dbname = (char *)malloc(strlen(GloVars.statsdb_disk)+50);
+//	sprintf(dbname,"%s?mode=memory&cache=shared",GloVars.statsdb_disk);
+//	statsdb_disk->open(dbname, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_FULLMUTEX);
+//	free(dbname);
+
+	statsdb_disk->execute("PRAGMA synchronous=0");
+//	GloProxyStats->statsdb_disk = configdb;
+	GloProxyStats->init();
 
 	tables_defs_admin=new std::vector<table_def_t *>;
 	tables_defs_stats=new std::vector<table_def_t *>;
@@ -3364,6 +3432,8 @@ bool ProxySQL_Admin::init() {
 	__attach_db(admindb, statsdb, (char *)"stats");
 	__attach_db(admindb, monitordb, (char *)"monitor");
 	__attach_db(statsdb, monitordb, (char *)"monitor");
+	__attach_db(admindb, statsdb_disk, (char *)"stats_history");
+	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
 
 	dump_mysql_collations();
 
@@ -3475,6 +3545,14 @@ void ProxySQL_Admin::init_sqliteserver_variables() {
 void ProxySQL_Admin::admin_shutdown() {
 	int i;
 //	do { usleep(50); } while (main_shutdown==0);
+	if (Admin_HTTP_Server) {
+		if (variables.web_enabled) {
+			MHD_stop_daemon(Admin_HTTP_Server);
+			Admin_HTTP_Server = NULL;
+		}
+	}
+	delete AdminHTTPServer;
+	AdminHTTPServer = NULL;
 	pthread_join(admin_thr, NULL);
 	delete admindb;
 	delete statsdb;
@@ -3617,7 +3695,6 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 						}
 						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"admin-%s\",\"%s\")",r->fields[0],val);
 						db->execute(q);
-						free(val);
 					} else {
 						if (strcmp(r->fields[0],(char *)"debug")==0) {
 							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"admin-%s\"",r->fields[0]);
@@ -3635,6 +3712,32 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		}
 		//commit(); NOT IMPLEMENTED
 		wrunlock();
+		{
+			if (variables.web_enabled != variables.web_enabled_old) {
+				if (variables.web_enabled) {
+					Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+						variables.web_port,
+						NULL, NULL, http_handler, NULL,
+						MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1, MHD_OPTION_END);
+				} else {
+					MHD_stop_daemon(Admin_HTTP_Server);
+					Admin_HTTP_Server = NULL;
+				}
+				variables.web_enabled_old = variables.web_enabled;
+			} else {
+				if (variables.web_port != variables.web_port_old) {
+					if (variables.web_enabled) {
+						MHD_stop_daemon(Admin_HTTP_Server);
+						Admin_HTTP_Server = NULL;
+						Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+							variables.web_port,
+							NULL, NULL, http_handler, NULL,
+							MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1, MHD_OPTION_END);
+					}
+					variables.web_port_old = variables.web_port;
+				}
+			}
+		}
 	}
 	if (resultset) delete resultset;
 }
@@ -4030,8 +4133,31 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"version")) return s_strdup(variables.admin_version);
 	if (!strcasecmp(name,"cluster_username")) return s_strdup(variables.cluster_username);
 	if (!strcasecmp(name,"cluster_password")) return s_strdup(variables.cluster_password);
+	if (!strncasecmp(name,"stats_",strlen("stats_"))) {
+		if (!strcasecmp(name,"stats_credentials"))
+			return s_strdup(variables.stats_credentials);
+		if (!strcasecmp(name,"stats_mysql_connection_pool")) {
+			sprintf(intbuf,"%d",variables.stats_mysql_connection_pool);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_mysql_connections")) {
+			sprintf(intbuf,"%d",variables.stats_mysql_connections);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_mysql_query_cache")) {
+			sprintf(intbuf,"%d",variables.stats_mysql_query_cache);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_system_cpu")) {
+			sprintf(intbuf,"%d",variables.stats_system_cpu);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"stats_system_memory")) {
+			sprintf(intbuf,"%d",variables.stats_system_memory);
+			return strdup(intbuf);
+		}
+	}
 	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
-	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
 	if (!strcasecmp(name,"telnet_admin_ifaces")) return s_strdup(variables.telnet_admin_ifaces);
 	if (!strcasecmp(name,"telnet_stats_ifaces")) return s_strdup(variables.telnet_stats_ifaces);
@@ -4089,6 +4215,13 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 	if (!strcasecmp(name,"checksum_mysql_users")) {
 		return strdup((checksum_variables.checksum_mysql_users ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"web_enabled")) {
+		return strdup((variables.web_enabled ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"web_port")) {
+		sprintf(intbuf,"%d",variables.web_port);
+		return strdup(intbuf);
 	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
@@ -4196,6 +4329,173 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			return true;
 		} else {
 			return false;
+		}
+	}
+	if (!strncasecmp(name,"stats_",strlen("stats_"))) {
+		if (!strcasecmp(name,"stats_mysql_connection_pool")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 300) {
+				if (intv > 120) {
+					intv = 300;
+				} else {
+					if (intv > 60) {
+						intv = 120;
+					} else {
+						if (intv > 30) {
+							intv = 60;
+						} else {
+							if (intv > 10) {
+								intv = 30;
+							} else {
+								if (intv > 5) {
+									intv = 10;
+								} else {
+									if (intv > 1) {
+										intv = 5;
+									}
+								}
+							}
+						}
+					}
+				}
+				variables.stats_mysql_connection_pool=intv;
+				GloProxyStats->variables.stats_mysql_connection_pool=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_mysql_connections")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 300) {
+				if (intv > 120) {
+					intv = 300;
+				} else {
+					if (intv > 60) {
+						intv = 120;
+					} else {
+						if (intv > 30) {
+							intv = 60;
+						} else {
+							if (intv > 10) {
+								intv = 30;
+							} else {
+								if (intv > 5) {
+									intv = 10;
+								} else {
+									if (intv > 1) {
+										intv = 5;
+									}
+								}
+							}
+						}
+					}
+				}
+				variables.stats_mysql_connections=intv;
+				GloProxyStats->variables.stats_mysql_connections=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_mysql_query_cache")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 300) {
+				if (intv > 120) {
+					intv = 300;
+				} else {
+					if (intv > 60) {
+						intv = 120;
+					} else {
+						if (intv > 30) {
+							intv = 60;
+						} else {
+							if (intv > 10) {
+								intv = 30;
+							} else {
+								if (intv > 5) {
+									intv = 10;
+								} else {
+									if (intv > 1) {
+										intv = 5;
+									}
+								}
+							}
+						}
+					}
+				}
+				variables.stats_mysql_query_cache=intv;
+				GloProxyStats->variables.stats_mysql_query_cache=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_system_cpu")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 600) {
+				if (intv > 120) {
+					intv = 300;
+				} else {
+					if (intv > 60) {
+						intv = 120;
+					} else {
+						if (intv > 30) {
+							intv = 60;
+						} else {
+							if (intv > 10) {
+								intv = 30;
+							} else {
+								if (intv > 5) {
+									intv = 10;
+								} else {
+									if (intv > 1) {
+										intv = 5;
+									}
+								}
+							}
+						}
+					}
+				}
+				variables.stats_system_cpu=intv;
+				GloProxyStats->variables.stats_system_cpu=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_system_memory")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= 600) {
+				if (intv > 120) {
+					intv = 300;
+				} else {
+					if (intv > 60) {
+						intv = 120;
+					} else {
+						if (intv > 30) {
+							intv = 60;
+						} else {
+							if (intv > 10) {
+								intv = 30;
+							} else {
+								if (intv > 5) {
+									intv = 10;
+								} else {
+									if (intv > 1) {
+										intv = 5;
+									}
+								}
+							}
+						}
+					}
+				}
+				variables.stats_system_memory=intv;
+				GloProxyStats->variables.stats_system_memory=intv;
+				return true;
+			} else {
+				return false;
+			}
 		}
 	}
 	if (!strcasecmp(name,"mysql_ifaces")) {
@@ -4350,6 +4650,26 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			return true;
 		}
 		return false;
+	}
+	if (!strcasecmp(name,"web_enabled")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.web_enabled=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.web_enabled=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"web_port")) {
+		int intv=atoi(value);
+		if (intv > 0 && intv < 65535) {
+			variables.web_port=intv;
+			return true;
+		} else {
+			return false;
+		}
 	}
 	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -4593,7 +4913,7 @@ void ProxySQL_Admin::stats___memory_metrics() {
 
 void ProxySQL_Admin::stats___mysql_global() {
 	if (!GloMTH) return;
-	SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus();
+	SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus(true);
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_global");

@@ -25,6 +25,8 @@
 #include "MySQL_Logger.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp" // cluster
+#include "ProxySQL_Statistics.hpp" // statistics
+#include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #undef swap
 #undef min
 #undef max
