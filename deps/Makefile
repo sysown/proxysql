@@ -11,12 +11,17 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd
 endif
 .PHONY: default
 
+libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
+	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
+	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
+	cd libmicrohttpd/libmicrohttpd && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
 cityhash/cityhash/src/.libs/libcityhash.a:
 	cd cityhash && rm -rf cityhash || true
@@ -127,5 +132,6 @@ cleanall:
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
+	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 .PHONY: cleanall
 

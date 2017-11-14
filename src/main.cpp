@@ -202,6 +202,9 @@ ClickHouse_Server *GloClickHouseServer;
 
 ProxySQL_Cluster *GloProxyCluster = NULL;
 
+ProxySQL_Statistics *GloProxyStats = NULL;
+
+
 void * mysql_worker_thread_func(void *arg) {
 
 //	__thr_sfp=l_mem_init();
@@ -311,6 +314,9 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
 	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
 
+	GloVars.statsdb_disk=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql_stats.db")+2);
+	sprintf(GloVars.statsdb_disk,"%s/%s",GloVars.datadir, (char *)"proxysql_stats.db");
+
 	GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
 	sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
 
@@ -355,6 +361,9 @@ void ProxySQL_Main_init_Admin_module() {
 	GloProxyCluster = new ProxySQL_Cluster();
 	GloProxyCluster->init();
 	GloProxyCluster->print_version();
+	GloProxyStats = new ProxySQL_Statistics();
+	//GloProxyStats->init();
+	GloProxyStats->print_version();
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->init();
 	GloAdmin->print_version();

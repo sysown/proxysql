@@ -51,6 +51,7 @@ class ProxySQL_GlobalVariables {
 	char *config_file;
 	char *datadir;
 	char *admindb;
+	char *statsdb_disk;
 	char *errorlog;
 	char *pid;
 	struct  {

@@ -441,7 +441,7 @@ class MySQL_Threads_Handler
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);
 	SQLite3_result * SQL3_Processlist();
-	SQLite3_result * SQL3_GlobalStatus();
+	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
 	unsigned long long get_total_backend_stmt_prepare();

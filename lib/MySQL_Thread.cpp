@@ -3344,13 +3344,15 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	}
 }
 
-SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus() {
+SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	const int colnum=2;
 	char buf[256];
 	char **pta=(char **)malloc(sizeof(char *)*colnum);
-	Get_Memory_Stats();
+	if (_memory == true) {
+		Get_Memory_Stats();
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
-  SQLite3_result *result=new SQLite3_result(colnum);
+	SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
 	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]

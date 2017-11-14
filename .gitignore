@@ -95,7 +95,7 @@ deps/memcached/memcached-1.4.20/
 deps/libconfig/libconfig-1.4.9/
 
 #libmicrohttpd
-deps/libmicrohttpd/libmicrohttpd-0.9.52/
+deps/libmicrohttpd/libmicrohttpd-0.9.55/
 
 #clickhouse
 deps/clickhouse-cpp/clickhouse-cpp/

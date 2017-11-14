@@ -96,6 +96,15 @@ class ProxySQL_Admin {
 		bool cluster_mysql_servers_save_to_disk;
 		bool cluster_mysql_users_save_to_disk;
 		bool cluster_proxysql_servers_save_to_disk;
+		int stats_mysql_connection_pool;
+		int stats_mysql_connections;
+		int stats_mysql_query_cache;
+		int stats_system_cpu;
+		int stats_system_memory;
+		bool web_enabled;
+		bool web_enabled_old;
+		int web_port;
+		int web_port_old;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
@@ -179,6 +188,7 @@ class ProxySQL_Admin {
 	SQLite3DB *statsdb;	// in memory
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
+	SQLite3DB *statsdb_disk; // on disk
 	int pipefd[2];
 	void print_version();
 	bool init();
@@ -265,6 +275,8 @@ class ProxySQL_Admin {
 	void init_sqliteserver_variables();
 	void load_sqliteserver_variables_to_runtime() { flush_sqliteserver_variables___database_to_runtime(admindb, true); }
 	void save_sqliteserver_variables_from_runtime() { flush_sqliteserver_variables___runtime_to_database(admindb, true, true, false); }
+
+	ProxySQL_HTTP_Server *AdminHTTPServer;
 
 #ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
