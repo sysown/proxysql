@@ -122,6 +122,8 @@ class MySrvList {	// MySQL Server List
 class MyHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
+	unsigned long long current_time_now;
+	uint32_t new_connections_now;
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
@@ -188,6 +190,7 @@ class MySQL_HostGroups_Manager {
 		int client_connections;
 		unsigned long server_connections_aborted;
 		unsigned long server_connections_created;
+		unsigned long server_connections_delayed;
 		unsigned long server_connections_connected;
 		unsigned long myconnpoll_get;
 		unsigned long myconnpoll_get_ok;

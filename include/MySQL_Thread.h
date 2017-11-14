@@ -365,6 +365,7 @@ class MySQL_Threads_Handler
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
 		int max_allowed_packet;
+		int throttle_connections_per_sec_to_hostgroup;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
