@@ -1970,11 +1970,13 @@ __get_pkts_from_client:
 											return handler_ret;
 										}
 									}
+									timespec begint;
+									timespec endt;
 									if (thread->variables.stats_time_query_processor) {
-										timespec begint;
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
-										qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
-										timespec endt;
+									}
+									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 										thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
 											(endt.tv_sec*1000000000+endt.tv_nsec) -
