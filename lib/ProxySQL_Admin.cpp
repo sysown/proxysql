@@ -6911,7 +6911,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		int default_hostgroup=0;
 		std::string default_schema="";
 		int schema_locked=0;
-		int transaction_persistent=0;
+		int transaction_persistent=1;
 		int fast_forward=0;
 		int max_connections=10000;
 		if (user.lookupValue("username", username)==false) continue;
