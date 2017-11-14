@@ -907,6 +907,15 @@ handler_again:
 			}
 			break;
 		case ASYNC_USE_RESULT_CONT:
+			{
+				unsigned int buffered_data=0;
+				buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
+				buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+				if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*8) {
+					next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
+					break;
+				}
+			}
 			if (async_fetch_row_start==false) {
 				async_exit_status=mysql_fetch_row_start(&mysql_row,mysql_result);
 				async_fetch_row_start=true;
