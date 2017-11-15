@@ -2519,6 +2519,19 @@ __mysql_thread_exit_add_mirror:
 						}
 					}
 				}
+				if (myds && myds->myds_type==MYDS_BACKEND) {
+					if (myds->sess && myds->sess->client_myds) {
+						unsigned int buffered_data=0;
+						buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
+						buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+						// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
+						// but assuming that client isn't completely blocked, we will stop checking for data
+						// only at mysql_thread___threshold_resultset_size * 4
+						if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*4) {
+							mypolls.fds[n].events = 0;
+						}
+					}
+				}
 
 			}
 			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
