@@ -20,7 +20,7 @@ endif
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
-	cd libmicrohttpd/libmicrohttpd && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+	cd libmicrohttpd/libmicrohttpd && ./configure --disable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
 cityhash/cityhash/src/.libs/libcityhash.a:

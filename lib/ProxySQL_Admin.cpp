@@ -40,6 +40,7 @@
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 
 
+
 struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
@@ -3718,7 +3719,10 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
 						variables.web_port,
 						NULL, NULL, http_handler, NULL,
-						MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1, MHD_OPTION_END);
+						MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
+						MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
+						MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
+						MHD_OPTION_END);
 				} else {
 					MHD_stop_daemon(Admin_HTTP_Server);
 					Admin_HTTP_Server = NULL;
@@ -3732,7 +3736,10 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 						Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
 							variables.web_port,
 							NULL, NULL, http_handler, NULL,
-							MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1, MHD_OPTION_END);
+							MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
+							MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
+							MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
+							MHD_OPTION_END);
 					}
 					variables.web_port_old = variables.web_port;
 				}

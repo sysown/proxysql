@@ -55,9 +55,9 @@ class ProxySQL_Statistics {
 	void MySQL_Threads_Handler_sets(SQLite3_result *);
 	void system_cpu_sets();
 	void system_memory_sets();
-	SQLite3_result * get_mysql_metrics();
-	SQLite3_result * get_system_cpu_metrics();
-	SQLite3_result * get_system_memory_metrics();
+	SQLite3_result * get_mysql_metrics(int interval);
+	SQLite3_result * get_system_cpu_metrics(int interval);
+	SQLite3_result * get_system_memory_metrics(int interval);
 };
 
 #endif /* CLASS_PROXYSQL_STATISTICS_H */

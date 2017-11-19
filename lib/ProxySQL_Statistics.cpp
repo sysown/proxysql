@@ -173,11 +173,46 @@ bool ProxySQL_Statistics::system_memory_timetoget(unsigned long long curtime) {
 	return false;
 }
 
-SQLite3_result * ProxySQL_Statistics::get_mysql_metrics() {
+SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 	SQLite3_result *resultset = NULL;
 	int cols;
 	int affected_rows;
 	char *error = NULL;
+	char *query = NULL;
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions FROM mysql_connections WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions FROM mysql_connections_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	time_t ts = time(NULL);
+	switch (interval) {
+		case 1800:
+		case 3600:
+		case 7200:
+			query = (char *)malloc(strlen(query1)+128);
+			sprintf(query, query1, ts-interval, ts);
+			break;
+		case 28800:
+		case 86400:
+		case 259200:
+		case 604800:
+		case 2592000:
+		case 7776000:
+			query = (char *)malloc(strlen(query2)+128);
+			sprintf(query, query2, ts-interval, ts);
+			break;
+		default:
+			assert(0);
+			break;
+	}
+	//fprintf(stderr,"%s\n", query);
+	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	free(query);
+	if (error) {
+		if (resultset) {
+			delete resultset;
+			resultset = NULL;
+		}
+		free(error);
+	}
+/*
 	char *query = (char *)"SELECT * FROM (SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_failure, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions FROM mysql_connections ORDER BY timestamp DESC LIMIT 100) t ORDER BY ts";
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
@@ -187,16 +222,42 @@ SQLite3_result * ProxySQL_Statistics::get_mysql_metrics() {
 		}
 		free(error);
 	}
+*/
 	return resultset;
 }
 
-SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics() {
+SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 	SQLite3_result *resultset = NULL;
 	int cols;
 	int affected_rows;
 	char *error = NULL;
-	char *query = (char *)"SELECT * FROM (SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, allocated, resident, active, mapped, metadata, retained FROM system_memory ORDER BY timestamp DESC LIMIT 100) t ORDER BY ts";
+	char *query = NULL;
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, allocated, resident, active, mapped, metadata, retained FROM system_memory WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, allocated, resident, active, mapped, metadata, retained FROM system_memory_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	time_t ts = time(NULL);
+	switch (interval) {
+		case 1800:
+		case 3600:
+		case 7200:
+			query = (char *)malloc(strlen(query1)+128);
+			sprintf(query, query1, ts-interval, ts);
+			break;
+		case 28800:
+		case 86400:
+		case 259200:
+		case 604800:
+		case 2592000:
+		case 7776000:
+			query = (char *)malloc(strlen(query2)+128);
+			sprintf(query, query2, ts-interval, ts);
+			break;
+		default:
+			assert(0);
+			break;
+	}
+	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	free(query);
 	if (error) {
 		if (resultset) {
 			delete resultset;
@@ -207,13 +268,37 @@ SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics() {
 	return resultset;
 }
 
-SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics() {
+SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 	SQLite3_result *resultset = NULL;
 	int cols;
 	int affected_rows;
 	char *error = NULL;
-	char *query = (char *)"SELECT * FROM (SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, tms_utime, tms_stime FROM system_cpu ORDER BY timestamp DESC LIMIT 100) t ORDER BY ts";
+	char *query = NULL;
+	char *query1 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, tms_utime, tms_stime FROM system_cpu WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	char *query2 = (char *)"SELECT SUBSTR(FROM_UNIXTIME(timestamp),0,20) ts, timestamp, tms_utime, tms_stime FROM system_cpu_hour WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp";
+	time_t ts = time(NULL);
+	switch (interval) {
+		case 1800:
+		case 3600:
+		case 7200:
+			query = (char *)malloc(strlen(query1)+128);
+			sprintf(query, query1, ts-interval, ts);
+			break;
+		case 28800:
+		case 259200:
+		case 604800:
+		case 2592000:
+		case 7776000:
+			query = (char *)malloc(strlen(query2)+128);
+			sprintf(query, query2, ts-interval, ts);
+			break;
+		default:
+			assert(0);
+			break;
+	}
+	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	free(query);
 	if (error) {
 		if (resultset) {
 			delete resultset;
@@ -250,7 +335,7 @@ void ProxySQL_Statistics::system_cpu_sets() {
 		int cols;
 		int affected_rows;
 		char *error = NULL;
-		char *query = (char *)"SELECT MAX(timestamp) FROM system_cpu";
+		char *query = (char *)"SELECT MAX(timestamp) FROM system_cpu_hour";
 		statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (error) {
 			if (resultset) {
@@ -261,15 +346,20 @@ void ProxySQL_Statistics::system_cpu_sets() {
 		} else {
 			char buf[256];
 			if (resultset->rows_count == 0) {
-				sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
 			} else {
 				SQLite3_row *r = resultset->rows[0];
-				time_t t = atol(r->fields[0]);
-				if (ts >= t + 3600) {
-					sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+				if (r->fields[0]) {
+					time_t t = atol(r->fields[0]);
+					if (ts >= t + 3600) {
+						sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+						statsdb_disk->execute(buf);
+					}
+				} else {
+					sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 					statsdb_disk->execute(buf);
-				}	
+				}
 			}
 			delete resultset;
 			resultset = NULL;
@@ -320,7 +410,7 @@ void ProxySQL_Statistics::system_memory_sets() {
 		int cols;
 		int affected_rows;
 		char *error = NULL;
-		char *query = (char *)"SELECT MAX(timestamp) FROM system_memory";
+		char *query = (char *)"SELECT MAX(timestamp) FROM system_memory_hour";
 		statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (error) {
 			if (resultset) {
@@ -331,15 +421,20 @@ void ProxySQL_Statistics::system_memory_sets() {
 		} else {
 			char buf[256];
 			if (resultset->rows_count == 0) {
-				sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
 			} else {
 				SQLite3_row *r = resultset->rows[0];
-				time_t t = atol(r->fields[0]);
-				if (ts >= t + 3600) {
-					sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+				if (r->fields[0]) {
+					time_t t = atol(r->fields[0]);
+					if (ts >= t + 3600) {
+						sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+						statsdb_disk->execute(buf);
+					}
+				} else {
+					sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 					statsdb_disk->execute(buf);
-				}	
+				}
 			}
 			delete resultset;
 			resultset = NULL;
@@ -433,4 +528,43 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) 
 	rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 	rc=sqlite3_reset(statement1); //assert(rc==SQLITE_OK);
 	sqlite3_finalize(statement1);
+
+	SQLite3_result *resultset2 = NULL;
+	int cols;
+	int affected_rows;
+	char *error = NULL;
+	time_t ts = time(NULL);
+	char *query = (char *)"SELECT MAX(timestamp) FROM mysql_connections_hour";
+	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset2);
+	if (error) {
+		if (resultset2) {
+			delete resultset2;
+			resultset2 = NULL;
+		}
+		free(error);
+	} else {
+		char buf[512];
+		if (resultset2->rows_count == 0) {
+			sprintf(buf,"INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries) FROM mysql_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+			statsdb_disk->execute(buf);
+		} else {
+			SQLite3_row *r = resultset2->rows[0];
+			if (r->fields[0]) {
+				time_t t = atol(r->fields[0]);
+				if (ts >= t + 3600) {
+					sprintf(buf,"INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries) FROM mysql_connections WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+					statsdb_disk->execute(buf);
+				}
+			} else {
+				sprintf(buf,"INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries) FROM mysql_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				statsdb_disk->execute(buf);
+			}
+		}
+		delete resultset2;
+		resultset2 = NULL;
+		sprintf(buf,"DELETE FROM system_memory WHERE timestamp < %ld", ts - 3600*24*7);
+		statsdb_disk->execute(buf);
+		sprintf(buf,"DELETE FROM system_memory_hour WHERE timestamp < %ld", ts - 3600*24*365);
+		statsdb_disk->execute(buf);
+	}
 }

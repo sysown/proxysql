@@ -40,8 +40,119 @@
 extern ProxySQL_Statistics *GloProxyStats;
 
 extern char * Chart_bundle_js_c;
+extern char * font_awesome;
 #define RATE_LIMIT_PAGE "<html><head><title>Rate Limit Page</title></head><body>Rate Limit Reached</body></html>"
 
+
+#define DENIED "<html><head><title>ProxySQL status page</title></head><body>Access denied</body></html>"
+#define OPAQUE "733b20011778ce330631c9afof70a870baddd964"
+
+
+
+static char *div1= (char *)"<div style=\"margin-bottom: 3px;\"><a href=stats?metric=";
+static char *style1 = (char *)" style=\"color: #1a3854 ; background-color: white; font-size: 12px; font-family: Verdana, sans-serif; border: 0px; text-decoration: none; padding-left: 5px; padding-right: 5px;\">";
+static char *style2 = (char *)" style=\"color: #2969a5 ; background-color: white; font-size: 12px; font-family: Verdana, sans-serif; border: 0px; text-decoration: none; padding-left: 5px; padding-right: 5px;\">";
+
+static char *generate_home() {
+	char *s = NULL;
+	string html = "";
+	char *link = (char *)"<a href=stats?metric=\"%s\" %s>30m</a>";
+	html.append("<div class=\"menu\" style=\"height: auto;\">\n");
+//<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">&nbsp</div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=3600"); html.append(style1); html.append("Last 1 hour</a></div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=7200"); html.append(style1); html.append("Last 2 hours</a></div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=28800"); html.append(style1); html.append("Last 8 hours</a></div>\n");
+
+	html.append("<span style=\"float: left; width: 15%;\">\n<div><p></p></div>\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #2969a5 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">Category:</div>\n");
+
+	html.append("<div style=\"margin-bottom: 3px;\"><a href=\"/\""); html.append(style2); html.append("Home</a></div>\n");
+	html.append(div1); html.append("system"); html.append(style2); html.append("System</a></div>\n");
+	html.append(div1); html.append("mysql"); html.append(style2); html.append("MySQL</a></div>\n");
+	html.append(div1); html.append("cache"); html.append(style2); html.append("Query Cache</a></div>\n");
+
+	html.append("</span>\n</div>\n");
+
+	html.append("<span style=\"float: left; width: 100%;\">\n");
+	html.append("<div style=\"height: auto;\">\n");
+	html.append("<p></p>\n");
+	html.append("<p></p>\n");
+	html.append("<h2 style=\"font-size: 25px; margin-top: 0em; margin-bottom: 0em;\">General information</h2>\n<hr style=\"align: centre\" width=\"100%\">\n");
+	html.append("<table style=\"font-size: 15px;\" border=0 width=\"100%\">\n");
+	html.append("<tr width=\"100%\">\n");
+	//html.append("<td style=\"align: left; width: 33%\">\n");
+	html.append("<td width=\"33%\">\n");
+	html.append("<b>Uptime = </b> 0d 0h00m44s<br>\n");
+	html.append("<b>OS version = </b>CentOS 7.3<br>\n");
+	html.append("<b>Worker threads = </b>8<br>\n");
+	html.append("<b>Idle threads = </b>enabled<br>\n");
+	html.append("<b>Monitor = </b>enabled<br>\n");
+	html.append("</td>\n");
+	html.append("<td width=\"33%\">\n");
+	html.append("<b>ProxySQL version = </b>1.4.3<br>\n");
+	html.append("<b>ProxySQL latest  = </b>1.4.4<br>\n");
+	html.append("</td>\n");
+	html.append("<td width=\"33%\">\n");
+	//html.append("<td style=\"align: left; width: 33%\">\n");
+	html.append("<b>ProxySQL version = </b>1.4.3<br>\n");
+	html.append("<b>ProxySQL latest  = </b>1.4.4<br>\n");
+	html.append("</td>\n");
+	html.append("</tr>\n");
+	html.append("</table>\n");
+	html.append("</div></span>\n");
+	s = strdup(html.c_str());
+	return s;
+}
+
+static char *generate_buttons(char *base) {
+	char *s = NULL;
+	//char *style = (char *)"style=\"color: white ; background-color: blue; font-size: 14px; border: 2px solid; border-radius: 5px; text-decoration: none; padding-left: 5px; padding-right: 5px;\"";
+	string html = "<div class=\"menu\" style=\"height: auto;\">\n<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">&nbsp</div>\n";
+	html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
+	html.append(div1); html.append(base); html.append("&interval=3600"); html.append(style1); html.append("Last 1 hour</a></div>\n");
+	html.append(div1); html.append(base); html.append("&interval=7200"); html.append(style1); html.append("Last 2 hours</a></div>\n");
+	html.append(div1); html.append(base); html.append("&interval=28800"); html.append(style1); html.append("Last 8 hours</a></div>\n");
+
+	html.append("</span>\n<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">Time range:</div>\n");
+
+	html.append(div1); html.append(base); html.append("&interval=86400"); html.append(style1); html.append("Last 1 day</a></div>\n");
+	html.append(div1); html.append(base); html.append("&interval=259200"); html.append(style1); html.append("Last 3 days</a></div>\n");
+	html.append(div1); html.append(base); html.append("&interval=604800"); html.append(style1); html.append("Last 7 days</a></div>\n");
+	html.append(div1); html.append(base); html.append("&interval=2592000"); html.append(style1); html.append("Last 1 month</a></div>\n");
+	html.append(div1); html.append(base); html.append("&interval=7776000"); html.append(style1); html.append("Last 3 months</a></div>\n");
+
+	html.append("</span>\n</div>\n");
+	html.append("<div class=\"menu\" style=\"height: auto;\">\n");
+//<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">&nbsp</div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=3600"); html.append(style1); html.append("Last 1 hour</a></div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=7200"); html.append(style1); html.append("Last 2 hours</a></div>\n");
+//	html.append(div1); html.append(base); html.append("&interval=28800"); html.append(style1); html.append("Last 8 hours</a></div>\n");
+
+	html.append("<span style=\"float: left; width: 15%;\">\n<div><p></p></div>\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #2969a5 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">Category:</div>\n");
+
+	html.append("<div style=\"margin-bottom: 3px;\"><a href=\"/\""); html.append(style2); html.append("Home</a></div>\n");
+	html.append(div1); html.append("system"); html.append(style2); html.append("System</a></div>\n");
+	html.append(div1); html.append("mysql"); html.append(style2); html.append("MySQL</a></div>\n");
+	html.append(div1); html.append("cache"); html.append(style2); html.append("Query Cache</a></div>\n");
+
+	html.append("</span>\n</div>\n");
+
+
+/*
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=30m "); html.append(style); html.append(">30mins</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=60m "); html.append(style); html.append(">60mins</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=120m "); html.append(style); html.append(">120mins</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=8h "); html.append(style); html.append(">8hrs</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=24h "); html.append(style); html.append(">24hrs</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=72h "); html.append(style); html.append(">72hrs</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=7d "); html.append(style); html.append(">7days</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=30d "); html.append(style); html.append(">30days</a>");
+	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=90d "); html.append(style); html.append(">90days</a>");
+*/
+	s = strdup(html.c_str());
+	return s;
+}
 
 
 char * ProxySQL_HTTP_Server::extract_values(SQLite3_result *result, int idx, bool relative, double mult) {
@@ -102,9 +213,39 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 	struct MHD_Response *response;
 	int ret;
+
+
+	char *username;
+	const char *password = "testpass";
+	const char *realm = "Access to ProxySQL status page";
+
+	username = MHD_digest_auth_get_username(connection);
+	if (username == NULL || strcmp(username,"stats")) {
+		response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
+		ret = MHD_queue_auth_fail_response(connection, realm, OPAQUE, response, MHD_NO);
+		MHD_destroy_response(response);
+		return ret;
+	}
+	ret = MHD_digest_auth_check(connection, realm, username, password, 300);
+	free(username);
+	if ( (ret == MHD_INVALID_NONCE) || (ret == MHD_NO) ) {
+		response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
+		if (NULL == response)
+			return MHD_NO;
+		ret = MHD_queue_auth_fail_response(connection, realm, OPAQUE, response, (ret == MHD_INVALID_NONCE) ? MHD_YES : MHD_NO);
+		MHD_destroy_response(response);
+		return ret;
+    }
+
+
+
+
+
 	char *valmetric = NULL;
 	char *valinterval = NULL;
 	char *valunit = NULL;
+	char *interval_s = NULL;
+	int interval_i = 1800;
 
 	time_t now = time(NULL);
 	if (now != cur_time) {
@@ -130,14 +271,33 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");
+/*
 		valinterval = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"points");
 		valunit = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"unit");
+*/
+		interval_s = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"interval");
+		//fprintf(stderr,"Interval = %s\n", interval_s);
 		if (valmetric == NULL) {
 			response = MHD_create_response_from_buffer (strlen (EMPTY_PAGE), (void *) EMPTY_PAGE, MHD_RESPMEM_PERSISTENT);
 			ret = MHD_queue_response (connection, MHD_HTTP_NOT_FOUND, response);
 			MHD_destroy_response (response);
 			return ret;
 		}
+		int tmp_ = 0;
+		if (interval_s) {
+			tmp_ = atoi(interval_s);
+		}
+		switch (tmp_) {
+			case 1800:
+			case 3600:
+			case 7200:
+			case 28800:
+				interval_i = tmp_;
+				break;
+			default:
+				break;
+		}
+/*
 		if (valunit == NULL) {
 			valunit = (char *)"second";
 		}
@@ -158,19 +318,27 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 				valinterval = (char *)"365";
 			}
 		}
-
+*/
 		if (strcmp(valmetric,"system")==0) {
 			string *s = generate_header((char *)"ProxySQL Graphs");
+			char *buttons = generate_buttons((char *)"system");
+			s->append(buttons);
+			free(buttons);
+			s->append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
 			string *s1 = generate_canvas((char *)"myChart1");
 			s->append(s1->c_str());
+			s->append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart2");
 			s->append(s1->c_str());
+			s->append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart3");
 			s->append(s1->c_str());
+			s->append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart4");
 			s->append(s1->c_str());
-			SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics();
-			SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics();
+			s->append("</div>\n");
+			SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics(interval_i);
+			SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics(interval_i);
 			//SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics();
 			char **nm = NULL;
 			char **nl = NULL;
@@ -237,17 +405,25 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 		if (strcmp(valmetric,"mysql")==0) {
 			string *s = generate_header((char *)"ProxySQL Graphs");
+			char *buttons = generate_buttons((char *)"mysql");
+			s->append(buttons);
+			free(buttons);
+			s->append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
 			string *s1 = generate_canvas((char *)"myChart1");
 			s->append(s1->c_str());
+			s->append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart2");
 			s->append(s1->c_str());
+			s->append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart3");
 			s->append(s1->c_str());
+			s->append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart4");
 			s->append(s1->c_str());
+			s->append("</div>\n");
 			//SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics();
 			//SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics();
-			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics();
+			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics(interval_i);
 			char **nm = NULL;
 			char **nl = NULL;
 			char **nv = NULL;
@@ -315,7 +491,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			free(ts);
 
 			s->append("</body></html>");
-	 		response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY); 
+			response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
   			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
   			MHD_destroy_response (response);
 			delete s;
@@ -324,9 +500,27 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	}
 
 	if (strcmp(url,"/Chart.bundle.js")==0) {
-		response = MHD_create_response_from_buffer(strlen(Chart_bundle_js_c), Chart_bundle_js_c, MHD_RESPMEM_PERSISTENT); 
+		response = MHD_create_response_from_buffer(strlen(Chart_bundle_js_c), Chart_bundle_js_c, MHD_RESPMEM_PERSISTENT);
   		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
   		MHD_destroy_response (response);
+		return ret;
+	}
+	if (strcmp(url,"/font-awesome.min.css")==0) {
+		response = MHD_create_response_from_buffer(strlen(font_awesome), font_awesome, MHD_RESPMEM_PERSISTENT);
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
+	if (strcmp(url,"/")==0) {
+		string *s = generate_header((char *)"ProxySQL Home");
+		char *home = generate_home();
+		s->append(home);
+		free(home);
+		s->append("</body></html>");
+		response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		delete s;
 		return ret;
 	}
 	response = MHD_create_response_from_buffer (strlen (EMPTY_PAGE), (void *) EMPTY_PAGE, MHD_RESPMEM_PERSISTENT);
@@ -340,15 +534,21 @@ string * ProxySQL_HTTP_Server::generate_header(char *s) {
 	string *a = new string();
 	a->append("<head>\n<title>");
 	a->append(s);
-	a->append("</title>\n<script src=\"/Chart.bundle.js\"></script>\n</head>\n<body>\n");
+	a->append("</title>\n");
+	a->append("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,600,900|Fira+Mono\">\n");
+	a->append("<link rel=\"stylesheet\" href=\"http://www.proxysql.com/assets/css/main-bundle.min.css\">\n");
+	//a->append("<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css\">\n");
+	a->append("<link rel=\"stylesheet\" href=\"/font-awesome.min.css\">\n");
+	a->append("<script src=\"/Chart.bundle.js\"></script>\n</head>\n<body style=\"background-color: white;\">\n");
+	a->append("<header class=\"header cf \" role=\"banner\">\n<a class=\"brand\" href=\"http://www.proxysql.com\"><span><strong>Proxy</strong>SQL</span>\n</a>");
 	return a;
 }
 
 string * ProxySQL_HTTP_Server::generate_canvas(char *s) {
 	string *a = new string();
-	a->append("<div class=\"wrapper\" style=\"width: 700px; height: 300px\"><canvas id=\"");
+	a->append("<div class=\"wrapper\" style=\"width: 750px; height: 350px\"><canvas id=\"");
 	a->append(s);
-	a->append("\" width=\"650\" height=\"280\"></canvas></div>\n");
+	a->append("\" width=\"700\" height=\"330\"></canvas></div>\n");
 	return a;
 }
 ProxySQL_HTTP_Server::ProxySQL_HTTP_Server() {
