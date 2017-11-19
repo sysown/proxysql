@@ -1982,7 +1982,7 @@ __get_pkts_from_client:
 //								(unsigned char *)_new_pkt.ptr[6]='S';
 //								(unsigned char *)_new_pkt.ptr[7]='E';
 //								(unsigned char *)_new_pkt.ptr[8]=' ';
-								memcpy(_new_pkt.ptr+9 , pkt.ptr+5, pkt.size-5);
+								memcpy((char *)_new_pkt.ptr+9 , (char *)pkt.ptr+5, pkt.size-5);
 								l_free(pkt.size,pkt.ptr);
 								pkt.size+=4;
 								pkt.ptr = _new_pkt.ptr;
