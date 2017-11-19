@@ -196,6 +196,9 @@ MySQL_Connection::~MySQL_Connection() {
 		delete userinfo;
 		userinfo=NULL;
 	}
+	if (local_stmts) {
+		delete local_stmts;
+	}
 	if (mysql) {
 		// always decrease the counter
 		if (ret_mysql)
@@ -206,9 +209,6 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 	if (MyRS) {
 		delete MyRS;
-	}
-	if (local_stmts) {
-		delete local_stmts;
 	}
 	if (query.stmt) {
 		query.stmt=NULL;

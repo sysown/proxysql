@@ -1977,9 +1977,9 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	}
 	int rc=pthread_attr_setstacksize(&attr, stacksize);
 	assert(rc==0);
-	mysql_threads=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
+	mysql_threads=(proxysql_mysql_thread_t *)calloc(num_threads,sizeof(proxysql_mysql_thread_t));
 #ifdef IDLE_THREADS
-	mysql_threads_idles=(proxysql_mysql_thread_t *)malloc(sizeof(proxysql_mysql_thread_t)*num_threads);
+	mysql_threads_idles=(proxysql_mysql_thread_t *)calloc(num_threads,sizeof(proxysql_mysql_thread_t));
 #endif // IDLE_THREADS
 }
 
