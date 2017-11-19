@@ -402,8 +402,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
 	variables.connpoll_reset_queue_length = 50;
-	variables.stats_time_backend_query=true;
-	variables.stats_time_query_processor=true;
+	variables.stats_time_backend_query=false;
+	variables.stats_time_query_processor=false;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms=1000;
@@ -3315,8 +3315,8 @@ MySQL_Thread::MySQL_Thread() {
 
 	match_regexes=NULL;
 
-	variables.stats_time_backend_query=true;
-	variables.stats_time_query_processor=true;
+	variables.stats_time_backend_query=false;
+	variables.stats_time_query_processor=false;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
