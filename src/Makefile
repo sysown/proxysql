@@ -48,7 +48,7 @@ LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIA
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
-	IDIRS+= -I/usr/local/include
+	IDIRS+= -I/usr/local/include -I/usr/local/opt/openssl/include
 	LDIRS+= -L/usr/local/lib
 endif
 
@@ -81,7 +81,7 @@ endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
-	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/sqlite3/sqlite3/sqlite3.o
+	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/sqlite3/sqlite3/sqlite3.o
 endif
 
 ODIR= obj

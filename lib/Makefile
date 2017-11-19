@@ -65,6 +65,11 @@ else
 PSQLCH=
 endif
 
+ifeq ($(UNAME_S),Darwin)
+	IDIRS+= -I/usr/local/opt/openssl/include
+endif
+
+
 MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
 MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH)
 

@@ -388,7 +388,9 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			s->append(s1->c_str());
 			s->append("</div>\n");
 			SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics(interval_i);
+#ifndef NOJEM
 			SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics(interval_i);
+#endif
 			//SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics();
 			char **nm = NULL;
 			char **nl = NULL;
@@ -415,6 +417,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			free(ts);
 			
 
+#ifndef NOJEM
 			nm = (char **)malloc(sizeof(char *)*5);
 			nm[0] = (char *)"allocated";
 			nm[1] = (char *)"resident";
@@ -445,6 +448,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			free(nv[4]);
 			free(nv);
 			free(ts);
+#endif
 			
 			s->append("</body></html>");
 	 		response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_PERSISTENT); 

@@ -2,7 +2,7 @@
 #include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__APPLE__)
 #include <fcntl.h>
 #endif
 

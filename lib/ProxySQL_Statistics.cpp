@@ -56,7 +56,9 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 
 	next_timer_MySQL_Threads_Handler = 0;
 	next_timer_system_cpu = 0;
+#ifndef NOJEM
 	next_timer_system_memory = 0;
+#endif
 }
 
 ProxySQL_Statistics::~ProxySQL_Statistics() {
@@ -75,13 +77,19 @@ void ProxySQL_Statistics::init() {
 	insert_into_tables_defs(tables_defs_statsdb_mem,"mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_cpu", STATSDB_SQLITE_TABLE_SYSTEM_CPU);
+#ifndef NOJEM
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_memory", STATSDB_SQLITE_TABLE_SYSTEM_MEMORY);
+#endif
 	insert_into_tables_defs(tables_defs_statsdb_disk,"mysql_connections_hour", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_cpu_hour", STATSDB_SQLITE_TABLE_SYSTEM_CPU_HOUR);
+#ifndef NOJEM
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_memory_hour", STATSDB_SQLITE_TABLE_SYSTEM_MEMORY_HOUR);
+#endif
 	insert_into_tables_defs(tables_defs_statsdb_disk,"mysql_connections_day", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_cpu_day", STATSDB_SQLITE_TABLE_SYSTEM_CPU_DAY);
+#ifndef NOJEM
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_memory_day", STATSDB_SQLITE_TABLE_SYSTEM_MEMORY_DAY);
+#endif
 
 	check_and_build_standard_tables(statsdb_mem, tables_defs_statsdb_disk);
 	check_and_build_standard_tables(statsdb_disk, tables_defs_statsdb_disk);
@@ -157,6 +165,7 @@ bool ProxySQL_Statistics::system_cpu_timetoget(unsigned long long curtime) {
 	return false;
 }
 
+#ifndef NOJEM
 bool ProxySQL_Statistics::system_memory_timetoget(unsigned long long curtime) {
 	unsigned int i = (unsigned int)variables.stats_system_memory;
 	if (i) {
@@ -172,6 +181,7 @@ bool ProxySQL_Statistics::system_memory_timetoget(unsigned long long curtime) {
 	}
 	return false;
 }
+#endif
 
 SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 	SQLite3_result *resultset = NULL;
@@ -226,6 +236,7 @@ SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 	return resultset;
 }
 
+#ifndef NOJEM
 SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 	SQLite3_result *resultset = NULL;
 	int cols;
@@ -267,6 +278,7 @@ SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 	}
 	return resultset;
 }
+#endif
 
 SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 	SQLite3_result *resultset = NULL;
@@ -371,6 +383,7 @@ void ProxySQL_Statistics::system_cpu_sets() {
 	}
 }
 
+#ifndef NOJEM
 void ProxySQL_Statistics::system_memory_sets() {
 	int rc;
 	struct tms buf;
@@ -445,6 +458,7 @@ void ProxySQL_Statistics::system_memory_sets() {
 		}
 	}
 }
+#endif
 
 void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) {
 	int rc;
@@ -562,9 +576,9 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) 
 		}
 		delete resultset2;
 		resultset2 = NULL;
-		sprintf(buf,"DELETE FROM system_memory WHERE timestamp < %ld", ts - 3600*24*7);
+		sprintf(buf,"DELETE FROM mysql_connections WHERE timestamp < %ld", ts - 3600*24*7);
 		statsdb_disk->execute(buf);
-		sprintf(buf,"DELETE FROM system_memory_hour WHERE timestamp < %ld", ts - 3600*24*365);
+		sprintf(buf,"DELETE FROM mysql_connections_hour WHERE timestamp < %ld", ts - 3600*24*365);
 		statsdb_disk->execute(buf);
 	}
 }

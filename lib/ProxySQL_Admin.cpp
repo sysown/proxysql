@@ -3086,9 +3086,11 @@ __end_while_pool:
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
 			}
+#ifndef NOJEM
 			if (GloProxyStats->system_memory_timetoget(curtime)) {
 				GloProxyStats->system_memory_sets();
 			}
+#endif
 		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
@@ -3223,7 +3225,9 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	GloProxyStats->variables.stats_mysql_connections = 60;
 	GloProxyStats->variables.stats_mysql_query_cache = 60;
 	GloProxyStats->variables.stats_system_cpu = 60;
+#ifndef NOJEM
 	GloProxyStats->variables.stats_system_memory = 60;
+#endif
 
 	variables.web_enabled = true;
 	variables.web_enabled_old = false;
@@ -4471,6 +4475,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 				return false;
 			}
 		}
+#ifndef NOJEM
 		if (!strcasecmp(name,"stats_system_memory")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 600) {
@@ -4504,6 +4509,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 				return false;
 			}
 		}
+#endif
 	}
 	if (!strcasecmp(name,"mysql_ifaces")) {
 		if (vallen) {
