@@ -38,6 +38,7 @@
 //extern struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
+extern MySQL_Threads_Handler *GloMTH;
 
 extern char * Chart_bundle_js_c;
 extern char * font_awesome;
@@ -82,19 +83,68 @@ static char *generate_home() {
 	html.append("<tr width=\"100%\">\n");
 	//html.append("<td style=\"align: left; width: 33%\">\n");
 	html.append("<td width=\"33%\">\n");
-	html.append("<b>Uptime = </b> 0d 0h00m44s<br>\n");
-	html.append("<b>OS version = </b>CentOS 7.3<br>\n");
-	html.append("<b>Worker threads = </b>8<br>\n");
-	html.append("<b>Idle threads = </b>enabled<br>\n");
-	html.append("<b>Monitor = </b>enabled<br>\n");
+	html.append("<b>Uptime = </b>");
+	{
+		unsigned long long t1=monotonic_time();
+		char buf1[30];
+		unsigned long long uptime = (t1-GloVars.global.start_time)/1000/1000;
+		unsigned long long days = uptime / 86400;
+		unsigned long long hours = (uptime - days*86400)/3600;
+		unsigned long long mins = (uptime % 3600)/60;
+		unsigned long long secs = uptime % 60;
+		sprintf(buf1,"%llud %02lluh%02llum%02llus", days, hours, mins, secs);
+		html.append(buf1);
+	}
+	html.append("<br>\n");
+	html.append("<b>OS version = </b>");
+	{
+		struct utsname unameData;
+		int rc;
+		rc=uname(&unameData);
+		if (rc==0) {
+			html.append(unameData.sysname); html.append(" ");
+			html.append(unameData.nodename); html.append(" ");
+			html.append(unameData.release); html.append(" ");
+			html.append(unameData.machine);
+        } else {
+			html.append("UNKNOWN");
+		}
+	}
+	html.append("<br>\n");
+	html.append("<b>Worker threads = </b>");
+	{
+		char buf[16];
+		sprintf(buf,"%u",GloMTH->num_threads);
+		html.append(buf);
+	}
+	html.append("<br>\n");
+	html.append("<b>Idle threads = </b>");
+	if (glovars.idle_threads) {
+		html.append("<span style=\"color: green;\">enabled</span>");
+	} else {
+		html.append("<span style=\"background-color: red;\"> disabled </span>");
+	}
+	html.append("<br>\n");
+	html.append("<b>Monitor = </b>");
+	{
+		char *en = GloMTH->get_variable("monitor_enabled");
+		if (en && strcmp(en,"true")==0) {
+			html.append("<span style=\"color: green;\">enabled</span>");
+		} else {
+			html.append("<span style=\"background-color: red;\"> disabled </span>");
+		}
+		if (en) {
+			free(en);
+		}
+	}
+	html.append("<br>\n");
 	html.append("</td>\n");
 	html.append("<td width=\"33%\">\n");
 	html.append("<b>ProxySQL version = </b>1.4.3<br>\n");
 	html.append("<b>ProxySQL latest  = </b>1.4.4<br>\n");
 	html.append("</td>\n");
 	html.append("<td width=\"33%\">\n");
-	//html.append("<td style=\"align: left; width: 33%\">\n");
-	html.append("<b>ProxySQL version = </b>1.4.3<br>\n");
+	html.append("<b>ProxySQL version = </b>"); html.append(PROXYSQL_VERSION); html.append("<br>\n");
 	html.append("<b>ProxySQL latest  = </b>1.4.4<br>\n");
 	html.append("</td>\n");
 	html.append("</tr>\n");

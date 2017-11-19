@@ -465,6 +465,7 @@ struct _global_variables_t {
 	pthread_rwlock_t rwlock_usernames;
 
 	bool has_debug;
+	bool idle_threads;
 
 	volatile int shutdown;
 	bool nostart;

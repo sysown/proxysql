@@ -174,6 +174,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 #ifdef IDLE_THREADS
 	if (opt->isSet("--idle-threads")) {
 		global.idle_threads=true;
+		glovars.idle_threads=true;
 	}
 #endif /* IDLE_THREADS */
 
