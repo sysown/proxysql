@@ -673,8 +673,7 @@ ifeq ($(DISTRO),"Ubuntu")
 else
 ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql defaults
-else
-		
+endif
 endif
 endif
 endif
@@ -703,8 +702,9 @@ else
 ifeq ($(DISTRO),"Debian GNU/Linux")
 		rm /etc/init.d/proxysql
 		update-rc.d proxysql remove
-else
-		
+endif
+endif
+endif
 endif
 endif
 endif

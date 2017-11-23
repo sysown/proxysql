@@ -162,6 +162,9 @@ class MySQL_Connection {
 		bool ret=false;
 			if (mysql) {
 				ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
+				if (ret == false && (mysql)->net.last_errno) {
+					ret = true;
+				}
 			}
 		return ret;
 	}
