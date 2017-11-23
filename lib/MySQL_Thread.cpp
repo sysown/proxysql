@@ -3,6 +3,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Thread.h"
+#include "SpookyV2.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -2216,6 +2217,14 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	myconn->fd=sess->client_myds->fd; // 20141011
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
+
+	// fix bug 1253 : initialize time_zone
+	uint32_t time_zone_int=SpookyHash::Hash32(mysql_thread___default_time_zone,strlen(mysql_thread___default_time_zone),10);
+	sess->client_myds->myconn->options.time_zone_int = time_zone_int;
+	if (sess->client_myds->myconn->options.time_zone) {
+		free(sess->client_myds->myconn->options.time_zone);
+	}
+	sess->client_myds->myconn->options.time_zone=strdup(mysql_thread___default_time_zone);
 	return sess;
 }
 
