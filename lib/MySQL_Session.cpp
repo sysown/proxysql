@@ -1779,6 +1779,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				myds->fd=0;
 				status=WAITING_CLIENT_DATA;
 				client_myds->DSS=STATE_SLEEP;
+				RequestEnd(myds);
 			}
 		} else {
 			// rc==1 , nothing to do for now
@@ -1832,6 +1833,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 					myds->destroy_MySQL_Connection_From_Pool(true);
 					myds->fd=0;
+				RequestEnd(myds);
 				status=WAITING_CLIENT_DATA;
 				client_myds->DSS=STATE_SLEEP;
 			}
