@@ -564,6 +564,18 @@ bool MySQL_HostGroups_Manager::commit() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
+	if (GloMTH->variables.hostgroup_manager_verbose) {
+		mydb->execute_statement((char *)"SELECT * FROM mysql_servers_incoming", &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on read from mysql_servers_incoming : %s\n", error);
+		} else {
+			if (resultset) {
+				proxy_info("Dumping mysql_servers_incoming\n");
+				resultset->dump_to_stderr();
+			}
+		}
+		if (resultset) { delete resultset; resultset=NULL; }
+	}
   char *query=NULL;
 	query=(char *)"SELECT mem_pointer, t1.hostgroup_id, t1.hostname, t1.port FROM mysql_servers t1 LEFT OUTER JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE t2.hostgroup_id IS NULL";
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -975,6 +987,22 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	}
 	sqlite3_finalize(statement1);
 	sqlite3_finalize(statement32);
+	if (GloMTH->variables.hostgroup_manager_verbose) {
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		mydb->execute_statement((char *)"SELECT * FROM mysql_servers", &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on read from mysql_servers : %s\n", error);
+		} else {
+			if (resultset) {
+				proxy_info("Dumping mysql_servers\n");
+				resultset->dump_to_stderr();
+			}
+		}
+		if (resultset) { delete resultset; resultset=NULL; }
+	}
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
@@ -1748,7 +1776,49 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			if (num_rows==0) {
 				// the server has read_only=0 , but we can't find any writer, so we perform a swap
 				GloAdmin->mysql_servers_wrlock();
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					char *error2=NULL;
+					int cols2=0;
+					int affected_rows2=0;
+					SQLite3_result *resultset2=NULL;
+					char * query2 = NULL;
+					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+					sprintf(query2,q,hostname,port);
+					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+					if (error2) {
+						proxy_error("Error on read from mysql_servers : %s\n", error2);
+					} else {
+						if (resultset2) {
+							proxy_info("read_only_action RO=0 phase 1 : Dumping mysql_servers for %s:%d\n", hostname, port);
+							resultset2->dump_to_stderr();
+						}
+					}
+					if (resultset2) { delete resultset2; resultset2=NULL; }
+					free(query2);
+				}
 				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					char *error2=NULL;
+					int cols2=0;
+					int affected_rows2=0;
+					SQLite3_result *resultset2=NULL;
+					char * query2 = NULL;
+					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+					sprintf(query2,q,hostname,port);
+					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+					if (error2) {
+						proxy_error("Error on read from mysql_servers : %s\n", error2);
+					} else {
+						if (resultset2) {
+							proxy_info("read_only_action RO=0 phase 2 : Dumping mysql_servers for %s:%d\n", hostname, port);
+							resultset2->dump_to_stderr();
+						}
+					}
+					if (resultset2) { delete resultset2; resultset2=NULL; }
+					free(query2);
+				}
 				sprintf(query,Q2B,hostname,port);
 				admindb->execute(query);
 				if (mysql_thread___monitor_writer_is_also_reader) {
@@ -1757,6 +1827,27 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					sprintf(query,Q3B,hostname,port);
 				}
 				admindb->execute(query);
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					char *error2=NULL;
+					int cols2=0;
+					int affected_rows2=0;
+					SQLite3_result *resultset2=NULL;
+					char * query2 = NULL;
+					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+					sprintf(query2,q,hostname,port);
+					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+					if (error2) {
+						proxy_error("Error on read from mysql_servers : %s\n", error2);
+					} else {
+						if (resultset2) {
+							proxy_info("read_only_action RO=0 phase 3 : Dumping mysql_servers for %s:%d\n", hostname, port);
+							resultset2->dump_to_stderr();
+						}
+					}
+					if (resultset2) { delete resultset2; resultset2=NULL; }
+					free(query2);
+				}
 				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 				GloAdmin->mysql_servers_wrunlock();
 			} else {
@@ -1779,17 +1870,80 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				}
 				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
 					GloAdmin->mysql_servers_wrlock();
+					if (GloMTH->variables.hostgroup_manager_verbose) {
+						char *error2=NULL;
+						int cols2=0;
+						int affected_rows2=0;
+						SQLite3_result *resultset2=NULL;
+						char * query2 = NULL;
+						char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+						sprintf(query2,q,hostname,port);
+						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+						if (error2) {
+							proxy_error("Error on read from mysql_servers : %s\n", error2);
+						} else {
+							if (resultset2) {
+								proxy_info("read_only_action RO=0 , rows=%d , phase 1 : Dumping mysql_servers for %s:%d\n", num_rows, hostname, port);
+								resultset2->dump_to_stderr();
+							}
+						}
+						if (resultset2) { delete resultset2; resultset2=NULL; }
+						free(query2);
+					}
 					GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
 					sprintf(query,Q2A,hostname,port);
 					admindb->execute(query);
 					sprintf(query,Q2B,hostname,port);
 					admindb->execute(query);
+					if (GloMTH->variables.hostgroup_manager_verbose) {
+						char *error2=NULL;
+						int cols2=0;
+						int affected_rows2=0;
+						SQLite3_result *resultset2=NULL;
+						char * query2 = NULL;
+						char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+						sprintf(query2,q,hostname,port);
+						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+						if (error2) {
+							proxy_error("Error on read from mysql_servers : %s\n", error2);
+						} else {
+							if (resultset2) {
+								proxy_info("read_only_action RO=0 , rows=%d , phase 2 : Dumping mysql_servers for %s:%d\n", num_rows, hostname, port);
+								resultset2->dump_to_stderr();
+							}
+						}
+						if (resultset2) { delete resultset2; resultset2=NULL; }
+						free(query2);
+					}
 					if (mysql_thread___monitor_writer_is_also_reader) {
 						sprintf(query,Q3A,hostname,port);
 					} else {
 						sprintf(query,Q3B,hostname,port);
 					}
 					admindb->execute(query);
+					if (GloMTH->variables.hostgroup_manager_verbose) {
+						char *error2=NULL;
+						int cols2=0;
+						int affected_rows2=0;
+						SQLite3_result *resultset2=NULL;
+						char * query2 = NULL;
+						char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+						query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+						sprintf(query2,q,hostname,port);
+						admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+						if (error2) {
+							proxy_error("Error on read from mysql_servers : %s\n", error2);
+						} else {
+							if (resultset2) {
+								proxy_info("read_only_action RO=0 , rows=%d , phase 3 : Dumping mysql_servers for %s:%d\n", num_rows, hostname, port);
+								resultset2->dump_to_stderr();
+							}
+						}
+						if (resultset2) { delete resultset2; resultset2=NULL; }
+						free(query2);
+					}
 					GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 					GloAdmin->mysql_servers_wrunlock();
 				}
@@ -1799,11 +1953,74 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			if (num_rows) {
 				// the server has read_only=1 , but we find it as writer, so we perform a swap
 				GloAdmin->mysql_servers_wrlock();
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					char *error2=NULL;
+					int cols2=0;
+					int affected_rows2=0;
+					SQLite3_result *resultset2=NULL;
+					char * query2 = NULL;
+					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+					sprintf(query2,q,hostname,port);
+					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+					if (error2) {
+						proxy_error("Error on read from mysql_servers : %s\n", error2);
+					} else {
+						if (resultset2) {
+							proxy_info("read_only_action RO=1 phase 1 : Dumping mysql_servers for %s:%d\n", hostname, port);
+							resultset2->dump_to_stderr();
+						}
+					}
+					if (resultset2) { delete resultset2; resultset2=NULL; }
+					free(query2);
+				}
 				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
 				sprintf(query,Q4,hostname,port);
 				admindb->execute(query);
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					char *error2=NULL;
+					int cols2=0;
+					int affected_rows2=0;
+					SQLite3_result *resultset2=NULL;
+					char * query2 = NULL;
+					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+					sprintf(query2,q,hostname,port);
+					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+					if (error2) {
+						proxy_error("Error on read from mysql_servers : %s\n", error2);
+					} else {
+						if (resultset2) {
+							proxy_info("read_only_action RO=1 phase 2 : Dumping mysql_servers for %s:%d\n", hostname, port);
+							resultset2->dump_to_stderr();
+						}
+					}
+					if (resultset2) { delete resultset2; resultset2=NULL; }
+					free(query2);
+				}
 				sprintf(query,Q5,hostname,port);
 				admindb->execute(query);
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					char *error2=NULL;
+					int cols2=0;
+					int affected_rows2=0;
+					SQLite3_result *resultset2=NULL;
+					char * query2 = NULL;
+					char *q = (char *)"SELECT * FROM mysql_servers WHERE hostname=\"%s\" AND port=%d";
+					query2 = (char *)malloc(strlen(q)+strlen(hostname)+32);
+					sprintf(query2,q,hostname,port);
+					admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+					if (error2) {
+						proxy_error("Error on read from mysql_servers : %s\n", error2);
+					} else {
+						if (resultset2) {
+							proxy_info("read_only_action RO=1 phase 3 : Dumping mysql_servers for %s:%d\n", hostname, port);
+							resultset2->dump_to_stderr();
+						}
+					}
+					if (resultset2) { delete resultset2; resultset2=NULL; }
+					free(query2);
+				}
 				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 				GloAdmin->mysql_servers_wrunlock();
 			}

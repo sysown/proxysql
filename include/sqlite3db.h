@@ -160,6 +160,7 @@ class SQLite3_result {
 			delete r;
 		}
 	};
+	void dump_to_stderr();
 };
 
 class SQLite3DB {
