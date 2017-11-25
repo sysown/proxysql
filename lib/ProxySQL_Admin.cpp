@@ -2407,6 +2407,29 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	// fix bug #1047
+	if (
+		(!strncasecmp("BEGIN", query_no_space, strlen("BEGIN")))
+		||
+		(!strncasecmp("START TRANSACTION", query_no_space, strlen("START TRANSACTION")))
+		||
+		(!strncasecmp("COMMIT", query_no_space, strlen("COMMIT")))
+		||
+		(!strncasecmp("ROLLBACK", query_no_space, strlen("ROLLBACK")))
+		||
+		(!strncasecmp("SET character_set_results", query_no_space, strlen("SET character_set_results")))
+		||
+		(!strncasecmp("SET SQL_AUTO_IS_NULL", query_no_space, strlen("SET SQL_AUTO_IS_NULL")))
+		||
+		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
+		||
+		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
+	) {
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
