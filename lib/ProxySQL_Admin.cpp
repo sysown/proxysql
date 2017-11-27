@@ -7162,7 +7162,11 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 		if (rule.lookupValue("match_digest", match_digest)) match_digest_exists=true;
 		if (rule.lookupValue("match_pattern", match_pattern)) match_pattern_exists=true;
 		rule.lookupValue("negate_match_pattern", negate_match_pattern);
-		if (rule.lookupValue("re_modifiers", re_modifiers)) re_modifiers_exists=true;
+		if (rule.lookupValue("re_modifiers", re_modifiers)) {
+		} else {
+			re_modifiers = "CASELESS";
+		}
+		re_modifiers_exists=true;
 		rule.lookupValue("flagOUT", flagOUT);
 		if (rule.lookupValue("replace_pattern", replace_pattern)) replace_pattern_exists=true;
 		rule.lookupValue("destination_hostgroup", destination_hostgroup);
