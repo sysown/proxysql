@@ -329,7 +329,7 @@ int MySQL_Data_Stream::write_to_net() {
 	VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
-			if (mypolls->fds[poll_fds_idx].revents & POLLOUT) { // in write_to_net_poll() we has remove this safety
+			if ((poll_fds_idx < 0) || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) { // in write_to_net_poll() we has remove this safety
                                                           // so we enforce it here
 				shut_soft();
 			}
