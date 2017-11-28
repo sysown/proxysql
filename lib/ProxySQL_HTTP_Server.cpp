@@ -39,6 +39,11 @@
 
 extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Threads_Handler *GloMTH;
+extern ProxySQL_Admin *GloAdmin;
+extern SQLite3_Server *GloSQLite3Server;
+#ifdef PROXYSQLCLICKHOUSE
+extern ClickHouse_Server *GloClickHouseServer;
+#endif
 
 extern char * Chart_bundle_js_c;
 extern char * font_awesome;
@@ -140,8 +145,52 @@ static char *generate_home() {
 	html.append("<br>\n");
 	html.append("</td>\n");
 	html.append("<td width=\"33%\">\n");
-	html.append("<b>ProxySQL version = </b>1.4.3<br>\n");
-	html.append("<b>ProxySQL latest  = </b>1.4.4<br>\n");
+	{
+		char *en = GloAdmin->get_variable("mysql_ifaces");
+		if (en) {
+			html.append("<b>Admin interface(s)</b> = ");
+			html.append(en);
+			html.append("<br>\n");
+			free(en);
+		}
+	}
+#ifdef PROXYSQLCLICKHOUSE
+	if (GloVars.global.clickhouse_server==false) {
+		html.append("<b>ClickHouse = </b><span style=\"background-color: yellow;\"> Disabled </span><br>\n");
+	} else {
+		char *en = GloClickHouseServer->get_variable("mysql_ifaces");
+		if (en) {
+			html.append("<b>ClickHouse interface</b> = ");
+			html.append(en);
+			html.append("<br>\n");
+			free(en);
+		}
+	}
+#else
+	html.append("<b>ClickHouse = </b><span style=\"background-color: red;\"> Not compiled </span><br>\n");
+#endif
+	if (GloMTH) {
+		char *en = GloMTH->get_variable("interfaces");
+		if (en) {
+			html.append("<b>MySQL interface(s)</b> = ");
+			html.append(en);
+			html.append("<br>\n");
+			free(en);
+		}
+	} else {
+		html.append("<b>MySQL interface(s)</b> = <span style=\"background-color: red;\"> Not started </span><br>");
+	}
+	if (GloVars.global.sqlite3_server==false) {
+		html.append("<b>SQLite3 = </b><span style=\"background-color: yellow;\"> Disabled </span><br>\n");
+	} else {
+		char *en = GloSQLite3Server->get_variable("mysql_ifaces");
+		if (en) {
+			html.append("<b>SQLite3 interface(s)</b> = ");
+			html.append(en);
+			html.append("<br>\n");
+			free(en);
+		}
+	}
 	html.append("</td>\n");
 	html.append("<td width=\"33%\">\n");
 	html.append("<b>ProxySQL version = </b>"); html.append(PROXYSQL_VERSION); html.append("<br>\n");

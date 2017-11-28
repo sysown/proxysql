@@ -138,7 +138,6 @@ class ProxySQL_Admin {
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 	char **get_variables_list();
-	char *get_variable(char *name);
 	bool set_variable(char *name, char *value);
 	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
@@ -258,6 +257,8 @@ class ProxySQL_Admin {
 
 	void mysql_servers_wrlock();
 	void mysql_servers_wrunlock();
+
+	char *get_variable(char *name);
 
 	// wrapper to call a private function
 	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
