@@ -158,7 +158,7 @@ class MySQL_Connection {
 
 
 	void async_free_result();
-	bool IsActiveTransaction() {
+	bool IsActiveTransaction(); /* {
 		bool ret=false;
 			if (mysql) {
 				ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
@@ -167,7 +167,7 @@ class MySQL_Connection {
 				}
 			}
 		return ret;
-	}
+	} */
 	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
