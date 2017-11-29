@@ -50,6 +50,7 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
+/*
 static void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
 	unsigned char ch;
 	size_t i, j;
@@ -71,6 +72,7 @@ static void StringToHex(unsigned char *string, unsigned char *hexstring, size_t 
 		}
 	}
 }
+*/
 
 struct cpu_timer
 {
@@ -95,8 +97,7 @@ static char *s_strdup(char *s) {
 	}
 	return ret;
 }
-
-
+/*
 static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
 	if (sha1_pass==NULL) return NULL;
 	// previous code is commented. Uncomment all to perform validation
@@ -117,7 +118,7 @@ static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
 //	free(buff);
 	return buff1;
 }
-
+*/
 /*
 static volatile int load_main_=0;
 static volatile bool nostart_=false;
@@ -138,7 +139,7 @@ extern SQLite3_Server *GloSQLite3Server;
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
-static int rc, arg_on=1, arg_off=0;
+//static int rc, arg_on=1, arg_off=0;
 
 static pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1648,7 +1649,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 */
 void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
-	SQLite3_Server *s3s=(SQLite3_Server *)_pa;
+	//SQLite3_Server *s3s=(SQLite3_Server *)_pa;
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -2480,6 +2481,7 @@ static void * sqlite3server_main_loop(void *arg)
 			poll_wait=500000;
 		}
 		poll_wait=poll_wait/1000;	// conversion to millisecond
+		int rc;
 		rc=poll(fds,nfds,poll_wait);
 		//if ((nostart_ && __sync_val_compare_and_swap(&GloVars.global.nostart,0,1)==0) || __sync_fetch_and_add(&glovars.shutdown,0)==1) {
 		//	nostart_=false;
@@ -3144,8 +3146,8 @@ bool SQLite3_Server::has_variable(const char *name) {
 }
 
 char * SQLite3_Server::get_variable(char *name) {
-#define INTBUFSIZE  4096
-	char intbuf[INTBUFSIZE];
+//#define INTBUFSIZE  4096
+//	char intbuf[INTBUFSIZE];
 //	if (!strcasecmp(name,"version")) return s_strdup(variables.admin_version);
 //	if (!strcasecmp(name,"admin_credentials")) return s_strdup(variables.admin_credentials);
 //	if (!strcasecmp(name,"stats_credentials")) return s_strdup(variables.stats_credentials);
@@ -3167,7 +3169,7 @@ char * SQLite3_Server::get_variable(char *name) {
 //		return strdup((variables.debug ? "true" : "false"));
 //	}
 //#endif // DEBUG
-//	return NULL;
+	return NULL;
 }
 
 /*
