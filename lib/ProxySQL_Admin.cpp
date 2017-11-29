@@ -1764,6 +1764,34 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
+			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM CONFIG") && !strncasecmp("LOAD ADMIN VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					int rows=0;
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					rows=SPA->Read_Global_Variables_from_configfile("admin");
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
+			return false;
+		}
+
+		if (
 			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO MEMORY") && !strncasecmp("SAVE ADMIN VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 			||
 			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO MEM") && !strncasecmp("SAVE ADMIN VARIABLES TO MEM",query_no_space, query_no_space_length))
