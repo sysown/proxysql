@@ -364,6 +364,7 @@ class MySQL_Threads_Handler
 		bool forward_autocommit;
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
+		bool autocommit_false_is_transaction;
 		int max_allowed_packet;
 		int throttle_connections_per_sec_to_hostgroup;
 		int max_transaction_time;

@@ -1111,6 +1111,9 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 }
 
 bool MySQL_Session::handler_again___verify_backend_autocommit() {
+	if (mysql_thread___forward_autocommit == true) {
+		return false;
+	}
 	if (autocommit != mybe->server_myds->myconn->IsAutoCommit()) {
 		// see case #485
 		if (mysql_thread___enforce_autocommit_on_reads == false) {

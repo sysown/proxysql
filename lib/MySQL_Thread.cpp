@@ -250,6 +250,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"forward_autocommit",
 	(char *)"enforce_autocommit_on_reads",
 	(char *)"autocommit_false_not_reusable",
+	(char *)"autocommit_false_is_transaction",
 	(char *)"hostgroup_manager_verbose",
 	(char *)"threshold_query_length",
 	(char *)"threshold_resultset_size",
@@ -400,6 +401,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.forward_autocommit=false;
 	variables.enforce_autocommit_on_reads=false;
 	variables.autocommit_false_not_reusable=false;
+	variables.autocommit_false_is_transaction=false;
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
 	variables.connpoll_reset_queue_length = 50;
@@ -648,6 +650,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
 	if (!strcasecmp(name,"enforce_autocommit_on_reads")) return (int)variables.enforce_autocommit_on_reads;
 	if (!strcasecmp(name,"autocommit_false_not_reusable")) return (int)variables.autocommit_false_not_reusable;
+	if (!strcasecmp(name,"autocommit_false_is_transaction")) return (int)variables.autocommit_false_is_transaction;
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
@@ -1003,6 +1006,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"autocommit_false_not_reusable")) {
 		return strdup((variables.autocommit_false_not_reusable ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"autocommit_false_is_transaction")) {
+		return strdup((variables.autocommit_false_is_transaction ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"commands_stats")) {
 		return strdup((variables.commands_stats ? "true" : "false"));
@@ -1831,6 +1837,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.autocommit_false_not_reusable=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"autocommit_false_is_transaction")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.autocommit_false_is_transaction=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.autocommit_false_is_transaction=false;
 			return true;
 		}
 		return false;
@@ -3245,6 +3262,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___forward_autocommit=(bool)GloMTH->get_variable_int((char *)"forward_autocommit");
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___autocommit_false_not_reusable=(bool)GloMTH->get_variable_int((char *)"autocommit_false_not_reusable");
+	mysql_thread___autocommit_false_is_transaction=(bool)GloMTH->get_variable_int((char *)"autocommit_false_is_transaction");
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");

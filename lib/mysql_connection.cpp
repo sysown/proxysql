@@ -1471,6 +1471,12 @@ bool MySQL_Connection::IsActiveTransaction() {
 		if (ret == false && (mysql)->net.last_errno) {
 			ret = true;
 		}
+		if (ret == false) {
+			bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit );
+			if ( r && (IsAutoCommit() == false) ) {
+				ret = true;
+			}
+		}
 	}
 	return ret;
 }
