@@ -2424,7 +2424,7 @@ __run_skip_1:
 		}
 #endif // IDLE_THREADS
 		while (mirror_queue_mysql_sessions->len) {
-			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > mysql_thread___mirror_max_concurrency ) {
+			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > (unsigned int)mysql_thread___mirror_max_concurrency ) {
 				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 				goto __mysql_thread_exit_add_mirror; // we can't add more mirror sessions at runtime
 			} else {
@@ -2435,7 +2435,7 @@ __run_skip_1:
 				newsess->handler(); // execute immediately
 				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 					unregister_session(mysql_sessions->len-1);
-					int l=mysql_thread___mirror_max_concurrency;
+					unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
 					if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
 					if (mirror_queue_mysql_sessions_cache->len <= l) {
 						bool to_cache=true;
@@ -2687,7 +2687,7 @@ __run_skip_1a:
 
 		if (maintenance_loop) {
 			// house keeping
-			int l=mysql_thread___mirror_max_concurrency;
+			unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
 			if (mirror_queue_mysql_sessions_cache->len > l) {
 				while (mirror_queue_mysql_sessions_cache->len > mirror_queue_mysql_sessions->len && mirror_queue_mysql_sessions_cache->len > l) {
 					MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
@@ -3073,7 +3073,7 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 				unregister_session(n);
 				n--;
-				int l=mysql_thread___mirror_max_concurrency;
+				unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
 				if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
 				if (mirror_queue_mysql_sessions_cache->len <= l) {
 					bool to_cache=true;
@@ -3660,7 +3660,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Mirror current concurrency
 		pta[0]=(char *)"Mirror_concurrency";
-		sprintf(buf,"%llu",status_variables.mirror_sessions_current);
+		sprintf(buf,"%u",status_variables.mirror_sessions_current);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
