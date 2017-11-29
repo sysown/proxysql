@@ -721,7 +721,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
 		bool collation_specified = false;
-		unsigned int charsetnr = 0;
+		//unsigned int charsetnr = 0;
 		const CHARSET_INFO * c;
 		char * collation_name = NULL;
 		if (strcasestr(csname," COLLATE ")) {
@@ -780,7 +780,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session() {
 	if (pktH->size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
 		// check if there are too many mirror sessions in queue
-		if (thread->mirror_queue_mysql_sessions->len >= mysql_thread___mirror_max_queue_length) {
+		if (thread->mirror_queue_mysql_sessions->len >= (unsigned int)mysql_thread___mirror_max_queue_length) {
 			return;
 		}
 		// at this point, we will create the new session
@@ -834,7 +834,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->mirror_queue_mysql_sessions->len==0) {
 			// there are no sessions in the queue, we try to execute immediately
 			// Only mysql_thread___mirror_max_concurrency mirror session can run in parallel
-			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > mysql_thread___mirror_max_concurrency ) {
+			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > (unsigned int)mysql_thread___mirror_max_concurrency ) {
 				// if the limit is reached, we queue it instead
 				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 				thread->mirror_queue_mysql_sessions->add(newsess);
@@ -844,7 +844,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				//newsess->to_process=0;
 				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
 					thread->unregister_session(thread->mysql_sessions->len-1);
-					int l=mysql_thread___mirror_max_concurrency;
+					unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
 					if (thread->mirror_queue_mysql_sessions->len*0.3 > l) l=thread->mirror_queue_mysql_sessions->len*0.3;
 					if (thread->mirror_queue_mysql_sessions_cache->len <= l) {
 						bool to_cache=true;
@@ -2642,7 +2642,7 @@ handler_again:
 								uint32_t client_stmtid;
 								uint64_t global_stmtid;
 #endif
-								bool is_new;
+								//bool is_new;
 								MySQL_STMT_Global_info *stmt_info=NULL;
 #ifndef PROXYSQL_STMT_V14
 									stmt_info=GloMyStmt->add_prepared_statement(&is_new, current_hostgroup,
@@ -3800,9 +3800,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			status=WAITING_CLIENT_DATA;
 			*wrong_pass=false;
 			client_authenticated=true;
-			int free_users=0;
+			//int free_users=0;
 			int used_users=0;
-			free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+			/*free_users */GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 			// FIXME: max_connections is not handled for CHANGE_USER
 		} else {
 			l_free(pkt->size,pkt->ptr);

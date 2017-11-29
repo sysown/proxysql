@@ -62,7 +62,7 @@ static char *style2 = (char *)" style=\"color: #2969a5 ; background-color: white
 static char *generate_home() {
 	char *s = NULL;
 	string html = "";
-	char *link = (char *)"<a href=stats?metric=\"%s\" %s>30m</a>";
+	//3char *link = (char *)"<a href=stats?metric=\"%s\" %s>30m</a>";
 	html.append("<div class=\"menu\" style=\"height: auto;\">\n");
 //<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">&nbsp</div>\n");
 //	html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
@@ -132,7 +132,7 @@ static char *generate_home() {
 	html.append("<br>\n");
 	html.append("<b>Monitor = </b>");
 	{
-		char *en = GloMTH->get_variable("monitor_enabled");
+		char *en = GloMTH->get_variable((char *)"monitor_enabled");
 		if (en && strcmp(en,"true")==0) {
 			html.append("<span style=\"color: green;\">enabled</span>");
 		} else {
@@ -146,7 +146,7 @@ static char *generate_home() {
 	html.append("</td>\n");
 	html.append("<td width=\"33%\">\n");
 	{
-		char *en = GloAdmin->get_variable("mysql_ifaces");
+		char *en = GloAdmin->get_variable((char *)"mysql_ifaces");
 		if (en) {
 			html.append("<b>Admin interface(s)</b> = ");
 			html.append(en);
@@ -158,7 +158,7 @@ static char *generate_home() {
 	if (GloVars.global.clickhouse_server==false) {
 		html.append("<b>ClickHouse = </b><span style=\"background-color: yellow;\"> Disabled </span><br>\n");
 	} else {
-		char *en = GloClickHouseServer->get_variable("mysql_ifaces");
+		char *en = GloClickHouseServer->get_variable((char *)"mysql_ifaces");
 		if (en) {
 			html.append("<b>ClickHouse interface</b> = ");
 			html.append(en);
@@ -170,7 +170,7 @@ static char *generate_home() {
 	html.append("<b>ClickHouse = </b><span style=\"background-color: red;\"> Not compiled </span><br>\n");
 #endif
 	if (GloMTH) {
-		char *en = GloMTH->get_variable("interfaces");
+		char *en = GloMTH->get_variable((char *)"interfaces");
 		if (en) {
 			html.append("<b>MySQL interface(s)</b> = ");
 			html.append(en);
@@ -183,7 +183,7 @@ static char *generate_home() {
 	if (GloVars.global.sqlite3_server==false) {
 		html.append("<b>SQLite3 = </b><span style=\"background-color: yellow;\"> Disabled </span><br>\n");
 	} else {
-		char *en = GloSQLite3Server->get_variable("mysql_ifaces");
+		char *en = GloSQLite3Server->get_variable((char *)"mysql_ifaces");
 		if (en) {
 			html.append("<b>SQLite3 interface(s)</b> = ");
 			html.append(en);
@@ -341,8 +341,8 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 
 	char *valmetric = NULL;
-	char *valinterval = NULL;
-	char *valunit = NULL;
+	//char *valinterval = NULL;
+	//char *valunit = NULL;
 	char *interval_s = NULL;
 	int interval_i = 1800;
 
