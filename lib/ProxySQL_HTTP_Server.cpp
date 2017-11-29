@@ -40,6 +40,7 @@
 extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
+extern MySQL_Authentication *GloMyAuth;
 extern SQLite3_Server *GloSQLite3Server;
 #ifdef PROXYSQLCLICKHOUSE
 extern ClickHouse_Server *GloClickHouseServer;
@@ -315,18 +316,51 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 
 	char *username;
-	const char *password = "testpass";
+	//const char *password = "testpass";
+	char *password = NULL;
 	const char *realm = "Access to ProxySQL status page";
 
 	username = MHD_digest_auth_get_username(connection);
-	if (username == NULL || strcmp(username,"stats")) {
+	if (username == NULL) {
 		response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
 		ret = MHD_queue_auth_fail_response(connection, realm, OPAQUE, response, MHD_NO);
 		MHD_destroy_response(response);
 		return ret;
 	}
+	{
+		int default_hostgroup = -1;
+		char *default_schema = NULL;
+		bool schema_locked;
+		bool transaction_persistent;
+		bool fast_forward;
+		bool _ret_use_ssl = false;
+		int max_connections;
+		void *sha1_pass = NULL;
+		password=GloMyAuth->lookup(username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+		if (default_schema) { // unused
+			free(default_schema);
+		}
+		if (sha1_pass) { // unused
+			free(sha1_pass);
+		}
+		if (
+			(default_hostgroup != STATS_HOSTGROUP)
+			||
+			(password == NULL)
+		) {
+			if (password) {
+				free(password); // cleanup
+			}
+			free(username); // cleanup
+			response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
+			ret = MHD_queue_auth_fail_response(connection, realm, OPAQUE, response, MHD_NO);
+			MHD_destroy_response(response);
+			return ret;
+		}
+	}
 	ret = MHD_digest_auth_check(connection, realm, username, password, 300);
 	free(username);
+	free(password);
 	if ( (ret == MHD_INVALID_NONCE) || (ret == MHD_NO) ) {
 		response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
 		if (NULL == response)
