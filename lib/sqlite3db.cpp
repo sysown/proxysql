@@ -304,7 +304,7 @@ void SQLite3_result::dump_to_stderr() {
 		SQLite3_row *r=*it;
 		for (int i=0; i<columns;i++) {
 			if (r->fields[i]) {
-				if (r->sizes[i] > columns_lengths[i]) {
+				if ((unsigned int)r->sizes[i] > columns_lengths[i]) {
 					columns_lengths[i] = r->sizes[i];
 				}
 			} else {
@@ -317,7 +317,7 @@ void SQLite3_result::dump_to_stderr() {
 	string s;
 	s = "+";
 	for (i=0; i<columns; i++) {
-		int j;
+		unsigned int j;
 		for (j=0; j < columns_lengths[i] + 2; j++) {
 			s.append("-");
 		}
@@ -331,7 +331,7 @@ void SQLite3_result::dump_to_stderr() {
 		size_t len = strlen(r->name);
 		s.append(" ");
 		s.append(r->name);
-		int j;
+		unsigned int j;
 		for (j=0; j < columns_lengths[i] - len + 1 ; j++) {
 			s.append(" ");
 		}
@@ -341,7 +341,7 @@ void SQLite3_result::dump_to_stderr() {
 	fprintf(stderr,"%s\n",s.c_str());
 	s = "+";
 	for (i=0; i<columns; i++) {
-		int j;
+		unsigned int j;
 		for (j=0; j < columns_lengths[i] + 2 ; j++) {
 			s.append("-");
 		}
@@ -363,7 +363,7 @@ void SQLite3_result::dump_to_stderr() {
 				len = 4;
 				s.append("NULL");
 			}
-			int j;
+			unsigned int j;
 			for (j=0; j < columns_lengths[i] - len + 1 ; j++) {
 				s.append(" ");
 			}
@@ -374,7 +374,7 @@ void SQLite3_result::dump_to_stderr() {
 
 	s = "+";
 	for (i=0; i<columns; i++) {
-		int j;
+		unsigned int j;
 		for (j=0; j < columns_lengths[i] + 2 ; j++) {
 			s.append("-");
 		}
