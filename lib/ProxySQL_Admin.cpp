@@ -3134,6 +3134,15 @@ __end_while_pool:
 					}
 				}
 			}
+			if (GloProxyStats->MySQL_Query_Cache_timetoget(curtime)) {
+				if (GloMTH) {
+					SQLite3_result * resultset=GloQC->SQL3_getStats();
+					if (resultset) {
+						GloProxyStats->MySQL_Query_Cache_sets(resultset);
+						delete resultset;
+					}
+				}
+			}
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
 			}
