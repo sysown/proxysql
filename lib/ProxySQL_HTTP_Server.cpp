@@ -168,7 +168,7 @@ static char *generate_home() {
 		}
 	}
 #else
-	html.append("<b>ClickHouse = </b><span style=\"background-color: red;\"> Not compiled </span><br>\n");
+	html.append("<b>ClickHouse = </b><span style=\"background-color: red;\"> support not compiled </span><br>\n");
 #endif
 	if (GloMTH) {
 		char *en = GloMTH->get_variable((char *)"interfaces");
@@ -425,6 +425,11 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			case 3600:
 			case 7200:
 			case 28800:
+			case 86400:
+			case 259200:
+			case 604800:
+			case 2592000:
+			case 7776000:
 				interval_i = tmp_;
 				break;
 			default:
