@@ -2865,8 +2865,11 @@ handler_again:
 							handler_ret = -1;
 							return handler_ret;
 						} else {
-							proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
-
+							if (mysql_thread___verbose_query_error) {
+								proxy_warning("Error during query on (%d,%s,%d) , user \"%s@%s\" , schema \"%s\" , %d, %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)), CurrentQuery.QueryParserArgs.digest_text );
+							} else {
+								proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
+							}
 							bool retry_conn=false;
 							switch (myerr) {
 								case 1317:  // Query execution was interrupted
