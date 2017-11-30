@@ -2,7 +2,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include <dirent.h>
-
+#include <libgen.h>
 
 static uint8_t mysql_encode_length(uint64_t len, unsigned char *hd) {
 	if (len < 251) return 1;
@@ -206,15 +206,16 @@ void MySQL_Logger::flush_log_unlocked() {
 
 
 void MySQL_Logger::open_log_unlocked() {
-	if (log_file_id==0) {
-		log_file_id=find_next_id()+1;
+        log_file_id=find_next_id();
+	if (log_file_id!=0) {
+                log_file_id=find_next_id()+1;
 	} else {
-		log_file_id++;
+                log_file_id++;
 	}
 	char *filen=NULL;
 	if (base_filename[0]=='/') { // absolute path
 		filen=(char *)malloc(strlen(base_filename)+10);
-		sprintf(filen,"/%s.%08d",base_filename,log_file_id);
+		sprintf(filen,"%s.%08d",base_filename,log_file_id);
 	} else { // relative path
 		filen=(char *)malloc(strlen(datadir)+strlen(base_filename)+10);
 		sprintf(filen,"%s/%s.%08d",datadir,base_filename,log_file_id);
@@ -343,26 +344,44 @@ unsigned int MySQL_Logger::find_next_id() {
 	int maxidx=0;
 	DIR *dir;
 	struct dirent *ent;
+	char *eval_filename = NULL;
+	char *eval_dirname = NULL;
+        char *eval_pathname = NULL;
 	assert(base_filename);
-	assert(datadir);
-	size_t bfl=strlen(base_filename);
-	if ((dir = opendir(datadir)) != NULL) {
-	  while ((ent = readdir (dir)) != NULL) {
-			if (strlen(ent->d_name)==bfl+9) {
-				if (strncmp(ent->d_name,base_filename,bfl)==0) {
-					if (ent->d_name[bfl]=='.') {
-						int idx=atoi(ent->d_name+bfl+1);
+	if (base_filename[0] == '/') {
+		eval_pathname = strdup(base_filename);
+		eval_filename = basename(eval_pathname);
+		eval_dirname = dirname(eval_pathname);
+	} else {
+                assert(datadir);
+		eval_filename = strdup(base_filename);
+		eval_dirname = strdup(datadir);
+	}
+	size_t efl=strlen(eval_filename);
+	if ((dir = opendir(eval_dirname)) != NULL) {
+		while ((ent = readdir (dir)) != NULL) {
+			if (strlen(ent->d_name)==efl+9) {
+				if (strncmp(ent->d_name,eval_filename,efl)==0) {
+					if (ent->d_name[efl]=='.') {
+						int idx=atoi(ent->d_name+efl+1);
 						if (idx>maxidx) maxidx=idx;
 					}
 				}
 			}
 		}
-  closedir (dir);
-	return maxidx;
+		closedir (dir);
+		if (base_filename[0] != '/') {
+			free(eval_dirname);
+			free(eval_filename);
+		}
+                if (eval_pathname) {
+                        free(eval_pathname);
+                }
+		return maxidx;
 	} else {
-  /* could not open directory */
-		fprintf(stderr,"Unable to open datadir: %s\n", datadir);
+        /* could not open directory */
+		proxy_error("Unable to open datadir: %s\n", eval_dirname);
 		exit(EXIT_FAILURE);
-	}
+	}        
 	return 0;
 }
