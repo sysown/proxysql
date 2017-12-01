@@ -3144,7 +3144,7 @@ __end_while_pool:
 						delete resultset;
 					}
 				}
-}			
+			}			
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
 			}

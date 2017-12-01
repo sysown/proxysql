@@ -30,6 +30,12 @@
 #define STATSDB_SQLITE_TABLE_SYSTEM_MEMORY_DAY "CREATE TABLE system_memory_day (timestamp INT NOT NULL, allocated INT NOT NULL, resident INT NOT NULL, active INT NOT NULL, mapped INT NOT NULL, metadata INT NOT NULL, retained INT NOT NULL, PRIMARY KEY (timestamp))"
 #endif
 
+
+#define STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE "CREATE TABLE mysql_query_cache (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))"
+#define STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE_HOUR "CREATE TABLE mysql_query_cache_hour (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))"
+#define STATSDB_SQLITE_TABLE_MYSQL_QUERY_CACHE_DAY "CREATE TABLE mysql_query_cache_day (timestamp INT NOT NULL, count_GET INT NOT NULL, count_GET_OK INT NOT NULL, count_SET INT NOT NULL, bytes_IN INT NOT NULL, bytes_OUT INT NOT NULL, Entries_Purged INT NOT NULL, Entries_In_Cache INT NOT NULL, Memory_Bytes INT NOT NULL, PRIMARY KEY (timestamp))"
+
+
 class ProxySQL_Statistics {
 	SQLite3DB *statsdb_mem; // internal statistics DB
 	std::vector<table_def_t *> *tables_defs_statsdb_mem;
@@ -43,6 +49,7 @@ class ProxySQL_Statistics {
 #ifndef NOJEM
 	unsigned long long next_timer_system_memory;
 #endif
+	unsigned long long next_timer_MySQL_Query_Cache;
 	public:
 	struct {
 		int stats_mysql_connection_pool;
@@ -63,16 +70,19 @@ class ProxySQL_Statistics {
 #ifndef NOJEM
 	bool system_memory_timetoget(unsigned long long);
 #endif
+	bool MySQL_Query_Cache_timetoget(unsigned long long);
 	void MySQL_Threads_Handler_sets(SQLite3_result *);
 	void system_cpu_sets();
 #ifndef NOJEM
 	void system_memory_sets();
 #endif
+	void MySQL_Query_Cache_sets(SQLite3_result *);
 	SQLite3_result * get_mysql_metrics(int interval);
 	SQLite3_result * get_system_cpu_metrics(int interval);
 #ifndef NOJEM
 	SQLite3_result * get_system_memory_metrics(int interval);
 #endif
+	SQLite3_result * get_MySQL_Query_Cache_metrics(int interval);
 };
 
 #endif /* CLASS_PROXYSQL_STATISTICS_H */

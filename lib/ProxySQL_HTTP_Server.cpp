@@ -168,7 +168,7 @@ static char *generate_home() {
 		}
 	}
 #else
-	html.append("<b>ClickHouse = </b><span style=\"background-color: red;\"> Not compiled </span><br>\n");
+	html.append("<b>ClickHouse = </b><span style=\"background-color: red;\"> support not compiled </span><br>\n");
 #endif
 	if (GloMTH) {
 		char *en = GloMTH->get_variable((char *)"interfaces");
@@ -425,6 +425,11 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			case 3600:
 			case 7200:
 			case 28800:
+			case 86400:
+			case 259200:
+			case 604800:
+			case 2592000:
+			case 7776000:
 				interval_i = tmp_;
 				break;
 			default:
@@ -599,7 +604,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			}
 			free(nv);
 			free(ts);
-			
+
 
 			nm = (char **)malloc(sizeof(char *)*4);
 			nm[0] = (char *)"ConnPool_get_conn_failure";
@@ -629,8 +634,96 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 			s->append("</body></html>");
 			response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
-  			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
-  			MHD_destroy_response (response);
+			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+			MHD_destroy_response (response);
+			delete s;
+			return ret;
+		}
+		if (strcmp(valmetric,"cache")==0) {
+			string *s = generate_header((char *)"ProxySQL Graphs");
+			char *buttons = generate_buttons((char *)"cache");
+			s->append(buttons);
+			free(buttons);
+			s->append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
+			string *s1 = generate_canvas((char *)"myChart1");
+			s->append(s1->c_str());
+			s->append("<p></p>\n");
+			s1 = generate_canvas((char *)"myChart2");
+			s->append(s1->c_str());
+			s->append("<p></p>\n");
+			s1 = generate_canvas((char *)"myChart3");
+			s->append(s1->c_str());
+			s->append("<p></p>\n");
+			s1 = generate_canvas((char *)"myChart4");
+			s->append(s1->c_str());
+			s->append("</div>\n");
+			//SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics();
+			//SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics();
+			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_MySQL_Query_Cache_metrics(interval_i);
+			char **nm = NULL;
+			char **nl = NULL;
+			char **nv = NULL;
+			char *ts = NULL;
+
+//Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions
+
+			nm = (char **)malloc(sizeof(char *)*5);
+			nm[0] = (char *)"count_GET";
+			nm[1] = (char *)"count_GET_OK";
+			nm[2] = (char *)"count_SET";
+			nm[3] = (char *)"Entries_Purged";
+			nm[4] = (char *)"Entries_In_Cache";
+			nl = (char **)malloc(sizeof(char *)*5);
+			nl[0] = (char *)"Count GET";
+			nl[1] = (char *)"Count GET OK";
+			nl[2] = (char *)"Count SET";
+			nl[3] = (char *)"Entries Purged";
+			nl[4] = (char *)"Entries In Cache";
+			nv = (char **)malloc(sizeof(char *)*6);
+			nv[0] = extract_values(mysql_metrics_sqlite,2,true,(double)1);
+			nv[1] = extract_values(mysql_metrics_sqlite,3,true,(double)1);
+			nv[2] = extract_values(mysql_metrics_sqlite,4,true,(double)1);
+			nv[3] = extract_values(mysql_metrics_sqlite,7,true,(double)1);
+			nv[4] = extract_values(mysql_metrics_sqlite,8,false,(double)1);
+			ts = extract_ts(mysql_metrics_sqlite,true);
+			s1 = generate_chart((char *)"myChart1",ts,5,nm,nl,nv);
+			s->append(s1->c_str());
+			free(nm);
+			free(nl);
+			for (int aa=0 ; aa<5 ; aa++) {
+				free(nv[aa]);
+			}
+			free(nv);
+			free(ts);
+
+
+			nm = (char **)malloc(sizeof(char *)*3);
+			nm[0] = (char *)"bytes_IN";
+			nm[1] = (char *)"bytes_OUT";
+			nm[2] = (char *)"Memory_Bytes";
+			nl = (char **)malloc(sizeof(char *)*3);
+			nl[0] = (char *)"KB IN";
+			nl[1] = (char *)"KB OUT";
+			nl[2] = (char *)"QC size MB";
+			nv = (char **)malloc(sizeof(char *)*3);
+			nv[0] = extract_values(mysql_metrics_sqlite,5,true,(double)1/1024);
+			nv[1] = extract_values(mysql_metrics_sqlite,6,true,(double)1/1024);
+			nv[2] = extract_values(mysql_metrics_sqlite,9,false,(double)1/1024/1024);
+			ts = extract_ts(mysql_metrics_sqlite,true);
+			s1 = generate_chart((char *)"myChart2",ts,3,nm,nl,nv);
+			s->append(s1->c_str());
+			free(nm);
+			free(nl);
+			for (int aa=0 ; aa<3 ; aa++) {
+				free(nv[aa]);
+			}
+			free(nv);
+			free(ts);
+
+			s->append("</body></html>");
+			response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
+			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+			MHD_destroy_response (response);
 			delete s;
 			return ret;
 		}
