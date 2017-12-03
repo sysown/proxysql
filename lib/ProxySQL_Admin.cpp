@@ -7548,9 +7548,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 		// upgrade is required
 		proxy_warning("Detected version v1.2.0a of table mysql_query_rules\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
-		// drop any existing table with suffix _v110
+		// drop any existing table with suffix _v120a
 		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_v120a");
-		// rename current table to add suffix _v110
+		// rename current table to add suffix _v120a
 		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v120a");
 		// create new table
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
@@ -7563,9 +7563,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 		// upgrade is required
 		proxy_warning("Detected version v1.2.0g of table mysql_query_rules\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
-		// drop any existing table with suffix _v110
+		// drop any existing table with suffix _v120g
 		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_v120g");
-		// rename current table to add suffix _v110
+		// rename current table to add suffix _v120g
 		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v120g");
 		// create new table
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
@@ -7578,9 +7578,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 		// upgrade is required
 		proxy_warning("Detected version v1.2.2 of table mysql_query_rules\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
-		// drop any existing table with suffix _v110
+		// drop any existing table with suffix _v122
 		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_v122");
-		// rename current table to add suffix _v110
+		// rename current table to add suffix _v122
 		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v122");
 		// create new table
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
@@ -7623,9 +7623,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 		// upgrade is required
 		proxy_warning("Detected version v1.4.0b of table mysql_query_rules\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
-		// drop any existing table with suffix _v140a
+		// drop any existing table with suffix _v140b
 		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_v140b");
-		// rename current table to add suffix _v140a
+		// rename current table to add suffix _v140b
 		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v140b");
 		// create new table
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
@@ -7725,9 +7725,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// upgrade is required
 		proxy_warning("Detected version v1.2.2 of table mysql_servers\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
-		//drop any existing table with suffix _v130
+		//drop any existing table with suffix _v122
 		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v122");
-                // rename current table to add suffix _v130
+                // rename current table to add suffix _v122
                 configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v122");
                 // create new table
                 configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
