@@ -7720,19 +7720,19 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms FROM mysql_servers_v120");
 	}
-	rci=configdb->check_table_structure((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_3_0);
+	rci=configdb->check_table_structure((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_2_2);
 	if (rci) {
 		// upgrade is required
-		proxy_warning("Detected version v1.3.0 of table mysql_servers\n");
+		proxy_warning("Detected version v1.2.2 of table mysql_servers\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
 		//drop any existing table with suffix _v130
-		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v130");
+		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v122");
                 // rename current table to add suffix _v130
-                configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v130");
+                configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v122");
                 // create new table
                 configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
                 // copy fields from old table
-                configdb->execute("INSERT INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_v130");
+                configdb->execute("INSERT OR IGNORE INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_v130");
 	}
 	rci=configdb->check_table_structure((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_0); // issue #643
 	if (rci) {
