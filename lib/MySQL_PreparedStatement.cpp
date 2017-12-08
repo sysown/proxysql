@@ -3,14 +3,13 @@
 
 #include "SpookyV2.h"
 
-#ifndef PROXYSQL_STMT_V14
-extern MySQL_STMT_Manager *GloMyStmt;
-static uint32_t add_prepared_statement_calls = 0;
-static uint32_t find_prepared_statement_by_hash_calls = 0;
-#else
+//#ifndef PROXYSQL_STMT_V14
+//extern MySQL_STMT_Manager *GloMyStmt;
+//static uint32_t add_prepared_statement_calls = 0;
+//static uint32_t find_prepared_statement_by_hash_calls = 0;
+//#else
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
-#endif
-
+//#endif
 
 static uint64_t stmt_compute_hash(unsigned int hostgroup, char *user,
                                   char *schema, char *query,
@@ -132,11 +131,11 @@ void *StmtLongDataHandler::get(uint32_t _stmt_id, uint16_t _param_id,
 	return NULL;
 }
 
-#ifndef PROXYSQL_STMT_V14
-MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h,
-#else
+//#ifndef PROXYSQL_STMT_V14
+//MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint32_t id, unsigned int h,
+//#else
 MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
-#endif
+//#endif
                                                char *u, char *s, char *q,
                                                unsigned int ql,
                                                MYSQL_STMT *stmt, uint64_t _h) {
@@ -463,6 +462,7 @@ MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
 		digest_text = NULL;
 	}
 }
+/*
 #ifndef PROXYSQL_STMT_V14
 uint64_t MySQL_STMTs_local::compute_hash(unsigned int hostgroup, char *user,
                                          char *schema, char *query,
@@ -755,6 +755,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager::find_prepared_statement_by_hash(
 
 
 #else // PROXYSQL_STMT_V14
+*/
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 void MySQL_STMTs_local_v14::backend_insert(uint64_t global_statement_id, MYSQL_STMT *stmt) {
@@ -777,6 +778,10 @@ uint64_t MySQL_STMTs_local_v14::compute_hash(unsigned int hostgroup, char *user,
 
 MySQL_STMT_Manager_v14::MySQL_STMT_Manager_v14() {
 	pthread_rwlock_init(&rwlock_, NULL);
+        map_stmt_id_to_info= std::map<uint64_t, MySQL_STMT_Global_info *>();       // map using statement id
+        map_stmt_hash_to_info = std::map<uint64_t, MySQL_STMT_Global_info *>();     // map using hashes
+        free_stmt_ids = std::stack<uint64_t> ();
+
 	next_statement_id =
 	    1;  // we initialize this as 1 because we 0 is not allowed
 }
@@ -834,7 +839,8 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 void MySQL_STMT_Manager_v14::ref_count_server(uint64_t _stmt_id ,int _v, bool lock) {
 	if (lock)
 		pthread_rwlock_wrlock(&rwlock_);
-	auto s = map_stmt_id_to_info.find(_stmt_id);
+	std::map<uint64_t, MySQL_STMT_Global_info *>::iterator s;
+	s = map_stmt_id_to_info.find(_stmt_id);
 	if (s != map_stmt_id_to_info.end()) {
 		MySQL_STMT_Global_info *stmt_info = s->second;
 		stmt_info->ref_count_server += _v;
@@ -933,6 +939,13 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_stmt_
 
 uint32_t MySQL_STMTs_local_v14::generate_new_client_stmt_id(uint64_t global_statement_id) {
 	uint32_t ret=0;
+	//auto s2 = global_stmt_to_client_ids.find(global_statement_id);
+	std::pair<std::multimap<uint64_t,uint32_t>::iterator, std::multimap<uint64_t,uint32_t>::iterator> itret;
+	itret = global_stmt_to_client_ids.equal_range(global_statement_id);
+	for (std::multimap<uint64_t,uint32_t>::iterator it=itret.first; it!=itret.second; ++it) {
+		ret = it->second;
+		return ret;
+	}
 	if (free_client_ids.size()) {
 		ret=free_client_ids.top();
 		free_client_ids.pop();
@@ -1075,4 +1088,4 @@ void MySQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
 	*s_total = s_t;
 }
 
-#endif // PROXYSQL_STMT_V14
+//#endif // PROXYSQL_STMT_V14
