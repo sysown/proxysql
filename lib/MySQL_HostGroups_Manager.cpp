@@ -1516,6 +1516,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 							(current_replication_lag==-2) // see issue 959
 						) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+							proxy_warning("Re-enabling server %s:%d with replication lag of %d second\n", address, port, current_replication_lag);
 						}
 					}
 				}

@@ -331,6 +331,7 @@ class MySQL_Threads_Handler
 		int monitor_slave_lag_when_null;
 		char *monitor_username;
 		char *monitor_password;
+		char * monitor_replication_lag_use_percona_heartbeat;
 		int ping_interval_server_msec;
 		int ping_timeout_server;
 		int shun_on_failures;

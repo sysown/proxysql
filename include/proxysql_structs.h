@@ -677,6 +677,7 @@ __thread int mysql_thread___monitor_query_timeout;
 __thread int mysql_thread___monitor_slave_lag_when_null;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
+__thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
@@ -781,6 +782,7 @@ extern __thread int mysql_thread___monitor_query_timeout;
 extern __thread int mysql_thread___monitor_slave_lag_when_null;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
+extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;

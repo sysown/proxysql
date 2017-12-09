@@ -970,6 +970,8 @@ void * monitor_replication_lag_thread(void *arg) {
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
 
+	bool use_percona_heartbeat = false;
+	char * percona_heartbeat_table = mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 
 	mmsd->t1=start_time;
 
@@ -984,7 +986,20 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
+	if (percona_heartbeat_table) {
+		int l = strlen(percona_heartbeat_table);
+		if (l) {
+			use_percona_heartbeat = true;
+			char *base_query = (char *)"SELECT MIN(ROUND(TIMESTAMPDIFF(MICROSECOND, ts, SYSDATE(6))/1000000)) AS Seconds_Behind_Master FROM %s";
+			char *replication_query = (char *)malloc(strlen(base_query)+l);
+			sprintf(replication_query,base_query,percona_heartbeat_table);
+			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,replication_query);
+			free(replication_query);
+		}
+	}
+	if (use_percona_heartbeat == false) {
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
+	}
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();

@@ -6,6 +6,8 @@
 #include "SpookyV2.h"
 #include <dirent.h>
 #include <libgen.h>
+#include "re2/re2.h"
+#include "re2/regexp.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -240,6 +242,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_username",
 	(char *)"monitor_password",
+	(char *)"monitor_replication_lag_use_percona_heartbeat",
 	(char *)"monitor_query_interval",
 	(char *)"monitor_query_timeout",
 	(char *)"monitor_slave_lag_when_null",
@@ -358,6 +361,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_slave_lag_when_null=60;
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
+	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
 	variables.max_allowed_packet=4*1024*1024;
@@ -515,6 +519,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strncasecmp(name,"monitor_",8)) {
 		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
 		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
+		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strncasecmp(name,"ssl_",4)) {
 		if (!strcasecmp(name,"ssl_p2s_ca")) {
@@ -741,6 +746,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strncasecmp(name,"monitor_",8)) {
 		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
 		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
+		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 		if (!strcasecmp(name,"monitor_enabled")) {
 			return strdup((variables.monitor_enabled ? "true" : "false"));
 		}
@@ -1079,6 +1085,30 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			free(variables.monitor_password);
 			variables.monitor_password=strdup(value);
 			return true;
+		}
+		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) {
+			if (vallen==0) { // empty string
+				free(variables.monitor_replication_lag_use_percona_heartbeat);
+				variables.monitor_replication_lag_use_percona_heartbeat=strdup((value));
+				return true;
+			} else {
+				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+				opt2->set_case_sensitive(false);
+				char *patt = (char *)"`?([a-z\\d_]+)`?\\.`?([a-z\\d_]+)`?";
+				RE2 *re = new RE2(patt, *opt2);
+				bool rc=false;
+				rc = RE2::FullMatch(value,*re);
+				delete re;
+				delete opt2;
+				if(rc) {
+					free(variables.monitor_replication_lag_use_percona_heartbeat);
+					variables.monitor_replication_lag_use_percona_heartbeat=strdup(value);
+					return true;
+				} else {
+					proxy_error("%s is an invalid value for %s, not matching regex \"%s\"\n", value, name, patt);
+				}
+			}
+			return false;
 		}
 		if (!strcasecmp(name,"monitor_enabled")) {
 			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -2112,6 +2142,10 @@ void MySQL_Threads_Handler::stop_listeners() {
 MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.monitor_username) { free(variables.monitor_username); variables.monitor_username=NULL; }
 	if (variables.monitor_password) { free(variables.monitor_password); variables.monitor_password=NULL; }
+	if (variables.monitor_replication_lag_use_percona_heartbeat) {
+		free(variables.monitor_replication_lag_use_percona_heartbeat);
+		variables.monitor_replication_lag_use_percona_heartbeat=NULL;
+	}
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
@@ -2223,6 +2257,10 @@ MySQL_Thread::~MySQL_Thread() {
 
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username=NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password=NULL; }
+	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
+		free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
+		mysql_thread___monitor_replication_lag_use_percona_heartbeat=NULL;
+	}
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
@@ -3246,6 +3284,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_username=GloMTH->get_variable_string((char *)"monitor_username");
 	if (mysql_thread___monitor_password) free(mysql_thread___monitor_password);
 	mysql_thread___monitor_password=GloMTH->get_variable_string((char *)"monitor_password");
+	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
+	mysql_thread___monitor_replication_lag_use_percona_heartbeat=GloMTH->get_variable_string((char *)"monitor_replication_lag_use_percona_heartbeat");
 
 	// SSL proxy to server
 	if (mysql_thread___ssl_p2s_ca) free(mysql_thread___ssl_p2s_ca);
