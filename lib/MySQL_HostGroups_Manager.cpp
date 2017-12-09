@@ -1232,7 +1232,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 //				delete c;
 				mysrvc->ConnectionsUsed->add(c);
-				destroy_MyConn_from_pool(c);
+				destroy_MyConn_from_pool(c, false);
 			} else {
 				c->optimize();
 				mysrvc->ConnectionsFree->add(c);
@@ -1464,7 +1464,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	return conn;
 }
 
-void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
+void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, bool _lock) {
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
@@ -1475,11 +1475,15 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c) {
 		queue.add(c);
 	} else {
 		// we lock only this part of the code because we need to remove the connection from ConnectionsUsed
-		wrlock();
+		if (_lock) {
+			wrlock();
+		}
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
 		mysrvc->ConnectionsUsed->remove(c);
 		status.myconnpoll_destroy++;
-		wrunlock();
+                if (_lock) {
+			wrunlock();
+		}
 	}
 	if (to_del) {
 		delete c;
