@@ -2680,6 +2680,7 @@ handler_again:
 #else
 								global_stmtid=stmt_info->statement_id;
 								myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
+								if (previous_status.size() == 0)
 								client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
 #endif
 								CurrentQuery.mysql_stmt=NULL;

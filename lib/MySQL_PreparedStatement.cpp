@@ -939,6 +939,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_stmt_
 
 uint32_t MySQL_STMTs_local_v14::generate_new_client_stmt_id(uint64_t global_statement_id) {
 	uint32_t ret=0;
+/*
 	//auto s2 = global_stmt_to_client_ids.find(global_statement_id);
 	std::pair<std::multimap<uint64_t,uint32_t>::iterator, std::multimap<uint64_t,uint32_t>::iterator> itret;
 	itret = global_stmt_to_client_ids.equal_range(global_statement_id);
@@ -946,6 +947,7 @@ uint32_t MySQL_STMTs_local_v14::generate_new_client_stmt_id(uint64_t global_stat
 		ret = it->second;
 		return ret;
 	}
+*/
 	if (free_client_ids.size()) {
 		ret=free_client_ids.top();
 		free_client_ids.pop();
