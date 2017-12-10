@@ -22,6 +22,13 @@
 #endif
 
 
+
+// Note: if you are running ProxySQL under gdb, you may consider setting this
+// variable immediately to 1
+// Example:
+// set disable_watchdog=1
+volatile int disable_watchdog = 0;
+
 void parent_open_error_log() {
 	if (GloVars.global.foreground==false) {
 		int outfd=0;
@@ -276,9 +283,20 @@ void * mysql_shared_query_cache_funct(void *arg) {
 void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.parse(argc,argv);
 	GloVars.process_opts_pre();
+	GloVars.restart_on_missing_heartbeats = 10; // default
 	// alwasy try to open a config file
 	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
 		GloVars.configfile_open=true;
+		const Setting& root = GloVars.confFile->cfg->getRoot();
+		if (root.exists("restart_on_missing_heartbeats")==true) {
+			// restart_on_missing_heartbeats datadir from config file
+			int restart_on_missing_heartbeats;
+			bool rc;
+			rc=root.lookupValue("restart_on_missing_heartbeats", restart_on_missing_heartbeats);
+			if (rc==true) {
+				GloVars.restart_on_missing_heartbeats=restart_on_missing_heartbeats;
+			}
+		}
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
 	}
@@ -286,7 +304,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
 		// datadir was not specified , try to read config file
 		if (GloVars.configfile_open==true) {
-			const Setting& root = GloVars.confFile->cfg->getRoot(); 
+			const Setting& root = GloVars.confFile->cfg->getRoot();
 			if (root.exists("datadir")==true) {
 				// reading datadir from config file
 				std::string datadir;
@@ -300,6 +318,20 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			} else {
 				// datadir was not specified in config file
 				GloVars.datadir=strdup(t);
+			}
+			if (root.exists("restart_on_missing_heartbeats")==true) {
+				// restart_on_missing_heartbeats datadir from config file
+				int restart_on_missing_heartbeats;
+				bool rc;
+				rc=root.lookupValue("restart_on_missing_heartbeats", restart_on_missing_heartbeats);
+				if (rc==true) {
+					GloVars.restart_on_missing_heartbeats=restart_on_missing_heartbeats;
+				} else {
+					GloVars.restart_on_missing_heartbeats = 10; // default
+				}
+			} else {
+				// restart_on_missing_heartbeats was not specified in config file
+				GloVars.restart_on_missing_heartbeats = 10; // default
 			}
 		} else {
 			// config file not readable
@@ -945,8 +977,74 @@ __start_label:
 #endif
 	}
 
-	while (glovars.shutdown==0) {
-		usleep(500000);   // FIXME: TERRIBLE UGLY
+	{
+		unsigned int missed_heartbeats = 0;
+		unsigned long long previous_time = monotonic_time();
+		unsigned int inner_loops = 0;
+		while (glovars.shutdown==0) {
+			usleep(200000);
+			if (disable_watchdog) {
+				continue;
+			}
+			unsigned long long curtime = monotonic_time();
+			inner_loops++;
+			if (curtime >= inner_loops*300000 + previous_time ) {
+				// if this happens, it means that this very simple loop is blocked
+				// probably we are running under gdb
+				previous_time = curtime;
+				inner_loops = 0;
+				continue;
+			}
+			if (GloMTH) {
+				unsigned long long atomic_curtime = 0;
+				unsigned long long poll_timeout = (unsigned int)GloMTH->variables.poll_timeout;
+				unsigned int threads_missing_heartbeat = 0;
+				poll_timeout += 1000; // add 1 second (rounding up)
+				poll_timeout *= 1000; // convert to us
+				if (curtime < previous_time + poll_timeout) {
+					continue;
+				}
+				previous_time = curtime;
+				inner_loops = 0;
+				unsigned int i;
+				if (GloMTH->mysql_threads) {
+					for (i=0; i<GloMTH->num_threads; i++) {
+						if (GloMTH->mysql_threads[i].worker) {
+							atomic_curtime = GloMTH->mysql_threads[i].worker->atomic_curtime;
+							if (curtime > atomic_curtime + poll_timeout) {
+								threads_missing_heartbeat++;
+							}
+						}
+					}
+				}
+#ifdef IDLE_THREADS
+				if (GloVars.global.idle_threads) {
+					if (GloMTH->mysql_threads) {
+						for (i=0; i<GloMTH->num_threads; i++) {
+							if (GloMTH->mysql_threads_idles[i].worker) {
+								atomic_curtime = GloMTH->mysql_threads_idles[i].worker->atomic_curtime;
+								if (curtime > atomic_curtime + poll_timeout) {
+									threads_missing_heartbeat++;
+								}
+							}
+						}
+					}
+				}
+#endif
+				if (threads_missing_heartbeat) {
+					proxy_error("Watchdog: %u threads missed a heartbeat\n", threads_missing_heartbeat);
+					missed_heartbeats++;
+					if (missed_heartbeats >= (unsigned int)GloVars.restart_on_missing_heartbeats) {
+						if (GloVars.restart_on_missing_heartbeats) {
+							proxy_error("Watchdog: reached %u missed heartbeats. Aborting!\n", missed_heartbeats);
+							assert(0);
+						}
+					}
+				} else {
+					missed_heartbeats = 0;
+				}
+			}
+		}
 	}
 
 __shutdown:

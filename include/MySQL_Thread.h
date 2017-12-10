@@ -6,6 +6,7 @@
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
+#include <atomic>
 
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
@@ -186,6 +187,7 @@ class MySQL_Thread
 	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
+	std::atomic<unsigned long long> atomic_curtime;
 	PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions_cache;

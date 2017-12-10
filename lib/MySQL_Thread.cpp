@@ -2425,6 +2425,7 @@ void MySQL_Thread::run() {
 #endif // IDLE_THREADS
 
 	curtime=monotonic_time();
+	atomic_curtime=curtime;
 
 #ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 	pthread_mutex_lock(&thread_mutex);
@@ -2734,6 +2735,7 @@ __run_skip_1a:
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
+		atomic_curtime=curtime;
 		poll_timeout_bool=false;
 		if (
 #ifdef IDLE_THREADS
