@@ -49,7 +49,8 @@ class MySrvConnList {
 	int find_idx(MySQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
 		for (unsigned int i=0; i<conns->len; i++) {
-			MySQL_Connection *conn=(MySQL_Connection *)conns->index(i);
+			MySQL_Connection *conn = NULL;
+			conn = (MySQL_Connection *)conns->index(i);
 			if (conn==c) {
 				return (unsigned int)i;
 			}
@@ -61,7 +62,8 @@ class MySrvConnList {
 	~MySrvConnList();
 	void add(MySQL_Connection *);
 	void remove(MySQL_Connection *c) {
-		int i=find_idx(c);
+		int i = -1;
+		i = find_idx(c);
 		assert(i>=0);
 		conns->remove_index_fast((unsigned int)i);
 	}
@@ -237,7 +239,7 @@ class MySQL_HostGroups_Manager {
 
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);
 	void push_MyConn_to_pool_array(MySQL_Connection **);
-	void destroy_MyConn_from_pool(MySQL_Connection *);	
+	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
 	void replication_lag_action(int, char*, unsigned int, int);
 	void read_only_action(char *hostname, int port, int read_only);

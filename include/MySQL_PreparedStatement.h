@@ -189,6 +189,8 @@ class MySQL_STMTs_local {
 		sess=NULL;
 		is_client=_ic;
 		num_entries=0;
+		client_stmt_to_global_id = std::map<uint32_t, uint32_t>();
+		m = std::map<uint32_t, MYSQL_STMT *>();
 	}
 	void set_is_client(MySQL_Session *_s) {
 		sess=_s;
@@ -265,6 +267,12 @@ class MySQL_STMTs_local_v14 {
 		local_max_stmt_id = 0;
 		sess = NULL;
 		is_client_ = _ic;
+		client_stmt_to_global_ids = std::map<uint32_t, uint64_t>();
+		global_stmt_to_client_ids = std::multimap<uint64_t, uint32_t>();
+		backend_stmt_to_global_ids = std::map<uint32_t, uint64_t>();
+		global_stmt_to_backend_ids = std::map<uint64_t, uint32_t>();
+		global_stmt_to_backend_stmt = std::map<uint64_t, MYSQL_STMT *>();
+		free_client_ids = std::stack<uint32_t>();
 	}
 	void set_is_client(MySQL_Session *_s) {
 		sess=_s;
@@ -308,6 +316,7 @@ class MySQL_STMT_Manager_v14 {
 	void ref_count_server(uint64_t _stmt, int _v, bool lock=true);
 	MySQL_STMT_Global_info * add_prepared_statement(unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock=true);
 	void get_metrics(uint64_t *c_unique, uint64_t *c_total, uint64_t *stmt_max_stmt_id, uint64_t *cached, uint64_t *s_unique, uint64_t *s_total);
+	SQLite3_result * get_prepared_statements_global_infos();
 };
 #endif // PROXYSQL_STMT_V14
 
