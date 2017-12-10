@@ -242,6 +242,7 @@ class ProxySQL_Admin {
 
 	void stats___proxysql_servers_checksums();
 	void stats___proxysql_servers_metrics();
+	void stats___mysql_prepared_statements_info();
 
 	int Read_Global_Variables_from_configfile(const char *prefix);
 	int Read_MySQL_Users_from_configfile();

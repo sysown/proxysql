@@ -1091,3 +1091,109 @@ void MySQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
 }
 
 //#endif // PROXYSQL_STMT_V14
+
+
+class PS_global_stats {
+	public:
+	uint64_t statement_id;
+	unsigned int hid;
+	char *username;
+	char *schemaname;
+	uint64_t digest;
+	unsigned long long ref_count_client;
+	unsigned long long ref_count_server;
+	char *query;
+	PS_global_stats(uint64_t stmt_id, unsigned int h, char *u, char *s, uint64_t d, char *q, unsigned long long ref_c, unsigned long long ref_s) {
+		statement_id = stmt_id;
+		hid=h;
+		digest=d;
+		query=strndup(q, mysql_thread___query_digests_max_digest_length);
+		username=strdup(u);
+		schemaname=strdup(s);
+		ref_count_client = ref_c;
+		ref_count_server = ref_s;
+	}
+	~PS_global_stats() {
+		if (query) {
+			free(query);
+			query=NULL;
+		}
+		if (username) {
+			free(username);
+			username=NULL;
+		}
+		if (schemaname) {
+			free(schemaname);
+			schemaname=NULL;
+		}
+	}
+	char **get_row() {
+		char buf[128];
+		char **pta=(char **)malloc(sizeof(char *)*8);
+		sprintf(buf,"%llu",statement_id);
+		pta[0]=strdup(buf);
+		sprintf(buf,"%u",hid);
+		pta[1]=strdup(buf);
+		assert(schemaname);
+		pta[2]=strdup(schemaname);
+		assert(username);
+		pta[3]=strdup(username);
+
+		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
+		pta[4]=strdup(buf);
+
+		assert(query);
+		pta[5]=strdup(query);
+		sprintf(buf,"%llu",ref_count_client);
+		pta[6]=strdup(buf);
+		sprintf(buf,"%llu",ref_count_server);
+		pta[7]=strdup(buf);
+
+		return pta;
+	}
+	void free_row(char **pta) {
+		int i;
+		for (i=0;i<8;i++) {
+			assert(pta[i]);
+			free(pta[i]);
+		}
+		free(pta);
+	}
+};
+
+
+SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current prepared statements global info\n");
+	SQLite3_result *result=new SQLite3_result(8);
+	rdlock();
+	result->add_column_definition(SQLITE_TEXT,"stmt_id");
+	result->add_column_definition(SQLITE_TEXT,"hid");
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"digest");
+	result->add_column_definition(SQLITE_TEXT,"query");
+	result->add_column_definition(SQLITE_TEXT,"ref_count_client");
+	result->add_column_definition(SQLITE_TEXT,"ref_count_server");
+	for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it = map_stmt_id_to_info.begin();
+			it != map_stmt_id_to_info.end(); ++it) {
+		MySQL_STMT_Global_info *a = it->second;
+		PS_global_stats * pgs = new PS_global_stats(a->statement_id, a->hostgroup_id,
+			a->schemaname, a->username,
+			a->hash, a->query,
+			a->ref_count_client, a->ref_count_server);
+			char **pta = pgs->get_row();
+			result->add_row(pta);
+			pgs->free_row(pta);
+			delete pgs;
+	}
+/*
+	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+		char **pta=qds->get_row();
+		result->add_row(pta);
+		qds->free_row(pta);
+	}
+*/
+	unlock();
+	return result;
+}
