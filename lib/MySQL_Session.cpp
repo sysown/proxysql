@@ -3693,8 +3693,70 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						return true;
 					}
 				} else {
-					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
-					return false;
+					// try case listed in #1279
+					// this is not a complete solution. A right solution involves true parsing
+					re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+					opt2->set_case_sensitive(false);
+					char *pattern=(char *)"^(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_MODE *(?:|:)= *(?:'||\")((\\w|,)*)(?:'||\")(?: *, *NAMES *)(?:'||\")((\\w|\\d)*)(?:'||\")(?:| +COLLATE +(?:'||\")((\\w|\\d)*)(?:'||\")) *(?:(|;|-- .*|#.*))$";
+					re2::RE2 *re=new RE2(pattern, *opt2);
+					string s1;
+					string s2;
+					string s3;
+					rc=RE2::FullMatch(nq, *re, &s1, (void *)NULL, &s2, (void *)NULL, &s3);
+					//proxy_info("s1 = %s\n",s1.c_str());
+					//proxy_info("s2 = %s\n",s2.c_str());
+					//proxy_info("s3 = %s\n",s3.c_str());
+					delete re;
+					delete opt2;
+					if (rc) {
+						const CHARSET_INFO * c;
+						if (s3.length()) {
+							c = proxysql_find_charset_collate_names(s2.c_str(), s3.c_str());
+						} else {
+							c = proxysql_find_charset_name(s2.c_str());
+						}
+						if (!c) {
+							char *m = NULL;
+							char *errmsg = NULL;
+							if (s3.length()) {
+								m=(char *)"Unknown character set '%s' or collation '%s'";
+								errmsg=(char *)malloc(s2.length() + s3.length() + strlen(m));
+								sprintf(errmsg,m,s2.c_str(), s3.c_str());
+							} else {
+								m=(char *)"Unknown character set: '%s'";
+								errmsg=(char *)malloc(s2.length()+strlen(m));
+								sprintf(errmsg,m,s2.c_str());
+							}
+							client_myds->DSS=STATE_QUERY_SENT_NET;
+							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+							free(errmsg);
+							return true;
+						} else {
+							uint32_t sql_mode_int=SpookyHash::Hash32(s1.c_str(),s1.length(),10);
+							if (client_myds->myconn->options.sql_mode_int != sql_mode_int) {
+								client_myds->myconn->options.sql_mode_int = sql_mode_int;
+								if (client_myds->myconn->options.sql_mode) {
+									free(client_myds->myconn->options.sql_mode);
+								}
+								client_myds->myconn->options.sql_mode=strdup(s1.c_str());
+							}
+							client_myds->myconn->set_charset(c->nr);
+							if (command_type == _MYSQL_COM_QUERY) {
+								client_myds->DSS=STATE_QUERY_SENT_NET;
+								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+								if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
+								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+									client_myds->DSS=STATE_SLEEP;
+								status=WAITING_CLIENT_DATA;
+								l_free(pkt->size,pkt->ptr);
+								RequestEnd(NULL);
+								return true;
+							}
+						}
+					} else {
+						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
+						return false;
+					}
 				}
 			}
 			if (match_regexes && match_regexes[2]->match(dig)) {
