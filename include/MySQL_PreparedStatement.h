@@ -114,6 +114,7 @@ typedef struct _stmt_long_data_t {
 	uint16_t param_id;
 	void *data;
 	unsigned long size;
+	my_bool is_null;
 } stmt_long_data_t;
 
 
@@ -125,7 +126,7 @@ class StmtLongDataHandler {
 	~StmtLongDataHandler();
 	unsigned int reset(uint32_t _stmt_id);
 	bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size);
-	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size);
+	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size, my_bool **_is_null);
 };
 
 // server side, metadata related to STMT_EXECUTE are stored in MYSQL_STMT itself

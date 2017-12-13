@@ -2318,10 +2318,12 @@ __get_pkts_from_client:
 									for (uint16_t ii=0; ii<stmt_meta->num_params; ii++) {
 										void *_data=NULL;
 										unsigned long *_l=0;
-										_data=SLDH->get(stmt_global_id,ii,&_l);
+										my_bool * _is_null;
+										_data=SLDH->get(stmt_global_id,ii,&_l, &_is_null);
 										if (_data) { // data was sent via STMT_SEND_LONG_DATA
 											stmt_meta->binds[ii].length=_l;
 											stmt_meta->binds[ii].buffer=_data;
+											stmt_meta->binds[ii].is_null = _is_null;
 										}
 									}
 									if (stmt_meta_found==false) {

@@ -93,6 +93,7 @@ bool StmtLongDataHandler::add(uint32_t _stmt_id, uint16_t _param_id,
 	sld->param_id = _param_id;
 	sld->size = _size;
 	sld->data = malloc(_size);
+	sld->is_null = 0; // because the client is sending data, the field cannot be NULL
 	memcpy(sld->data, _data, _size);
 	long_datas->add(sld);
 	return false;  // a new entry was created
@@ -117,7 +118,7 @@ unsigned int StmtLongDataHandler::reset(uint32_t _stmt_id) {
 }
 
 void *StmtLongDataHandler::get(uint32_t _stmt_id, uint16_t _param_id,
-                               unsigned long **_size) {
+                               unsigned long **_size, my_bool **_is_null) {
 	stmt_long_data_t *sld = NULL;
 	unsigned int i;
 	for (i = 0; i < long_datas->len; i++) {
@@ -125,6 +126,7 @@ void *StmtLongDataHandler::get(uint32_t _stmt_id, uint16_t _param_id,
 		if (sld->stmt_id == _stmt_id && sld->param_id == _param_id) {
 			// we found it!
 			*_size = &sld->size;
+			*_is_null = &sld->is_null;
 			return sld->data;
 		}
 	}
