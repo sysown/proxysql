@@ -1472,7 +1472,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"query_processor_regex")) {
 		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1000*1000) {
+		if (intv >= 1 && intv <= 2) {
 			variables.query_processor_regex=intv;
 			return true;
 		} else {
