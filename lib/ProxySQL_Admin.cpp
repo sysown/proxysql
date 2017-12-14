@@ -7882,8 +7882,8 @@ void ProxySQL_External_Scheduler::update_table(SQLite3_result *resultset) {
 #endif
 }
 
-// this fuction will be called a s a deatached thread
-void * waitpid_thread(void *arg) {
+// this fuction will be called as a deatached thread
+static void * waitpid_thread(void *arg) {
 	pid_t *cpid_ptr=(pid_t *)arg;
 	int status;
 	waitpid(*cpid_ptr, &status, 0);

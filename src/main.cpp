@@ -23,6 +23,17 @@
 
 
 
+// this fuction will be called as a deatached thread
+static void * waitpid_thread(void *arg) {
+	pid_t *cpid_ptr=(pid_t *)arg;
+	int status;
+	waitpid(*cpid_ptr, &status, 0);
+	free(cpid_ptr);
+	return NULL;
+}
+
+
+
 // Note: if you are running ProxySQL under gdb, you may consider setting this
 // variable immediately to 1
 // Example:
@@ -295,6 +306,15 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			rc=root.lookupValue("restart_on_missing_heartbeats", restart_on_missing_heartbeats);
 			if (rc==true) {
 				GloVars.restart_on_missing_heartbeats=restart_on_missing_heartbeats;
+			}
+		}
+		if (root.exists("execute_on_exit_failure")==true) {
+			// restart_on_missing_heartbeats datadir from config file
+			string execute_on_exit_failure;
+			bool rc;
+			rc=root.lookupValue("execute_on_exit_failure", execute_on_exit_failure);
+			if (rc==true) {
+				GloVars.execute_on_exit_failure=strdup(execute_on_exit_failure.c_str());
 			}
 		}
 	} else {
@@ -820,6 +840,43 @@ bool ProxySQL_daemonize_phase2() {
 	return true;
 }
 
+
+void call_execute_on_exit_failure() {
+	if (GloVars.execute_on_exit_failure == NULL) {
+		return;
+	}
+	proxy_error("Trying to call external script after exit failure: %s\n", GloVars.execute_on_exit_failure);
+	pid_t cpid;
+	cpid = fork();
+	if (cpid == -1) {
+		exit(EXIT_FAILURE);
+	}
+	if (cpid == 0) {
+		int rc;
+		rc = system(GloVars.execute_on_exit_failure);
+		if (rc) {
+			proxy_error("Execute on EXIT_FAILURE: Failed to run %s\n", GloVars.execute_on_exit_failure);
+			perror("system()");
+			exit(EXIT_FAILURE);
+		} else {
+			exit(EXIT_SUCCESS);
+		}
+	} else {
+		pthread_attr_t attr;
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+		pthread_attr_setstacksize (&attr, 64*1024);
+		pid_t *cpid_ptr=(pid_t *)malloc(sizeof(pid_t));
+		*cpid_ptr=cpid;
+		pthread_t thr;
+		if (pthread_create(&thr, &attr, waitpid_thread, (void *)cpid_ptr) !=0 ) {
+			perror("Thread creation");
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+
+
 bool ProxySQL_daemonize_phase3() {
 	int rc;
 	int status;
@@ -846,6 +903,7 @@ bool ProxySQL_daemonize_phase3() {
 			//daemon_log(LOG_INFO, "ProxySQL exited with code %d . Restarting!\n", rc);
 			parent_open_error_log();
 			proxy_error("ProxySQL exited with code %d . Restarting!\n", rc);
+			call_execute_on_exit_failure();
 			parent_close_error_log();
 			return false;
 		}
@@ -853,6 +911,7 @@ bool ProxySQL_daemonize_phase3() {
 		//daemon_log(LOG_INFO, "ProxySQL crashed. Restarting!\n");
 		parent_open_error_log();
 		proxy_error("ProxySQL crashed. Restarting!\n");
+		call_execute_on_exit_failure();
 		parent_close_error_log();
 		return false;
 	}

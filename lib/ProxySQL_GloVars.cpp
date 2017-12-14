@@ -34,6 +34,10 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	opt->reset();
 	delete opt;
 	delete confFile;
+	if (execute_on_exit_failure) {
+		free(execute_on_exit_failure);
+		execute_on_exit_failure = NULL;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
@@ -70,6 +74,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	checksums_values.updates_cnt = 0;
 	checksums_values.dumped_at = 0;
 	checksums_values.global_checksum = 0;
+	execute_on_exit_failure = NULL;
 #ifdef DEBUG
 	global.gdb=0;
 #endif

@@ -55,6 +55,7 @@ class ProxySQL_GlobalVariables {
 	char *errorlog;
 	char *pid;
 	int restart_on_missing_heartbeats;
+	char * execute_on_exit_failure;
 	struct  {
 		unsigned long long start_time;
 		bool gdbg;
