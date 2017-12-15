@@ -35,8 +35,6 @@
 #define PROXYSQL_HTTP_SERVER_VERSION "1.4.1031" DEB
 
 
-//extern struct MHD_Daemon *Admin_HTTP_Server;
-
 extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -56,28 +54,19 @@ extern char * font_awesome;
 
 
 
-static char *div1= (char *)"<div style=\"margin-bottom: 3px;\"><a href=stats?metric=";
-static char *style1 = (char *)" style=\"color: #1a3854 ; background-color: white; font-size: 12px; font-family: Verdana, sans-serif; border: 0px; text-decoration: none; padding-left: 5px; padding-right: 5px;\">";
+static char *div1= (char *)"<div style=\"margin-bottom: 1px;\"><a href=stats?metric=";
+static char *style1 = (char *)" style=\"color: #2969a5 ; background-color: white; font-weight: bold; font-size: 13px; font-family: Verdana, sans-serif; border: 0px; text-decoration: none; padding-left: 5px; padding-right: 5px;\">";
 static char *style2 = (char *)" style=\"color: #2969a5 ; background-color: white; font-size: 12px; font-family: Verdana, sans-serif; border: 0px; text-decoration: none; padding-left: 5px; padding-right: 5px;\">";
 
 static char *generate_home() {
 	char *s = NULL;
 	string html = "";
-	//3char *link = (char *)"<a href=stats?metric=\"%s\" %s>30m</a>";
 	html.append("<div class=\"menu\" style=\"height: auto;\">\n");
-//<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">&nbsp</div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=3600"); html.append(style1); html.append("Last 1 hour</a></div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=7200"); html.append(style1); html.append("Last 2 hours</a></div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=28800"); html.append(style1); html.append("Last 8 hours</a></div>\n");
-
-	html.append("<span style=\"float: left; width: 15%;\">\n<div><p></p></div>\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #2969a5 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">Category:</div>\n");
-
-	html.append("<div style=\"margin-bottom: 3px;\"><a href=\"/\""); html.append(style2); html.append("Home</a></div>\n");
-	html.append(div1); html.append("system"); html.append(style2); html.append("System</a></div>\n");
-	html.append(div1); html.append("mysql"); html.append(style2); html.append("MySQL</a></div>\n");
-	html.append(div1); html.append("cache"); html.append(style2); html.append("Query Cache</a></div>\n");
-
+	html.append("<span style=\"float: left; width: 50%;\">\n");
+	html.append("<div style=\"margin-top: 15px;\"><a href=\"/\""); html.append(style2); html.append("Home</a>\n");
+	html.append("<a href=stats?metric=system"); html.append(style2); html.append("System</a>\n");
+	html.append("<a href=stats?metric=mysql"); html.append(style2); html.append("MySQL</a>\n");
+	html.append("<a href=stats?metric=cache"); html.append(style2); html.append("Query Cache</a></div>\n");
 	html.append("</span>\n</div>\n");
 
 	html.append("<span style=\"float: left; width: 100%;\">\n");
@@ -87,7 +76,6 @@ static char *generate_home() {
 	html.append("<h2 style=\"font-size: 25px; margin-top: 0em; margin-bottom: 0em;\">General information</h2>\n<hr style=\"align: centre\" width=\"100%\">\n");
 	html.append("<table style=\"font-size: 15px;\" border=0 width=\"100%\">\n");
 	html.append("<tr width=\"100%\">\n");
-	//html.append("<td style=\"align: left; width: 33%\">\n");
 	html.append("<td width=\"33%\">\n");
 	html.append("<b>Uptime = </b>");
 	{
@@ -206,51 +194,40 @@ static char *generate_home() {
 
 static char *generate_buttons(char *base) {
 	char *s = NULL;
-	//char *style = (char *)"style=\"color: white ; background-color: blue; font-size: 14px; border: 2px solid; border-radius: 5px; text-decoration: none; padding-left: 5px; padding-right: 5px;\"";
-	string html = "<div class=\"menu\" style=\"height: auto;\">\n<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">&nbsp</div>\n";
-	html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
-	html.append(div1); html.append(base); html.append("&interval=3600"); html.append(style1); html.append("Last 1 hour</a></div>\n");
-	html.append(div1); html.append(base); html.append("&interval=7200"); html.append(style1); html.append("Last 2 hours</a></div>\n");
-	html.append(div1); html.append(base); html.append("&interval=28800"); html.append(style1); html.append("Last 8 hours</a></div>\n");
+        string html = "<div class=\"menu\" style=\"height: auto;\"><span style=\"float: left; width: 100%;\">\n";
+        html.append("<div style=\"margin-top: 15px;\">");
+        html.append("<a href=\"/\""); html.append(style2); html.append("Home</a>\n");
+        html.append("<a href=stats?metric=system"); html.append(style2); html.append("System</a>\n");
+        html.append("<a href=stats?metric=mysql"); html.append(style2); html.append("MySQL</a>\n");
+        html.append("<a href=stats?metric=cache"); html.append(style2); html.append("Query Cache</a>\n");
+	html.append("</div></span>");
 
-	html.append("</span>\n<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">Time range:</div>\n");
+	html.append("<div class=\"menu\" style=\"height: auto;\">\n<span style=\"float: left;\">\n");
+        html.append("<p></p>\n");
+        html.append("<p></p>\n");
+        html.append("<h2 style=\"font-size: 25px; margin-top: 0em; margin-bottom: 0em;\">Statistics:</h2>\n<hr style=\"align: centre\" width=\"100%\">\n");
 
-	html.append(div1); html.append(base); html.append("&interval=86400"); html.append(style1); html.append("Last 1 day</a></div>\n");
-	html.append(div1); html.append(base); html.append("&interval=259200"); html.append(style1); html.append("Last 3 days</a></div>\n");
+        html.append("<div class=\"menu\" style=\"height: auto;\">\n<span style=\"float: left;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #2969a5; border-bottom-width: 0px; margin-bottom: 1px; color: #2969a5 ; background-color: white; font-size: 15px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\"></div>\n");
+        html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
+        html.append(div1); html.append(base); html.append("&interval=3600"); html.append(style1); html.append("Last 1 hour</a></div>\n");
+        html.append(div1); html.append(base); html.append("&interval=7200"); html.append(style1); html.append("Last 2 hours</a></div>\n");
+        html.append("</span>\n</div>\n");
+
+	html.append("<div class=\"menu\" style=\"height: auto;\">\n<span style=\"float: left;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #2969a5; border-bottom-width: 0px; margin-bottom: 1px; color: #2969a5 ; background-color: white; font-size: 15px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\"></div>\n");
+        html.append(div1); html.append(base); html.append("&interval=28800"); html.append(style1); html.append("Last 8 hours</a></div>\n");
+        html.append(div1); html.append(base); html.append("&interval=86400"); html.append(style1); html.append("Last 1 day</a></div>\n");
+        html.append(div1); html.append(base); html.append("&interval=259200"); html.append(style1); html.append("Last 3 days</a></div>\n");
+        html.append("</span>\n</div>\n");
+
+        html.append("<div class=\"menu\" style=\"height: auto;\">\n<span style=\"float: left;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #2969a5; border-bottom-width: 0px; margin-bottom: 1px; color: #2969a5 ; background-color: white; font-size: 15px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\"></div>\n");
+
 	html.append(div1); html.append(base); html.append("&interval=604800"); html.append(style1); html.append("Last 7 days</a></div>\n");
 	html.append(div1); html.append(base); html.append("&interval=2592000"); html.append(style1); html.append("Last 1 month</a></div>\n");
 	html.append(div1); html.append(base); html.append("&interval=7776000"); html.append(style1); html.append("Last 3 months</a></div>\n");
-
-	html.append("</span>\n</div>\n");
-	html.append("<div class=\"menu\" style=\"height: auto;\">\n");
-//<span style=\"float: right; width: 20%;\">\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #1a3854 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">&nbsp</div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=1800"); html.append(style1); html.append("Last 1/2 hour</a></div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=3600"); html.append(style1); html.append("Last 1 hour</a></div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=7200"); html.append(style1); html.append("Last 2 hours</a></div>\n");
-//	html.append(div1); html.append(base); html.append("&interval=28800"); html.append(style1); html.append("Last 8 hours</a></div>\n");
-
-	html.append("<span style=\"float: left; width: 15%;\">\n<div><p></p></div>\n<div style=\"border-bottom-style: solid; border-bottom-color: #1a3854; border-bottom-width: 1px; margin-bottom: 3px; color: #2969a5 ; background-color: white; font-size: 13px; font-family: Verdana, sans-serif; font-weight: bold; text-decoration: none; padding-left: 5px; padding-right: 5px;\">Category:</div>\n");
-
-	html.append("<div style=\"margin-bottom: 3px;\"><a href=\"/\""); html.append(style2); html.append("Home</a></div>\n");
-	html.append(div1); html.append("system"); html.append(style2); html.append("System</a></div>\n");
-	html.append(div1); html.append("mysql"); html.append(style2); html.append("MySQL</a></div>\n");
-	html.append(div1); html.append("cache"); html.append(style2); html.append("Query Cache</a></div>\n");
-
 	html.append("</span>\n</div>\n");
 
-
-/*
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=30m "); html.append(style); html.append(">30mins</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=60m "); html.append(style); html.append(">60mins</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=120m "); html.append(style); html.append(">120mins</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=8h "); html.append(style); html.append(">8hrs</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=24h "); html.append(style); html.append(">24hrs</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=72h "); html.append(style); html.append(">72hrs</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=7d "); html.append(style); html.append(">7days</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=30d "); html.append(style); html.append(">30days</a>");
-	html.append("<a href=stats?metric="); html.append(base); html.append("?interval=90d "); html.append(style); html.append(">90days</a>");
-*/
 	s = strdup(html.c_str());
+
 	return s;
 }
 
@@ -316,7 +293,6 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 
 	char *username;
-	//const char *password = "testpass";
 	char *password = NULL;
 	const char *realm = "Access to ProxySQL status page";
 
@@ -375,8 +351,6 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 
 	char *valmetric = NULL;
-	//char *valinterval = NULL;
-	//char *valunit = NULL;
 	char *interval_s = NULL;
 	int interval_i = 1800;
 
@@ -395,21 +369,10 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 	if (0 != strcmp (method, "GET"))
 		return MHD_NO;              /* unexpected method */
-//	if (&aptr != *ptr) { 
-//		/* do never respond on first call */
-//		*ptr = &aptr;
-//		return MHD_YES;
-//	}
-//	*ptr = NULL;                  /* reset when done */
 
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");
-/*
-		valinterval = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"points");
-		valunit = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"unit");
-*/
 		interval_s = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"interval");
-		//fprintf(stderr,"Interval = %s\n", interval_s);
 		if (valmetric == NULL) {
 			response = MHD_create_response_from_buffer (strlen (EMPTY_PAGE), (void *) EMPTY_PAGE, MHD_RESPMEM_PERSISTENT);
 			ret = MHD_queue_response (connection, MHD_HTTP_NOT_FOUND, response);
@@ -479,7 +442,6 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 #ifndef NOJEM
 			SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics(interval_i);
 #endif
-			//SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics();
 			char **nm = NULL;
 			char **nl = NULL;
 			char **nv = NULL;
@@ -563,15 +525,11 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			s1 = generate_canvas((char *)"myChart4");
 			s->append(s1->c_str());
 			s->append("</div>\n");
-			//SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics();
-			//SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics();
 			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics(interval_i);
 			char **nm = NULL;
 			char **nl = NULL;
 			char **nv = NULL;
 			char *ts = NULL;
-
-//Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions
 
 			nm = (char **)malloc(sizeof(char *)*6);
 			nm[0] = (char *)"Client_Connections_aborted";
@@ -657,15 +615,11 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			s1 = generate_canvas((char *)"myChart4");
 			s->append(s1->c_str());
 			s->append("</div>\n");
-			//SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics();
-			//SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics();
 			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_MySQL_Query_Cache_metrics(interval_i);
 			char **nm = NULL;
 			char **nl = NULL;
 			char **nv = NULL;
 			char *ts = NULL;
-
-//Client_Connections_aborted, Client_Connections_connected, Client_Connections_created, Server_Connections_aborted, Server_Connections_connected, Server_Connections_created, ConnPool_get_conn_immediate, ConnPool_get_conn_success, Questions
 
 			nm = (char **)malloc(sizeof(char *)*5);
 			nm[0] = (char *)"count_GET";
@@ -762,13 +716,12 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 string * ProxySQL_HTTP_Server::generate_header(char *s) {
 	string *a = new string();
-	a->append("<head>\n<title>");
+	a->append("<!DOCTYPE html><head>\n<title>");
 	a->append(s);
 	a->append("</title>\n");
-	a->append("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,600,900|Fira+Mono\">\n");
-	a->append("<link rel=\"stylesheet\" href=\"http://www.proxysql.com/assets/css/main-bundle.min.css\">\n");
-	//a->append("<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css\">\n");
-	a->append("<link rel=\"stylesheet\" href=\"/font-awesome.min.css\">\n");
+	a->append("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,600,900|Fira+Mono\"/>\n");
+	a->append("<link rel=\"stylesheet\" href=\"http://www.proxysql.com/assets/css/main-bundle.min.css\"/>\n");
+	a->append("<link rel=\"stylesheet\" href=\"/font-awesome.min.css\"/>\n");
 	a->append("<script src=\"/Chart.bundle.js\"></script>\n</head>\n<body style=\"background-color: white;\">\n");
 	a->append("<header class=\"header cf \" role=\"banner\">\n<a class=\"brand\" href=\"http://www.proxysql.com\"><span><strong>Proxy</strong>SQL</span>\n</a>");
 	return a;
@@ -830,36 +783,20 @@ string * ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int ns
 		ret->append("\n");
 	}
 	ret->append("    ]\n");
-	ret->append("  }\n");
+	ret->append("  },\n");
+	ret->append("options: {\n");
+        ret->append("    scales: {\n");
+        ret->append("      xAxes: [{\n");
+        ret->append("        ticks: {\n");
+//        ret->append("          autoSkip: true,\n");
+//        ret->append("          maxRotation: 0,\n");
+//        ret->append("          minRotation: 0\n");
+        ret->append("        }\n");
+        ret->append("      }]\n");
+        ret->append("    }\n");
+        ret->append("  }\n");
 	ret->append("});\n");
 	ret->append("</script>\n");
 	return ret;
 	
 }
-/*
-    <script>\n";
-	
-
-	char *script5 = "\
-var ctx = document.getElementById(\"myChart1\"); var myChart1 = new Chart(ctx, { \n\
-type: 'line', \n\
-  data: { \n\
-    labels: ts, \n\
-    datasets: [ \n\
-      { \n\
-        data: utime, \n\
-        label: \"User Time\", \n\
-        borderColor: \"#3e95cd\", \n\
-        fill: false \n\
-      }, \n\
-      { \n\
-        data: stime, \n\
-        label: \"System Time\", \n\
-        borderColor: \"#8e5ea2\", \n\
-        fill: false \n\
-      } \n\
-    ] \n\
-  } \n\
-});\n";
-
-*/
