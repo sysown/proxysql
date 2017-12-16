@@ -360,6 +360,7 @@ SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 			sprintf(query, query1, ts-interval, ts);
 			break;
 		case 28800:
+		case 86400:
 		case 259200:
 		case 604800:
 		case 2592000:
