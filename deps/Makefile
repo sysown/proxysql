@@ -11,11 +11,17 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl
 endif
 .PHONY: default
+
+curl/curl/lib/.libs/libcurl.a:
+	cd curl && rm -rf curl-7.57.0 || true
+	cd curl && tar -zxf curl-7.57.0.tar.gz
+	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp && CC=${CC} CXX=${CXX} ${MAKE}
+curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
@@ -133,5 +139,6 @@ cleanall:
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
+	cd curl && rm -rf curl-7.57.0 || true
 .PHONY: cleanall
 

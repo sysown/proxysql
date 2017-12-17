@@ -108,6 +108,10 @@ deps/re2/re2/
 deps/pcre/pcre-8.39/
 deps/pcre/pcre/
 
+# curl
+deps/curl/curl/
+deps/curl/curl-7.57.0/
+
 #protobuf
 deps/protobuf/protobuf-2.6.1/
 
