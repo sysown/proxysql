@@ -2,6 +2,7 @@
 #include "cpp.h"
 #include "SpookyV2.h"
 #include <fcntl.h>
+#include <regex.h>
 
 extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
@@ -1511,168 +1512,15 @@ bool MySQL_Connection::MultiplexDisabled() {
 
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 
-	// Defining list of session variables to consider
+	// Defining list of session variables or digests to disable multiplexing for "SET <variable_name>" commands
 	const char *session_vars[160];
-	session_vars[0] = "auto_increment_increment";
-	session_vars[1] = "auto_increment_offset";
-	session_vars[2] = "autocommit";
-	session_vars[3] = "big_tables";
-	session_vars[4] = "binlog_direct_non_transactional_updates";
-	session_vars[5] = "binlog_format";
-	session_vars[6] = "binlog_row_image=image_type";
-	session_vars[7] = "binlog_rows_query_log_events";
-	session_vars[8] = "binlogging_impossible_mode";
-	session_vars[9] = "block_encryption_mode";
-	session_vars[10] = "bulk_insert_buffer_size";
-	session_vars[11] = "character_set_client";
-	session_vars[12] = "character_set_connection";
-	session_vars[13] = "character_set_database";
-	session_vars[14] = "character_set_filesystem";
-	session_vars[15] = "character_set_results";
-	session_vars[16] = "character_set_server";
-	session_vars[17] = "collation_connection";
-	session_vars[18] = "collation_database";
-	session_vars[19] = "collation_server";
-	session_vars[20] = "completion_type";
-	session_vars[21] = "debug";
-	session_vars[22] = "debug_sync";
-	session_vars[23] = "default_storage_engine";
-	session_vars[24] = "default_tmp_storage_engine";
-	session_vars[25] = "default_week_format";
-	session_vars[26] = "div_precision_increment";
-	session_vars[27] = "end_markers_in_json";
-	session_vars[28] = "eq_range_index_dive_limit";
-	session_vars[29] = "explicit_defaults_for_timestamp";
-	session_vars[30] = "foreign_key_checks";
-	session_vars[31] = "group_concat_max_len";
-	session_vars[32] = "gtid_next";
-	session_vars[33] = "identity";
-	session_vars[34] = "innodb_ft_user_stopword_table";
-	session_vars[35] = "innodb_lock_wait_timeout";
-	session_vars[36] = "innodb_optimize_point_storage";
-	session_vars[37] = "innodb_strict_mode";
-	session_vars[38] = "innodb_support_xa";
-	session_vars[39] = "innodb_table_locks";
-	session_vars[40] = "innodb_tmpdir";
-	session_vars[41] = "insert_id";
-	session_vars[42] = "interactive_timeout";
-	session_vars[43] = "join_buffer_size";
-	session_vars[44] = "keep_files_on_create";
-	session_vars[45] = "last_insert_id";
-	session_vars[46] = "lc_messages";
-	session_vars[47] = "lc_time_names";
-	session_vars[48] = "lock_wait_timeout";
-	session_vars[49] = "long_query_time";
-	session_vars[50] = "low_priority_updates";
-	session_vars[51] = "max_allowed_packet";
-	session_vars[52] = "max_delayed_threads";
-	session_vars[53] = "max_error_count";
-	session_vars[54] = "max_execution_time";
-	session_vars[55] = "max_heap_table_size";
-	session_vars[56] = "max_insert_delayed_threads";
-	session_vars[57] = "max_join_size";
-	session_vars[58] = "max_length_for_sort_data";
-	session_vars[59] = "max_points_in_geometry";
-	session_vars[60] = "max_seeks_for_key";
-	session_vars[61] = "max_sort_length";
-	session_vars[62] = "max_sp_recursion_depth";
-	session_vars[63] = "max_statement_time";
-	session_vars[64] = "max_tmp_tables";
-	session_vars[65] = "max_user_connections";
-	session_vars[66] = "min_examined_row_limit";
-	session_vars[67] = "multi_range_count";
-	session_vars[68] = "myisam_repair_threads";
-	session_vars[69] = "myisam_sort_buffer_size";
-	session_vars[70] = "myisam_stats_method";
-	session_vars[71] = "ndb-allow-copying-alter-table";
-	session_vars[72] = "ndb_autoincrement_prefetch_sz";
-	session_vars[73] = "ndb_blob_read_batch_bytes";
-	session_vars[74] = "ndb_blob_write_batch_bytes";
-	session_vars[75] = "ndb_deferred_constraints";
-	session_vars[76] = "ndb_deferred_constraints";
-	session_vars[77] = "ndb_force_send";
-	session_vars[78] = "ndb_fully_replicated";
-	session_vars[79] = "ndb_index_stat_enable";
-	session_vars[80] = "ndb_index_stat_option";
-	session_vars[81] = "ndb_join_pushdown";
-	session_vars[82] = "ndb_log_bin";
-	session_vars[83] = "ndb_log_exclusive_reads";
-	session_vars[84] = "ndb_log_exclusive_reads";
-	session_vars[85] = "ndb_table_no_logging";
-	session_vars[86] = "ndb_table_temporary";
-	session_vars[87] = "ndb_use_exact_count";
-	session_vars[88] = "ndb_use_transactions";
-	session_vars[89] = "ndbinfo_max_bytes";
-	session_vars[90] = "ndbinfo_max_rows";
-	session_vars[91] = "ndbinfo_show_hidden";
-	session_vars[92] = "ndbinfo_table_prefix";
-	session_vars[93] = "net_buffer_length";
-	session_vars[94] = "net_read_timeout";
-	session_vars[95] = "net_retry_count";
-	session_vars[96] = "net_write_timeout";
-	session_vars[97] = "new";
-	session_vars[98] = "old_alter_table";
-	session_vars[99] = "old_passwords";
-	session_vars[100] = "optimizer_prune_level";
-	session_vars[101] = "optimizer_search_depth";
-	session_vars[102] = "optimizer_switch";
-	session_vars[103] = "optimizer_trace";
-	session_vars[104] = "optimizer_trace_features";
-	session_vars[105] = "optimizer_trace_limit";
-	session_vars[106] = "optimizer_trace_max_mem_size";
-	session_vars[107] = "optimizer_trace_offset";
-	session_vars[108] = "parser_max_mem_size";
-	session_vars[109] = "preload_buffer_size";
-	session_vars[110] = "profiling";
-	session_vars[111] = "profiling_history_size";
-	session_vars[112] = "pseudo_slave_mode";
-	session_vars[113] = "pseudo_thread_id";
-	session_vars[114] = "query_alloc_block_size";
-	session_vars[115] = "query_cache_type";
-	session_vars[116] = "query_cache_wlock_invalidate";
-	session_vars[117] = "query_prealloc_size";
-	session_vars[118] = "rand_seed1";
-	session_vars[119] = "rand_seed2";
-	session_vars[120] = "range_alloc_block_size";
-	session_vars[121] = "range_optimizer_max_mem_size";
-	session_vars[122] = "rbr_exec_mode";
-	session_vars[123] = "read_buffer_size";
-	session_vars[124] = "read_rnd_buffer_size";
-	session_vars[125] = "session_track_gtids";
-	session_vars[126] = "session_track_schema";
-	session_vars[127] = "session_track_state_change";
-	session_vars[128] = "session_track_system_variables";
-	session_vars[129] = "show_old_temporals";
-	session_vars[130] = "sort_buffer_size";
-	session_vars[131] = "sql_auto_is_null";
-	session_vars[132] = "sql_big_selects";
-	session_vars[133] = "sql_buffer_result";
-	session_vars[134] = "sql_log_bin";
-	session_vars[135] = "sql_log_off";
-	session_vars[136] = "sql_mode";
-	session_vars[137] = "sql_notes";
-	session_vars[138] = "sql_quote_show_create";
-	session_vars[139] = "sql_safe_updates";
-	session_vars[140] = "sql_select_limit";
-	session_vars[141] = "sql_warnings";
-	session_vars[142] = "storage_engine";
-	session_vars[143] = "thread_pool_high_priority_connection";
-	session_vars[144] = "thread_pool_prio_kickup_timer";
-	session_vars[145] = "time_zone";
-	session_vars[146] = "timestamp";
-	session_vars[147] = "tmp_table_size";
-	session_vars[148] = "transaction_alloc_block_size";
-	session_vars[149] = "transaction_allow_batching";
-	session_vars[150] = "tx_isolation";
-	session_vars[151] = "transaction_prealloc_size";
-	session_vars[152] = "tx_read_only";
-	session_vars[153] = "transaction_write_set_extraction";
-	session_vars[154] = "tx_isolation";
-	session_vars[155] = "tx_read_only";
-	session_vars[156] = "unique_checks";
-	session_vars[157] = "updatable_views_with_limit";
-	session_vars[158] = "version_tokens_session";
-	session_vars[159] = "wait_timeout";
+	// For issue #555 , multiplexing is disabled if --safe-updates is used
+	session_vars[0] = "SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?";
+	session_vars[1] = "SET FOREIGN_KEY_CHECKS=?";
+	session_vars[2] = "SET UNIQUE_CHECKS=?";
+	session_vars[3] = "auto_increment_increment";
+	session_vars[4] = "auto_increment_offset";
+	session_vars[5] = "group_concat_max_len";
 
 	if (query_digest_text==NULL) return;
 	// unknown what to do with multiplex
@@ -1702,21 +1550,12 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			}
 		}
 		if (strncasecmp(query_digest_text,"SET ",4)==0) {
-			// For issue #555 , multiplexing is disabled if --safe-updates is used
-			if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
-				set_status_user_variable(true);
-			} else if (strcasecmp(query_digest_text,"SET FOREIGN_KEY_CHECKS=?")==0) { // see #835
-				set_status_user_variable(true);
-			} else if (strcasecmp(query_digest_text,"SET UNIQUE_CHECKS=?")==0) { // see #835
-				set_status_user_variable(true);
-			} //else {
-			//	for (unsigned int i = 0; i < sizeof(session_vars); i++) {
-			//		if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
-			//			set_status_user_variable(true);
-			//			break;
-			//		}
-			//	}
-			//}
+			for (unsigned int i = 0; i < sizeof(session_vars); i++) {
+				if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
+					set_status_user_variable(true);
+					break;
+				}
+			}
 		}
 	}
 	if (get_status_prepared_statement()==false) { // we search if prepared was already executed
