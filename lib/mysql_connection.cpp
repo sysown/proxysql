@@ -24,6 +24,16 @@ mysql_status(short event, short cont) {
 	return status;
 }
 
+// Defining list of session variables for comparison with query digest to disable multiplexing for "SET <variable_name>" commands
+static char * session_vars[]= {
+	// For issue #555 , multiplexing is disabled if --safe-updates is used
+	(char *)"SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?",
+	(char *)"FOREIGN_KEY_CHECKS",
+	(char *)"UNIQUE_CHECKS",
+	(char *)"AUTO_INCREMENT_INCREMENT",
+	(char *)"AUTO_INCREMENT_OFFSET",
+	(char *)"GROUP_CONCAT_MAX_LEN"
+};
 
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
@@ -1511,17 +1521,6 @@ bool MySQL_Connection::MultiplexDisabled() {
 
 
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
-
-	// Defining list of session variables or digests to disable multiplexing for "SET <variable_name>" commands
-	const char *session_vars[160];
-	// For issue #555 , multiplexing is disabled if --safe-updates is used
-	session_vars[0] = "SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?";
-	session_vars[1] = "SET FOREIGN_KEY_CHECKS=?";
-	session_vars[2] = "SET UNIQUE_CHECKS=?";
-	session_vars[3] = "auto_increment_increment";
-	session_vars[4] = "auto_increment_offset";
-	session_vars[5] = "group_concat_max_len";
-
 	if (query_digest_text==NULL) return;
 	// unknown what to do with multiplex
 	int mul=-1;
@@ -1550,6 +1549,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			}
 		}
 		if (strncasecmp(query_digest_text,"SET ",4)==0) {
+			// For issue #555 , multiplexing is disabled if --safe-updates is used (see session_vars definition)
 			for (unsigned int i = 0; i < sizeof(session_vars); i++) {
 				if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
 					set_status_user_variable(true);
