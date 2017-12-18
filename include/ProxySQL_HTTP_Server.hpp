@@ -9,8 +9,11 @@
 class ProxySQL_HTTP_Server {
 	unsigned int page_sec;
 	time_t cur_time;
+	pthread_mutex_t check_version_mutex;
+	time_t last_check_version;
 	public:
 	struct {
+		char *proxysql_latest_version;
 	} variables;
 	ProxySQL_HTTP_Server();
 	~ProxySQL_HTTP_Server();
@@ -22,6 +25,7 @@ class ProxySQL_HTTP_Server {
 	std::string * generate_chart(char *chart_name, char *ts, int nsets, char **dname, char **llabel, char **values);
 	char *extract_values(SQLite3_result *result, int idx, bool relative, double mult=1);
 	char *extract_ts(SQLite3_result *result, bool relative);
+	void check_latest_version_http();
 };
 
 #endif /* CLASS_PROXYSQL_HTTP_SERVER */

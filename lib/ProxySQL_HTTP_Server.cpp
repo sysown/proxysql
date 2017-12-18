@@ -25,7 +25,7 @@
 
 #include "platform.h"
 #include "microhttpd.h"
-
+#include "curl/curl.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -52,7 +52,51 @@ extern char * font_awesome;
 #define DENIED "<html><head><title>ProxySQL status page</title></head><body>Access denied</body></html>"
 #define OPAQUE "733b20011778ce330631c9afof70a870baddd964"
 
+struct MemoryStruct {
+	char *memory;
+	size_t size;
+};
 
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+	size_t realsize = size * nmemb;
+	struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+	mem->memory = (char *)realloc(mem->memory, mem->size + realsize + 1);
+	assert(mem->memory);
+
+	memcpy(&(mem->memory[mem->size]), contents, realsize);
+	mem->size += realsize;
+	mem->memory[mem->size] = 0;
+	return realsize;
+}
+
+static char * check_latest_version() {
+	CURL *curl_handle;
+	CURLcode res;
+	struct MemoryStruct chunk;
+	chunk.memory = (char *)malloc(1);
+	chunk.size = 0;
+	curl_global_init(CURL_GLOBAL_ALL);
+
+	curl_handle = curl_easy_init();
+	curl_easy_setopt(curl_handle, CURLOPT_URL, "http://www.proxysql.com/latest");
+	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+
+	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "proxysql-agent/1.4.4");
+	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 5);
+	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
+
+	res = curl_easy_perform(curl_handle);
+
+	if (res != CURLE_OK) {
+		proxy_error("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		free(chunk.memory);
+		chunk.memory = NULL;
+	}
+	curl_easy_cleanup(curl_handle);
+	curl_global_cleanup();
+	return chunk.memory;
+}
 
 static char *div1= (char *)"<div style=\"margin-bottom: 1px;\"><a href=stats?metric=";
 static char *style1 = (char *)" style=\"color: #2969a5 ; background-color: white; font-weight: bold; font-size: 13px; font-family: Verdana, sans-serif; border: 0px; text-decoration: none; padding-left: 5px; padding-right: 5px;\">";
@@ -183,7 +227,16 @@ static char *generate_home() {
 	html.append("</td>\n");
 	html.append("<td width=\"33%\">\n");
 	html.append("<b>ProxySQL version = </b>"); html.append(PROXYSQL_VERSION); html.append("<br>\n");
-	html.append("<b>ProxySQL latest  = </b>1.4.4<br>\n");
+	html.append("<b>ProxySQL latest  = </b>");
+	{
+		GloAdmin->AdminHTTPServer->check_latest_version_http();
+		if (GloAdmin->AdminHTTPServer->variables.proxysql_latest_version == NULL) {
+			html.append("unknown");
+		} else {
+			html.append(GloAdmin->AdminHTTPServer->variables.proxysql_latest_version);
+		}
+	}
+	html.append("<br>\n");
 	html.append("</td>\n");
 	html.append("</tr>\n");
 	html.append("</table>\n");
@@ -231,6 +284,23 @@ static char *generate_buttons(char *base) {
 	return s;
 }
 
+void ProxySQL_HTTP_Server::check_latest_version_http() {
+	pthread_mutex_lock(&check_version_mutex);
+	time_t now = time(NULL);
+	if (now > last_check_version + 300) {
+		if (variables.proxysql_latest_version) {
+			if (now > last_check_version + 3600) {
+				free(variables.proxysql_latest_version);
+				variables.proxysql_latest_version = NULL;
+			}
+		}
+		if (variables.proxysql_latest_version == NULL) {
+			variables.proxysql_latest_version = check_latest_version();
+			last_check_version = now;
+		}
+	}
+	pthread_mutex_unlock(&check_version_mutex);
+}
 
 char * ProxySQL_HTTP_Server::extract_values(SQLite3_result *result, int idx, bool relative, double mult) {
 	string s = "[";
@@ -737,9 +807,16 @@ string * ProxySQL_HTTP_Server::generate_canvas(char *s) {
 ProxySQL_HTTP_Server::ProxySQL_HTTP_Server() {
 	page_sec = 0;
 	cur_time = time(NULL);
+	last_check_version = 0;
+	pthread_mutex_init(&check_version_mutex,NULL);
+	variables.proxysql_latest_version = NULL;
 }
 
 ProxySQL_HTTP_Server::~ProxySQL_HTTP_Server() {
+	if (variables.proxysql_latest_version) {
+		free(variables.proxysql_latest_version);
+		variables.proxysql_latest_version = NULL;
+	}
 }
 
 string * ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nsets, char **dname, char **llabel, char **values) {
