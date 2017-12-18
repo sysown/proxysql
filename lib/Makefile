@@ -30,7 +30,7 @@ MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd
 MICROHTTPD_IDIR=-I$(MICROHTTPD_DIR) -I$(MICROHTTPD_DIR)/src/include
 
 CURL_DIR=$(DEPS_PATH)/curl/curl
-CURL_IDIR=-I$(MICROHTTPD_DIR)/include
+CURL_IDIR=-I$(CURL_DIR)/include
 
 IDIR=../include
 
