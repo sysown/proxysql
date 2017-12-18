@@ -1512,7 +1512,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 
 	// Defining list of session variables or digests to disable multiplexing for "SET <variable_name>" commands
-	const char *session_vars[160];
+	const char *session_vars[6];
 	// For issue #555 , multiplexing is disabled if --safe-updates is used
 	session_vars[0] = "SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?";
 	session_vars[1] = "SET FOREIGN_KEY_CHECKS=?";
