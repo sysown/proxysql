@@ -12,7 +12,9 @@ New features:
 * It is now possible to configure ProxySQL to call an external script in case proxysql daemon terminates not gracefully. See [execute_on_exit_failure](https://github.com/sysown/proxysql/wiki/Configuration-file#general-variables)
 * added support for `utf8mb4_0900_ai_ci` (MySQL 8)
 * added new algorithm to limit the number of new connections per second to backends, controlled by variable variable `mysql-throttle_connections_per_sec_to_hostgroup`
-
+* added support for monitoring replication lag using Percona heartbeat table instead of Seconds_Behind_Master #1248
+* added new Admin command LOAD ADMIN VARIABLES FROM CONFIG #1075
+* added new variable `mysql-autocommit_false_is_transaction` , to consider `autocommit=0` as a transaction #1256
 
 Bug fixes:
 * Connection Pool: do not terminate connections in case of errors due to read-only variable #1194
@@ -42,6 +44,7 @@ Bug fixes:
 * MySQL Server: added contraint hostgroup_id >= 0 #1244 and #1270
 * Eventlog: Persist eventlog file across restarts #1201 and #1269
 * Connection Pool: disable multiplexing for `auto_increment_increment`, `auto_increment_offset` and `group_concat_max_len` #1290
+* Admin: crashes if writing on a closed socket #1227
 
 Performance improvements:
 * General: introduced several optimizations to reduce memory allocation overhead for small resultsets
