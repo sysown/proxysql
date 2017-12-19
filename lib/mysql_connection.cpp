@@ -23,6 +23,16 @@ mysql_status(short event, short cont) {
 	return status;
 }
 
+// Defining list of session variables for comparison with query digest to disable multiplexing for "SET <variable_name>" commands
+static char * session_vars[]= {
+	// For issue #555 , multiplexing is disabled if --safe-updates is used
+	(char *)"SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?",
+	(char *)"FOREIGN_KEY_CHECKS",
+	(char *)"UNIQUE_CHECKS",
+	(char *)"AUTO_INCREMENT_INCREMENT",
+	(char *)"AUTO_INCREMENT_OFFSET",
+	(char *)"GROUP_CONCAT_MAX_LEN"
+};
 
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
@@ -1538,13 +1548,12 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			}
 		}
 		if (strncasecmp(query_digest_text,"SET ",4)==0) {
-			// For issue #555 , multiplexing is disabled if --safe-updates is used
-			if (strcasecmp(query_digest_text,"SET SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?")==0) {
-				set_status_user_variable(true);
-			} else if (strcasecmp(query_digest_text,"SET FOREIGN_KEY_CHECKS=?")==0) { // see #835
-				set_status_user_variable(true);
-			} else if (strcasecmp(query_digest_text,"SET UNIQUE_CHECKS=?")==0) { // see #835
-				set_status_user_variable(true);
+			// For issue #555 , multiplexing is disabled if --safe-updates is used (see session_vars definition)
+			for (unsigned int i = 0; i < sizeof(session_vars); i++) {
+				if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
+					set_status_user_variable(true);
+					break;
+				}
 			}
 		}
 	}
