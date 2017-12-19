@@ -318,7 +318,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				// comment type 2 - # ... \n
 				(flag == 2 && (*s == '\n' || *s == '\r' || (i == len - 1) ))
 				||
-				// comment type 2 - # ... \n
+				// comment type 3 - -- ... \n
 				(flag == 3 && (*s == '\n' || *s == '\r' || (i == len -1) ))
 			)
 			{

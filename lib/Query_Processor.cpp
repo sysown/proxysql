@@ -176,7 +176,7 @@ class QP_query_digest_stats {
 
 		time_t __now;
     time(&__now);
-		
+
 		unsigned long long curtime=monotonic_time();
 
 		time_t seen_time;
@@ -975,12 +975,12 @@ __internal_loop:
 			//sess->query_info.flagOUT=flagIN;
     }
     if (qr->reconnect >= 0) {
-			// Note: negative reconnect means this rule doesn't change 
+			// Note: negative reconnect means this rule doesn't change
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set reconnect: %d. Query will%s be rexecuted if connection is lost\n", qr->rule_id, qr->reconnect, (qr->reconnect == 0 ? " NOT" : "" ));
       ret->reconnect=qr->reconnect;
     }
     if (qr->timeout >= 0) {
-			// Note: negative timeout means this rule doesn't change 
+			// Note: negative timeout means this rule doesn't change
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
       ret->timeout=qr->timeout;
     }
@@ -990,7 +990,7 @@ __internal_loop:
       ret->retries=qr->retries;
     }
     if (qr->delay >= 0) {
-			// Note: negative delay means this rule doesn't change 
+			// Note: negative delay means this rule doesn't change
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
       ret->delay=qr->delay;
     }
@@ -1020,7 +1020,7 @@ __internal_loop:
       ret->OK_msg=strdup(qr->OK_msg);
     }
     if (qr->cache_ttl >= 0) {
-			// Note: negative TTL means this rule doesn't change 
+			// Note: negative TTL means this rule doesn't change
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
       ret->cache_ttl=qr->cache_ttl;
     }
@@ -1040,7 +1040,7 @@ __internal_loop:
       ret->log=qr->log;
     }
     if (qr->destination_hostgroup >= 0) {
-			// Note: negative hostgroup means this rule doesn't change 
+			// Note: negative hostgroup means this rule doesn't change
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
       ret->destination_hostgroup=qr->destination_hostgroup;
     }
@@ -1077,7 +1077,7 @@ __internal_loop:
 			}
 		}
 	}
-	
+
 __exit_process_mysql_query:
 	// FIXME : there is too much data being copied around
 	if (len < stackbuffer_size) {
@@ -1232,7 +1232,7 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 #else
 	spin_wrlock(&digest_rwlock);
 #endif
-	QP_query_digest_stats *qds;	
+	QP_query_digest_stats *qds;
 
 	std::unordered_map<uint64_t, void *>::iterator it;
 	it=digest_umap.find(qp->digest_total);
@@ -1681,9 +1681,10 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 				}
 			}
 		}
+
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
 		free(key);
 		free(value);
-		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
 	}
 	free_tokenizer( &tok );
 	return ret;
