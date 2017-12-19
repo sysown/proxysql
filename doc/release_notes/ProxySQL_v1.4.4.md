@@ -1,6 +1,6 @@
-Release date: 2017-12-xx
+Release date: 2017-12-20
 
-Stable release v1.4.4 , released on 2017-12-xx
+Stable release v1.4.4 , released on 2017-12-20
 
 Compared to v1.4.3, it has the following new features / bugs fixes / enhancements :
 
@@ -38,7 +38,10 @@ Bug fixes:
 * General: do not report in error log replication hostgroups information if `hostgroup_manager_verbose=0` #1204
 * Admin: configure mysql_query_rules.re_modifiers=CASELESS if mysql_query_rules are read from config file #1124
 * Protocol: added support for utf8mb4_0900_ai_ci (MySQL 8) #1129
-
+* Global variables: fixed some incorrect input validation
+* MySQL Server: added contraint hostgroup_id >= 0 #1244 and #1270
+* Eventlog: Persist eventlog file across restarts #1201 and #1269
+* Connection Pool: disable multiplexing for `auto_increment_increment`, `auto_increment_offset` and `group_concat_max_len` #1290
 
 Performance improvements:
 * General: introduced several optimizations to reduce memory allocation overhead for small resultsets
