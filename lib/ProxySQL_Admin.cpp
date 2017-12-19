@@ -3299,7 +3299,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	GloProxyStats->variables.stats_system_memory = 60;
 #endif
 
-	variables.web_enabled = true;
+	variables.web_enabled = false;
 	variables.web_enabled_old = false;
 	variables.web_port = 6080;
 	variables.web_port_old = variables.web_port;
