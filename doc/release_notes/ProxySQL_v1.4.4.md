@@ -46,12 +46,12 @@ Bug fixes:
 * Eventlog: Persist eventlog file across restarts #1201 and #1269
 * Connection Pool: disable multiplexing for `auto_increment_increment`, `auto_increment_offset` and `group_concat_max_len` #1290
 * Admin: crashes if writing on a closed socket #1227
+* Prepared statements: incorrect format in Decimal fields #1192
 
 Performance improvements:
 * General: introduced several optimizations to reduce memory allocation overhead for small resultsets
 * Query Processor: changed the default value for `mysql-stats_time_backend_query` and `mysql-stats_time_query_processor` from `true` to `false`. Depending from the workload, this can drastically boost performance
 * Prepared statements: ported from 1.3 the reuse of prepared statements IDs #1198
-* Prepared statements: incorrect format in Decimal fields #1192
 * Connection Poll: reset connections using the current username instead of monitor user #1186
 * Connection Poll: limit the size of connections reset queue #1185
 * Connection Poll: added new variable `mysql-throttle_connections_per_sec_to_hostgroup` to limit the number of new connections per second to backends
