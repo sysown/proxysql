@@ -7,6 +7,7 @@ Compared to v1.4.3, it has the following new features / bugs fixes / enhancement
 New features:
 * Admin Module now regularly collects historical statistics of various metrics
 * introduced a new web interface to export simple statistics
+* from the web interface it is possible to verify if a newer version was released
 * added bandwidth throttling for resultsets sent from ProxySQL to client, or from MySQL server to ProxySQL: see [wiki](https://github.com/sysown/proxysql/wiki/Bandwidth-throttling)
 * Added watchdog to automatically restart proxysql if MySQL threads are not reporting heartbeat: see [wiki](https://github.com/sysown/proxysql/wiki/Watchdog)
 * It is now possible to configure ProxySQL to call an external script in case proxysql daemon terminates not gracefully. See [execute_on_exit_failure](https://github.com/sysown/proxysql/wiki/Configuration-file#general-variables)
