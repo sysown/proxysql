@@ -183,6 +183,7 @@ int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
 	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on sqlite3_prepare_v2() running query \"%s\" : %s\n", buff, sqlite3_errmsg(db));
 	  sqlite3_finalize(statement);
 	  free(buff);
+          proxy_error("SQLITE error: Cannot access SQLITE database, check permissions and path\n");
 	  assert(0);
 	}
 	int result=0;
