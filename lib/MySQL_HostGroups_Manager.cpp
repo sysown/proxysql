@@ -382,6 +382,8 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
+	queue.add(NULL);
+	HGCU_thread->join();
 	while (MyHostGroups->len) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->remove_index_fast(0);
 		delete myhgc;
@@ -391,8 +393,6 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	if (admindb) {
 		delete admindb;
 	}
-	queue.add(NULL);
-	HGCU_thread->join();
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
 #endif
