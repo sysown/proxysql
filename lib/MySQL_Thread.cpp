@@ -2623,7 +2623,7 @@ __mysql_thread_exit_add_mirror:
 					}
 				}
 				if (myds && myds->myds_type==MYDS_BACKEND) {
-					if (myds->sess && myds->sess->client_myds) {
+					if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
 						unsigned int buffered_data=0;
 						buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 						buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
