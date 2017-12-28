@@ -69,18 +69,20 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
 mariadb-client-library/mariadb_client/include/my_config.h:
-	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
-	cd mariadb-client-library && tar -zxf mariadb-connector-c-2.3.1-src.tar.gz
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.0.2-src.tar.gz
 	cd mariadb-client-library/mariadb_client && cmake .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
-	cd mariadb-client-library/mariadb_client && patch libmariadb/libmariadb.c < ../libmariadb.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mysql_async.c < ../mysql_async.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/password.c < ../password.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
+#	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_async.c < ../mariadb_async.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_password.c < ../ma_password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/my_alloc.c < ../my_alloc.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/my_charset.c < ../my_charset.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_alloc.c < ../ma_alloc.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.patch
+	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
+	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
 

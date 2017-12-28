@@ -1,0 +1,110 @@
+@@ -1494,9 +1494,16 @@
+ 
+   mysql->client_flag= client_flag;
+ 
++   {
++       volatile my_bool net_blocking = ma_pvio_is_blocking(net->pvio);
++       if (!net_blocking)
++           ma_pvio_blocking(net->pvio, TRUE, 0);
+   if (run_plugin_auth(mysql, scramble_data, scramble_len,
+                              scramble_plugin, db))
+     goto error;
++       if (!net_blocking)
++           ma_pvio_blocking(net->pvio, FALSE, 0);
++   }
+ 
+   if (mysql->client_flag & CLIENT_COMPRESS)
+     net->compress= 1;
+@@ -1625,7 +1632,7 @@
+   if (!mysql_real_connect(&tmp_mysql,mysql->host,mysql->user,mysql->passwd,
+ 			  mysql->db, mysql->port, mysql->unix_socket,
+ 			  mysql->client_flag | CLIENT_REMEMBER_OPTIONS) ||
+-      mysql_set_character_set(&tmp_mysql, mysql->charset->csname))
++      mysql_set_character_set(&tmp_mysql, mysql->charset->csname, NULL))
+   {
+     if (ctxt)
+       my_context_install_suspend_resume_hook(ctxt, NULL, NULL);
+@@ -1671,6 +1678,7 @@
+ {
+   if (mysql->stmts)
+   {
++/*
+     LIST *li_stmt= mysql->stmts;
+ 
+     for (; li_stmt; li_stmt= li_stmt->next)
+@@ -1679,6 +1687,7 @@
+       stmt->mysql= NULL;
+       SET_CLIENT_STMT_ERROR(stmt, CR_STMT_CLOSED, SQLSTATE_UNKNOWN, function_name);
+     }
++*/
+     mysql->stmts= NULL;
+   }
+ }
+@@ -1948,6 +1957,33 @@
+   return;
+ }
+ 
++void STDCALL
++mysql_close_no_command(MYSQL *mysql)
++{
++  if (mysql)                    /* Some simple safety */
++  {
++
++    if (mysql->methods) {
++            if (mysql->net.pvio) {
++                free_old_query(mysql);
++                mysql->status=MYSQL_STATUS_READY; /* Force command */
++            mysql->options.reconnect=0;
++                end_server(mysql);
++            }
++        }
++    mysql_close_memory(mysql);
++    mysql_close_options(mysql);
++    mysql->host_info=mysql->user=mysql->passwd=mysql->db=0;
++
++    /* Clear pointers for better safety */
++    bzero((char*) &mysql->options,sizeof(mysql->options));
++    mysql->net.pvio= 0;
++    if (mysql->free_me)
++      free(mysql);
++  }
++  return;
++}
++
+ 
+ /**************************************************************************
+ ** Do a query. If query returned rows, free old rows.
+@@ -3425,18 +3461,27 @@
+   mariadb_get_charset_info(mysql, cs);
+ }
+ 
+-int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname)
++int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname, uint charsetnr)
+ {
+   const MARIADB_CHARSET_INFO *cs;
+ 
+-  if (!csname)
++  if (!csname && !charsetnr)
+     goto error;
+ 
+-  if ((cs= mysql_find_charset_name(csname)))
+-  {
+-    char buff[64];
++  if (csname) {
++    cs = mysql_find_charset_name(csname);
++  } else {
++    cs = mysql_find_charset_nr(charsetnr); 
++  }
++  if (cs)
++  {
++    char buff[128];
++    if (csname) { // default behavior
++      snprintf(buff, 63, "SET NAMES %s", cs->csname);
++    } else {
++      snprintf(buff, 63, "SET NAMES %s COLLATE %s", cs->csname, cs->name);
++    }
+ 
+-    snprintf(buff, 63, "SET NAMES %s", cs->csname);
+     if (!mysql_real_query(mysql, buff, (unsigned long)strlen(buff)))
+     {
+       mysql->charset= cs;

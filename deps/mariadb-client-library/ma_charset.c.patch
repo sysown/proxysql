@@ -1,0 +1,8 @@
+@@ -732,6 +732,7 @@
+   { 247, 1, UTF8_MB4, UTF8_MB4"_vietnamese_ci", "", 65001, "UTF-8", 1, 4, mysql_mbcharlen_utf8, check_mb_utf8_valid},
+ 
+   { 254, 1, UTF8_MB3, UTF8_MB3"_general_cs", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8, check_mb_utf8_valid},
++  { 255, 1, UTF8_MB4, UTF8_MB4"_0900_ai_ci", "", 65001, "UTF-8", 1, 4, mysql_mbcharlen_utf8, check_mb_utf8_valid},
+   { 576, 1, UTF8_MB3, UTF8_MB3"_croatian_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid}, /*MDB*/
+   { 577, 1, UTF8_MB3, UTF8_MB3"_myanmar_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid}, /*MDB*/
+   { 578, 1, UTF8_MB3, UTF8_MB3"_thai_520_w2", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid}, /*MDB*/

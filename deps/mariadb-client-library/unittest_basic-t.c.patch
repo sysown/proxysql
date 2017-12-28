@@ -1,0 +1,11 @@
+--- /tmp/basic-t.c	2017-12-28 14:55:55.958512116 +0100
++++ unittest/libmariadb/basic-t.c	2017-12-28 14:56:08.770490417 +0100
+@@ -48,7 +48,7 @@
+   rc= mysql_query(mysql, "CREATE TABLE a (a varchar(200))");
+   check_mysql_rc(rc, mysql);
+ 
+-  rc= mysql_set_character_set(mysql, "utf8");
++  rc= mysql_set_character_set(mysql, "utf8", 0);
+   check_mysql_rc(rc, mysql);
+ 
+   for (i=0; i < 10; i++)
