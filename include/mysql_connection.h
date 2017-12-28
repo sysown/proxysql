@@ -178,5 +178,7 @@ class MySQL_Connection {
 	void set_is_client(); // used for local_stmts
 
 	void reset();
+
+	bool get_gtid(char *buff, uint64_t *trx_id);
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

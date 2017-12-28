@@ -2621,6 +2621,7 @@ handler_again:
 						(begint.tv_sec*1000000000+begint.tv_nsec);
 				}
 				if (rc==0) {
+					myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid);
 					// check if multiplexing needs to be disabled
 					char *qdt=CurrentQuery.get_digest_text();
 					if (qdt)

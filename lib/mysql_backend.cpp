@@ -14,6 +14,8 @@ MySQL_Backend::MySQL_Backend() {
 	server_myds=NULL;
 	server_bytes_at_cmd.bytes_recv=0;
 	server_bytes_at_cmd.bytes_sent=0;
+	memset(gtid_uuid,0,sizeof(gtid_uuid));
+	gtid_trxid=0;
 }
 
 MySQL_Backend::~MySQL_Backend() {
