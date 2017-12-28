@@ -68,7 +68,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
-mariadb-client-library/mariadb_client/include/my_config.h:
+mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.0.2-src.tar.gz
 	cd mariadb-client-library/mariadb_client && cmake .
@@ -86,7 +86,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
 
-mariadb_client: mariadb-client-library/mariadb_client/include/my_config.h
+mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
 
 
 sqlite3/sqlite3/sqlite3.o:
