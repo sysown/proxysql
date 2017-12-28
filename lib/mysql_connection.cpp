@@ -1701,3 +1701,22 @@ void MySQL_Connection::reset() {
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
 }
+
+bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
+	// note: current implementation for for OWN GTID only!
+	bool ret = false;
+	if (buff==NULL || trx_id == NULL) {
+		return ret;
+	}
+	if (mysql) {
+		const char *data;
+		size_t length;
+		if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
+			memcpy(buff,data,length);
+			buff[length]=0;
+			fprintf(stderr,"GTID=%s\n",buff);
+			ret = true;
+		}
+	}
+	return ret;
+}

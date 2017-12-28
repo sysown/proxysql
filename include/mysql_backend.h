@@ -10,6 +10,8 @@ class MySQL_Backend
 	void * operator new(size_t);
 	void operator delete(void *);
 	int hostgroup_id;
+	char gtid_uuid[48];
+	uint64_t gtid_trxid;
 	MySQL_Data_Stream *server_myds;
 //  mysql_cp_entry_t *server_mycpe;
   bytes_stats_t server_bytes_at_cmd;
