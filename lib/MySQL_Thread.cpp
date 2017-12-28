@@ -28,8 +28,8 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
-const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
-	const CHARSET_INFO * c = compiled_charsets;
+const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
+	const MARIADB_CHARSET_INFO * c = mariadb_compiled_charsets;
 	do {
 		if (c->nr == nr) {
 			return c;
@@ -39,8 +39,8 @@ const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	return NULL;
 }
 
-CHARSET_INFO * proxysql_find_charset_name(const char *name) {
-	CHARSET_INFO *c = (CHARSET_INFO *)compiled_charsets;
+MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name) {
+	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
 		if (!strcasecmp(c->csname, name)) {
 			return c;
@@ -50,8 +50,8 @@ CHARSET_INFO * proxysql_find_charset_name(const char *name) {
 	return NULL;
 }
 
-CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename) {
-	CHARSET_INFO *c = (CHARSET_INFO *)compiled_charsets;
+MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename) {
+	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
 		if (!strcasecmp(c->csname, csname) && !strcasecmp(c->name, collatename)) {
 			return c;
@@ -818,7 +818,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 	}
 	if (!strcasecmp(name,"default_charset")) {
-		const CHARSET_INFO *c = proxysql_find_charset_nr(variables.default_charset);
+		const MARIADB_CHARSET_INFO *c = proxysql_find_charset_nr(variables.default_charset);
 		if (!c) {
 			proxy_error("Not existing charset number %u\n", variables.default_charset);
 			assert(c);
@@ -1790,7 +1790,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"default_charset")) {
 		if (vallen) {
-			CHARSET_INFO * c=proxysql_find_charset_name(value);
+			MARIADB_CHARSET_INFO * c=proxysql_find_charset_name(value);
 			if (c) {
 				variables.default_charset=c->nr;
 				return true;

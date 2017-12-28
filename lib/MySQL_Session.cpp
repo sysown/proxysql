@@ -15,8 +15,8 @@
 
 #define EXPMARIA
 
-extern const CHARSET_INFO * proxysql_find_charset_name(const char * const name);
-extern CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
+extern const MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
+extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
 
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
@@ -722,7 +722,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
 		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
-		const CHARSET_INFO * c;
+		const MARIADB_CHARSET_INFO * c;
 		char * collation_name = NULL;
 		if (strcasestr(csname," COLLATE ")) {
 			collation_specified = true;
@@ -3711,7 +3711,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					delete re;
 					delete opt2;
 					if (rc) {
-						const CHARSET_INFO * c;
+						const MARIADB_CHARSET_INFO * c;
 						if (s3.length()) {
 							c = proxysql_find_charset_collate_names(s2.c_str(), s3.c_str());
 						} else {

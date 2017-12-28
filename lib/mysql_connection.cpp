@@ -3,7 +3,7 @@
 #include "SpookyV2.h"
 #include <fcntl.h>
 
-extern const CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
+extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 #define PROXYSQL_USE_RESULT
 
@@ -386,7 +386,7 @@ void MySQL_Connection::connect_start() {
 	}
 	unsigned int timeout= 1;
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
-	const CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
 	if (!c) {
 		proxy_error("Not existing charset number %u\n", mysql_thread___default_charset);
 		assert(0);
@@ -476,7 +476,7 @@ void MySQL_Connection::set_autocommit_cont(short event) {
 
 void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
-	const CHARSET_INFO * c = proxysql_find_charset_nr(options.charset);
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(options.charset);
 	if (!c) {
 		proxy_error("Not existing charset number %u\n", options.charset);
 		assert(0);
@@ -1612,7 +1612,7 @@ void MySQL_Connection::optimize() {
 // if avoids that a QUIT command stops forever
 // FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if ((send_quit) && (mysql->net.vio)) {
+	if ((send_quit) && (mysql->net.pvio)) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;
