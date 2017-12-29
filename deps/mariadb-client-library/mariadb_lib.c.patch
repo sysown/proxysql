@@ -1,5 +1,3 @@
---- /tmp/mariadb_lib.c	2017-12-28 14:21:33.620559119 +0100
-+++ libmariadb/mariadb_lib.c	2017-12-28 15:12:33.117032010 +0100
 @@ -1494,9 +1494,16 @@
  
    mysql->client_flag= client_flag;
@@ -76,7 +74,16 @@
  
  /**************************************************************************
  ** Do a query. If query returned rows, free old rows.
-@@ -3425,18 +3461,27 @@
+@@ -2028,6 +2064,8 @@
+               old_pos= pos;
+               si_type= (enum enum_session_state_type)net_field_length(&pos);
+               switch(si_type) {
++              case SESSION_TRACK_GTIDS:
++                net_field_length(&pos); /* skip encoding */
+               case SESSION_TRACK_SCHEMA:
+               case SESSION_TRACK_STATE_CHANGE:
+               case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
+@@ -3425,18 +3463,27 @@
    mariadb_get_charset_info(mysql, cs);
  }
  
