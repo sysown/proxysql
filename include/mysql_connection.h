@@ -65,11 +65,7 @@ class MySQL_Connection {
 	unsigned long long last_time_used;
 	unsigned long long timeout;
 	int fd;
-#ifndef PROXYSQL_STMT_V14
-	MySQL_STMTs_local *local_stmts;	// local view of prepared statements
-#else
 	MySQL_STMTs_local_v14 *local_stmts;	// local view of prepared statements
-#endif
 	MYSQL *mysql;
 	MYSQL *ret_mysql;
 	MYSQL_RES *mysql_result;

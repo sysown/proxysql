@@ -21,11 +21,7 @@ extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *cs
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
-#ifndef PROXYSQL_STMT_V14
-extern MySQL_STMT_Manager *GloMyStmt;
-#else
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
-#endif
 
 extern SQLite3_Server *GloSQLite3Server;
 
@@ -1684,11 +1680,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	}
 	// we recreate local_stmts : see issue #752
 	delete myconn->local_stmts;
-#ifndef PROXYSQL_STMT_V14
-	myconn->local_stmts=new MySQL_STMTs_local(false); // false by default, it is a backend
-#else
 	myconn->local_stmts=new MySQL_STMTs_local_v14(false); // false by default, it is a backend
-#endif
 	int rc=myconn->async_change_user(myds->revents);
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
@@ -2115,21 +2107,12 @@ __get_pkts_from_client:
 								break;
 							case _MYSQL_COM_STMT_CLOSE:
 								{
-#ifndef PROXYSQL_STMT_V14
-									uint32_t stmt_global_id=0;
-									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									// FIXME: no input validation
-									SLDH->reset(stmt_global_id);
-									sess_STMTs_meta->erase(stmt_global_id);
-									client_myds->myconn->local_stmts->erase(stmt_global_id);
-#else
 									uint32_t client_global_id=0;
 									memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 									// FIXME: no input validation
 									SLDH->reset(client_global_id);
 									sess_STMTs_meta->erase(client_global_id);
 									client_myds->myconn->local_stmts->client_close(client_global_id);
-#endif
 								}
 								l_free(pkt.size,pkt.ptr);
 								// FIXME: this is not complete. Counters should be decreased
@@ -2178,48 +2161,10 @@ __get_pkts_from_client:
 										break;
 									}
 									if (client_myds->myconn->local_stmts==NULL) {
-#ifndef PROXYSQL_STMT_V14
-										client_myds->myconn->local_stmts=new MySQL_STMTs_local(true);
-#else
 										client_myds->myconn->local_stmts=new MySQL_STMTs_local_v14(true);
-#endif
 									}
 									uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 									MySQL_STMT_Global_info *stmt_info=NULL;
-#ifndef PROXYSQL_STMT_V14
-									stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash); // find_prepared_statement_by_hash() always increase ref_count_client
-									if (stmt_info) {
-										// FIXME: there is a very interesting race condition here
-										// FIXME: it is possible that multiple statement have the same hash
-										// FIXME: we should check local_stmts to verify is this stmt_id was already sent
-										if (client_myds->myconn->local_stmts->exists(stmt_info->statement_id)) {
-											// the client is asking to prepare another identical prepared statements
-											__sync_fetch_and_sub(&stmt_info->ref_count_client,1); // since find_prepared_statement_by_hash() already increased red_count_client we decrease it here
-											stmt_info=NULL;
-										}
-									}
-									if (stmt_info) {
-										l_free(pkt.size,pkt.ptr);
-										client_myds->setDSS_STATE_QUERY_SENT_NET();
-										client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
-										client_myds->myconn->local_stmts->insert(stmt_info->statement_id,NULL);
-										__sync_fetch_and_sub(&stmt_info->ref_count_client,1); // since find_prepared_statement_by_hash() already increased red_count_client before insert(), we decrease it here
-										client_myds->DSS=STATE_SLEEP;
-										status=WAITING_CLIENT_DATA;
-										CurrentQuery.end_time=thread->curtime;
-										CurrentQuery.end();
-										break;
-									} else {
-										mybe=find_or_create_backend(current_hostgroup);
-										status=PROCESSING_STMT_PREPARE;
-										mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
-										mybe->server_myds->wait_until=0;
-										pause_until=0;
-										mybe->server_myds->killed_at=0;
-										mybe->server_myds->mysql_real_query.init(&pkt); // fix memory leak for PREPARE in prepared statements #796
-										client_myds->setDSS_STATE_QUERY_SENT_NET();
-									}
-#else // PROXYSQL_STMT_V14
 									// we first lock GloStmt
 									GloMyStmt->wrlock();
 									stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash,false);
@@ -2247,7 +2192,6 @@ __get_pkts_from_client:
 									}
 									GloMyStmt->unlock();
 									break; // make sure to not break before unlocking GloMyStmt
-#endif // PROXYSQL_STMT_V14
 								}
 								break;
 							case _MYSQL_COM_STMT_EXECUTE:
@@ -2264,14 +2208,6 @@ __get_pkts_from_client:
 									thread->status_variables.queries++;
 									//bool rc_break=false;
 
-#ifndef PROXYSQL_STMT_V14
-									uint32_t stmt_global_id=0;
-									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									CurrentQuery.stmt_global_id=stmt_global_id;
-									// now we get the statement information
-									MySQL_STMT_Global_info *stmt_info=NULL;
-									stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(stmt_global_id);
-#else
 									uint32_t client_stmt_id=0;
 									uint64_t stmt_global_id=0;
 									memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
@@ -2284,7 +2220,6 @@ __get_pkts_from_client:
 									// now we get the statement information
 									MySQL_STMT_Global_info *stmt_info=NULL;
 									stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(stmt_global_id);
-#endif
 									if (stmt_info==NULL) {
 										// we couldn't find it
 										l_free(pkt.size,pkt.ptr);
@@ -2554,11 +2489,7 @@ handler_again:
 							goto handler_again;
 						}
 					if (status==PROCESSING_STMT_EXECUTE) {
-#ifndef PROXYSQL_STMT_V14
-						CurrentQuery.mysql_stmt=myconn->local_stmts->find(CurrentQuery.stmt_global_id);
-#else
 						CurrentQuery.mysql_stmt=myconn->local_stmts->find_backend_stmt_by_global_id(CurrentQuery.stmt_global_id);
-#endif
 						if (CurrentQuery.mysql_stmt==NULL) {
 							MySQL_STMT_Global_info *stmt_info=NULL;
 							// the conection we too doesn't have the prepared statements prepared
@@ -2640,26 +2571,10 @@ handler_again:
 							{
 								thread->status_variables.backend_stmt_prepare++;
 								GloMyStmt->wrlock();
-#ifndef PROXYSQL_STMT_V14
-								uint32_t stmid;
-#else
 								uint32_t client_stmtid;
 								uint64_t global_stmtid;
-#endif
 								//bool is_new;
 								MySQL_STMT_Global_info *stmt_info=NULL;
-#ifndef PROXYSQL_STMT_V14
-									stmt_info=GloMyStmt->add_prepared_statement(&is_new, current_hostgroup,
-										(char *)client_myds->myconn->userinfo->username,
-										(char *)client_myds->myconn->userinfo->schemaname,
-										(char *)CurrentQuery.QueryPointer,
-										CurrentQuery.QueryLength,
-										CurrentQuery.mysql_stmt,
-										qpo->cache_ttl,
-										qpo->timeout,
-										qpo->delay,
-										true);
-#else
 									stmt_info=GloMyStmt->add_prepared_statement(current_hostgroup,
 										(char *)client_myds->myconn->userinfo->username,
 										(char *)client_myds->myconn->userinfo->schemaname,
@@ -2670,7 +2585,6 @@ handler_again:
 										qpo->timeout,
 										qpo->delay,
 										false);
-#endif
 									if (CurrentQuery.QueryParserArgs.digest_text) {
 										if (stmt_info->digest_text==NULL) {
 											stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
@@ -2678,15 +2592,10 @@ handler_again:
 											stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
 										}
 									}
-#ifndef PROXYSQL_STMT_V14
-									stmid=stmt_info->statement_id;
-								myds->myconn->local_stmts->insert(stmid,CurrentQuery.mysql_stmt);
-#else
 								global_stmtid=stmt_info->statement_id;
 								myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
 								if (previous_status.size() == 0)
 								client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
-#endif
 								GloMyStmt->unlock();
 								CurrentQuery.mysql_stmt=NULL;
 								enum session_status st=status;
@@ -2698,13 +2607,7 @@ handler_again:
 									previous_status.pop();
 									NEXT_IMMEDIATE(st);
 								} else {
-#ifndef PROXYSQL_STMT_V14
-									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info);
-									client_myds->myconn->local_stmts->insert(stmt_info->statement_id,NULL);
-									if (is_new) __sync_fetch_and_sub(&stmt_info->ref_count_client,1);
-#else
 									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,client_stmtid);
-#endif
 								}
 							}
 							break;
