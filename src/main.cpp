@@ -208,7 +208,7 @@ MySQL_STMT_Manager_v14 *GloMyStmt;
 #endif
 
 MySQL_Monitor *GloMyMon;
-std::thread *MyMon_thread;
+std::thread *MyMon_thread = NULL;
 
 MySQL_Logger *GloMyLogger;
 
@@ -505,7 +505,7 @@ void ProxySQL_Main_join_all_threads() {
 	}
 
 	// join GloMyMon thread
-	if (GloMyMon) {
+	if (GloMyMon && MyMon_thread) {
 		cpu_timer t;
 		MyMon_thread->join();
 #ifdef DEBUG
