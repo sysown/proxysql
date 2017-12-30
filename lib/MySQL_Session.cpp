@@ -2639,6 +2639,7 @@ handler_again:
 						case PROCESSING_STMT_PREPARE:
 							{
 								thread->status_variables.backend_stmt_prepare++;
+								GloMyStmt->wrlock();
 #ifndef PROXYSQL_STMT_V14
 								uint32_t stmid;
 #else
@@ -2668,7 +2669,7 @@ handler_again:
 										qpo->cache_ttl,
 										qpo->timeout,
 										qpo->delay,
-										true);
+										false);
 #endif
 									if (CurrentQuery.QueryParserArgs.digest_text) {
 										if (stmt_info->digest_text==NULL) {
@@ -2686,6 +2687,7 @@ handler_again:
 								if (previous_status.size() == 0)
 								client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
 #endif
+								GloMyStmt->wrlock();
 								CurrentQuery.mysql_stmt=NULL;
 								enum session_status st=status;
 								size_t sts=previous_status.size();
