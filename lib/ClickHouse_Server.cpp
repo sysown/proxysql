@@ -1970,6 +1970,15 @@ __end_show_commands:
 			run_query=false;
 			goto __run_query;
 		}
+		if (
+			(strncasecmp("LOCK TABLE",query_no_space,10)==0)
+			||
+			(strncasecmp("UNLOCK TABLE",query_no_space,12)==0)
+		) {
+			GloClickHouseServer->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			run_query=false;
+			goto __run_query;
+		}
 	}
 	
 __run_query:
