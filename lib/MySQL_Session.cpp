@@ -2686,7 +2686,7 @@ handler_again:
 								if (previous_status.size() == 0)
 								client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
 #endif
-								GloMyStmt->wrlock();
+								GloMyStmt->unlock();
 								CurrentQuery.mysql_stmt=NULL;
 								enum session_status st=status;
 								size_t sts=previous_status.size();
