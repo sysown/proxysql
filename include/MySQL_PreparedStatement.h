@@ -38,8 +38,6 @@ To summarie the most important classes:
 // it is an internal representation of prepared statement
 // it include all metadata associated with it
 
-#define PROXYSQL_STMT_V14
-
 class MySQL_STMT_Global_info {
 	private:
 	void compute_hash();
@@ -55,11 +53,7 @@ class MySQL_STMT_Global_info {
 	unsigned int hostgroup_id;
 	int ref_count_client;
 	int ref_count_server;
-#ifndef PROXYSQL_STMT_V14
-	uint32_t statement_id;
-#else
 	uint64_t statement_id;
-#endif
 	uint16_t num_columns;
 	uint16_t num_params;
 	uint16_t warning_count;
@@ -71,12 +65,8 @@ class MySQL_STMT_Global_info {
 	} properties;
 	bool is_select_NOT_for_update;
 	MYSQL_BIND **params; // seems unused (?)
-#ifndef PROXYSQL_STMT_V14
-	MySQL_STMT_Global_info(uint32_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
-#else
 	MySQL_STMT_Global_info(uint64_t id, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);
-#endif
 	~MySQL_STMT_Global_info();
 };
 
@@ -175,76 +165,8 @@ class MySQL_STMTs_meta {
 	}
 };
 
-#ifndef PROXYSQL_STMT_V14
 // class MySQL_STMTs_local associates a global statement ID with a local statement ID for a specific connection
 
-class MySQL_STMTs_local {
-	private:
-	unsigned int num_entries;
-	bool is_client;
-	std::map<uint32_t, uint32_t> client_stmt_to_global_id;
-	std::map<uint32_t, MYSQL_STMT *> m;
-	public:
-	MySQL_Session *sess;
-	MySQL_STMTs_local(bool _ic) {
-		sess=NULL;
-		is_client=_ic;
-		num_entries=0;
-		client_stmt_to_global_id = std::map<uint32_t, uint32_t>();
-		m = std::map<uint32_t, MYSQL_STMT *>();
-	}
-	void set_is_client(MySQL_Session *_s) {
-		sess=_s;
-		is_client=true;
-	}
-	~MySQL_STMTs_local();
-	void insert(uint32_t global_statement_id, MYSQL_STMT *stmt);
-
-	// we declare it here to be inline
-	MYSQL_STMT * find(uint32_t global_statement_id) {
-		auto s=m.find(global_statement_id);
-		if (s!=m.end()) {	// found
-			return s->second;
-		}
-		return NULL;	// not found
-	}
-	uint32_t generate_new_stmt_id(uint32_t global_statement_id);
-	uint32_t find_original_id(uint32_t client_stmt_id);
-	bool exists(uint32_t global_statement_id) {
-		auto s=m.find(global_statement_id);
-		if (s!=m.end()) {	// found
-			return true;
-		}
-		return false;	// not found
-	}
-	bool erase(uint32_t global_statement_id);
-	uint64_t compute_hash(unsigned int hostgroup, char *user, char *schema, char *query, unsigned int query_length);
-	unsigned int get_num_entries() { return num_entries; }
-};
-
-class MySQL_STMT_Manager {
-	private:
-	uint32_t next_statement_id;
-	rwlock_t rwlock;
-	std::map<uint32_t, MySQL_STMT_Global_info *> m;	// map using statement id
-	std::map<uint64_t, MySQL_STMT_Global_info *> h;	// map using hashes
-	std::stack<uint32_t> free_stmt_ids;
-	public:
-	MySQL_STMT_Manager();
-	~MySQL_STMT_Manager();
-	uint32_t generate_new_stmt_id() {
-		return __sync_add_and_fetch(&next_statement_id,1);
-	}
-	int ref_count(uint32_t statement_id, int cnt, bool lock, bool is_client);
-	MySQL_STMT_Global_info * add_prepared_statement(bool *is_new, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock=true);
-	MySQL_STMT_Global_info * add_prepared_statement(bool *is_new, unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock=true);
-	MySQL_STMT_Global_info * find_prepared_statement_by_stmt_id(uint32_t id, bool lock=true);
-	MySQL_STMT_Global_info * find_prepared_statement_by_hash(uint64_t hash, bool lock=true);
-	uint32_t total_prepared_statements() { return next_statement_id-1; }
-	void active_prepared_statements(uint32_t *unique, uint32_t *total);
-};
-
-#else // PROXYSQL_STMT_V14
 class MySQL_STMTs_local_v14 {
 	private:
 	bool is_client_;
@@ -320,6 +242,5 @@ class MySQL_STMT_Manager_v14 {
 	void get_metrics(uint64_t *c_unique, uint64_t *c_total, uint64_t *stmt_max_stmt_id, uint64_t *cached, uint64_t *s_unique, uint64_t *s_total);
 	SQLite3_result * get_prepared_statements_global_infos();
 };
-#endif // PROXYSQL_STMT_V14
 
 #endif /* CLASS_MYSQL_PREPARED_STATEMENT_H */
