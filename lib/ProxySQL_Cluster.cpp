@@ -167,6 +167,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				}
 				if (conn->net.pvio) {
 					mysql_close(conn);
+					conn = NULL;
 				}
 			} else {
 				proxy_warning("Cluster: unable to connect to peer %s:%d . Error: %s\n", node->hostname, node->port, mysql_error(conn));
@@ -180,7 +181,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		}
 	}
 __exit_monitor_thread:
-	//if (conn) {
+	if (conn)
 	if (conn->net.pvio) {
 		mysql_close(conn);
 	}

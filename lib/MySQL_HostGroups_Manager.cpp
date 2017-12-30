@@ -337,6 +337,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.server_connections_connected=0;
 	status.server_connections_aborted=0;
 	status.server_connections_created=0;
+	status.server_connections_delayed=0;
 	status.servers_table_version=0;
 	pthread_mutex_init(&status.servers_table_version_lock, NULL);
 	pthread_cond_init(&status.servers_table_version_cond, NULL);
