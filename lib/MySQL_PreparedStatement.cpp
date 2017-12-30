@@ -786,6 +786,7 @@ MySQL_STMT_Manager_v14::MySQL_STMT_Manager_v14() {
 
 	next_statement_id =
 	    1;  // we initialize this as 1 because we 0 is not allowed
+	num_stmt_with_ref_client_count_zero = 0;
 }
 
 MySQL_STMT_Manager_v14::~MySQL_STMT_Manager_v14() {
@@ -797,16 +798,27 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 	auto s = map_stmt_id_to_info.find(_stmt_id);
 	if (s != map_stmt_id_to_info.end()) {
 		MySQL_STMT_Global_info *stmt_info = s->second;
+		if (stmt_info->ref_count_client == 0 && _v == 1) {
+			__sync_sub_and_fetch(&num_stmt_with_ref_client_count_zero,1);
+		} else {
+			if (stmt_info->ref_count_client == 1 && _v == -1) {
+				__sync_add_and_fetch(&num_stmt_with_ref_client_count_zero,1);
+			}
+		}
 		stmt_info->ref_count_client += _v;
-			if (map_stmt_id_to_info.size() > (unsigned)mysql_thread___max_stmts_cache) {
-				int max_purge = map_stmt_id_to_info.size() / 20;  // purge up to 5%
+			uint64_t num_count_zero = __sync_add_and_fetch(&num_stmt_with_ref_client_count_zero, 0);
+			size_t map_size = map_stmt_id_to_info.size();
+			if (map_size > (unsigned)mysql_thread___max_stmts_cache && num_count_zero > map_size/10) { // purge only if there is at least 10% gain
+				int max_purge = map_size / 5;  // purge up to 20%
 				int i = -1;
 				uint64_t *torem =
 				    (uint64_t *)malloc(max_purge * sizeof(uint64_t));
 				for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it =
 				         map_stmt_id_to_info.begin();
 				     it != map_stmt_id_to_info.end(); ++it) {
-					if (i == (max_purge - 1)) continue;
+					if ( (i == (max_purge - 1)) || (i == (num_count_zero - 1)) ) {
+						continue; // nothing left to clean up
+					}
 					MySQL_STMT_Global_info *a = it->second;
 					if (__sync_add_and_fetch(&a->ref_count_client, 0) == 0) {
 						uint64_t hash = a->hash;
@@ -814,6 +826,7 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 						if (s2 != map_stmt_hash_to_info.end()) {
 							map_stmt_hash_to_info.erase(s2);
 						}
+						__sync_sub_and_fetch(&num_stmt_with_ref_client_count_zero,1);
 						// m.erase(it);
 						// delete a;
 						i++;
@@ -1046,6 +1059,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 //		__sync_fetch_and_add(&ret->ref_count_client,
 //		                     1);  // increase reference count
 //		*is_new = true;
+		__sync_add_and_fetch(&num_stmt_with_ref_client_count_zero,1);
 	}
 	ret->ref_count_server++;
 //	__sync_fetch_and_add(&add_prepared_statement_calls, 1);
