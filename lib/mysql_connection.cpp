@@ -1702,6 +1702,7 @@ void MySQL_Connection::reset() {
 	}
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
+<<<<<<< HEAD
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
@@ -1722,4 +1723,6 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 		}
 	}
 	return ret;
+=======
+>>>>>>> 3520dbb... Remove all references to PS handling before 1.4
 }
