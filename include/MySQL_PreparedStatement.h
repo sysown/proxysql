@@ -301,6 +301,7 @@ class MySQL_STMTs_local_v14 {
 class MySQL_STMT_Manager_v14 {
 	private:
 	uint64_t next_statement_id;
+	uint64_t num_stmt_with_ref_client_count_zero;
 	pthread_rwlock_t rwlock_;
 	std::map<uint64_t, MySQL_STMT_Global_info *> map_stmt_id_to_info;	// map using statement id
 	std::map<uint64_t, MySQL_STMT_Global_info *> map_stmt_hash_to_info;	// map using hashes
