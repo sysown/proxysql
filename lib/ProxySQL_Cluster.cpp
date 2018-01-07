@@ -762,7 +762,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 					result1 = mysql_store_result(conn);
 
 					//rc_query = mysql_query(conn,"SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups");
-					rc_query = mysql_query(conn,CLSUTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS);
+					rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS);
 					if ( rc_query == 0 ) {
 						result2 = mysql_store_result(conn);
 						proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d completed\n", hostname, port);
