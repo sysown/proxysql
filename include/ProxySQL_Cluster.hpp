@@ -8,8 +8,13 @@
 
 #define PROXYSQL_NODE_METRICS_LEN	5
 
+<<<<<<< HEAD
 #define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'"
 #define CLSUTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups"
+=======
+#define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'"
+#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "SELECT writer_hostgroup, reader_hostgroup, COALESCE(comment,'') FROM runtime_mysql_replication_hostgroups"
+>>>>>>> c94fbe7... Fixed bug #1304
 
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
