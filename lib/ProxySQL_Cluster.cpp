@@ -809,17 +809,17 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 
 									proxy_info("Cluster: Writing mysql_replication_hostgroups table\n");
 									GloAdmin->admindb->execute("DELETE FROM mysql_replication_hostgroups");
-									q=(char *)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment) VALUES (%s, %s, '%s')";
+									q=(char *)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (%s, %s, '%s', '%s')";
 									while ((row = mysql_fetch_row(result2))) {
 										int i;
 										int l=0;
-											for (i=0; i<2; i++) {
+											for (i=0; i<3; i++) {
 											l+=strlen(row[i]);
 										}
-										char *o=escape_string_single_quotes(row[2],false);
+										char *o=escape_string_single_quotes(row[3],false);
 										char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
-										sprintf(query,q,row[0],row[1],o);
-										if (o!=row[2]) { // there was a copy
+										sprintf(query,q,row[0],row[1],row[2],o);
+										if (o!=row[3]) { // there was a copy
 											free(o);
 										}
 										GloAdmin->admindb->execute(query);
