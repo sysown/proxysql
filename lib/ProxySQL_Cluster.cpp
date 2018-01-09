@@ -179,6 +179,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		} else {
 			sleep(1);	// do not monitor if the username is empty
 		}
+		rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, NULL, 0); // added extra check, see #1323 
 	}
 __exit_monitor_thread:
 	if (conn)
@@ -1113,7 +1114,13 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 	std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator ite = umap_proxy_nodes.find(hash_);
 	if (ite != umap_proxy_nodes.end()) {
 		ProxySQL_Node_Entry * node = ite->second;
-		node->set_metrics(_r, _response_time);
+		if (_r) {
+			node->set_metrics(_r, _response_time);
+		} else {
+			// if _r is NULL, this function is being called only to verify if
+			// the node should still be checked or not
+			// see bug #1323
+		}
 		ret = true;
 	}
 	pthread_mutex_unlock(&mutex);
