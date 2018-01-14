@@ -224,10 +224,19 @@ class MySQL_STMT_Manager_v14 {
 	private:
 	uint64_t next_statement_id;
 	uint64_t num_stmt_with_ref_client_count_zero;
+	uint64_t num_stmt_with_ref_server_count_zero;
 	pthread_rwlock_t rwlock_;
 	std::map<uint64_t, MySQL_STMT_Global_info *> map_stmt_id_to_info;	// map using statement id
 	std::map<uint64_t, MySQL_STMT_Global_info *> map_stmt_hash_to_info;	// map using hashes
 	std::stack<uint64_t> free_stmt_ids;
+	struct {
+		uint64_t c_unique;
+		uint64_t c_total;
+		uint64_t stmt_max_stmt_id;
+		uint64_t cached;
+		uint64_t s_unique;
+		uint64_t s_total;
+	} statuses;
 	public:
 	MySQL_STMT_Manager_v14();
 	~MySQL_STMT_Manager_v14();
