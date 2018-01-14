@@ -2,6 +2,7 @@
 #define __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "proxysql_gtid.h"
 
 #include <thread>
 
@@ -182,6 +183,9 @@ class MySQL_HostGroups_Manager {
 	std::map<int , Group_Replication_Info *> Group_Replication_Info_Map;
 
 	std::thread *HGCU_thread;
+
+	std::unordered_map <string, Gtid_Server_Info *> gtid_map;
+	pthread_rwlock_t gtid_rwlock;
 
 	public:
 	struct {
