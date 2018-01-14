@@ -11,9 +11,9 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl libev
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl libev
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev
 endif
 .PHONY: default
 
@@ -22,7 +22,7 @@ libev/libev/.libs/libev.a:
 	cd libev && tar -zxf libev-4.24.tar.gz
 	cd libev/libev  && ./configure
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
-libev: libev/libev/.libs/libev.a
+ev: libev/libev/.libs/libev.a
 
 
 curl/curl/lib/.libs/libcurl.a:

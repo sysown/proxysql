@@ -15,6 +15,7 @@
 #include <libdaemon/dlog.h>
 #include <libdaemon/dpid.h>
 #include <libdaemon/dexec.h>
+#include "ev.h"
 
 // MariaDB client library redefines dlerror(), see https://mariadb.atlassian.net/browse/CONC-101
 #ifdef dlerror
@@ -393,6 +394,13 @@ void ProxySQL_Main_init_main_modules() {
 	GloMyMon=NULL;
 	GloMyLogger=NULL;
 	GloMyStmt=NULL;
+
+	// initialize libev
+	if (!ev_default_loop (EVBACKEND_POLL | EVFLAG_NOENV)) {
+		fprintf(stderr,"could not initialise libev");
+		exit(EXIT_FAILURE);
+	}
+
 	MyHGM=new MySQL_HostGroups_Manager();
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
