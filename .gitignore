@@ -123,6 +123,9 @@ deps/clickhouse-cpp
 deps/cityhash/cityhash/
 deps/lz4/lz4-1.7.5/
 
+#libev
+deps/libev/libev-4.24/
+
 test/.vagrant
 .DS_Store
 proxysql-tests.ini
