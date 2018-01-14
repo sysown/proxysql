@@ -487,6 +487,13 @@ MySQL_STMT_Manager_v14::MySQL_STMT_Manager_v14() {
 	next_statement_id =
 	    1;  // we initialize this as 1 because we 0 is not allowed
 	num_stmt_with_ref_client_count_zero = 0;
+	num_stmt_with_ref_server_count_zero = 0;
+	statuses.c_unique = 0;
+	statuses.c_total = 0;
+	statuses.stmt_max_stmt_id = 0;
+	statuses.cached = 0;
+	statuses.s_unique = 0;
+	statuses.s_total = 0;
 }
 
 MySQL_STMT_Manager_v14::~MySQL_STMT_Manager_v14() {
@@ -497,6 +504,7 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 		pthread_rwlock_wrlock(&rwlock_);
 	auto s = map_stmt_id_to_info.find(_stmt_id);
 	if (s != map_stmt_id_to_info.end()) {
+		statuses.c_total += _v;
 		MySQL_STMT_Global_info *stmt_info = s->second;
 		if (stmt_info->ref_count_client == 0 && _v == 1) {
 			__sync_sub_and_fetch(&num_stmt_with_ref_client_count_zero,1);
@@ -527,6 +535,9 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 							map_stmt_hash_to_info.erase(s2);
 						}
 						__sync_sub_and_fetch(&num_stmt_with_ref_client_count_zero,1);
+						if (a->ref_count_server == 0) {
+							//__sync_sub_and_fetch(&num_stmt_with_ref_server_count_zero,1);
+						}
 						// m.erase(it);
 						// delete a;
 						i++;
@@ -538,9 +549,11 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 					auto s3 = map_stmt_id_to_info.find(id);
 					MySQL_STMT_Global_info *a = s3->second;
 					if (a->ref_count_server == 0) {
+						__sync_sub_and_fetch(&num_stmt_with_ref_server_count_zero,1);
 						free_stmt_ids.push(id);
 					}
 					map_stmt_id_to_info.erase(s3);
+					statuses.s_total -= a->ref_count_server;
 					delete a;
 					i--;
 				}
@@ -557,7 +570,15 @@ void MySQL_STMT_Manager_v14::ref_count_server(uint64_t _stmt_id ,int _v, bool lo
 	std::map<uint64_t, MySQL_STMT_Global_info *>::iterator s;
 	s = map_stmt_id_to_info.find(_stmt_id);
 	if (s != map_stmt_id_to_info.end()) {
+		statuses.s_total += _v;
 		MySQL_STMT_Global_info *stmt_info = s->second;
+		if (stmt_info->ref_count_server == 0 && _v == 1) {
+			__sync_sub_and_fetch(&num_stmt_with_ref_server_count_zero,1);
+		} else {
+			if (stmt_info->ref_count_server == 1 && _v == -1) {
+				__sync_add_and_fetch(&num_stmt_with_ref_server_count_zero,1);
+			}
+		}
 		stmt_info->ref_count_server += _v;
 	}
 	if (lock)
@@ -760,8 +781,13 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 //		                     1);  // increase reference count
 //		*is_new = true;
 		__sync_add_and_fetch(&num_stmt_with_ref_client_count_zero,1);
+		__sync_add_and_fetch(&num_stmt_with_ref_server_count_zero,1);
+	}
+	if (ret->ref_count_server == 0) {
+		__sync_sub_and_fetch(&num_stmt_with_ref_server_count_zero,1);
 	}
 	ret->ref_count_server++;
+	statuses.s_total++;
 //	__sync_fetch_and_add(&add_prepared_statement_calls, 1);
 //	__sync_fetch_and_add(&ret->ref_count_server,
 //	                     1);  // increase reference count
@@ -781,6 +807,10 @@ void MySQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
 	uint64_t s_u = 0;
 	uint64_t s_t = 0;
 	pthread_rwlock_wrlock(&rwlock_);
+	statuses.cached = map_stmt_id_to_info.size();
+	statuses.c_unique = statuses.cached - num_stmt_with_ref_client_count_zero;
+	statuses.s_unique = statuses.cached - num_stmt_with_ref_server_count_zero;
+#ifdef DEBUG
 	for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it = map_stmt_id_to_info.begin();
 	     it != map_stmt_id_to_info.end(); ++it) {
 		MySQL_STMT_Global_info *a = it->second;
@@ -797,13 +827,20 @@ void MySQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
 			m = it->first;
 		}
 	}
-	pthread_rwlock_unlock(&rwlock_);
-	*c_unique = c_u;
-	*c_total = c_t;
+	assert (c_u == statuses.c_unique);
+	assert (c_t == statuses.c_total);
+	assert (c == statuses.cached);
+	assert (s_t == statuses.s_total);
+	assert (s_u == statuses.s_unique);
 	*stmt_max_stmt_id = m;
-	*cached = c;
-	*s_unique = s_u;
-	*s_total = s_t;
+#endif
+	*stmt_max_stmt_id = next_statement_id; // this is max stmt_id, no matter if in used or not
+	*c_unique = statuses.c_unique;
+	*c_total = statuses.c_total;
+	*cached = statuses.cached;
+	*s_total = statuses.s_total;
+	*s_unique = statuses.s_unique;
+	pthread_rwlock_unlock(&rwlock_);
 }
 
 
