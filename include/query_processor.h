@@ -41,7 +41,7 @@ struct _Query_Processor_rule_t {
   char *comment; // #643
 	void *regex_engine1;
 	void *regex_engine2;
-	int hits;
+	uint64_t hits;
 	struct _Query_Processor_rule_t *parent; // pointer to parent, to speed up parent update
 };
 
