@@ -402,6 +402,7 @@ void ProxySQL_Main_init_main_modules() {
 	}
 
 	MyHGM=new MySQL_HostGroups_Manager();
+	MyHGM->init();
 	GloMTH=new MySQL_Threads_Handler();
 	GloMyLogger = new MySQL_Logger();
 	GloMyStmt=new MySQL_STMT_Manager_v14();

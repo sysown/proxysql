@@ -8,6 +8,8 @@
 #include "thread.h"
 #include "wqueue.h"
 
+#include "ev.h"
+
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
     rc=sqlite3_step(_stmt);\
@@ -28,6 +30,20 @@ class MySrvConnList;
 class MySrvC;
 class MySrvList;
 class MyHGC;
+
+//static struct ev_async * gtid_ev_async;
+
+static pthread_mutex_t ev_loop_mutex;
+
+//static std::unordered_map <string, Gtid_Server_Info *> gtid_map;
+
+static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int revents) {
+	pthread_mutex_lock(&ev_loop_mutex);
+	MyHGM->generate_mysql_gtid_executed_tables();
+	pthread_mutex_unlock(&ev_loop_mutex);
+	return;
+}
+
 
 static int wait_for_mysql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
@@ -53,6 +69,173 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	}
 }
 
+void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
+	pthread_mutex_lock(&ev_loop_mutex);
+	if (revents & EV_READ) {
+		GTID_Server_Data *sd = (GTID_Server_Data *)w->data;
+		bool rc = true;
+		rc = sd->readall();
+		if (rc == false) {
+			delete sd;
+			ev_io_stop(MyHGM->gtid_ev_loop, w);
+			free(w);
+		} else {
+			sd->dump();
+		}
+	}
+	pthread_mutex_unlock(&ev_loop_mutex);
+}
+
+void connect_cb(EV_P_ ev_io *w, int revents) {
+	struct ev_io * c = w;
+	if (revents & EV_WRITE) {
+		int optval = 0;
+		socklen_t optlen = sizeof(optval);
+		if ((getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) ||
+			(optval != 0)) {
+			/* Connection failed; try the next address in the list. */
+			int errnum = optval ? optval : errno;
+			ev_io_stop(MyHGM->gtid_ev_loop, w);
+			close(w->fd);
+			GTID_Server_Data * custom_data = (GTID_Server_Data *)w->data;
+			delete custom_data;
+			free(c);
+		} else {
+			ev_io_stop(MyHGM->gtid_ev_loop, w);
+			int fd=w->fd;
+			free(w);
+			struct ev_io * new_w = (struct ev_io*) malloc(sizeof(struct ev_io));
+			ev_io_init(new_w, reader_cb, fd, EV_READ);
+			ev_io_start(MyHGM->gtid_ev_loop, new_w);
+		}
+	}
+}
+
+struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port) {
+	struct sockaddr_in a;
+	int s;
+
+	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+		perror("socket");
+		close(s);
+		return NULL;
+	}
+	memset(&a, 0, sizeof(a));
+	a.sin_port = htons(gtid_port);
+	a.sin_family = AF_INET;
+	if (!inet_aton(address, (struct in_addr *) &a.sin_addr.s_addr)) {
+		perror("bad IP address format");
+		close(s);
+		return NULL;
+	}
+	ioctl_FIONBIO(s,1);
+
+	int status = connect(s, (struct sockaddr *) &a, sizeof(a));
+	if ((status == 0) || ((status == -1) && (errno == EINPROGRESS))) {
+		struct ev_io *c = (struct ev_io *)malloc(sizeof(struct ev_io));
+		if (c) {
+			ev_io_init(c, connect_cb, s, EV_WRITE);
+			GTID_Server_Data * custom_data = new GTID_Server_Data(c, address, gtid_port, mysql_port);
+			c->data = (void *)custom_data;
+			return c;
+		}
+		/* else error */
+	}
+	return NULL;
+}
+
+
+std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
+	std::string gtid_set;
+	for (auto it=gtid_executed.begin(); it!=gtid_executed.end(); ++it) {
+		std::string s = it->first;
+		s.insert(8,"-");
+		s.insert(13,"-");
+		s.insert(18,"-");
+		s.insert(23,"-");
+		s = s + ":";
+		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+			std::string s2 = s;
+			s2 = s2 + std::to_string(itr->first);
+			s2 = s2 + "-";
+			s2 = s2 + std::to_string(itr->second);
+			s2 = s2 + ",";
+			gtid_set = gtid_set + s2;
+		}
+	}
+	gtid_set.pop_back();
+	return gtid_set;
+}
+
+
+
+void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
+	auto it = gtid_executed.find(gtid.first);
+	if (it == gtid_executed.end())
+	{
+		gtid_executed[gtid.first].emplace_back(gtid.second, gtid.second);
+		return;
+	}
+
+	bool flag = true;
+	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
+	{
+		if (gtid.second >= itr->first && gtid.second <= itr->second)
+			return;
+		if (gtid.second + 1 == itr->first)
+		{
+			--itr->first;
+			flag = false;
+			break;
+		}
+		else if (gtid.second == itr->second + 1)
+		{
+			++itr->second;
+			flag = false;
+			break;
+		}
+		else if (gtid.second < itr->first)
+		{
+			it->second.emplace(itr, gtid.second, gtid.second);
+			return;
+		}
+	}
+
+	if (flag)
+		it->second.emplace_back(gtid.second, gtid.second);
+
+	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
+	{
+		auto next_itr = std::next(itr);
+		if (next_itr != it->second.end() && itr->second + 1 == next_itr->first)
+		{
+			itr->second = next_itr->second;
+			it->second.erase(next_itr);
+			break;
+		}
+	}
+}
+
+static void * GTID_syncer_run() {
+	//struct ev_loop * gtid_ev_loop;
+	//gtid_ev_loop = NULL;
+	MyHGM->gtid_ev_loop = ev_loop_new (EVBACKEND_POLL | EVFLAG_NOENV);
+	if (MyHGM->gtid_ev_loop == NULL) {
+		proxy_error("could not initialise GTID sync loop\n");
+		exit(EXIT_FAILURE);
+	}
+	MyHGM->gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
+	//ev_async_init(gtid_ev_async, gtid_async_cb);
+	//ev_async_start(gtid_ev_loop, gtid_ev_async);
+	ev_async_init(MyHGM->gtid_ev_async, gtid_async_cb);
+	ev_async_start(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
+	//ev_ref(gtid_ev_loop);
+	ev_run(MyHGM->gtid_ev_loop, 0);
+	//sleep(1000);
+	return NULL;
+}
+
+//static void * HGCU_thread_run() {
 static void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
 	while(1) {
@@ -380,12 +563,28 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	MyHostGroups=new PtrArray();
 	incoming_replication_hostgroups=NULL;
 	incoming_group_replication_hostgroups=NULL;
+	pthread_rwlock_init(&gtid_rwlock, NULL);
+	gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
+}
+void MySQL_HostGroups_Manager::init() {
+	//conn_reset_queue = NULL;
+	//conn_reset_queue = new wqueue<MySQL_Connection *>();
 	HGCU_thread = new std::thread(&HGCU_thread_run);
+	//pthread_create(&HGCU_thread_id, NULL, HGCU_thread_run , NULL);
+
+	// gtid initialization;
+	GTID_syncer_thread = new std::thread(&GTID_syncer_run);
+
+	//pthread_create(&GTID_syncer_thread_id, NULL, GTID_syncer_run , NULL);
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	queue.add(NULL);
 	HGCU_thread->join();
+	//pthread_join(HGCU_thread_id, NULL);
+	//pthread_join(GTID_syncer_thread_id, NULL);
+	GTID_syncer_thread->join();
+	free(gtid_ev_async);
 	while (MyHostGroups->len) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->remove_index_fast(0);
 		delete myhgc;
@@ -866,6 +1065,8 @@ bool MySQL_HostGroups_Manager::commit() {
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
 
+	ev_async_send(gtid_ev_loop, gtid_ev_async);
+
 	__sync_fetch_and_add(&status.servers_table_version,1);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
@@ -876,6 +1077,64 @@ bool MySQL_HostGroups_Manager::commit() {
 	return true;
 }
 
+
+void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
+	pthread_rwlock_wrlock(&gtid_rwlock);
+	// first, set them all as active = false
+	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
+	while(it != gtid_map.end()) {
+		GTID_Server_Data * gtid_si = it->second;
+		gtid_si->active = false;
+		it++;
+	}
+
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		MySrvC *mysrvc=NULL;
+		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+			mysrvc=myhgc->mysrvs->idx(j);
+			if (mysrvc->gtid_port) {
+				std::string s1 = mysrvc->address;
+				s1.append(":");
+				s1.append(std::to_string(mysrvc->port));
+				std::unordered_map <string, GTID_Server_Data *>::iterator it2;
+				it2 = gtid_map.find(s1);
+				GTID_Server_Data *gtid_is=NULL;
+				if (it2!=gtid_map.end()) {
+					gtid_is=it2->second;
+					gtid_is->active = true;
+				} else {
+					// we didn't find it. Create it
+					/*
+					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
+					gtid_is = new GTID_Server_Data(watcher, mysrvc->address, mysrvc->port, mysrvc->gtid_port);
+					gtid_map.emplace(s1,gtid_is);
+					*/
+					struct ev_io * c = NULL;
+					c = new_connector(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
+					if (c) {
+						gtid_is = (GTID_Server_Data *)c->data;
+						gtid_map.emplace(s1,gtid_is);
+						ev_io_start(MyHGM->gtid_ev_loop,c);
+					}
+				}
+			}
+		}
+	}
+	std::vector<string> to_remove;
+	it = gtid_map.begin();
+	while(it != gtid_map.end()) {
+		GTID_Server_Data * gtid_si = it->second;
+		if (gtid_si->active == false) {
+			to_remove.push_back(it->first);
+		}
+		it++;
+	}
+	for (std::vector<string>::iterator it3=to_remove.begin(); it3!=to_remove.end(); ++it3) {
+		gtid_map.erase(*it3);
+	}
+	pthread_rwlock_unlock(&gtid_rwlock);
+}
 
 void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
@@ -2599,4 +2858,35 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 		// we couldn't find the cluster, exits
 	}
 	pthread_mutex_unlock(&Group_Replication_Info_mutex);
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
+	const int colnum = 3;
+	SQLite3_result * result = new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"hostname");
+	result->add_column_definition(SQLITE_TEXT,"port");
+	result->add_column_definition(SQLITE_TEXT,"gtid_executed");
+	int k;
+	pthread_rwlock_wrlock(&gtid_rwlock);
+	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
+	while(it != gtid_map.end()) {
+		GTID_Server_Data * gtid_si = it->second;
+		char buf[64];
+		char **pta=(char **)malloc(sizeof(char *)*colnum);
+		pta[0]=strdup(gtid_si->address);
+		sprintf(buf,"%d", (int)gtid_si->mysql_port);
+		pta[1]=strdup(buf);
+		//sprintf(buf,"%d", mysrvc->port);
+		string s1 = gtid_executed_to_string(gtid_si->gtid_executed);
+		pta[2]=strdup(s1.c_str());
+		result->add_row(pta);
+		for (k=0; k<colnum; k++) {
+			if (pta[k])
+				free(pta[k]);
+		}
+		free(pta);
+		it++;
+	}
+	pthread_rwlock_unlock(&gtid_rwlock);
+	return result;
 }
