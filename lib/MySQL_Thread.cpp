@@ -1768,10 +1768,12 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv > 10 && intv <= 65535) {
 			variables.server_capabilities=intv;
-			if (variables.server_capabilities & CLIENT_SSL) {
+//			if (variables.server_capabilities & CLIENT_SSL) {
 				// for now disable CLIENT_SSL
-				variables.server_capabilities &= ~CLIENT_SSL;
-			}
+//				variables.server_capabilities &= ~CLIENT_SSL;
+//			}
+			variables.server_capabilities |= CLIENT_SSL;
+			
 			return true;
 		} else {
 			return false;

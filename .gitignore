@@ -113,6 +113,8 @@ deps/pcre/pcre/
 deps/curl/curl/
 deps/curl/curl-7.57.0/
 
+deps/libev/libev-4.24/
+
 #protobuf
 deps/protobuf/protobuf-2.6.1/
 
