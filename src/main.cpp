@@ -17,11 +17,14 @@
 #include <libdaemon/dexec.h>
 #include "ev.h"
 
+
 // MariaDB client library redefines dlerror(), see https://mariadb.atlassian.net/browse/CONC-101
 #ifdef dlerror
 #undef dlerror
 #endif
 
+static pthread_mutex_t *lockarray;
+#include <openssl/crypto.h>
 
 
 // this fuction will be called as a deatached thread
@@ -106,7 +109,33 @@ struct cpu_timer
 	unsigned long long begin;
 };
 
-/*
+
+static void lock_callback(int mode, int type, const char *file, int line) { 
+	(void)file;
+	(void)line;
+	if(mode & CRYPTO_LOCK) {
+		pthread_mutex_lock(&(lockarray[type]));
+	} else {
+		pthread_mutex_unlock(&(lockarray[type]));
+	}
+}
+
+static unsigned long thread_id(void) {
+	unsigned long ret;
+	ret = (unsigned long)pthread_self();
+	return ret;
+}
+
+static void init_locks(void) {
+	int i;
+	lockarray = (pthread_mutex_t *)OPENSSL_malloc(CRYPTO_num_locks() * sizeof(pthread_mutex_t));
+	for(i = 0; i<CRYPTO_num_locks(); i++) {
+		pthread_mutex_init(&(lockarray[i]), NULL);
+	}
+	CRYPTO_set_id_callback((unsigned long (*)())thread_id);
+	CRYPTO_set_locking_callback((void (*)(int, int, const char *, int))lock_callback);
+}
+
 void ProxySQL_Main_init_SSL_module() {
 	SSL_library_init();
 	SSL_METHOD *ssl_method;
@@ -131,8 +160,9 @@ void ProxySQL_Main_init_SSL_module() {
 		fprintf(stderr, "Private key does not match the public certificate\n");
 		abort();
 	}
+	init_locks();
 }
-*/
+
 
 /*
 void example_listern() {
@@ -935,6 +965,13 @@ int main(int argc, const char * argv[]) {
 		GloVars.global.start_time=monotonic_time(); // always initialize it
 #ifdef DEBUG
 		std::cerr << "Main init global variables completed in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		ProxySQL_Main_init_SSL_module();
+#ifdef DEBUG
+		std::cerr << "Main SSL init variables completed in ";
 #endif
 	}
 
