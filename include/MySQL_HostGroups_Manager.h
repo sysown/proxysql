@@ -84,6 +84,7 @@ class MySrvC {	// MySQL Server Container
 	enum MySerStatus status;
 	unsigned int compression;
 	unsigned int max_connections;
+        unsigned int max_connections_used; // The maximum number of connections that has been opened
 	unsigned int max_replication_lag;
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
@@ -105,6 +106,7 @@ class MySrvC {	// MySQL Server Container
 	~MySrvC();
 	void connect_error(int);
 	void shun_and_killall();
+        unsigned int update_max_connections_used();
 };
 
 class MySrvList {	// MySQL Server List
