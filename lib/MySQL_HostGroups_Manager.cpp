@@ -302,20 +302,6 @@ void MySrvC::shun_and_killall() {
 	shunned_and_kill_all_connections=true;
 }
 
-/**
- * Update the maximum number of used connections
- * @return 
- *  the maximum number of used connections
- */
-unsigned int MySrvC::update_max_connections_used() {
-   unsigned int connections_used =  ConnectionsUsed->conns_length();
-        
-    if (max_connections_used < connections_used)
-        max_connections_used = connections_used;
-   
-   return max_connections_used;
-}
-
 MySrvC::~MySrvC() {
 	if (address) free(address);
 	if (comment) free(comment);
@@ -1469,8 +1455,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.myconnpoll_get_ok++;
-                        mysrvc->update_max_connections_used();
-                        
+			mysrvc->update_max_connections_used();
 		}
 	}
 	wrunlock();
@@ -1650,23 +1635,24 @@ void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3
 	incoming_group_replication_hostgroups=s;
 }
 
-SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
-  const int colnum=13;
-  proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
-  SQLite3_result *result=new SQLite3_result(colnum);
-  result->add_column_definition(SQLITE_TEXT,"hostgroup");
-  result->add_column_definition(SQLITE_TEXT,"srv_host");
-  result->add_column_definition(SQLITE_TEXT,"srv_port");
-  result->add_column_definition(SQLITE_TEXT,"status");
-  result->add_column_definition(SQLITE_TEXT,"ConnUsed");
-  result->add_column_definition(SQLITE_TEXT,"ConnFree");
-  result->add_column_definition(SQLITE_TEXT,"ConnOK");
-  result->add_column_definition(SQLITE_TEXT,"ConnERR");
-  result->add_column_definition(SQLITE_TEXT,"Queries");
-  result->add_column_definition(SQLITE_TEXT,"Bytes_sent");
-  result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
-  result->add_column_definition(SQLITE_TEXT,"Latency_us");
-  result->add_column_definition(SQLITE_TEXT,"MaxConnUsed");
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset)
+{
+	const int colnum = 13;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
+	SQLite3_result *result = new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT, "hostgroup");
+	result->add_column_definition(SQLITE_TEXT, "srv_host");
+	result->add_column_definition(SQLITE_TEXT, "srv_port");
+	result->add_column_definition(SQLITE_TEXT, "status");
+	result->add_column_definition(SQLITE_TEXT, "ConnUsed");
+	result->add_column_definition(SQLITE_TEXT, "ConnFree");
+	result->add_column_definition(SQLITE_TEXT, "ConnOK");
+	result->add_column_definition(SQLITE_TEXT, "ConnERR");
+	result->add_column_definition(SQLITE_TEXT, "Queries");
+	result->add_column_definition(SQLITE_TEXT, "Bytes_sent");
+	result->add_column_definition(SQLITE_TEXT, "Bytes_recv");
+	result->add_column_definition(SQLITE_TEXT, "Latency_us");
+	result->add_column_definition(SQLITE_TEXT, "MaxConnUsed");
 	wrlock();
 	int i,j, k;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -1742,9 +1728,12 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
 				mysrvc->bytes_recv=0;
 			}
 			sprintf(buf,"%u", mysrvc->current_latency_us);
-			pta[11]=strdup(buf);
-                        sprintf(buf,"%u", mysrvc->max_connections_used);
-                        pta[12]=strdup(buf);
+			pta[11] = strdup(buf);
+			sprintf(buf, "%u", mysrvc->max_connections_used);
+			pta[12] = strdup(buf);
+			if (_reset) {
+				mysrvc->max_connections_used=0;
+			}
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])
