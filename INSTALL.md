@@ -18,9 +18,10 @@ Make sure you have installed the equivalent for each of these packages for your 
 - g++
 - gcc
 - git
-- openssl
-- openssl-devel
 - patch
+- openssl
+- openssl-devel   # RHEL based
+- libssl-dev      # Debian based
 
 Go to the directory where you cloned the repo (or unpacked the tarball) and run:
 
