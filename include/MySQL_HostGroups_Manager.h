@@ -64,6 +64,13 @@ class GTID_Server_Data {
 	char uuid_server[64];
 	gtid_set_t gtid_executed;
 	bool active;
+	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
+	void resize(size_t _s);
+	~GTID_Server_Data();
+	bool readall();
+	bool writeout();
+	bool read_next_gtid();
+/*
 	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port) {
 		active = true;
 		w = _w;
@@ -99,8 +106,9 @@ class GTID_Server_Data {
 			len += rc;
 		} else {
 			int myerr = errno;
+			fprintf(stderr,"read returned %d bytes, error %d\n", rc, myerr);
 			if (
-				(rc == 0) ||
+				//(rc == 0) ||
 				(rc==-1 && myerr != EINTR && myerr != EAGAIN)
 			) {
 				ret = false;
@@ -174,7 +182,7 @@ class GTID_Server_Data {
 						uint64_t trx_from;
 						uint64_t trx_to;
 						sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
-						fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server, trx_from, trx_to);
+						//fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server, trx_from, trx_to);
 						std::string s = uuid_server;
 						gtid_executed[s].emplace_back(trx_from, trx_to);
 					}
@@ -220,6 +228,28 @@ class GTID_Server_Data {
 		std::cout << "current pos " << gtid_executed_to_string(gtid_executed) << std::endl << std::endl;
 		return true;
 	}
+*/
+	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
+	void read_all_gtids();
+	void dump();
+/*
+	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
+		std::string s = gtid_uuid;
+		auto it = gtid_executed.find(s);
+		fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
+		if (it == gtid_executed.end()) {
+			fprintf(stderr,"NO\n");
+			return false;
+		}
+		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+			if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
+				fprintf(stderr,"YES\n");
+				return true;
+			}
+		}
+		fprintf(stderr,"NO\n");
+		return false;
+	}
 	void read_all_gtids() {
 		while (read_next_gtid()) {
 		}
@@ -238,6 +268,7 @@ class GTID_Server_Data {
 			pos = 0;
 		}
 	}
+*/
 };
 
 
@@ -330,7 +361,7 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
-	MySrvC *get_random_MySrvC();
+	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid);
 };
 
 class Group_Replication_Info {
@@ -442,7 +473,7 @@ class MySQL_HostGroups_Manager {
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int, bool ff=false);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int, bool ff, char * gtid_uuid, uint64_t gtid_trxid);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
@@ -467,6 +498,7 @@ class MySQL_HostGroups_Manager {
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
+	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

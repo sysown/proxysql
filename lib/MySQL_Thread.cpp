@@ -4504,16 +4504,42 @@ void MySQL_Thread::Get_Memory_Stats() {
 }
 
 
-MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid) {
+MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Data_Stream *client_myds, char *gtid_uuid, uint64_t gtid_trxid) {
 	unsigned int i;
+	std::vector<MySrvC *> parents;
 	MySQL_Connection *c=NULL;
+//	MySQL_Connection *_candidate = NULL; // this will be used when we will pass optional parameters
 	for (i=0; i<cached_connections->len; i++) {
 		c=(MySQL_Connection *)cached_connections->index(i);
 		if (c->parent->myhgc->hid==_hid) {
-			c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
-			return c;
+			if (gtid_uuid) {
+				// we first check if we already excluded this parent (MySQL Server)
+				MySrvC *mysrvc = c->parent;
+				std::vector<MySrvC *>::iterator it;
+				it = find(parents.begin(), parents.end(), mysrvc);
+				if (it != parents.end()) {
+					// we didn't exclude this server (yet?)
+					bool gtid_found = false;
+					gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
+					if (gtid_found) {
+						c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+						return c;
+					} else {
+						parents.push_back(mysrvc); // stop evaluating this server
+//						if (_candidate == NULL) {
+//							_candidate = c; // this server is a potential candidate
+//						}
+					}
+				}
+			} else {
+				c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+				return c;
+			}
 		}
 	}
+//	if (_candidate) {
+//		return _candidate;
+//	}
 	return NULL;
 }
 
