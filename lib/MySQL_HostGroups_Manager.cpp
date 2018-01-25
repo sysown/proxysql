@@ -18,6 +18,15 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
+#define SAFE_SQLITE3_STEP2(_stmt) do {\
+        do {\
+                rc=sqlite3_step(_stmt);\
+                if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
+                        usleep(100);\
+                }\
+        } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
+} while (0)
+
 extern ProxySQL_Admin *GloAdmin;
 
 extern MySQL_Threads_Handler *GloMTH;
@@ -459,7 +468,7 @@ bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t 
 	rc=sqlite3_bind_int64(statement, 10, _max_latency_ms); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 11, comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 
-	SAFE_SQLITE3_STEP(statement);
+	SAFE_SQLITE3_STEP2(statement);
 	rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 	rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 	sqlite3_finalize(statement);
@@ -515,7 +524,7 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 			rc=sqlite3_bind_int64(statement32, (idx*11)+10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_text(statement32, (idx*11)+11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 			if (idx==31) {
-				SAFE_SQLITE3_STEP(statement32);
+				SAFE_SQLITE3_STEP2(statement32);
 				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
 			}
@@ -531,7 +540,7 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 			rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_text(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement1);
+			SAFE_SQLITE3_STEP2(statement1);
 			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 		}
@@ -644,7 +653,7 @@ bool MySQL_HostGroups_Manager::commit() {
 				rc=sqlite3_bind_int64(statement1, 2, atoi(r->fields[0])); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement1, 3,  r->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement1, 4, atoi(r->fields[2])); assert(rc==SQLITE_OK);
-				SAFE_SQLITE3_STEP(statement1);
+				SAFE_SQLITE3_STEP2(statement1);
 				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 			} else {
@@ -700,7 +709,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					rc=sqlite3_bind_int64(statement2, 9, mysrvc->myhgc->hid); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_text(statement2, 10,  mysrvc->address, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_int64(statement2, 11, mysrvc->port); assert(rc==SQLITE_OK);
-					SAFE_SQLITE3_STEP(statement2);
+					SAFE_SQLITE3_STEP2(statement2);
 					rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
 					rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
 				}
@@ -961,7 +970,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 					rc=sqlite3_bind_text(statement32, (i*12)+11, mysrvc->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_int64(statement32, (i*12)+12, ptr); assert(rc==SQLITE_OK);
 				}
-				SAFE_SQLITE3_STEP(statement32);
+				SAFE_SQLITE3_STEP2(statement32);
 				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
 			}
@@ -983,7 +992,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		rc=sqlite3_bind_text(statement1, 11, mysrvc->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement1, 12, ptr); assert(rc==SQLITE_OK);
 
-		SAFE_SQLITE3_STEP(statement1);
+		SAFE_SQLITE3_STEP2(statement1);
 		rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 	}
@@ -1078,7 +1087,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		rc=sqlite3_bind_int64(statement, 8, max_transactions_behind); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 
-		SAFE_SQLITE3_STEP(statement);
+		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		std::map<int , Group_Replication_Info *>::iterator it2;
