@@ -50,6 +50,41 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
+<<<<<<< HEAD
+=======
+#define SAFE_SQLITE3_STEP2(_stmt) do {\
+        do {\
+                rc=sqlite3_step(_stmt);\
+                if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
+                        usleep(100);\
+                }\
+        } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
+} while (0)
+
+/*
+static void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
+	unsigned char ch;
+	size_t i, j;
+
+	for (i=0, j=0; i<l; i++, j+=2) {
+		ch=string[i];
+		ch = ch >> 4;
+		if (ch <= 9) {
+			hexstring[j]= '0' + ch;
+		} else {
+			hexstring[j]= 'A' + ch - 10;
+		}
+		ch = string[i];
+		ch = ch & 0x0F;
+		if (ch <= 9) {
+			hexstring[j+1]= '0' + ch;
+		} else {
+			hexstring[j+1]= 'A' + ch - 10;
+		}
+	}
+}
+*/
+>>>>>>> 9b3fffd... Removing SQLLite lock assertion
 
 struct cpu_timer
 {
