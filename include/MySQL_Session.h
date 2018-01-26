@@ -172,6 +172,9 @@ class MySQL_Session
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, of if proysql is still buffering everything
 
+
+	bool with_gtid;
+
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
 
