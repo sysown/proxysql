@@ -710,6 +710,9 @@ handler_again:
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.length);
 			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
+			if (myds->sess->with_gtid == true) {
+				__sync_fetch_and_add(&parent->queries_gtid_sync,1);
+			}
 			if (async_exit_status) {
 				next_event(ASYNC_QUERY_CONT);
 			} else {

@@ -317,6 +317,7 @@ class MySrvC {	// MySQL Server Container
 	unsigned int compression;
 	unsigned int max_connections;
 	unsigned int max_replication_lag;
+	unsigned int max_connections_used; // The maximum number of connections that has been opened
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
 	// note that these variables are in microsecond, while user defines max lantency in millisecond
@@ -325,6 +326,7 @@ class MySrvC {	// MySQL Server Container
 	time_t time_last_detected_error;
 	unsigned int connect_ERR_at_time_last_detected_error;
 	unsigned long long queries_sent;
+	unsigned long long queries_gtid_sync;
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
 	bool shunned_automatic;
@@ -337,6 +339,18 @@ class MySrvC {	// MySQL Server Container
 	~MySrvC();
 	void connect_error(int);
 	void shun_and_killall();
+	/**
+	 * Update the maximum number of used connections
+	 * @return 
+	 *  the maximum number of used connections
+	 */
+	unsigned int update_max_connections_used()
+	{
+		unsigned int connections_used = ConnectionsUsed->conns_length();
+		if (max_connections_used < connections_used)
+			max_connections_used = connections_used;
+		return max_connections_used;
+	}
 };
 
 class MySrvList {	// MySQL Server List

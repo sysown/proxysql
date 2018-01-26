@@ -652,6 +652,8 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	queries_sent=0;
 	bytes_sent=0;
 	bytes_recv=0;
+	max_connections_used=0;
+	queries_gtid_sync=0;
 	time_last_detected_error=0;
 	connect_ERR_at_time_last_detected_error=0;
 	shunned_automatic=false;
@@ -2030,6 +2032,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.myconnpoll_get_ok++;
+			mysrvc->update_max_connections_used();
 		}
 	}
 	wrunlock();
@@ -2210,7 +2213,7 @@ void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
-  const int colnum=12;
+  const int colnum=14;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
   result->add_column_definition(SQLITE_TEXT,"hostgroup");
@@ -2221,7 +2224,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
   result->add_column_definition(SQLITE_TEXT,"ConnFree");
   result->add_column_definition(SQLITE_TEXT,"ConnOK");
   result->add_column_definition(SQLITE_TEXT,"ConnERR");
+  result->add_column_definition(SQLITE_TEXT,"MaxConnUsed");
   result->add_column_definition(SQLITE_TEXT,"Queries");
+  result->add_column_definition(SQLITE_TEXT,"Queries_GTID_sync");
   result->add_column_definition(SQLITE_TEXT,"Bytes_sent");
   result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
   result->add_column_definition(SQLITE_TEXT,"Latency_us");
@@ -2284,23 +2289,33 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
 			if (_reset) {
 				mysrvc->connect_ERR=0;
 			}
-			sprintf(buf,"%llu", mysrvc->queries_sent);
+			sprintf(buf,"%u", mysrvc->max_connections_used);
 			pta[8]=strdup(buf);
+			if (_reset) {
+				mysrvc->max_connections_used=0;
+			}
+			sprintf(buf,"%llu", mysrvc->queries_sent);
+			pta[9]=strdup(buf);
 			if (_reset) {
 				mysrvc->queries_sent=0;
 			}
+			sprintf(buf,"%llu", mysrvc->queries_gtid_sync);
+			pta[10]=strdup(buf);
+			if (_reset) {
+				mysrvc->queries_gtid_sync=0;
+			}
 			sprintf(buf,"%llu", mysrvc->bytes_sent);
-			pta[9]=strdup(buf);
+			pta[11]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_sent=0;
 			}
 			sprintf(buf,"%llu", mysrvc->bytes_recv);
-			pta[10]=strdup(buf);
+			pta[12]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_recv=0;
 			}
 			sprintf(buf,"%u", mysrvc->current_latency_us);
-			pta[11]=strdup(buf);
+			pta[13]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
 				if (pta[k])

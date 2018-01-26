@@ -273,6 +273,8 @@ MySQL_Session::MySQL_Session() {
 	mirror_flagOUT=-1;
 	active_transactions=0;
 
+	with_gtid = false;
+
 	match_regexes=NULL;
 /*
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
@@ -3821,7 +3823,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
 	
-		bool with_gtid = false;
+		with_gtid = false;
 		MySQL_Connection *mc=NULL;
 		MySQL_Backend * _gtid_from_backend = NULL;
 		char uuid[64];
