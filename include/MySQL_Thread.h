@@ -216,6 +216,7 @@ class MySQL_Thread
 		unsigned long long frontend_stmt_close;
 		unsigned long long queries;
 		unsigned long long queries_slow;
+		unsigned long long queries_gtid;
 		unsigned long long queries_backends_bytes_sent;
 		unsigned long long queries_backends_bytes_recv;
 		unsigned long long query_processor_time;
@@ -226,6 +227,8 @@ class MySQL_Thread
 		unsigned long long ConnPool_get_conn_immediate;
 		unsigned long long ConnPool_get_conn_success;
 		unsigned long long ConnPool_get_conn_failure;
+		unsigned long long gtid_binlog_collected;
+		unsigned long long gtid_session_collected;
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -459,6 +462,8 @@ class MySQL_Threads_Handler
 	unsigned long long get_total_frontend_stmt_close();
 	unsigned long long get_total_queries();
 	unsigned long long get_slow_queries();
+	unsigned long long get_gtid_queries();
+	unsigned long long get_gtid_session_collected();
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
 	unsigned int get_active_transations();

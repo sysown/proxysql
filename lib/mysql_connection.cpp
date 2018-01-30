@@ -1716,7 +1716,8 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 		if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
 			memcpy(buff,data,length);
 			buff[length]=0;
-			fprintf(stderr,"GTID=%s\n",buff);
+			//fprintf(stderr,"GTID=%s\n",buff);
+			__sync_fetch_and_add(&myds->sess->thread->status_variables.gtid_session_collected,1);
 			ret = true;
 		}
 	}

@@ -62,6 +62,7 @@ class GTID_Server_Data {
 	size_t pos;
 	struct ev_io *w;
 	char uuid_server[64];
+	unsigned long long events_read;
 	gtid_set_t gtid_executed;
 	bool active;
 	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
