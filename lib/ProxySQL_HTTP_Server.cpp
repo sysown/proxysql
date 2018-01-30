@@ -635,27 +635,33 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			free(ts);
 
 
-			nm = (char **)malloc(sizeof(char *)*4);
+			nm = (char **)malloc(sizeof(char *)*6);
 			nm[0] = (char *)"ConnPool_get_conn_failure";
 			nm[1] = (char *)"ConnPool_get_conn_immediate";
 			nm[2] = (char *)"ConnPool_get_conn_success";
 			nm[3] = (char *)"Questions";
-			nl = (char **)malloc(sizeof(char *)*4);
+			nm[4] = (char *)"Slow_queries";
+			nm[5] = (char *)"GTID_consistent_queries";
+			nl = (char **)malloc(sizeof(char *)*6);
 			nl[0] = (char *)"ConnPool failure";
 			nl[1] = (char *)"ConnPool immediate";
 			nl[2] = (char *)"ConnPool success";
 			nl[3] = (char *)"Questions";
-			nv = (char **)malloc(sizeof(char *)*4);
+			nl[4] = (char *)"Slow Queries";
+			nl[5] = (char *)"GTID Consistent Queries";
+			nv = (char **)malloc(sizeof(char *)*6);
 			nv[0] = extract_values(mysql_metrics_sqlite,8,true);
 			nv[1] = extract_values(mysql_metrics_sqlite,9,true);
 			nv[2] = extract_values(mysql_metrics_sqlite,10,true);
 			nv[3] = extract_values(mysql_metrics_sqlite,11,true);
+			nv[4] = extract_values(mysql_metrics_sqlite,12,true);
+			nv[5] = extract_values(mysql_metrics_sqlite,13,true);
 			ts = extract_ts(mysql_metrics_sqlite,true);
-			s1 = generate_chart((char *)"myChart2",ts,4,nm,nl,nv);
+			s1 = generate_chart((char *)"myChart2",ts,6,nm,nl,nv);
 			s->append(s1->c_str());
 			free(nm);
 			free(nl);
-			for (int aa=0 ; aa<4 ; aa++) {
+			for (int aa=0 ; aa<6 ; aa++) {
 				free(nv[aa]);
 			}
 			free(nv);

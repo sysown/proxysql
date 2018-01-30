@@ -3430,6 +3430,7 @@ MySQL_Thread::MySQL_Thread() {
 
 	status_variables.queries=0;
 	status_variables.queries_slow=0;
+	status_variables.queries_gtid=0;
 	status_variables.queries_backends_bytes_sent=0;
 	status_variables.queries_backends_bytes_recv=0;
 	status_variables.queries_frontends_bytes_sent=0;
@@ -3443,6 +3444,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.ConnPool_get_conn_success=0;
 	status_variables.ConnPool_get_conn_failure=0;
 	status_variables.active_transactions=0;
+	status_variables.gtid_session_collected = 0;
 
 	match_regexes=NULL;
 
@@ -3795,6 +3797,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Slow queries
 		pta[0]=(char *)"Slow_queries";
 		sprintf(buf,"%llu",get_slow_queries());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries with GTID consistent read
+		pta[0]=(char *)"GTID_consistent_queries";
+		sprintf(buf,"%llu",get_gtid_queries());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries with GTID session state
+		pta[0]=(char *)"GTID_session_collected";
+		sprintf(buf,"%llu",get_gtid_session_collected());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -4372,6 +4386,32 @@ unsigned long long MySQL_Threads_Handler::get_slow_queries() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_slow,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_gtid_queries() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.queries_gtid,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_gtid_session_collected() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.gtid_session_collected,0);
 		}
 	}
 	return q;

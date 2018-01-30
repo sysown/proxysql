@@ -145,6 +145,9 @@ void Query_Info::end() {
 	if ((end_time-start_time) > (unsigned int)mysql_thread___long_query_time*1000) {
 		__sync_add_and_fetch(&sess->thread->status_variables.queries_slow,1);
 	}
+	if (sess->with_gtid) {
+		__sync_add_and_fetch(&sess->thread->status_variables.queries_gtid,1);
+	}
 	assert(mysql_stmt==NULL);
 	if (stmt_info) {
 		stmt_info=NULL;

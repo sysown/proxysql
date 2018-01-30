@@ -179,6 +179,7 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	address = strdup(_address);
 	port = _port;
 	mysql_port = _mysql_port;
+	events_read = 0;
 }
 
 void GTID_Server_Data::resize(size_t _s) {
@@ -221,18 +222,18 @@ bool GTID_Server_Data::readall() {
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
 	std::string s = gtid_uuid;
 	auto it = gtid_executed.find(s);
-	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
+//	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
 	if (it == gtid_executed.end()) {
-		fprintf(stderr,"NO\n");
+//		fprintf(stderr,"NO\n");
 		return false;
 	}
 	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
 		if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
-			fprintf(stderr,"YES\n");
+//			fprintf(stderr,"YES\n");
 			return true;
 		}
 	}
-	fprintf(stderr,"NO\n");
+//	fprintf(stderr,"NO\n");
 	return false;
 }
 
@@ -359,14 +360,15 @@ bool GTID_Server_Data::read_next_gtid() {
 				default:
 					break;
 			}
-			fprintf(stdout,"%s:%lu\n", uuid_server, rec_trxid);
+			//fprintf(stdout,"%s:%lu\n", uuid_server, rec_trxid);
 			std::string s = uuid_server;
 			gtid_t new_gtid = std::make_pair(s,rec_trxid);
 			addGtid(new_gtid,gtid_executed);
+			events_read++;
 			//return true;
 		}
 	}
-	std::cout << "current pos " << gtid_executed_to_string(gtid_executed) << std::endl << std::endl;
+	//std::cout << "current pos " << gtid_executed_to_string(gtid_executed) << std::endl << std::endl;
 	return true;
 }
 
@@ -1341,7 +1343,7 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 			ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
 		}
 	}	
-	proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
+	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
 	pthread_rwlock_unlock(&gtid_rwlock);
 	return ret;
 }
@@ -3238,11 +3240,12 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
-	const int colnum = 3;
+	const int colnum = 4;
 	SQLite3_result * result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"hostname");
 	result->add_column_definition(SQLITE_TEXT,"port");
 	result->add_column_definition(SQLITE_TEXT,"gtid_executed");
+	result->add_column_definition(SQLITE_TEXT,"events");
 	int k;
 	pthread_rwlock_wrlock(&gtid_rwlock);
 	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
@@ -3256,6 +3259,8 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 		//sprintf(buf,"%d", mysrvc->port);
 		string s1 = gtid_executed_to_string(gtid_si->gtid_executed);
 		pta[2]=strdup(s1.c_str());
+		sprintf(buf,"%llu", (int)gtid_si->events_read);
+		pta[3]=strdup(buf);
 		result->add_row(pta);
 		for (k=0; k<colnum; k++) {
 			if (pta[k])
