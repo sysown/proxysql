@@ -108,21 +108,21 @@ void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections in progress\n");
-		statsdb_disk->execute("ALTER TABLE mysql_connections ADD COLUMN GTID_consistent_queries INT NOT NULL");
+		statsdb_disk->execute("ALTER TABLE mysql_connections ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections completed\n");
 	}
 	rci=statsdb_disk->check_table_structure((char *)"mysql_connections_hour",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections_hour\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_hour in progress\n");
-		statsdb_disk->execute("ALTER TABLE mysql_connections_hour ADD COLUMN GTID_consistent_queries INT NOT NULL");
+		statsdb_disk->execute("ALTER TABLE mysql_connections_hour ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_hour completed\n");
 	}
 	rci=statsdb_disk->check_table_structure((char *)"mysql_connections_day",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections_day\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day in progress\n");
-		statsdb_disk->execute("ALTER TABLE mysql_connections_day ADD COLUMN GTID_consistent_queries INT NOT NULL");
+		statsdb_disk->execute("ALTER TABLE mysql_connections_day ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day completed\n");
 	}
 }
