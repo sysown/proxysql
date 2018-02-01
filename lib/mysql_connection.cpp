@@ -1550,7 +1550,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		}
 		if (strncasecmp(query_digest_text,"SET ",4)==0) {
 			// For issue #555 , multiplexing is disabled if --safe-updates is used (see session_vars definition)
-			for (unsigned int i = 0; i < sizeof(session_vars); i++) {
+			for (unsigned int i = 0; i < sizeof(session_vars)/sizeof(char *); i++) {
 				if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
 					set_status_user_variable(true);
 					break;
