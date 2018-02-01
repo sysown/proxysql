@@ -42,6 +42,14 @@ static MySQL_Monitor *GloMyMon;
 	} while (rc!=SQLITE_DONE);\
 } while (0)
 
+#define SAFE_SQLITE3_STEP2(_stmt) do {\
+        do {\
+                rc=sqlite3_step(_stmt);\
+                if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
+                        usleep(100);\
+                }\
+        } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
+} while (0)
 
 class ConsumerThread : public Thread {
 	wqueue<WorkItem*>& m_queue;
@@ -387,7 +395,7 @@ void * monitor_connect_thread(void *arg) {
 	rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-	SAFE_SQLITE3_STEP(statement);
+	SAFE_SQLITE3_STEP2(statement);
 	rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 	rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 	sqlite3_finalize(statement);
@@ -466,7 +474,7 @@ __exit_monitor_ping_thread:
 		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		SAFE_SQLITE3_STEP(statement);
+		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
@@ -675,7 +683,7 @@ __exit_monitor_read_only_thread:
 			rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 		}
 		rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		SAFE_SQLITE3_STEP(statement);
+		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 
@@ -916,7 +924,7 @@ __end_process_group_replication_result:
 			rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 		}
 		rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		SAFE_SQLITE3_STEP(statement);
+		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 
@@ -1089,7 +1097,7 @@ __exit_monitor_replication_lag_thread:
 					rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 				}
 				rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				SAFE_SQLITE3_STEP(statement);
+				SAFE_SQLITE3_STEP2(statement);
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
@@ -1207,7 +1215,7 @@ __end_monitor_connect_loop:
 			}
 			unsigned long long time_now=realtime_time();
 			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement);
+			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
@@ -1315,7 +1323,7 @@ __end_monitor_ping_loop:
 			}
 			unsigned long long time_now=realtime_time();
 			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement);
+			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
@@ -1533,7 +1541,7 @@ __end_monitor_read_only_loop:
 			}
 			unsigned long long time_now=realtime_time();
 			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement);
+			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
@@ -1658,7 +1666,7 @@ __end_monitor_group_replication_loop:
 			}
 			unsigned long long time_now=realtime_time();
 			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement);
+			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
@@ -1769,7 +1777,7 @@ __end_monitor_replication_lag_loop:
 			}
 			unsigned long long time_now=realtime_time();
 			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement);
+			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 			sqlite3_finalize(statement);
@@ -1997,7 +2005,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 				rc=sqlite3_bind_text(statement1, 6, ( node->last_entries[i].read_only ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement1, 7, node->last_entries[i].transactions_behind ); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement1, 8, node->last_entries[i].error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				SAFE_SQLITE3_STEP(statement1);
+				SAFE_SQLITE3_STEP2(statement1);
 				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 			}
