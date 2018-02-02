@@ -5,7 +5,9 @@
 #include "cpp.h"
 
 
-#define QUEUE_T_DEFAULT_SIZE	32768
+//#define QUEUE_T_DEFAULT_SIZE	32768
+#define QUEUE_T_DEFAULT_SIZE	8192
+#define MY_SSL_BUFFER	8192
 
 typedef struct _queue_t {
 	void *buffer;
@@ -43,12 +45,16 @@ class MyDS_real_query {
 	}
 };
 
+enum sslstatus { SSLSTATUS_OK, SSLSTATUS_WANT_IO, SSLSTATUS_FAIL};
+
 class MySQL_Data_Stream
 {
 	private:
 	int array2buffer();
 	int buffer2array();
 	void generate_compressed_packet();
+	enum sslstatus do_ssl_handshake();
+	void queue_encrypted_bytes(const char *buf, size_t len);
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
@@ -90,6 +96,10 @@ class MySQL_Data_Stream
 	MySQL_Session *sess;  // pointer to the session using this data stream
 	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
 	SSL *ssl;
+	BIO *rbio_ssl;
+	BIO *wbio_ssl;
+	char *ssl_write_buf;
+	size_t ssl_write_len;
 	struct sockaddr *client_addr;
 
 	struct {
