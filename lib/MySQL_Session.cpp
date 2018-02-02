@@ -1957,7 +1957,8 @@ __get_pkts_from_client:
 						handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
 						break;
 					case STATE_SSL_INIT:
-						handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(&pkt);
+						handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
+						//handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(&pkt);
 						break;
 					default:
 						proxy_error("Detected not valid state client state: %d\n", client_myds->DSS);
@@ -3186,8 +3187,59 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 }
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
+	bool is_encrypted = client_myds->encrypted;
+	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
+	
+	if (
+		(is_encrypted == false) && // the connection was encrypted
+		(handshake_response_return == false) && // the authentication didn't complete
+		(client_myds->encrypted == true) // client is asking for encryption
+	) {
+		// use SSL
+		client_myds->DSS=STATE_SSL_INIT;
+		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
+		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+		client_myds->ssl=SSL_new(GloVars.global.ssl_ctx);
+		SSL_set_fd(client_myds->ssl, client_myds->fd);
+		SSL_set_accept_state(client_myds->ssl); 
+		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+/*
+		while (!SSL_is_init_finished(client_myds->ssl)) {
+            int ret = SSL_do_handshake(client_myds->ssl);
+            int ret2;
+            if (ret != 1) {
+                //ERR_print_errors_fp(stderr);
+                ret2 = SSL_get_error(client_myds->ssl, ret);
+                fprintf(stderr,"%d\n",ret2);
+            }
+
+		}			
+*/
+//		if (!SSL_is_init_finished(client_myds->ssl)) {
+//			int n = SSL_do_handshake(client_myds->ssl);
+//			
+//		}
+		//ioctl_FIONBIO(client_myds->fd,0);
+
+//		bool connected = false;
+//		while (connected) {	
+//		if (!SSL_accept(client_myds->ssl)==-1) {
+//		if (SSL_do_handshake(client_myds->ssl)==-1) {
+//			ERR_print_errors_fp(stderr);
+//		} else {
+//			connected = true;
+//		}
+//		}
+		//ioctl_FIONBIO(client_myds->fd,1);
+		//int my_ssl_error;
+		//int n = SSL_accept(client_myds->ssl);
+		//my_ssl_error = SSL_get_error(client_mmyds->ssl);
+		return;
+	}
+
 	if ( 
-		(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) 
+		//(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) 
+		(handshake_response_return == true) 
 		&&
 		(
 			//(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
@@ -3213,7 +3265,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			}
 		}
 		l_free(pkt->size,pkt->ptr);
-		if (client_myds->encrypted==false) {
+		//if (client_myds->encrypted==false) {
 			if (client_myds->myconn->userinfo->schemaname==NULL) {
 				client_myds->myconn->userinfo->set_schemaname(default_schema,strlen(default_schema));
 			}
@@ -3303,25 +3355,26 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						(strcmp(client_addr,(char *)"::1")==0)
 					) {
 						// we are good!
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
 					} else {
 						char *a=(char *)"User '%s' can only connect locally";
 						char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username));
 						sprintf(b,a,client_myds->myconn->userinfo->username);
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"42000", b);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1040,(char *)"42000", b);
 						free(b);
 					}
 					free(client_addr);
 				} else {
 					// we are good!
-					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
 					status=WAITING_CLIENT_DATA;
 					client_myds->DSS=STATE_CLIENT_AUTH_OK;
 				}
 			}
-		} else {
+//		} else {
+/*
 			// use SSL
 			client_myds->DSS=STATE_SSL_INIT;
 			client_myds->ssl=SSL_new(GloVars.global.ssl_ctx);
@@ -3331,7 +3384,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				ERR_print_errors_fp(stderr);
 			}
 			ioctl_FIONBIO(client_myds->fd,1);
-		}
+*/
+//		}
 	} else {
 		l_free(pkt->size,pkt->ptr);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
@@ -3365,18 +3419,19 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		} else {
 			client_addr = strdup((char *)"");
 		}
-		if (client_myds->encrypted == false) {
+		//if (client_myds->encrypted == false) {
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
 		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 		free(_s);
 		client_myds->DSS=STATE_SLEEP;
-		}
+		//}
 	}
 }
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(PtrSize_t *pkt) {
+/*
 	if (client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) {
 		l_free(pkt->size,pkt->ptr);
 		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,3,0,0,0,0,NULL);
@@ -3389,6 +3444,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(PtrSize_
 		perror("Hitting a not implemented feature: https://github.com/sysown/proxysql-0.2/issues/124");
 		assert(0);
 	}	
+*/
 }
 
 

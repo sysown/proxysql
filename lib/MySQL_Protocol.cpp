@@ -1329,14 +1329,21 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pkt     += sizeof(uint32_t);
 	charset  = *(uint8_t *)pkt;
 	// see bug #810
+	if ( (*myds)->encrypted == false ) { // client wants to use SSL
+		if (len == sizeof(mysql_hdr)+32) {
+			(*myds)->encrypted = true;
+			use_ssl = true;
+			return false;
+		}
+	}
 	if (charset==0) {
 		charset=mysql_thread___default_charset;
 	}
 	pkt     += 24;
-	if (len==sizeof(mysql_hdr)+32) {
-		(*myds)->encrypted=true;
-		use_ssl=true;
-	} else {
+//	if (len==sizeof(mysql_hdr)+32) {
+//		(*myds)->encrypted=true;
+//		use_ssl=true;
+//	} else {
 	user     = pkt;
 	pkt     += strlen((char *)user) + 1;
 
@@ -1412,20 +1419,21 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
 						}
-						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+						if (userinfo->sha1_pass)
+							free(userinfo->sha1_pass);
 						userinfo->sha1_pass=sha1_pass_hex(reply);
-					}
 					}
 				}
 			}
 		}
-		if (_ret_use_ssl==true) {
-			// if we reached here, use_ssl is false , but _ret_use_ssl is true
-			// it means that a client is required to use SSL , but it is not
-			ret=false;
-		}
 	}
-  proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
+//	if (_ret_use_ssl==true) {
+//		// if we reached here, use_ssl is false , but _ret_use_ssl is true
+//		// it means that a client is required to use SSL , but it is not
+//		ret=false;
+//	}
+//	}
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" scramble:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
             (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
 	assert(sess);
 	assert(sess->client_myds);
