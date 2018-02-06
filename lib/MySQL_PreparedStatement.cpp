@@ -136,6 +136,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
                                                char *u, char *s, char *q,
                                                unsigned int ql,
                                                MYSQL_STMT *stmt, uint64_t _h) {
+	pthread_rwlock_init(&rwlock_, NULL);
 	statement_id = id;
 	hostgroup_id = h;
 	ref_count_client = 0;
@@ -221,6 +222,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 void MySQL_STMT_Global_info::update_metadata(MYSQL_STMT *stmt) {
 	int i;
 	bool need_refresh = false;
+	pthread_rwlock_wrlock(&rwlock_);
 	if (
 		(num_params != stmt->param_count)
 		||
@@ -400,6 +402,7 @@ void MySQL_STMT_Global_info::update_metadata(MYSQL_STMT *stmt) {
 		}
 // till here is copied from constructor
 	}
+	pthread_rwlock_unlock(&rwlock_);
 }
 
 MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {

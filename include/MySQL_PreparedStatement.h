@@ -42,6 +42,7 @@ class MySQL_STMT_Global_info {
 	private:
 	void compute_hash();
 	public:
+	pthread_rwlock_t rwlock_;
 	uint64_t digest;
 	MYSQL_COM_QUERY_command MyComQueryCmd;
 	char * digest_text;
