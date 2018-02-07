@@ -104,7 +104,7 @@ stop() {
 		exit 0
 	else
 		# Note: we send a kill to all the processes, not just to the child
-		for i in `pgrep proxysql` ; do
+		for i in `pgrep -x proxysql` ; do
 			if [ "$i" != "$$" ]; then
 				kill $i
 			fi
