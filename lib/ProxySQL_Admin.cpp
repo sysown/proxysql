@@ -5023,6 +5023,24 @@ void ProxySQL_Admin::stats___mysql_global() {
 	}
 	delete resultset;
 	resultset=NULL;
+
+	resultset=MyHGM->SQL3_Get_ConnPool_Stats();
+	if (resultset) {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			int arg_len=0;
+			for (int i=0; i<2; i++) {
+				arg_len+=strlen(r->fields[i]);
+			}
+			char *query=(char *)malloc(strlen(a)+arg_len+32);
+			sprintf(query,a,r->fields[0],r->fields[1]);
+			statsdb->execute(query);
+			free(query);
+		}
+		delete resultset;
+		resultset=NULL;
+	}
+
 	int highwater;
 	int current;
 	sqlite3_status(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);

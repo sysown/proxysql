@@ -342,6 +342,15 @@ int MySQL_Data_Stream::write_to_net() {
 		if (mypolls) mypolls->last_sent[poll_fds_idx]=sess->thread->curtime;
 		bytes_info.bytes_sent+=bytes_io;
 	}
+	if (bytes_io > 0) {
+		if (myds_type == MYDS_FRONTEND) {
+			if (sess) {
+				if (sess->thread) {
+					sess->thread->status_variables.queries_frontends_bytes_sent += bytes_io;
+				}
+			}
+		}
+	}
 	return bytes_io;
 }
 

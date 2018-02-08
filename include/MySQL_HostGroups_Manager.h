@@ -198,6 +198,7 @@ class MySQL_HostGroups_Manager {
 		unsigned long myconnpoll_get_ok;
 		unsigned long myconnpoll_get_ping;
 		unsigned long myconnpoll_push;
+		unsigned long myconnpoll_reset;
 		unsigned long myconnpoll_destroy;
 		unsigned long long autocommit_cnt;
 		unsigned long long commit_cnt;
@@ -253,6 +254,9 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 	void converge_group_replication_config(int _writer_hostgroup);
+
+	SQLite3_result *SQL3_Get_ConnPool_Stats();
+	void increase_reset_counter();
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

@@ -218,6 +218,8 @@ class MySQL_Thread
 		unsigned long long queries_slow;
 		unsigned long long queries_backends_bytes_sent;
 		unsigned long long queries_backends_bytes_recv;
+		unsigned long long queries_frontends_bytes_sent;
+		unsigned long long queries_frontends_bytes_recv;
 		unsigned long long query_processor_time;
 		unsigned long long backend_query_time;
 		unsigned long long mysql_backend_buffers_bytes;
@@ -461,6 +463,8 @@ class MySQL_Threads_Handler
 	unsigned long long get_slow_queries();
 	unsigned long long get_queries_backends_bytes_recv();
 	unsigned long long get_queries_backends_bytes_sent();
+	unsigned long long get_queries_frontends_bytes_recv();
+	unsigned long long get_queries_frontends_bytes_sent();
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();
