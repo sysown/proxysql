@@ -12,11 +12,21 @@ CXX=clang++-3.6 CC=clang-3.6 CPPFLAGS="-I/usr/include/c++/4.8/ -I/usr/include/x8
 
 ## On FreeBSD
 
+On a default release of BSD 11.1 (available https://www.freebsd.org/where.html), all you need to do to build ProxySQL is the following:
+
+# Install pre-requisites:
+pkg install automake bzip2 cmake gmake gcc git openssl-devel patch
+
+# Make packages (gcc6 as default)
+CC=gcc CXX=g++ LIBS="-L/usr/local/lib -I/usr/local/includes -Wl,-rpath=/usr/local/lib/gcc6 -lic" gmake 
+
+### Misc commands commands for other versions of gcc / clang:
+
 ## compile using gcc 4.8
-CC=gcc49 CXX=g++49 LIBS="-Wl,-rpath=/usr/local/lib/gcc48 -liconv" CPPFLAGS=-D_GLIBCXX_USE_C99 gmake
+CC=gcc48 CXX=g++48 LIBS="-Wl,-rpath=/usr/local/lib/gcc48 -liconv" CPPFLAGS=-D_GLIBCXX_USE_C99 gmake
 
 ## compile using gcc 4.9
-CC=gcc48 CXX=g++48 LIBS="-Wl,-rpath=/usr/local/lib/gcc49 -liconv" CPPFLAGS=-D_GLIBCXX_USE_C99 gmake
+CC=gcc49 CXX=g++49 LIBS="-Wl,-rpath=/usr/local/lib/gcc49 -liconv" CPPFLAGS=-D_GLIBCXX_USE_C99 gmake
 
 ## compile using clang 3.7
 CC=clang37 CXX=clang++37 gmake
