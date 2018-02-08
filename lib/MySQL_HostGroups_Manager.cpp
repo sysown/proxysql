@@ -485,6 +485,7 @@ static void * HGCU_thread_run() {
 		int i;
 		for (i=0;i<(int)l;i++) {
 			myconn->reset();
+			MyHGM->increase_reset_counter();
 			myconn=(MySQL_Connection *)conn_array->index(i);
 			if (myconn->mysql->net.pvio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 				MySQL_Connection_userinfo *userinfo = myconn->userinfo;
@@ -760,6 +761,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.myconnpoll_get_ping=0;
 	status.myconnpoll_push=0;
 	status.myconnpoll_destroy=0;
+	status.myconnpoll_reset=0;
 	status.autocommit_cnt=0;
 	status.commit_cnt=0;
 	status.rollback_cnt=0;
@@ -1751,6 +1753,11 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	return myhgc;
 }
 
+void MySQL_HostGroups_Manager::increase_reset_counter() {
+	wrlock();
+	status.myconnpoll_reset++;
+	wrunlock();
+}
 void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lock) {
 	assert(c->parent);
 	MySrvC *mysrvc=NULL;
@@ -2697,6 +2704,53 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 	}
 	wrunlock();
 }
+
+
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
+	const int colnum=2;
+	char buf[256];
+	char **pta=(char **)malloc(sizeof(char *)*colnum);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Global Status\n");
+	SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"Variable_Name");
+	result->add_column_definition(SQLITE_TEXT,"Variable_Value");
+	wrlock();
+	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
+    {
+		pta[0]=(char *)"MyHGM_myconnpoll_get";
+		sprintf(buf,"%lu",status.myconnpoll_get);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+    {
+		pta[0]=(char *)"MyHGM_myconnpoll_get_ok";
+		sprintf(buf,"%lu",status.myconnpoll_get_ok);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+    {
+		pta[0]=(char *)"MyHGM_myconnpoll_push";
+		sprintf(buf,"%lu",status.myconnpoll_push);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+    {
+		pta[0]=(char *)"MyHGM_myconnpoll_destroy";
+		sprintf(buf,"%lu",status.myconnpoll_destroy);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+    {
+		pta[0]=(char *)"MyHGM_myconnpoll_reset";
+		sprintf(buf,"%lu",status.myconnpoll_reset);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	wrunlock();
+	free(pta);
+	return result;
+}
+
 
 unsigned long long MySQL_HostGroups_Manager::Get_Memory_Stats() {
 	unsigned long long intsize=0;

@@ -454,6 +454,7 @@ class MySQL_HostGroups_Manager {
 		unsigned long myconnpoll_get_ok;
 		unsigned long myconnpoll_get_ping;
 		unsigned long myconnpoll_push;
+		unsigned long myconnpoll_reset;
 		unsigned long myconnpoll_destroy;
 		unsigned long long autocommit_cnt;
 		unsigned long long commit_cnt;
@@ -511,9 +512,14 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 	void converge_group_replication_config(int _writer_hostgroup);
 
+<<<<<<< HEAD
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
 	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
+=======
+	SQLite3_result *SQL3_Get_ConnPool_Stats();
+	void increase_reset_counter();
+>>>>>>> e8de8ee... Added new metrics
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
