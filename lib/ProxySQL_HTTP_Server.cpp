@@ -46,6 +46,7 @@ extern ClickHouse_Server *GloClickHouseServer;
 
 extern char * Chart_bundle_js_c;
 extern char * font_awesome;
+extern char * main_bundle_min_css_c;
 #define RATE_LIMIT_PAGE "<html><head><title>Rate Limit Page</title></head><body>Rate Limit Reached</body></html>"
 
 
@@ -771,6 +772,12 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		MHD_destroy_response (response);
 		return ret;
 	}
+	if (strcmp(url,"/main-bundle.min.css")==0) {
+		response = MHD_create_response_from_buffer(strlen(main_bundle_min_css_c), main_bundle_min_css_c, MHD_RESPMEM_PERSISTENT);
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
 	if (strcmp(url,"/")==0) {
 		string *s = generate_header((char *)"ProxySQL Home");
 		char *home = generate_home();
@@ -796,7 +803,7 @@ string * ProxySQL_HTTP_Server::generate_header(char *s) {
 	a->append(s);
 	a->append("</title>\n");
 	a->append("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,600,900|Fira+Mono\"/>\n");
-	a->append("<link rel=\"stylesheet\" href=\"http://www.proxysql.com/assets/css/main-bundle.min.css\"/>\n");
+	a->append("<link rel=\"stylesheet\" href=\"/main-bundle.min.css\"/>\n");
 	a->append("<link rel=\"stylesheet\" href=\"/font-awesome.min.css\"/>\n");
 	a->append("<script src=\"/Chart.bundle.js\"></script>\n</head>\n<body style=\"background-color: white;\">\n");
 	a->append("<header class=\"header cf \" role=\"banner\">\n<a class=\"brand\" href=\"http://www.proxysql.com\"><span><strong>Proxy</strong>SQL</span>\n</a>");
