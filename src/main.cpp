@@ -136,6 +136,58 @@ static void init_locks(void) {
 	CRYPTO_set_locking_callback((void (*)(int, int, const char *, int))lock_callback);
 }
 
+int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
+	X509 *x;
+	EVP_PKEY *pk;
+	RSA *rsa;
+	X509_NAME *name = NULL;
+
+	if ((pkeyp == NULL) || (*pkeyp == NULL)) {
+		if ((pk = EVP_PKEY_new()) == NULL) {
+			abort();
+			return (0);
+		}
+	} else
+		pk = *pkeyp;
+
+	if ((x509p == NULL) || (*x509p == NULL)) {
+		if ((x = X509_new()) == NULL)
+			goto err;
+	} else
+		x = *x509p;
+
+	rsa = RSA_generate_key(bits, RSA_F4, NULL, NULL);
+	if (!EVP_PKEY_assign_RSA(pk, rsa)) {
+		abort();
+		goto err;
+	}
+	rsa = NULL;
+
+	X509_set_version(x, 3);
+	ASN1_INTEGER_set(X509_get_serialNumber(x), serial);
+	X509_gmtime_adj(X509_get_notBefore(x), 0);
+	X509_gmtime_adj(X509_get_notAfter(x), (long)60 * 60 * 24 * days);
+	X509_set_pubkey(x, pk);
+
+	name = X509_get_subject_name(x);
+
+	X509_NAME_add_entry_by_txt(name, "C", MBSTRING_ASC, (const unsigned char *)"US", -1, -1, 0);
+	X509_NAME_add_entry_by_txt(name, "CN",
+							   MBSTRING_ASC, (const unsigned char *)"ProxySQL LLC", -1, -1, 0);
+
+	X509_set_issuer_name(x, name);
+
+	if (!X509_sign(x, pk, EVP_md5()))
+		goto err;
+
+	*x509p = x;
+	*pkeyp = pk;
+	return (1);
+ err:
+	return (0);
+
+}
+
 void ProxySQL_Main_init_SSL_module() {
 	SSL_library_init();
 	SSL_METHOD *ssl_method;
@@ -145,22 +197,54 @@ void ProxySQL_Main_init_SSL_module() {
 	GloVars.global.ssl_ctx = SSL_CTX_new(ssl_method);
 	if (GloVars.global.ssl_ctx==NULL)	{
 		ERR_print_errors_fp(stderr);
-		abort();
+		proxy_error("Unable to initialize SSL. Shutting down...\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
+	}
+	BIO *bio_err;
+	X509 *x509 = NULL;
+	EVP_PKEY *pkey = NULL;
+
+	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
+
+	bio_err = BIO_new_fp(stderr, BIO_NOCLOSE);
+
+	if (ssl_mkit(&x509, &pkey, 512, 0, 730) == 0) {
+		proxy_error("Unable to initialize SSL. Shutting down...\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 
-	if ( SSL_CTX_use_certificate_file(GloVars.global.ssl_ctx, "newreq.pem", SSL_FILETYPE_PEM) <= 0 )	{
+	RSA_print_fp(stdout, pkey->pkey.rsa, 0);
+	X509_print_fp(stdout, x509);
+
+	PEM_write_PrivateKey(stdout, pkey, NULL, NULL, 0, NULL, NULL);
+	PEM_write_X509(stdout, x509);
+
+
+
+	int RSA_generate_key_ex(RSA *rsa, int bits, BIGNUM *e, BN_GENCB *cb);
+
+	if ( SSL_CTX_use_certificate(GloVars.global.ssl_ctx, x509) <= 0 )	{
 		ERR_print_errors_fp(stderr);
-		abort();
+		proxy_error("Unable to use SSL certificate. Shutting down...\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
-	if ( SSL_CTX_use_PrivateKey_file(GloVars.global.ssl_ctx, "privkey.pem", SSL_FILETYPE_PEM) <= 0 ) {
+	if ( SSL_CTX_use_PrivateKey(GloVars.global.ssl_ctx, pkey) <= 0 ) {
 		ERR_print_errors_fp(stderr);
-		abort();
+		proxy_error("Unable to use SSL key. Shutting down...\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 	if ( !SSL_CTX_check_private_key(GloVars.global.ssl_ctx) ) {
-		fprintf(stderr, "Private key does not match the public certificate\n");
-		abort();
+		proxy_error("Private key does not match the public certificate\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 	init_locks();
+
+	X509_free(x509);
+	EVP_PKEY_free(pkey);
+
+
+	CRYPTO_mem_leaks(bio_err);
+	BIO_free(bio_err);
 }
 
 
