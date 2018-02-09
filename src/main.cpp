@@ -213,15 +213,12 @@ void ProxySQL_Main_init_SSL_module() {
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 
-	RSA_print_fp(stdout, pkey->pkey.rsa, 0);
-	X509_print_fp(stdout, x509);
+	//RSA_print_fp(stdout, pkey->pkey.rsa, 0);
+	//X509_print_fp(stdout, x509);
 
-	PEM_write_PrivateKey(stdout, pkey, NULL, NULL, 0, NULL, NULL);
-	PEM_write_X509(stdout, x509);
+	//PEM_write_PrivateKey(stdout, pkey, NULL, NULL, 0, NULL, NULL);
+	//PEM_write_X509(stdout, x509);
 
-
-
-	int RSA_generate_key_ex(RSA *rsa, int bits, BIGNUM *e, BN_GENCB *cb);
 
 	if ( SSL_CTX_use_certificate(GloVars.global.ssl_ctx, x509) <= 0 )	{
 		ERR_print_errors_fp(stderr);
