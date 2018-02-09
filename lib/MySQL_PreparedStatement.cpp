@@ -148,6 +148,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 	memcpy(query, q, ql);
 	query[ql] = '\0';  // add NULL byte
 	query_length = ql;
+	MyComQueryCmd = MYSQL_COM_QUERY__UNINITIALIZED;
 	num_params = stmt->param_count;
 	num_columns = stmt->field_count;
 	warning_count = stmt->upsert_status.warning_count;
