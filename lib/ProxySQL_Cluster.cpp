@@ -183,11 +183,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	}
 __exit_monitor_thread:
 	if (conn)
-<<<<<<< HEAD
 	if (conn->net.pvio) {
-=======
-	if (conn->net.vio) {
->>>>>>> 232bec9... Fix minor bugs
 		mysql_close(conn);
 	}
 	proxy_info("Cluster: closing thread for peer %s:%d\n", node->hostname, node->port);
