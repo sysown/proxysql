@@ -21,21 +21,12 @@
 } while (0)
 
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
-<<<<<<< HEAD
-	do {\
-		rc=sqlite3_step(_stmt);\
-		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-			usleep(100);\
-		}\
-	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
-=======
         do {\
                 rc=sqlite3_step(_stmt);\
                 if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
                         usleep(100);\
                 }\
         } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
->>>>>>> 9b3fffd... Removing SQLLite lock assertion
 } while (0)
 
 extern ProxySQL_Admin *GloAdmin;
@@ -889,7 +880,6 @@ bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t 
 	rc=sqlite3_bind_int64(statement, 1, hid); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 2, add, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 3, p); assert(rc==SQLITE_OK);
-<<<<<<< HEAD
 	rc=sqlite3_bind_int64(statement, 4, gp); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 5, _weight); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 6, status); assert(rc==SQLITE_OK);
@@ -899,17 +889,6 @@ bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t 
 	rc=sqlite3_bind_int64(statement, 10, _use_ssl); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 11, _max_latency_ms); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 12, comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-=======
-	rc=sqlite3_bind_int64(statement, 4, _weight); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 5, status); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 6, _comp); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 7, _max_connections); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 8, _max_replication_lag); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 9, _use_ssl); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement, 10, _max_latency_ms); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_text(statement, 11, comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
->>>>>>> 9b3fffd... Removing SQLLite lock assertion
-
 	SAFE_SQLITE3_STEP2(statement);
 	rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 	rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
@@ -982,12 +961,8 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 			rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
-<<<<<<< HEAD
 			rc=sqlite3_bind_int64(statement1, 11, atoi(r1->fields[10])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-=======
-			rc=sqlite3_bind_text(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
->>>>>>> 9b3fffd... Removing SQLLite lock assertion
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
@@ -1177,16 +1152,10 @@ bool MySQL_HostGroups_Manager::commit() {
 					rc=sqlite3_bind_int64(statement2, 6, mysrvc->use_ssl); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_int64(statement2, 7, mysrvc->max_latency_us/1000); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_text(statement2, 8,  mysrvc->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-<<<<<<< HEAD
 					rc=sqlite3_bind_int64(statement2, 9, mysrvc->gtid_port); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_int64(statement2, 10, mysrvc->myhgc->hid); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_text(statement2, 11,  mysrvc->address, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_int64(statement2, 12, mysrvc->port); assert(rc==SQLITE_OK);
-=======
-					rc=sqlite3_bind_int64(statement2, 9, mysrvc->myhgc->hid); assert(rc==SQLITE_OK);
-					rc=sqlite3_bind_text(statement2, 10,  mysrvc->address, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-					rc=sqlite3_bind_int64(statement2, 11, mysrvc->port); assert(rc==SQLITE_OK);
->>>>>>> 9b3fffd... Removing SQLLite lock assertion
 					SAFE_SQLITE3_STEP2(statement2);
 					rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
 					rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
@@ -1547,7 +1516,6 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		rc=sqlite3_bind_int64(statement1, 1, mysrvc->myhgc->hid); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement1, 2, mysrvc->address, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement1, 3, mysrvc->port); assert(rc==SQLITE_OK);
-<<<<<<< HEAD
 		rc=sqlite3_bind_int64(statement1, 4, mysrvc->gtid_port); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement1, 5, mysrvc->weight); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement1, 6, mysrvc->status); assert(rc==SQLITE_OK);
@@ -1558,18 +1526,6 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		rc=sqlite3_bind_int64(statement1, 11, mysrvc->max_latency_us/1000); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement1, 12, mysrvc->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement1, 13, ptr); assert(rc==SQLITE_OK);
-=======
-		rc=sqlite3_bind_int64(statement1, 4, mysrvc->weight); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement1, 5, mysrvc->status); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement1, 6, mysrvc->compression); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement1, 7, mysrvc->max_connections); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement1, 8, mysrvc->max_replication_lag); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement1, 9, mysrvc->use_ssl); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement1, 10, mysrvc->max_latency_us/1000); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_text(statement1, 11, mysrvc->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_int64(statement1, 12, ptr); assert(rc==SQLITE_OK);
->>>>>>> 9b3fffd... Removing SQLLite lock assertion
-
 		SAFE_SQLITE3_STEP2(statement1);
 		rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
@@ -1664,7 +1620,6 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		rc=sqlite3_bind_int64(statement, 7, writer_is_also_reader); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 8, max_transactions_behind); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-
 		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
