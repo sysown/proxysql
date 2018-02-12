@@ -723,12 +723,8 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
 		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
-<<<<<<< HEAD
 		const MARIADB_CHARSET_INFO * c;
-=======
-		const CHARSET_INFO * c;
 		char * collation_name_unstripped = NULL;
->>>>>>> 7e95852... Fix bug #1357 : incorrect parsing of SET NAMES ... COLLATE
 		char * collation_name = NULL;
 		if (strcasestr(csname," COLLATE ")) {
 			collation_specified = true;
