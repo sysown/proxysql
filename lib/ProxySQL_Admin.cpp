@@ -225,11 +225,6 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES "CREATE TABLE runtime_global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
-<<<<<<< HEAD
-//#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , comment VARCHAR , UNIQUE (reader_hostgroup))"
-
-=======
->>>>>>> c94fbe7... Fixed bug #1304
 // mysql_replication_hostgroups in v1.0
 #define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_0 "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , UNIQUE (reader_hostgroup))"
 
@@ -239,16 +234,11 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 // mysql_replication_hostgroups in v1.4.5
 #define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_4_5 "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
-<<<<<<< HEAD
 // mysql_replication_hostgroups in v2.0.0
 #define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0 "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
 // mysql_replication_hostgroups current
 #define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0
-=======
-// mysql_replication_hostgroups current
-#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_4_5
->>>>>>> c94fbe7... Fixed bug #1304
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
@@ -7837,11 +7827,7 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// rename current table to add suffix _v100
 		configdb->execute("ALTER TABLE mysql_replication_hostgroups RENAME TO mysql_replication_hostgroups_v100");
 		// create new table
-<<<<<<< HEAD
 		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS,false);
-=======
-		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_4_5,false);
->>>>>>> c94fbe7... Fixed bug #1304
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup) SELECT writer_hostgroup , reader_hostgroup FROM mysql_replication_hostgroups_v100");
 	}
@@ -7855,11 +7841,13 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// rename current table to add suffix _v122
 		configdb->execute("ALTER TABLE mysql_replication_hostgroups RENAME TO mysql_replication_hostgroups_v122");
 		// create new table
-<<<<<<< HEAD
 		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS,false);
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) SELECT writer_hostgroup , reader_hostgroup , COALESCE(comment,'') FROM mysql_replication_hostgroups_v122");
-	}
+                configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_4_5,false);
+                // copy fields from old table
+                configdb->execute("INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) SELECT writer_hostgroup , reader_hostgroup , COALESCE(comment,'') FROM mysql_replication_hostgroups_v122");
+        }
 	rci=configdb->check_table_structure((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_4_5); // issue #1304
 	if (rci) {
 		// upgrade is required
@@ -7874,12 +7862,6 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) SELECT writer_hostgroup , reader_hostgroup , comment FROM mysql_replication_hostgroups_v145");
 	}
-=======
-		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_4_5,false);
-		// copy fields from old table
-		configdb->execute("INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) SELECT writer_hostgroup , reader_hostgroup , COALESCE(comment,'') FROM mysql_replication_hostgroups_v122");
-	}
->>>>>>> c94fbe7... Fixed bug #1304
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
 
