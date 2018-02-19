@@ -3626,6 +3626,15 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 			if (match_regexes && match_regexes[1]->match(dig)) {
+			{
+				int query_no_space_length = nq.length();
+				char *query_no_space=(char *)malloc(query_no_space_length+1);
+				memcpy(query_no_space,nq.c_str(),query_no_space_length);
+				query_no_space[query_no_space_length]='\0';
+				query_no_space_length=remove_spaces(query_no_space);
+				nq = string(query_no_space);
+				free(query_no_space);
+			}
 				// set sql_mode
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 				opt2->set_case_sensitive(false);
@@ -3719,8 +3728,54 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 					} else {
-						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
-						return false;
+						// try case listed in #1373
+						// SET  @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483
+						// this is not a complete solution. A right solution involves true parsing
+						int query_no_space_length = nq.length();
+						char *query_no_space=(char *)malloc(query_no_space_length+1);
+						memcpy(query_no_space,nq.c_str(),query_no_space_length);
+						query_no_space[query_no_space_length]='\0';
+						query_no_space_length=remove_spaces(query_no_space);
+
+						string nq1 = string(query_no_space);
+						free(query_no_space);
+						RE2::GlobalReplace(&nq1,(char *)"SESSION.",(char *)"");
+						RE2::GlobalReplace(&nq1,(char *)"SESSION ",(char *)"");
+						RE2::GlobalReplace(&nq1,(char *)"session.",(char *)"");
+						RE2::GlobalReplace(&nq1,(char *)"session ",(char *)"");
+						//fprintf(stderr,"%s\n",nq1.c_str());
+						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+						opt2->set_case_sensitive(false);
+						char *pattern=(char *)"^SET @@SQL_MODE *(?:|:)= *(?:'||\")(.*)(?:'||\") *, *@@sql_auto_is_null *(?:|:)= *(?:(?:\\w|\\d)*) *, @@wait_timeout *(?:|:)= *(?:\\d*)$";
+						re2::RE2 *re=new RE2(pattern, *opt2);
+						string s1;
+						rc=RE2::FullMatch(nq1, *re, &s1);
+						delete re;
+						delete opt2;
+						if (rc) {
+							uint32_t sql_mode_int=SpookyHash::Hash32(s1.c_str(),s1.length(),10);
+							if (client_myds->myconn->options.sql_mode_int != sql_mode_int) {
+								client_myds->myconn->options.sql_mode_int = sql_mode_int;
+								if (client_myds->myconn->options.sql_mode) {
+									free(client_myds->myconn->options.sql_mode);
+								}
+								client_myds->myconn->options.sql_mode=strdup(s.c_str());
+							}
+							if (command_type == _MYSQL_COM_QUERY) {
+								client_myds->DSS=STATE_QUERY_SENT_NET;
+								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+								if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
+								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+								client_myds->DSS=STATE_SLEEP;
+								status=WAITING_CLIENT_DATA;
+								l_free(pkt->size,pkt->ptr);
+								RequestEnd(NULL);
+								return true;
+							}
+						} else {
+							proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
+							return false;
+						}
 					}
 				}
 			}
