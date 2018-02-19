@@ -2555,12 +2555,13 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		rc=RE2::PartialMatch(query_no_space,*(RE2 *)(pa->match_regexes.re[1]));
 		if (rc) {
 			string *new_query=new std::string(query_no_space);
-			RE2::Replace(new_query,(char *)"^(\\w+)  *@@([0-9A-Za-z_-]+) *",(char *)"SELECT variable_value AS '@@\\2' FROM global_variables WHERE variable_name='\\2'");
+			RE2::Replace(new_query,(char *)"^(\\w+)  *@@([0-9A-Za-z_-]+) *",(char *)"SELECT variable_value AS '@@\\2' FROM global_variables WHERE variable_name='\\2' COLLATE NOCASE UNION ALL SELECT variable_value AS '@@\\2' FROM stats.stats_mysql_global WHERE variable_name='\\2' COLLATE NOCASE");
 			free(query);
 			query_length=new_query->length()+1;
 			query=(char *)malloc(query_length);
 			memcpy(query,new_query->c_str(),query_length-1);
 			query[query_length-1]='\0';
+			GloAdmin->stats___mysql_global();
 			goto __run_query;
 		}
 	}
