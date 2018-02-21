@@ -619,10 +619,10 @@ void MySQL_Data_Stream::set_pollout() {
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return;
 					}
+					_pollfd->events |= POLLOUT;
 				} else {
 					//proxy_info("SSL_is_init_finished completed\n");
 				}
-				_pollfd->events |= POLLOUT;
 			}
 		}
 	}
