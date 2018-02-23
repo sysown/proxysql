@@ -439,6 +439,8 @@ class MySQL_HostGroups_Manager {
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
 	struct ev_async * gtid_ev_async;
 	struct ev_loop * gtid_ev_loop;
+	struct ev_timer * gtid_ev_timer;
+	bool gtid_missing_nodes;
 	struct {
 		unsigned int servers_table_version;
 		pthread_mutex_t servers_table_version_lock;
