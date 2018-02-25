@@ -167,6 +167,7 @@ MySQL_Connection::MySQL_Connection() {
 	userinfo=new MySQL_Connection_userinfo();
 	fd=-1;
 	status_flags=0;
+	options.client_flag = 0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
 	options.last_set_autocommit=-1;	// -1 = never set

@@ -44,6 +44,7 @@ class MySQL_Connection {
 		uint32_t time_zone_int;
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
+		uint32_t client_flag;
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
