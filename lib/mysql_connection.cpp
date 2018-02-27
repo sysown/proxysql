@@ -1699,4 +1699,5 @@ void MySQL_Connection::reset() {
 	}
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
+	creation_time=myds->sess->thread->curtime;
 }
