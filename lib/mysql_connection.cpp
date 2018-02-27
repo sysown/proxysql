@@ -1123,7 +1123,7 @@ int MySQL_Connection::async_connect(short event) {
 	if (async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
 		async_state_machine=ASYNC_IDLE;
 		myds->wait_until=0;
-		creation_time=myds->sess->thread->curtime;
+		creation_time = monotonic_time();
 		return 0;
 	}
 	handler(event);
@@ -1699,5 +1699,5 @@ void MySQL_Connection::reset() {
 	}
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
-	creation_time=myds->sess->thread->curtime;
+	creation_time = monotonic_time();
 }
