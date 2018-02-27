@@ -1,3 +1,12 @@
+@@ -622,7 +622,7 @@
+   { 147, 1, "ucs2", "ucs2_sinhala_ci", "", 1200, "UCS2-BE", 2, 2, mysql_mbcharlen_ucs2, check_mb_ucs2},
+   { 149, 1, "ucs2", "ucs2_croatian_ci", "", 1200, "UCS2-BE", 2, 2, mysql_mbcharlen_ucs2, check_mb_ucs2}, /* MDB */
+ 
+-  { 192, 1, UTF8_MB3, UTF8_MB3"_general_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
++  { 192, 1, UTF8_MB3, UTF8_MB3"_unicode_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
+   { 193, 1, UTF8_MB3, UTF8_MB3"_icelandic_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
+   { 194, 1, UTF8_MB3, UTF8_MB3"_latvian_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3,  check_mb_utf8mb3_valid},
+   { 195, 1, UTF8_MB3, UTF8_MB3"_romanian_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
 @@ -666,6 +666,7 @@
    { 243, 1, UTF8_MB4, UTF8_MB4"_sinhala_ci", "", 65001, "UTF-8", 1, 4, mysql_mbcharlen_utf8, check_mb_utf8_valid},
  
