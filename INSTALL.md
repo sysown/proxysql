@@ -18,9 +18,19 @@ Make sure you have installed the equivalent for each of these packages for your 
 - g++
 - gcc
 - git
-- openssl
-- openssl-devel
 - patch
+- openssl
+- openssl-devel   # Only for RHEL / CentOS based
+- libssl-dev      # Only for Debian / Ubuntu based
+
+Shortcut commands for installing pre-requisites:
+```
+# RHEL / CentOS Based:
+yum install automake bzip2 cmake make g++ gcc git openssl openssl-devel patch
+
+# Debian / Ubuntu Based:
+apt-get install automake bzip2 cmake make g++ gcc git openssl libssl-dev patch
+```
 
 Go to the directory where you cloned the repo (or unpacked the tarball) and run:
 

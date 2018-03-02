@@ -724,12 +724,70 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
 		const MARIADB_CHARSET_INFO * c;
+		char * collation_name_unstripped = NULL;
 		char * collation_name = NULL;
 		if (strcasestr(csname," COLLATE ")) {
 			collation_specified = true;
-			collation_name = strcasestr(csname," COLLATE ") + strlen(" COLLATE ");
-			char *_s=index(csname,' ');
-			*_s = '\0';
+			collation_name_unstripped = strcasestr(csname," COLLATE ") + strlen(" COLLATE ");
+			collation_name = trim_spaces_and_quotes_in_place(collation_name_unstripped);
+			char *_s1=index(csname,' ');
+			char *_s2=index(csname,'\'');
+			char *_s3=index(csname,'"');
+			char *_s = NULL;
+			if (_s1) {
+				_s = _s1;
+			}
+			if (_s2) {
+				if (_s) {
+					if (_s2 < _s) {
+						_s = _s2;
+					}
+				} else {
+					_s = _s2;
+				}
+			}
+			if (_s3) {
+				if (_s) {
+					if (_s3 < _s) {
+						_s = _s3;
+					}
+				} else {
+					_s = _s3;
+				}
+			}
+			if (_s) {
+				*_s = '\0';
+			}
+
+			_s1 = index(collation_name,' ');
+			_s2 = index(collation_name,'\'');
+			_s3 = index(collation_name,'"');
+			_s = NULL;
+			if (_s1) {
+				_s = _s1;
+			}
+			if (_s2) {
+				if (_s) {
+					if (_s2 < _s) {
+						_s = _s2;
+					}
+				} else {
+					_s = _s2;
+				}
+			}
+			if (_s3) {
+				if (_s) {
+					if (_s3 < _s) {
+						_s = _s3;
+					}
+				} else {
+					_s = _s3;
+				}
+			}
+			if (_s) {
+				*_s = '\0';
+			}
+
 			c = proxysql_find_charset_collate_names(csname,collation_name);
 		} else {
 			c = proxysql_find_charset_name(csname);
