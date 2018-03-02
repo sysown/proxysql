@@ -258,6 +258,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"autocommit_false_is_transaction",
 	(char *)"verbose_query_error",
 	(char *)"hostgroup_manager_verbose",
+	(char *)"binlog_reader_connect_retry_msec",
 	(char *)"threshold_query_length",
 	(char *)"threshold_resultset_size",
 	(char *)"query_digests_max_digest_length",
@@ -368,6 +369,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.throttle_connections_per_sec_to_hostgroup=1000000;
 	variables.max_transaction_time=4*3600*1000;
 	variables.hostgroup_manager_verbose=1;
+	variables.binlog_reader_connect_retry_msec=3000;
 	variables.threshold_query_length=512*1024;
 	variables.threshold_resultset_size=4*1024*1024;
 	variables.query_digests_max_digest_length=2*1024;
@@ -628,6 +630,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) return (int)variables.throttle_connections_per_sec_to_hostgroup;
 	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
 	if (!strcasecmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
+	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
 	if (!strcasecmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
 	if (!strcasecmp(name,"threshold_resultset_size")) return (int)variables.threshold_resultset_size;
 	if (!strcasecmp(name,"query_digests_max_digest_length")) return (int)variables.query_digests_max_digest_length;
@@ -893,6 +896,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"hostgroup_manager_verbose")) {
 		sprintf(intbuf,"%d",variables.hostgroup_manager_verbose);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) {
+		sprintf(intbuf,"%d",variables.binlog_reader_connect_retry_msec);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"threshold_query_length")) {
@@ -1310,6 +1317,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1) {
 			variables.hostgroup_manager_verbose=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) {
+		int intv=atoi(value);
+		if (intv >= 200 && intv <= 120000) {
+			__sync_lock_test_and_set(&variables.binlog_reader_connect_retry_msec,intv);
 			return true;
 		} else {
 			return false;

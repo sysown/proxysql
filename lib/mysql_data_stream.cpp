@@ -546,8 +546,13 @@ int MySQL_Data_Stream::write_to_net() {
 				//}
 				//bytes_io += n;
   			} else {
-				shut_soft();
-				return -1;
+				int myds_errno=errno;
+				if (n==0 || (n==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
+					shut_soft();
+					return 0;
+				} else {
+					return -1;
+				}
 			}
 		}
 	} else {
@@ -628,10 +633,10 @@ void MySQL_Data_Stream::set_pollout() {
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return;
 					}
+					_pollfd->events |= POLLOUT;
 				} else {
 					//proxy_info("SSL_is_init_finished completed\n");
 				}
-				_pollfd->events |= POLLOUT;
 			}
 		}
 	}
@@ -690,8 +695,13 @@ int MySQL_Data_Stream::write_to_net_poll() {
 					rc = n; // and continue
 				}
   			} else {
-				shut_soft();
-				return -1;
+				int myds_errno=errno;
+				if (n==0 || (n==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
+					shut_soft();
+					return 0;
+				} else {
+					return -1;
+				}
 			}
 		}
 	}
