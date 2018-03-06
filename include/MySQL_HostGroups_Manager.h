@@ -517,6 +517,8 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
 	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
+	void increase_reset_counter();
+
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
