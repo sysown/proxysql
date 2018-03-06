@@ -50,7 +50,6 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
-<<<<<<< ac7e98f157ae77963db9bc47b283ce6e9cd71d20
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
         do {\
                 rc=sqlite3_step(_stmt);\

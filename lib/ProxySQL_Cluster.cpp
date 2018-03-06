@@ -797,18 +797,18 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 									proxy_info("Cluster: Writing mysql_servers table\n");
 									GloAdmin->admindb->execute("DELETE FROM mysql_servers");
 									MYSQL_ROW row;
-									char *q=(char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (%s, \"%s\", %s, %s, \"%s\", %s, %s, %s, %s, %s, '%s')";
+									char *q=(char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (%s, \"%s\", %s, %s, %s, \"%s\", %s, %s, %s, %s, %s, '%s')";
 									while ((row = mysql_fetch_row(result1))) {
 										int i;
 										int l=0;
-										for (i=0; i<10; i++) {
+										for (i=0; i<11; i++) {
 											l+=strlen(row[i]);
 										}
-										char *o=escape_string_single_quotes(row[10],false);
+										char *o=escape_string_single_quotes(row[11],false);
 										char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
 
-										sprintf(query,q,row[0],row[1],row[2],row[3], ( strcmp(row[4],"SHUNNED")==0 ? "ONLINE" : row[4] ), row[5],row[6],row[7],row[8],row[9],o);
-										if (o!=row[10]) { // there was a copy
+										sprintf(query,q,row[0],row[1],row[2],row[3], row[4], ( strcmp(row[5],"SHUNNED")==0 ? "ONLINE" : row[5] ), row[6],row[7],row[8],row[9],row[10],o);
+										if (o!=row[11]) { // there was a copy
 											free(o);
 										}
 										GloAdmin->admindb->execute(query);
