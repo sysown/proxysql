@@ -3933,7 +3933,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
 	
+		bool with_gtid = false;
 		MySQL_Connection *mc=NULL;
+		MySQL_Backend * _gtid_from_backend = NULL;
+		char uuid[64];
+		uint64_t trxid = 0;
 #ifdef STRESSTEST_POOL
 		int i=100;
 		while (i) {
@@ -3951,10 +3955,37 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 #else
 		if (session_fast_forward == false) {
-			mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+			if (qpo->gtid_from_hostgroup >= 0) {
+				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
+				if (_gtid_from_backend) {
+					if (_gtid_from_backend->gtid_uuid[0]) {
+						with_gtid = true;
+					}
+				}
+			}
+			if (with_gtid) {
+				int l = index(_gtid_from_backend->gtid_uuid,':') - _gtid_from_backend->gtid_uuid;
+				trxid = strtoull(index(_gtid_from_backend->gtid_uuid,':')+1, NULL, 10);
+				int m;
+				int n=0;
+				for (m=0; m<l; m++) {
+					if (_gtid_from_backend->gtid_uuid[m] != '-') {
+						uuid[n]=_gtid_from_backend->gtid_uuid[m];
+						n++;
+					}
+				}
+				uuid[n]='\0';
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, NULL, uuid, trxid);
+			} else {
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, NULL, NULL, 0);
+			}
 		}
 		if (mc==NULL) {
-			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward);
+			if (trxid) {
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward, uuid, trxid);
+			} else {
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward, NULL, 0);
+			}
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
 		}

@@ -85,7 +85,15 @@ void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 		bool rc = true;
 		rc = sd->readall();
 		if (rc == false) {
-			delete sd;
+			//delete sd;
+			std::string s1 = sd->address;
+			s1.append(":");
+			s1.append(std::to_string(sd->port));
+			std::unordered_map <string, GTID_Server_Data *>::iterator it2;
+			it2 = MyHGM->gtid_map.find(s1);
+			if (it2 != MyHGM->gtid_map.end()) {
+				MyHGM->gtid_map.erase(it2);
+			}
 			ev_io_stop(MyHGM->gtid_ev_loop, w);
 			free(w);
 		} else {
@@ -96,6 +104,7 @@ void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 }
 
 void connect_cb(EV_P_ ev_io *w, int revents) {
+	pthread_mutex_lock(&ev_loop_mutex);
 	struct ev_io * c = w;
 	if (revents & EV_WRITE) {
 		int optval = 0;
@@ -112,12 +121,16 @@ void connect_cb(EV_P_ ev_io *w, int revents) {
 		} else {
 			ev_io_stop(MyHGM->gtid_ev_loop, w);
 			int fd=w->fd;
-			free(w);
 			struct ev_io * new_w = (struct ev_io*) malloc(sizeof(struct ev_io));
+			new_w->data = w->data;
+			GTID_Server_Data * custom_data = (GTID_Server_Data *)new_w->data;
+			custom_data->w = new_w;
+			free(w);
 			ev_io_init(new_w, reader_cb, fd, EV_READ);
 			ev_io_start(MyHGM->gtid_ev_loop, new_w);
 		}
 	}
+	pthread_mutex_unlock(&ev_loop_mutex);
 }
 
 struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port) {
@@ -153,6 +166,209 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 	return NULL;
 }
 
+
+
+GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port) {
+	active = true;
+	w = _w;
+	size = 1024; // 1KB buffer
+	data = (char *)malloc(size);
+	uuid_server[0] = 0;
+	pos = 0;
+	len = 0;
+	address = strdup(_address);
+	port = _port;
+	mysql_port = _mysql_port;
+}
+
+void GTID_Server_Data::resize(size_t _s) {
+	char *data_ = (char *)malloc(_s);
+	memcpy(data_, data, (_s > size ? size : _s));
+	size = _s;
+	free(data);
+	data = data_;
+}
+
+GTID_Server_Data::~GTID_Server_Data() {
+	free(address);
+	free(data);
+}
+
+bool GTID_Server_Data::readall() {
+	bool ret = true;
+	if (size == len) {
+		// buffer is full, expand
+		resize(len*2);
+	}
+	int rc = 0;
+	rc = read(w->fd,data+len,size-len);
+	if (rc > 0) {
+		len += rc;
+	} else {
+		int myerr = errno;
+		proxy_error("Read returned %d bytes, error %d\n", rc, myerr);
+		if (
+			//(rc == 0) ||
+			(rc==-1 && myerr != EINTR && myerr != EAGAIN)
+		) {
+			ret = false;
+		}
+	}
+	return ret;
+}
+
+
+bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
+	std::string s = gtid_uuid;
+	auto it = gtid_executed.find(s);
+	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
+	if (it == gtid_executed.end()) {
+		fprintf(stderr,"NO\n");
+		return false;
+	}
+	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+		if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
+			fprintf(stderr,"YES\n");
+			return true;
+		}
+	}
+	fprintf(stderr,"NO\n");
+	return false;
+}
+
+void GTID_Server_Data::read_all_gtids() {
+		while (read_next_gtid()) {
+		}
+	}
+
+void GTID_Server_Data::dump() {
+	if (len==0) {
+		return;
+	}
+	read_all_gtids();
+	//int rc = write(1,data+pos,len-pos);
+	fflush(stdout);
+	///pos += rc;
+	if (pos >= len/2) {
+		memmove(data,data+pos,len-pos);
+		len = len-pos;
+		pos = 0;
+	}
+}
+
+bool GTID_Server_Data::writeout() {
+	bool ret = true;
+	if (len==0) {
+		return ret;
+	}
+	int rc = 0;
+	rc = write(w->fd,data+pos,len-pos);
+	if (rc > 0) {
+		pos += rc;
+		if (pos >= len/2) {
+			memmove(data,data+pos,len-pos);
+			len = len-pos;
+			pos = 0;
+		}
+	}
+	return ret;
+}
+
+bool GTID_Server_Data::read_next_gtid() {
+	if (len==0) {
+		return false;
+	}
+	void *nlp = NULL;
+	nlp = memchr(data+pos,'\n',len-pos);
+	if (nlp == NULL) {
+		return false;
+	}
+	int l = (char *)nlp - (data+pos);
+	char rec_msg[80];
+	if (strncmp(data+pos,(char *)"ST=",3)==0) {
+		// we are reading the bootstrap
+		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
+		memcpy(bs,data+pos+3,l+1-3);
+		char *saveptr1=NULL;
+		char *saveptr2=NULL;
+		//char *saveptr3=NULL;
+		char *token = NULL;
+		char *subtoken = NULL;
+		//char *subtoken2 = NULL;
+		char *str1 = NULL;
+		char *str2 = NULL;
+		//char *str3 = NULL;
+		for (str1 = bs; ; str1 = NULL) {
+			token = strtok_r(str1, ",", &saveptr1);
+			if (token == NULL) {
+				break;
+			}
+			int j = 0;
+			for (str2 = token; ; str2 = NULL) {
+				subtoken = strtok_r(str2, ":", &saveptr2);
+				if (subtoken == NULL) {
+					break;
+					}
+				j++;
+				if (j%2 == 1) { // we are reading the uuid
+					char *p = uuid_server;
+					for (unsigned int k=0; k<strlen(subtoken); k++) {
+						if (subtoken[k]!='-') {
+							*p = subtoken[k];
+							p++;
+						}
+					}
+					//fprintf(stdout,"BS from %s\n", uuid_server);
+				} else { // we are reading the trxids
+					uint64_t trx_from;
+					uint64_t trx_to;
+					sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
+					//fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server, trx_from, trx_to);
+					std::string s = uuid_server;
+					gtid_executed[s].emplace_back(trx_from, trx_to);
+			   }
+			}
+		}
+		pos += l+1;
+		free(bs);
+		//return true;
+	} else {
+		strncpy(rec_msg,data+pos,l);
+		pos += l+1;
+		rec_msg[l]=0;
+		//int rc = write(1,data+pos,l+1);
+		//fprintf(stdout,"%s\n", rec_msg);
+		if (rec_msg[0]=='I') {
+			//char rec_uuid[80];
+			uint64_t rec_trxid;
+			char *a = NULL;
+			int ul = 0;
+			switch (rec_msg[1]) {
+				case '1':
+					//sscanf(rec_msg+3,"%s\:%lu",uuid_server,&rec_trxid);
+					a = strchr(rec_msg+3,':');
+					ul = a-rec_msg-3;
+					strncpy(uuid_server,rec_msg+3,ul);
+					uuid_server[ul] = 0;
+					rec_trxid=atoll(a+1);
+					break;
+				case '2':
+					//sscanf(rec_msg+3,"%lu",&rec_trxid);
+					rec_trxid=atoll(rec_msg+3);
+					break;
+				default:
+					break;
+			}
+			fprintf(stdout,"%s:%lu\n", uuid_server, rec_trxid);
+			std::string s = uuid_server;
+			gtid_t new_gtid = std::make_pair(s,rec_trxid);
+			addGtid(new_gtid,gtid_executed);
+			//return true;
+		}
+	}
+	std::cout << "current pos " << gtid_executed_to_string(gtid_executed) << std::endl << std::endl;
+	return true;
+}
 
 std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 	std::string gtid_set;
@@ -525,6 +741,7 @@ MyHGC::~MyHGC() {
 }
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
+	pthread_mutex_init(&ev_loop_mutex, NULL);
 	status.client_connections=0;
 	status.client_connections_aborted=0;
 	status.client_connections_created=0;
@@ -1107,6 +1324,25 @@ bool MySQL_HostGroups_Manager::commit() {
 	return true;
 }
 
+bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
+	bool ret = false;
+	pthread_rwlock_rdlock(&gtid_rwlock);
+	std::string s1 = mysrvc->address;
+	s1.append(":");
+	s1.append(std::to_string(mysrvc->port));
+	std::unordered_map <string, GTID_Server_Data *>::iterator it2;
+	it2 = gtid_map.find(s1);
+	GTID_Server_Data *gtid_is=NULL;
+	if (it2!=gtid_map.end()) {
+		gtid_is=it2->second;
+		if (gtid_is->active == true) {
+			ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
+		}
+	}	
+	proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
+	pthread_rwlock_unlock(&gtid_rwlock);
+	return ret;
+}
 
 void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	pthread_rwlock_wrlock(&gtid_rwlock);
@@ -1145,7 +1381,9 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 					if (c) {
 						gtid_is = (GTID_Server_Data *)c->data;
 						gtid_map.emplace(s1,gtid_is);
+						//pthread_mutex_lock(&ev_loop_mutex);
 						ev_io_start(MyHGM->gtid_ev_loop,c);
+						//pthread_mutex_unlock(&ev_loop_mutex);
 					}
 				}
 			}
@@ -1570,7 +1808,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca) 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC() {
+MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -1583,8 +1821,15 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						sum+=mysrvc->weight;
-						TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+						if (gtid_trxid) {
+							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+								sum+=mysrvc->weight;
+								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+							}
+						} else {
+							sum+=mysrvc->weight;
+							TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+						}
 					}
 				}
 			} else {
@@ -1615,8 +1860,15 @@ MySrvC *MyHGC::get_random_MySrvC() {
 								mysrvc->time_last_detected_error=0;
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+									if (gtid_trxid) {
+										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+											sum+=mysrvc->weight;
+											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+										}
+									} else {
+										sum+=mysrvc->weight;
+										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+									}
 								}
 							}
 						}
@@ -1644,8 +1896,15 @@ MySrvC *MyHGC::get_random_MySrvC() {
 						mysrvc->time_last_detected_error=0;
 						// if a server is taken back online, consider it immediately
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-							sum+=mysrvc->weight;
-							TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+							if (gtid_trxid) {
+								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+									sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								}
+							} else {
+								sum+=mysrvc->weight;
+								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+							}
 						}
 					}
 				}
@@ -1659,7 +1918,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 		unsigned int New_sum=0;
 		unsigned int New_TotalUsedConn=0;
 
-		// we will now scan again to ignore overloaded server
+		// we will now scan again to ignore overloaded servers
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
@@ -1667,8 +1926,15 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-							New_sum+=mysrvc->weight;
-							New_TotalUsedConn+=len;
+							if (gtid_trxid) {
+								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+									New_sum+=mysrvc->weight;
+									New_TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								}
+							} else {
+								New_sum+=mysrvc->weight;
+								New_TotalUsedConn+=len;
+							}
 						}
 					}
 				}
@@ -1696,7 +1962,14 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-							New_sum+=mysrvc->weight;
+							if (gtid_trxid) {
+								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+									New_sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								}
+							} else {
+								New_sum+=mysrvc->weight;
+							}
 							if (k<=New_sum) {
 								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
 								return mysrvc;
@@ -1753,12 +2026,12 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(bool ff) {
 	return NULL; // never reach here
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, bool ff) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, bool ff, char * gtid_uuid, uint64_t gtid_trxid) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
-	MySrvC *mysrvc=myhgc->get_random_MySrvC();
+	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(ff);
 		if (conn) {
