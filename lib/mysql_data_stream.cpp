@@ -876,7 +876,9 @@ void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
 	mc->last_time_used=sess->thread->curtime;
-	if ((mysql_thread___connection_max_age_ms) && (mc->last_time_used > mc->creation_time + mysql_thread___connection_max_age_ms * 1000)) {
+	unsigned long long intv = mysql_thread___connection_max_age_ms;
+	intv *= 1000;
+	if ((intv) && (mc->last_time_used > mc->creation_time + intv)) {
 		destroy_MySQL_Connection_From_Pool(true);
 	} else {
 		detach_connection();
