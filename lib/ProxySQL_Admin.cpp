@@ -3704,7 +3704,7 @@ ProxySQL_Admin::~ProxySQL_Admin() {
 // This function is used only used to export what collations are available
 // it is mostly informative
 void ProxySQL_Admin::dump_mysql_collations() {
-	const CHARSET_INFO * c = compiled_charsets;
+	const MARIADB_CHARSET_INFO * c = mariadb_compiled_charsets;
 	char buf[1024];
 	char *query=(char *)"INSERT INTO mysql_collations VALUES (%d, \"%s\", \"%s\", \"\")";
 	admindb->execute("DELETE FROM mysql_collations");

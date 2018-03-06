@@ -172,7 +172,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				if (glovars.shutdown == 0) {
 					// we arent' shutting down, but the query failed
 				}
-				if (conn->net.vio) { 
+				if (conn->net.pvio) {
 					mysql_close(conn);
 					conn = NULL;
 				}
@@ -189,8 +189,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, NULL, 0); // added extra check, see #1323 
 	}
 __exit_monitor_thread:
-	if (conn)
-	if (conn->net.vio) {
+	if (conn->net.pvio) {
 		mysql_close(conn);
 	}
 	proxy_info("Cluster: closing thread for peer %s:%d\n", node->hostname, node->port);
@@ -644,7 +643,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 		}
 __exit_pull_mysql_query_rules_from_peer:
 		if (conn) {
-			if (conn->net.vio) {
+			if (conn->net.pvio) {
 				mysql_close(conn);
 			}
 		}
@@ -725,7 +724,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 		}
 __exit_pull_mysql_users_from_peer:
 		if (conn) {
-			if (conn->net.vio) {
+			if (conn->net.pvio) {
 				mysql_close(conn);
 			}
 		}
@@ -870,7 +869,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 		}
 __exit_pull_mysql_servers_from_peer:
 		if (conn) {
-			if (conn->net.vio) {
+			if (conn->net.pvio) {
 				mysql_close(conn);
 			}
 		}
@@ -944,7 +943,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 		}
 __exit_pull_proxysql_servers_from_peer:
 		if (conn) {
-			if (conn->net.vio) {
+			if (conn->net.pvio) {
 				mysql_close(conn);
 			}
 		}

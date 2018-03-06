@@ -384,7 +384,7 @@ int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__my
 //			}
 			cmd=*payload;
 			switch (cmd) {
-				case MYSQL_COM_QUERY:
+				case COM_QUERY:
 					if (pkt_com_query(payload, hdr.pkt_length)==PKT_PARSED) {
 						//*states=STATE_CLIENT_COM_QUERY;
 						return PKT_PARSED;
@@ -494,7 +494,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, char *sql_message) {
+bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
