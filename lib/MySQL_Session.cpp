@@ -724,6 +724,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
 		const MARIADB_CHARSET_INFO * c;
+		char * collation_name_unstripped = NULL;
 		char * collation_name = NULL;
 		if (strcasestr(csname," COLLATE ")) {
 			collation_specified = true;
