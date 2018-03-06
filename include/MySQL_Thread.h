@@ -323,6 +323,7 @@ class MySQL_Threads_Handler
 		int monitor_ping_timeout;
 		int monitor_read_only_interval;
 		int monitor_read_only_timeout;
+		int monitor_read_only_max_timeout_count;
 		bool monitor_enabled;
 		bool monitor_wait_timeout;
 		bool monitor_writer_is_also_reader;

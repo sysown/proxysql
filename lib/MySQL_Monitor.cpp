@@ -574,6 +574,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 }
 
 void * monitor_read_only_thread(void *arg) {
+	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -592,7 +593,15 @@ void * monitor_read_only_thread(void *arg) {
 		rc=mmsd->create_new_connection();
 		crc=true;
 		if (rc==false) {
-			goto __fast_exit_monitor_read_only_thread;
+			unsigned long long now=monotonic_time();
+			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
+			sprintf(new_error,"timeout on creating new connection: %s",mmsd->mysql_error_msg);
+			free(mmsd->mysql_error_msg);
+			mmsd->mysql_error_msg = new_error;
+			proxy_error("Timeout on read_only check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			timeout_reached = true;
+			goto __exit_monitor_read_only_thread;
+			//goto __fast_exit_monitor_read_only_thread;
 		}
 	}
 
@@ -603,7 +612,8 @@ void * monitor_read_only_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -619,7 +629,8 @@ void * monitor_read_only_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout. Assuming read_only=1\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -686,10 +697,37 @@ __exit_monitor_read_only_thread:
 		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
-
-		MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only);
-
 		sqlite3_finalize(statement);
+
+		if (timeout_reached == false) {
+			MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // default behavior
+		} else {
+			char *error=NULL;
+			int cols=0;
+			int affected_rows=0;
+			SQLite3_result *resultset=NULL;
+			char *new_query=NULL;
+			SQLite3DB *mondb=mmsd->mondb;
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,read_only,error FROM mysql_server_read_only_log WHERE hostname='%s' AND port='%d' ORDER BY time_start_us DESC LIMIT %d) a WHERE read_only IS NULL AND SUBSTR(error,1,7) = 'timeout' GROUP BY hostname,port HAVING COUNT(*)=%d";
+			char *buff=(char *)malloc(strlen(new_query)+strlen(mmsd->hostname)+32);
+			int max_failures=mysql_thread___monitor_read_only_max_timeout_count;
+			sprintf(buff,new_query, mmsd->hostname, mmsd->port, max_failures, max_failures);
+			mondb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+			if (!error) {
+				if (resultset) {
+					if (resultset->rows_count) {
+						// disable host
+						proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, max_failures);
+						MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // N timeouts reached
+					}
+					delete resultset;
+					resultset=NULL;
+				}
+			} else {
+				proxy_error("Error on %s : %s\n", buff, error);
+			}
+			free(buff);
+		}
 	}
 	if (mmsd->interr) { // check failed
 	} else {
@@ -1535,9 +1573,9 @@ __end_monitor_read_only_loop:
 			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
 			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 			assert(rc==SQLITE_OK);
-			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
-				if (mysql_thread___monitor_ping_interval < 3600000)
-					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
+			if (mysql_thread___monitor_history < mysql_thread___monitor_read_only_interval * (mysql_thread___monitor_read_only_max_timeout_count + 1 )) { // issue #626
+				if (mysql_thread___monitor_read_only_interval < 3600000)
+					mysql_thread___monitor_history = mysql_thread___monitor_read_only_interval * (mysql_thread___monitor_read_only_max_timeout_count + 1 );
 			}
 			unsigned long long time_now=realtime_time();
 			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); assert(rc==SQLITE_OK);
