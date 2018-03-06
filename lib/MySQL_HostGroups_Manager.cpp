@@ -21,12 +21,12 @@
 } while (0)
 
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
-        do {\
-                rc=sqlite3_step(_stmt);\
-                if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-                        usleep(100);\
-                }\
-        } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
+	do {\
+		rc=sqlite3_step(_stmt);\
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
+			usleep(100);\
+		}\
+	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
 extern ProxySQL_Admin *GloAdmin;
@@ -745,7 +745,7 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 			rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement1, 11, atoi(r1->fields[10])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			SAFE_SQLITE3_STEP(statement1);
+			SAFE_SQLITE3_STEP2(statement1);
 			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 		}
@@ -798,6 +798,10 @@ bool MySQL_HostGroups_Manager::commit() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+		if (GloMTH->variables.hostgroup_manager_verbose) {
+			proxy_info("Dumping mysql_servers JEFT JOIN mysql_servers_incoming\n");
+			resultset->dump_to_stderr();
+		}
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[0]);
@@ -824,13 +828,17 @@ bool MySQL_HostGroups_Manager::commit() {
 
 
 	// SELECT FROM mysql_servers whatever is not identical in mysql_servers_incoming, or where mem_pointer=0 (where there is no pointer yet)
-	query=(char *)"SELECT t1.*, t2.gtid_port, t2.weight, t2.status, t2.compression, t2.max_connections, t2.max_replication_lag, t2.use_ssl, t2.max_latency_ms, t2.comment FROM mysql_servers t1 JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE mem_pointer=0 OR t1.weight<>t2.weight OR t1.status<>t2.status OR t1.compression<>t2.compression OR t1.max_connections<>t2.max_connections OR t1.max_replication_lag<>t2.max_replication_lag OR t1.use_ssl<>t2.use_ssl OR t1.max_latency_ms<>t2.max_latency_ms or t1.comment<>t2.comment";
+	query=(char *)"SELECT t1.*, t2.gtid_port, t2.weight, t2.status, t2.compression, t2.max_connections, t2.max_replication_lag, t2.use_ssl, t2.max_latency_ms, t2.comment FROM mysql_servers t1 JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE mem_pointer=0 OR t1.gtid_port<>t2.gtid_port OR t1.weight<>t2.weight OR t1.status<>t2.status OR t1.compression<>t2.compression OR t1.max_connections<>t2.max_connections OR t1.max_replication_lag<>t2.max_replication_lag OR t1.use_ssl<>t2.use_ssl OR t1.max_latency_ms<>t2.max_latency_ms or t1.comment<>t2.comment";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 
+		if (GloMTH->variables.hostgroup_manager_verbose) {
+			proxy_info("Dumping mysql_servers JOIN mysql_servers_incoming\n");
+			resultset->dump_to_stderr();
+		}
 		// optimization #829
 		int rc;
 		sqlite3_stmt *statement1=NULL;
@@ -849,7 +857,9 @@ bool MySQL_HostGroups_Manager::commit() {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d , weight=%d, status=%d, mem_pointer=%llu, hostgroup=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), ptr, atoi(r->fields[0]), atoi(r->fields[5]));
 			//fprintf(stderr,"%lld\n", ptr);
 			if (ptr==0) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Creating new server %s:%d , weight=%d, status=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), atoi(r->fields[5]) );
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%s\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]));
+				}
 				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]), atoi(r->fields[8]), atoi(r->fields[9]), atoi(r->fields[10]), r->fields[11]); // add new fields here if adding more columns in mysql_servers
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), mysrvc, atoi(r->fields[0]));
 				add(mysrvc,atoi(r->fields[0]));
@@ -865,46 +875,55 @@ bool MySQL_HostGroups_Manager::commit() {
 				bool run_update=false;
 				MySrvC *mysrvc=(MySrvC *)ptr;
 				// carefully increase the 2nd index by 1 for every new column added
-				if (atoi(r->fields[4])!=atoi(r->fields[12])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing gtid_port for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[4] , mysrvc->gtid_port , atoi(r->fields[12]));
-					mysrvc->weight=atoi(r->fields[12]);
+				if (atoi(r->fields[3])!=atoi(r->fields[13])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_info("Changing gtid_port for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->gtid_port , atoi(r->fields[13]));
+					mysrvc->gtid_port=atoi(r->fields[13]);
 				}
 
-				if (atoi(r->fields[5])!=atoi(r->fields[13])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[5] , mysrvc->weight , atoi(r->fields[13]));
-					mysrvc->weight=atoi(r->fields[13]);
+				if (atoi(r->fields[4])!=atoi(r->fields[14])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
+					mysrvc->weight=atoi(r->fields[14]);
 				}
-				if (atoi(r->fields[6])!=atoi(r->fields[14])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing status for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[6] , mysrvc->status , atoi(r->fields[14]));
-					mysrvc->status=(MySerStatus)atoi(r->fields[14]);
+				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]) , mysrvc->status , atoi(r->fields[15]));
+					mysrvc->status=(MySerStatus)atoi(r->fields[15]);
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 						mysrvc->shunned_automatic=false;
 					}
 				}
-				if (atoi(r->fields[7])!=atoi(r->fields[15])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing compression for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[7] , mysrvc->compression , atoi(r->fields[15]));
-					mysrvc->compression=atoi(r->fields[15]);
+				if (atoi(r->fields[6])!=atoi(r->fields[16])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_info("Changing compression for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[6]) , mysrvc->compression , atoi(r->fields[16]));
+					mysrvc->compression=atoi(r->fields[16]);
 				}
-				if (atoi(r->fields[8])!=atoi(r->fields[16])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_connections for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[8] , mysrvc->max_connections , atoi(r->fields[16]));
-					mysrvc->max_connections=atoi(r->fields[16]);
+				if (atoi(r->fields[7])!=atoi(r->fields[17])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+					proxy_info("Changing max_connections for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[7]) , mysrvc->max_connections , atoi(r->fields[17]));
+					mysrvc->max_connections=atoi(r->fields[17]);
 				}
-				if (atoi(r->fields[9])!=atoi(r->fields[17])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_replication_lag for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[9] , mysrvc->max_replication_lag , atoi(r->fields[17]));
-					mysrvc->max_replication_lag=atoi(r->fields[17]);
+				if (atoi(r->fields[8])!=atoi(r->fields[18])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_info("Changing max_replication_lag for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[8]) , mysrvc->max_replication_lag , atoi(r->fields[18]));
+					mysrvc->max_replication_lag=atoi(r->fields[18]);
 				}
-				if (atoi(r->fields[10])!=atoi(r->fields[18])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing use_ssl for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[10] , mysrvc->use_ssl , atoi(r->fields[18]));
-					mysrvc->use_ssl=atoi(r->fields[18]);
+				if (atoi(r->fields[9])!=atoi(r->fields[19])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_info("Changing use_ssl for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[9]) , mysrvc->use_ssl , atoi(r->fields[19]));
+					mysrvc->use_ssl=atoi(r->fields[19]);
 				}
-				if (atoi(r->fields[11])!=atoi(r->fields[18])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing max_latency_ms for server %s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[11] , mysrvc->max_latency_us , atoi(r->fields[19]));
-					mysrvc->max_latency_us=1000*atoi(r->fields[19]);
+				if (atoi(r->fields[10])!=atoi(r->fields[20])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_info("Changing max_latency_ms for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[10]) , mysrvc->max_latency_us/1000 , atoi(r->fields[20]));
+					mysrvc->max_latency_us=1000*atoi(r->fields[20]);
 				}
-				if (strcmp(r->fields[12],r->fields[20])) {
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing comment for server %s:%d (%s:%d) from '%s' to '%s'\n" , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[12], r->fields[20]);
+				if (strcmp(r->fields[11],r->fields[21])) {
+					if (GloMTH->variables.hostgroup_manager_verbose)
+						proxy_info("Changing comment for server %d:%s:%d (%s:%d) from '%s' to '%s'\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[11], r->fields[21]);
 					free(mysrvc->comment);
-					mysrvc->comment=strdup(r->fields[20]);
+					mysrvc->comment=strdup(r->fields[21]);
 				}
 				if (run_update) {
 					rc=sqlite3_bind_int64(statement2, 1, mysrvc->weight); assert(rc==SQLITE_OK);
@@ -919,7 +938,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					rc=sqlite3_bind_int64(statement2, 10, mysrvc->myhgc->hid); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_text(statement2, 11,  mysrvc->address, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 					rc=sqlite3_bind_int64(statement2, 12, mysrvc->port); assert(rc==SQLITE_OK);
-					SAFE_SQLITE3_STEP(statement2);
+					SAFE_SQLITE3_STEP2(statement2);
 					rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
 					rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
 				}
@@ -930,7 +949,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
-	mydb->execute("DELETE FROM mysql_servers_incoming");	
+	mydb->execute("DELETE FROM mysql_servers_incoming");
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_replication_hostgroups\n");
 	mydb->execute("DELETE FROM mysql_replication_hostgroups");
@@ -1142,6 +1161,11 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 		it++;
 	}
 	for (std::vector<string>::iterator it3=to_remove.begin(); it3!=to_remove.end(); ++it3) {
+		it = gtid_map.find(*it3);
+		GTID_Server_Data * gtid_si = it->second;
+		ev_io_stop(MyHGM->gtid_ev_loop, gtid_si->w);
+		close(gtid_si->w->fd);
+		free(gtid_si->w);
 		gtid_map.erase(*it3);
 	}
 	pthread_rwlock_unlock(&gtid_rwlock);
