@@ -785,10 +785,13 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 //		                     1);  // increase reference count
 //		*is_new = true;
 		__sync_add_and_fetch(&num_stmt_with_ref_client_count_zero,1);
+<<<<<<< HEAD
 		__sync_add_and_fetch(&num_stmt_with_ref_server_count_zero,1);
 	}
 	if (ret->ref_count_server == 0) {
 		__sync_sub_and_fetch(&num_stmt_with_ref_server_count_zero,1);
+=======
+>>>>>>> upstream/v2.0-lab
 	}
 	ret->ref_count_server++;
 	statuses.s_total++;

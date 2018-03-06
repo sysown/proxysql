@@ -59,30 +59,6 @@
         } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
-/*
-static void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
-	unsigned char ch;
-	size_t i, j;
-
-	for (i=0, j=0; i<l; i++, j+=2) {
-		ch=string[i];
-		ch = ch >> 4;
-		if (ch <= 9) {
-			hexstring[j]= '0' + ch;
-		} else {
-			hexstring[j]= 'A' + ch - 10;
-		}
-		ch = string[i];
-		ch = ch & 0x0F;
-		if (ch <= 9) {
-			hexstring[j+1]= '0' + ch;
-		} else {
-			hexstring[j+1]= 'A' + ch - 10;
-		}
-	}
-}
-*/
-
 struct cpu_timer
 {
 	cpu_timer() {
