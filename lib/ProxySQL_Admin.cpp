@@ -191,7 +191,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_4_4 "CREATE TABLE mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 // mysql_servers in v2.0.0
-#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0 "CREATE TABLE mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0 "CREATE TABLE mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0
 
@@ -282,6 +282,8 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define STATS_SQLITE_TABLE_MYSQL_GLOBAL "CREATE TABLE stats_mysql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
 #define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
+
+#define STATS_SQLITE_TABLE_MYSQL_GTID_EXECUTED "CREATE TABLE stats_mysql_gtid_executed (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_executed VARCHAR)"
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
@@ -1856,6 +1858,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_commands_counters=false;
 	bool stats_mysql_query_rules=false;
 	bool stats_mysql_users=false;
+	bool stats_mysql_gtid_executed=false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -1905,6 +1908,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_query_rules=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_users"))
 		{ stats_mysql_users=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_gtid_executed"))
+		{ stats_mysql_gtid_executed=true; refresh=true; }
 
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
@@ -1982,6 +1987,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_commands_counters();
 		if (stats_mysql_users)
 			stats___mysql_users();
+		if (stats_mysql_gtid_executed)
+			stats___mysql_gtid_executed();
 
 		// cluster
 		if (stats_proxysql_servers_metrics) {
@@ -3491,6 +3498,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_digest_reset", STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_gtid_executed", STATS_SQLITE_TABLE_MYSQL_GTID_EXECUTED);
 	insert_into_tables_defs(tables_defs_stats,"stats_memory_metrics", STATS_SQLITE_TABLE_MEMORY_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_users", STATS_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES); // workaround for issue #708
@@ -6509,6 +6517,57 @@ void ProxySQL_Admin::stats___mysql_users() {
 	free(ads);
 }
 
+void ProxySQL_Admin::stats___mysql_gtid_executed() {
+	int i;
+	statsdb->execute("DELETE FROM stats_mysql_gtid_executed");
+	SQLite3_result *resultset=NULL;
+	resultset = MyHGM->get_stats_mysql_gtid_executed();
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement1=NULL;
+		sqlite3_stmt *statement32=NULL;
+		sqlite3 *mydb3=statsdb->get_db();
+		char *query1=NULL;
+		char *query32=NULL;
+		query1=(char *)"INSERT INTO stats_mysql_gtid_executed VALUES (?1, ?2, ?3)";
+		query32=(char *)"INSERT INTO stats_mysql_gtid_executed VALUES (?1, ?2, ?3), (?4, ?5, ?6), (?7, ?8, ?9), (?10, ?11, ?12), (?13, ?14, ?15), (?16, ?17, ?18), (?19, ?20, ?21), (?22, ?23, ?24), (?25, ?26, ?27), (?28, ?29, ?30), (?31, ?32, ?33), (?34, ?35, ?36), (?37, ?38, ?39), (?40, ?41, ?42), (?43, ?44, ?45), (?46, ?47, ?48), (?49, ?50, ?51), (?52, ?53, ?54), (?55, ?56, ?57), (?58, ?59, ?60), (?61, ?62, ?63), (?64, ?65, ?66), (?67, ?68, ?69), (?70, ?71, ?72), (?73, ?74, ?75), (?76, ?77, ?78), (?79, ?80, ?81), (?82, ?83, ?84), (?85, ?86, ?87), (?88, ?89, ?90), (?91, ?92, ?93), (?94, ?95, ?96)";
+
+		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		assert(rc==SQLITE_OK);
+		rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+		assert(rc==SQLITE_OK);
+		int row_idx=0;
+		int max_bulk_row_idx=resultset->rows_count/32;
+		max_bulk_row_idx=max_bulk_row_idx*32;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r1=*it;
+			int idx=row_idx%32;
+			if (row_idx<max_bulk_row_idx) { // bulk
+				rc=sqlite3_bind_text(statement32, (idx*3)+1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*3)+2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement32, (idx*3)+3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				if (idx==31) {
+					SAFE_SQLITE3_STEP(statement32);
+					rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
+					rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+				}
+			} else { // single row
+				rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				SAFE_SQLITE3_STEP(statement1);
+				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			}
+			row_idx++;
+		}
+		sqlite3_finalize(statement1);
+		sqlite3_finalize(statement32);
+		delete resultset;
+		resultset = NULL;
+	}
+}
+
 void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	char *query=NULL;
 	if (_runtime) {
@@ -7400,7 +7459,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 				}
 			}
 			server.lookupValue("port", port);
-			server.lookupValue("gtid_port", port);
+			server.lookupValue("gtid_port", gtid_port);
 			if (server.lookupValue("hostgroup", hostgroup)==false) continue;
 			server.lookupValue("status", status);
 			if (
@@ -7421,7 +7480,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
 			char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+strlen(o)+128);
-			sprintf(query,q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
+			sprintf(query,q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
