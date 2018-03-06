@@ -1028,22 +1028,22 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 		SQLite3_row *r=*it;
 		char *o=NULL;
 		int comment_length=0;	// #issue #643
-		if (r->fields[2]) { // comment is not null
-			o=escape_string_single_quotes(r->fields[2],false);
+		//if (r->fields[3]) { // comment is not null
+			o=escape_string_single_quotes(r->fields[3],false);
 			comment_length=strlen(o);
-		}
+		//}
 		char *query=(char *)malloc(256+comment_length);
-		if (r->fields[2]) { // comment is not null
-			sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s,'%s')",r->fields[0], r->fields[1], o);
-			if (o!=r->fields[2]) { // there was a copy
+		//if (r->fields[3]) { // comment is not null
+			sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s,'%s','%s')",r->fields[0], r->fields[1], r->fields[2], o);
+			if (o!=r->fields[3]) { // there was a copy
 				free(o);
 			}
-		} else {
-			sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
-		}
+		//} else {
+			//sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
+		//}
 		mydb->execute(query);
 		if (GloMTH->variables.hostgroup_manager_verbose) {
-			fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s, %s\n", r->fields[0],r->fields[1], r->fields[2]);
+			fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s, check_type %s, comment: %s\n", r->fields[0],r->fields[1], r->fields[2], r->fields[3]);
 		}
 		free(query);
 	}
@@ -1172,7 +1172,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgrou
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, comment FROM mysql_replication_hostgroups";
+	char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();

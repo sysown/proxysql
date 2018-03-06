@@ -606,7 +606,15 @@ void * monitor_read_only_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'read_only'");
+	if (mmsd->task_id == MON_INNODB_READ_ONLY) {
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'innodb_read_only'");
+	} else {
+		if (mmsd->task_id == MON_SUPER_READ_ONLY) {
+			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'super_read_only'");
+		} else {
+			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'read_only'");
+		}
+	}
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
@@ -1523,7 +1531,7 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -1555,6 +1563,16 @@ void * MySQL_Monitor::monitor_read_only() {
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
 				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
+				mmsd->task_id = MON_READ_ONLY; // default
+				if (r->fields[3]) {
+					if (strcasecmp(r->fields[3],(char *)"innodb_read_only")==0) {
+						mmsd->task_id = MON_INNODB_READ_ONLY;
+					} else {
+						if (strcasecmp(r->fields[3],(char *)"super_read_only")==0) {
+							mmsd->task_id = MON_SUPER_READ_ONLY;
+						}
+					}
+				}
 				mmsd->mondb=monitordb;
 				WorkItem* item;
 				item=new WorkItem(mmsd,monitor_read_only_thread);
