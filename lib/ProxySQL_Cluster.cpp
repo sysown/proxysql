@@ -189,6 +189,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, NULL, 0); // added extra check, see #1323 
 	}
 __exit_monitor_thread:
+	if (conn)
 	if (conn->net.pvio) {
 		mysql_close(conn);
 	}
