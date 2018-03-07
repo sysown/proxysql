@@ -2480,6 +2480,8 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					if (resultset2) { delete resultset2; resultset2=NULL; }
 					free(query2);
 				}
+				sprintf(query,Q2A,hostname,port);
+				admindb->execute(query);
 				sprintf(query,Q2B,hostname,port);
 				admindb->execute(query);
 				if (mysql_thread___monitor_writer_is_also_reader) {
