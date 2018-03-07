@@ -1322,7 +1322,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	//Copy4B(&hdr,pkt);
 	pkt     += sizeof(mysql_hdr);
 	capabilities     = CPY4(pkt);
-	(*myds)->myconn.options.client_flags = capabilities;
+	(*myds)->myconn->options.client_flag = capabilities;
 	pkt     += sizeof(uint32_t);
 	max_pkt  = CPY4(pkt);
 	pkt     += sizeof(uint32_t);
