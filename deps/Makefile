@@ -11,9 +11,9 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev coredumper
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev coredumper
 endif
 .PHONY: default
 
@@ -23,6 +23,12 @@ libev/libev/.libs/libev.a:
 	cd libev/libev  && ./configure
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
 ev: libev/libev/.libs/libev.a
+
+google-coredumper/google-coredumper/.libs/libcoredumper.a:
+	cd google-coredumper && rm -rf google-coredumper || true
+	cd google-coredumper && tar -zxf google-coredumper.tar.gz
+	cd google-coredumper/google-coredumper && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+coredumper: google-coredumper/google-coredumper/.libs/libcoredumper.a
 
 
 curl/curl/lib/.libs/libcurl.a:
@@ -152,5 +158,6 @@ cleanall:
 	cd lz4 && rm -rf lz4-1.7.5 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd curl && rm -rf curl-7.57.0 || true
+	cd google-coredumper && rm -rf google-coredumper || true
 .PHONY: cleanall
 
