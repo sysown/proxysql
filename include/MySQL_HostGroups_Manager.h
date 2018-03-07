@@ -300,7 +300,7 @@ class MySrvConnList {
 		conns->remove_index_fast((unsigned int)i);
 	}
 	MySQL_Connection *remove(int);
-	MySQL_Connection * get_random_MyConn(bool ff);
+	MySQL_Connection * get_random_MyConn(MySQL_Session *sess, bool ff);
 	unsigned int conns_length();
 	void drop_all_connections();
 	MySQL_Connection *index(unsigned int);
@@ -491,7 +491,7 @@ class MySQL_HostGroups_Manager {
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int, bool ff, char * gtid_uuid, uint64_t gtid_trxid);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);

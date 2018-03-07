@@ -2044,7 +2044,7 @@ unsigned int MySrvList::cnt() {
 
 MySrvC * MySrvList::idx(unsigned int i) { return (MySrvC *)servers->index(i); }
 
-MySQL_Connection * MySrvConnList::get_random_MyConn(bool ff) {
+MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int l=conns_length();
@@ -2054,7 +2054,45 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(bool ff) {
 		} else {
 			i=fastrand()%l;
 		}
-		conn=(MySQL_Connection *)conns->remove_index_fast(i);
+		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
+			// try to match schemaname
+			char *schema = sess->client_myds->myconn->userinfo->schemaname;
+			bool conn_found = false;
+			unsigned int k;
+			for (k = i; conn_found == false && k < l; k++) {
+				conn = (MySQL_Connection *)conns->index(k);
+				if (strcmp(conn->userinfo->schemaname,schema)==0) {
+					conn_found = true;
+					i = k;
+				}
+			}
+			if (conn_found == false ) {
+				for (k = 0; conn_found == false && k < i; k++) {
+					conn = (MySQL_Connection *)conns->index(k);
+					if (strcmp(conn->userinfo->schemaname,schema)==0) {
+						conn_found = true;
+						i = k;
+					}
+				}
+			}
+			if (conn_found == true) {
+				conn=(MySQL_Connection *)conns->remove_index_fast(i);
+			} else {
+				// we may consider creating a new connection
+				unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+				unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+				if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
+					conn = new MySQL_Connection();
+					conn->parent=mysrvc;
+					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+				} else {
+					conn=(MySQL_Connection *)conns->remove_index_fast(i);
+				}
+			}
+		} else {
+			conn=(MySQL_Connection *)conns->remove_index_fast(i);
+		}
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 		return conn;
 	} else {
@@ -2080,14 +2118,14 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(bool ff) {
 	return NULL; // never reach here
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, bool ff, char * gtid_uuid, uint64_t gtid_trxid) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
-		conn=mysrvc->ConnectionsFree->get_random_MyConn(ff);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.myconnpoll_get_ok++;

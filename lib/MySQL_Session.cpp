@@ -4006,22 +4006,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		MySQL_Backend * _gtid_from_backend = NULL;
 		char uuid[64];
 		uint64_t trxid = 0;
-#ifdef STRESSTEST_POOL
-		int i=100;
-		while (i) {
-			if (mc==NULL) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward);
-			}
-			if (mc) {
-				mybe->server_myds->attach_connection(mc);
-				if (i > 1) {
-					mybe->server_myds->return_MySQL_Connection_To_Pool();
-					mc=NULL;
-				}
-			}
-		i--;
-		}
-#else
 		if (session_fast_forward == false) {
 			if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
@@ -4043,16 +4027,16 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					}
 				}
 				uuid[n]='\0';
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, NULL, uuid, trxid);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid);
 			} else {
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, NULL, NULL, 0);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0);
 			}
 		}
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward, uuid, trxid);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward, NULL, 0);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0);
 			}
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
@@ -4063,7 +4047,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		} else {
 			thread->status_variables.ConnPool_get_conn_failure++;
 		}
-#endif
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
 	if (mybe->server_myds->myconn==NULL) {
 		// we couldn't get a connection for whatever reason, ex: no backends, or too busy
