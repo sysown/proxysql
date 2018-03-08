@@ -26,6 +26,7 @@
 #include "platform.h"
 #include "microhttpd.h"
 
+#include "google/coredumper.h"
 
 //#define MYSQL_THREAD_IMPLEMENTATION
 
@@ -642,6 +643,15 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		} else {
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is not paused, impossible to resume");
 		}
+		return false;
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL COREDUMP") && !strncasecmp("PROXYSQL COREDUMP",query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL COREDUMP\n");
+		proxy_info("Generating Core Dump\n");
+		WriteCoreDump((const char *)"test_dump");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
 
