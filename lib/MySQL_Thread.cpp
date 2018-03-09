@@ -4565,13 +4565,35 @@ void MySQL_Thread::Get_Memory_Stats() {
 }
 
 
-MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid) {
+MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess) {
 	unsigned int i;
+	unsigned int bc = 0; // best candidate
+	bool pcf = false; // possible candidate found
+	unsigned int npc = 0; // number of possible candidates
 	MySQL_Connection *c=NULL;
 	for (i=0; i<cached_connections->len; i++) {
 		c=(MySQL_Connection *)cached_connections->index(i);
 		if (c->parent->myhgc->hid==_hid) {
-			c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+			if (pcf == false) {
+				bc = i;
+				pcf = true;
+			}
+			npc++;
+			if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
+				char *schema = sess->client_myds->myconn->userinfo->schemaname;
+				if (strcmp(c->userinfo->schemaname,schema)==0) {
+					c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+					return c;
+				}
+			} else {
+				c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+				return c;
+			}
+		}
+	}
+	if (pcf) { // there was a possible connection, but we skipped trying to find a better one
+		if (npc > 5) { // more candidates were evaluated
+			c=(MySQL_Connection *)cached_connections->remove_index_fast(bc);
 			return c;
 		}
 	}

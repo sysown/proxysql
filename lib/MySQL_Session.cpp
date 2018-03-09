@@ -3951,10 +3951,10 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 #else
 		if (session_fast_forward == false) {
-			mc=thread->get_MyConn_local(mybe->hostgroup_id); // experimental , #644
+			mc=thread->get_MyConn_local(mybe->hostgroup_id, this); // experimental , #644
 		}
 		if (mc==NULL) {
-			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, session_fast_forward);
+			mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward);
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
 		}
