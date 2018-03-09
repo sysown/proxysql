@@ -912,7 +912,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		spin_rdunlock(&rwlock); // unlock should be after the copy
 #endif
 	}
-	QP_rule_t *qr;
+	QP_rule_t *qr = NULL;
 	re2_t *re2p;
 	int flagIN=0;
 	ret->next_query_flagIN=-1; // reset
@@ -1154,7 +1154,7 @@ __internal_loop:
 	}
 
 __exit_process_mysql_query:
-	if (qr->apply == false) {
+	if (qr == NULL || qr->apply == false) {
 		// now it is time to check mysql_query_rules_fast_routing
 		// it is only check if "apply" is not true
 		string s = sess->client_myds->myconn->userinfo->username;
