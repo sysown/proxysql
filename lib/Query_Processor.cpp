@@ -301,6 +301,7 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
+__thread std::unordered_map<std::string, int> * _thr_SQP_rules_fast_routing;
 __thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 
 Query_Processor::Query_Processor() {
@@ -375,16 +376,37 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_UPDATE]=(char *)"UPDATE";
   commands_counters_desc[MYSQL_COM_QUERY_USE]=(char *)"USE";
   commands_counters_desc[MYSQL_COM_QUERY_UNKNOWN]=(char *)"UNKNOWN";
+
+	{
+		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+		rand_del[0] = '-';
+		rand_del[1] = '-';
+		rand_del[2] = '-';
+		for (int i = 3; i < 11; i++) {
+			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+		}
+		rand_del[11] = '-';
+		rand_del[12] = '-';
+		rand_del[13] = '-';
+		rand_del[14] = 0;
+	}
+	fast_routing_resultset = NULL;
+
 };
 
 Query_Processor::~Query_Processor() {
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete commands_counters[i];
 	__reset_rules(&rules);
+	rules_fast_routing.clear();
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		delete qds;
 	}
 	digest_umap.erase(digest_umap.begin(),digest_umap.end());
+	if (fast_routing_resultset) {
+		delete fast_routing_resultset;
+		fast_routing_resultset = NULL;
+	}
 };
 
 // This function is called by each thread when it starts. It create a Query Processor Table for each thread
@@ -392,6 +414,7 @@ void Query_Processor::init_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Per-Thread Query Processor Table with version=0\n");
 	_thr_SQP_version=0;
 	_thr_SQP_rules=new std::vector<QP_rule_t *>;
+	_thr_SQP_rules_fast_routing = new std::unordered_map<std::string, int>;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) _thr_commands_counters[i] = new Command_Counter(i);
 };
 
@@ -400,6 +423,7 @@ void Query_Processor::end_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Destroying Per-Thread Query Processor Table with version=%d\n", _thr_SQP_version);
 	__reset_rules(_thr_SQP_rules);
 	delete _thr_SQP_rules;
+	delete _thr_SQP_rules_fast_routing;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete _thr_commands_counters[i];
 };
 
@@ -499,6 +523,7 @@ void Query_Processor::reset_all(bool lock) {
 		spin_wrlock(&rwlock);
 #endif
 	__reset_rules(&rules);
+	rules_fast_routing.clear();
 	if (lock)
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
@@ -659,6 +684,41 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping Query Rule id: %d\n", qr1->rule_id);
 		result->add_row(qt->pta);
 		delete qt;
+	}
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
+	spin_rdunlock(&rwlock);
+#endif
+	return result;
+}
+
+SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules fast_routing, using Global version %d\n", version);
+	SQLite3_result *result=new SQLite3_result(5);
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&rwlock);
+#else
+	spin_rdlock(&rwlock);
+#endif
+	//QP_rule_t *qr1;
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"flagIN");
+	result->add_column_definition(SQLITE_TEXT,"destination_hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"comment");
+/*
+	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
+		qr1=*it;
+		QP_rule_text *qt=new QP_rule_text(qr1);
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping Query Rule id: %d\n", qr1->rule_id);
+		result->add_row(qt->pta);
+		delete qt;
+	}
+*/
+	for (std::vector<SQLite3_row *>::iterator it = fast_routing_resultset->rows.begin() ; it != fast_routing_resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		result->add_row(r);
 	}
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
@@ -836,6 +896,11 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				_thr_SQP_rules->push_back(qr2);
 			}
 		}
+		delete _thr_SQP_rules_fast_routing;
+		_thr_SQP_rules_fast_routing = new std::unordered_map<std::string, int>(rules_fast_routing);
+		//for (std::unordered_map<std::string, int>::iterator it = rules_fast_routing.begin(); it != rules_fast_routing.end(); ++it) {
+		//	_thr_SQP_rules_fast_routing->insert(
+		//}
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
 #else
@@ -1079,6 +1144,21 @@ __internal_loop:
 	}
 
 __exit_process_mysql_query:
+	if (qr->apply == false) {
+		// now it is time to check mysql_query_rules_fast_routing
+		// it is only check if "apply" is not true
+		string s = sess->client_myds->myconn->userinfo->username;
+		s.append(rand_del);
+		s.append(sess->client_myds->myconn->userinfo->schemaname);
+		s.append(rand_del);
+		s.append(std::to_string(flagIN));
+		s.append(rand_del);
+		std::unordered_map<std::string, int>:: iterator it;
+		it = _thr_SQP_rules_fast_routing->find(s);
+		if (it != _thr_SQP_rules_fast_routing->end()) {
+			ret->destination_hostgroup = it->second;
+		}
+	}
 	// FIXME : there is too much data being copied around
 	if (len < stackbuffer_size) {
 		// query is in the stack
@@ -1701,4 +1781,20 @@ void Query_Processor::query_parser_free(SQP_par_t *qp) {
 		free(qp->first_comment);
 		qp->first_comment=NULL;
 	}
+};
+
+void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		string s = r->fields[0];
+		s.append(rand_del);
+		s.append(r->fields[1]);
+		s.append(rand_del);
+		s.append(r->fields[2]);
+		s.append(rand_del);
+		int destination_hostgroup = atoi(r->fields[3]);
+		rules_fast_routing[s] = destination_hostgroup;
+	}
+	delete fast_routing_resultset;
+	fast_routing_resultset = resultset; // save it
 };

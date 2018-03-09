@@ -169,6 +169,7 @@ class Command_Counter {
 
 class Query_Processor {
 	private:
+	char rand_del[16];
 	umap_query_digest digest_umap;
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_t digest_rwlock;
@@ -184,6 +185,7 @@ class Query_Processor {
 	rwlock_t rwlock;
 #endif
 	std::vector<QP_rule_t *> rules;
+	std::unordered_map<std::string,int> rules_fast_routing;
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 	volatile unsigned int version;
 	public:
@@ -226,6 +228,11 @@ class Query_Processor {
 
 	unsigned long get_query_digests_total_size();
 
+
+	// fast routing
+	SQLite3_result * fast_routing_resultset;
+	void load_fast_routing(SQLite3_result *resultset);
+	SQLite3_result * get_current_query_rules_fast_routing();
 };
 
 typedef Query_Processor * create_Query_Processor_t();

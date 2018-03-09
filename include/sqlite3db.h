@@ -138,6 +138,13 @@ class SQLite3_result {
 		rows_count++;
 		return SQLITE_ROW;
 	};
+	int add_row(SQLite3_row *old_row) {
+		SQLite3_row *row=new SQLite3_row(columns);
+		row->add_fields(old_row->fields);
+		rows.push_back(row);
+		rows_count++;
+		return SQLITE_ROW;
+	};
 	SQLite3_result(sqlite3_stmt *stmt) {
 		rows_count=0;
 		columns=sqlite3_column_count(stmt);
