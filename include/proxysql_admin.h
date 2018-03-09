@@ -218,6 +218,7 @@ class ProxySQL_Admin {
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
 	void save_mysql_query_rules_from_runtime(bool);
+	void save_mysql_query_rules_fast_routing_from_runtime(bool);
 
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
