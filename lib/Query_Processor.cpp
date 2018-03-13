@@ -1150,9 +1150,8 @@ __exit_process_mysql_query:
 		string s = sess->client_myds->myconn->userinfo->username;
 		s.append(rand_del);
 		s.append(sess->client_myds->myconn->userinfo->schemaname);
-		s.append(rand_del);
+		s.append("---");
 		s.append(std::to_string(flagIN));
-		s.append(rand_del);
 		std::unordered_map<std::string, int>:: iterator it;
 		it = _thr_SQP_rules_fast_routing->find(s);
 		if (it != _thr_SQP_rules_fast_routing->end()) {
