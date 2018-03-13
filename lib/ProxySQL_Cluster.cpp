@@ -20,7 +20,14 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
-
+#define SAFE_SQLITE3_STEP2(_stmt) do {\
+        do {\
+                rc=sqlite3_step(_stmt);\
+                if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
+                        usleep(100);\
+                }\
+        } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
+} while (0)
 
 static char *NODE_COMPUTE_DELIMITER=(char *)"-gtyw23a-"; // a random string used for hashing
 
@@ -698,7 +705,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 						rc=sqlite3_bind_int64(statement1, 11, atoll(row[10])); assert(rc==SQLITE_OK); // frontend
 						rc=sqlite3_bind_int64(statement1, 12, atoll(row[11])); assert(rc==SQLITE_OK); // max_connection
 
-						SAFE_SQLITE3_STEP(statement1);
+						SAFE_SQLITE3_STEP2(statement1);
 						rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 						rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 					}
@@ -764,7 +771,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 					result1 = mysql_store_result(conn);
 
 					//rc_query = mysql_query(conn,"SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups");
-					rc_query = mysql_query(conn,CLSUTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS);
+					rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS);
 					if ( rc_query == 0 ) {
 						result2 = mysql_store_result(conn);
 						proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d completed\n", hostname, port);
