@@ -777,6 +777,7 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	okpack[4]=0;
 	okpack[13]=0;
 	okpack[15]=0;
+	pthread_rwlock_rdlock(&stmt_info->rwlock_);
 	if (_stmt_id) {
 		memcpy(okpack+5,&_stmt_id,sizeof(uint32_t));
 	} else {
@@ -817,6 +818,7 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 		generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
 		sid++;
 	}
+	pthread_rwlock_unlock(&stmt_info->rwlock_);
 	return true;
 }
 
