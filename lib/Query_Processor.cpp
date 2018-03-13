@@ -1147,15 +1147,18 @@ __exit_process_mysql_query:
 	if (qr == NULL || qr->apply == false) {
 		// now it is time to check mysql_query_rules_fast_routing
 		// it is only check if "apply" is not true
-		string s = sess->client_myds->myconn->userinfo->username;
-		s.append(rand_del);
-		s.append(sess->client_myds->myconn->userinfo->schemaname);
-		s.append("---");
-		s.append(std::to_string(flagIN));
-		std::unordered_map<std::string, int>:: iterator it;
-		it = _thr_SQP_rules_fast_routing->find(s);
-		if (it != _thr_SQP_rules_fast_routing->end()) {
-			ret->destination_hostgroup = it->second;
+		size_t mapl = _thr_SQP_rules_fast_routing->size();
+		if (mapl) { // trigger new routing algorithm only if rules exists
+			string s = sess->client_myds->myconn->userinfo->username;
+			s.append(rand_del);
+			s.append(sess->client_myds->myconn->userinfo->schemaname);
+			s.append("---");
+			s.append(std::to_string(flagIN));
+			std::unordered_map<std::string, int>:: iterator it;
+			it = _thr_SQP_rules_fast_routing->find(s);
+			if (it != _thr_SQP_rules_fast_routing->end()) {
+				ret->destination_hostgroup = it->second;
+			}
 		}
 	}
 	// FIXME : there is too much data being copied around
