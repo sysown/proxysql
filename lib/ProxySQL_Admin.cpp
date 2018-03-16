@@ -7851,7 +7851,7 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		//drop any existing table with suffix _v144
 		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v144");
                 // rename current table to add suffix _v144
-                configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v44");
+                configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v144");
                 // create new table
                 configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
                 // copy fields from old table
