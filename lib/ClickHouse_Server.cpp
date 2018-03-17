@@ -143,6 +143,16 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				case clickhouse::Type::Code::FixedString:
 					s=block[i]->As<ColumnFixedString>()->At(r);
 					break;
+				case clickhouse::Type::Code::Nullable:
+					{
+						auto s_t = block[i]->As<ColumnNullable>();
+						if (s_t->IsNull(r)) {
+							s = "\\N";
+						} else {
+							s = s_t->Nested()->As<ColumnString>()->At(r);
+						}
+				}
+					break;
 				case clickhouse::Type::Code::Date:
 					{
 						std::time_t t=block[i]->As<ColumnDate>()->At(r);
