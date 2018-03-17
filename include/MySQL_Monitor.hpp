@@ -135,6 +135,7 @@ class MySQL_Monitor {
 	void * monitor_replication_lag();
 	void * run();
 	void populate_monitor_mysql_server_group_replication_log();
+	bool server_responds_to_ping(char *address, int port);
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */

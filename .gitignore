@@ -113,6 +113,9 @@ deps/pcre/pcre/
 deps/curl/curl/
 deps/curl/curl-7.57.0/
 
+# google-coredumper
+deps/google-coredumper/google-coredumper/
+
 #protobuf
 deps/protobuf/protobuf-2.6.1/
 
