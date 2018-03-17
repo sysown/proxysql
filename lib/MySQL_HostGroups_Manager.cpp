@@ -2925,11 +2925,14 @@ __exit_read_only_action:
 // shun_and_killall
 // this function is called only from MySQL_Monitor::monitor_ping()
 // it temporary disables a host that is not responding to pings, and mark the host in a way that when used the connection will be dropped
-void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
+// return true if the status was changed
+bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
+	time_t t = time(NULL);
+	bool ret = false;
 	wrlock();
 	MySrvC *mysrvc=NULL;
-  for (unsigned int i=0; i<MyHostGroups->len; i++) {
-    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+	MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		unsigned int j;
 		unsigned int l=myhgc->mysrvs->cnt();
 		if (l) {
@@ -2942,6 +2945,9 @@ void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 								break;
 							}
 						case MYSQL_SERVER_STATUS_ONLINE:
+							if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
+								ret = true;
+							}
 							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED;
 						case MYSQL_SERVER_STATUS_OFFLINE_SOFT:
 							mysrvc->shunned_automatic=true;
@@ -2951,11 +2957,13 @@ void MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 						default:
 							break;
 					}
+					mysrvc->time_last_detected_error = t;
 				}
 			}
 		}
 	}
 	wrunlock();
+	return ret;
 }
 
 // set_server_current_latency_us

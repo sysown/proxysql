@@ -1579,12 +1579,16 @@ void * MySQL_Monitor::monitor_connect() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_connect_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[0],atoi(r->fields[1]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_connect_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) return NULL;
 			}
 		}
@@ -1757,8 +1761,11 @@ __end_monitor_ping_loop:
 					if (resultset) {
 						if (resultset->rows_count) {
 							// disable host
-							proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections\n", addresses[j], ports[j], max_failures);
-							MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+							bool rc_shun = false;
+							rc_shun = MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+							if (rc_shun) {
+								proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections. Disabling other checks until the node comes back online.\n", addresses[j], ports[j], max_failures);
+							}
 						}
 						delete resultset;
 						resultset=NULL;
@@ -1856,6 +1863,39 @@ __sleep_monitor_ping_loop:
 	return NULL;
 }
 
+
+
+bool MySQL_Monitor::server_responds_to_ping(char *address, int port) {
+	bool ret = true; // default
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *new_query=NULL;
+	new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port=%d ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
+	char *buff=(char *)malloc(strlen(new_query)+strlen(address)+32);
+	int max_failures = mysql_thread___monitor_ping_max_failures;
+	sprintf(buff,new_query,address,port,max_failures,max_failures);
+	monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+	if (!error) {
+		if (resultset) {
+			if (resultset->rows_count) {
+				ret = false;
+			}
+			delete resultset;
+			resultset=NULL;
+		}
+	} else {
+		proxy_error("Error on %s : %s\n", buff, error);
+	}
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+	free(buff);
+	return ret;
+}
+
 void * MySQL_Monitor::monitor_read_only() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
@@ -1906,22 +1946,26 @@ void * MySQL_Monitor::monitor_read_only() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
-				mmsd->task_id = MON_READ_ONLY; // default
-				if (r->fields[3]) {
-					if (strcasecmp(r->fields[3],(char *)"innodb_read_only")==0) {
-						mmsd->task_id = MON_INNODB_READ_ONLY;
-					} else {
-						if (strcasecmp(r->fields[3],(char *)"super_read_only")==0) {
-							mmsd->task_id = MON_SUPER_READ_ONLY;
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[0],atoi(r->fields[1]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
+					mmsd->task_id = MON_READ_ONLY; // default
+					if (r->fields[3]) {
+						if (strcasecmp(r->fields[3],(char *)"innodb_read_only")==0) {
+							mmsd->task_id = MON_INNODB_READ_ONLY;
+						} else {
+							if (strcasecmp(r->fields[3],(char *)"super_read_only")==0) {
+								mmsd->task_id = MON_SUPER_READ_ONLY;
+							}
 						}
 					}
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_read_only_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
 				}
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_read_only_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
 				if (GloMyMon->shutdown) return NULL;
 			}
 		}
@@ -2240,12 +2284,16 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1], atoi(r->fields[2]), NULL, atoi(r->fields[4]), atoi(r->fields[0]));
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_replication_lag_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[0],atoi(r->fields[1]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1], atoi(r->fields[2]), NULL, atoi(r->fields[4]), atoi(r->fields[0]));
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_replication_lag_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) return NULL;
 			}
 		}
