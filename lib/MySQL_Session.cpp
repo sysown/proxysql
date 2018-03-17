@@ -3268,6 +3268,14 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		l_free(pkt->size,pkt->ptr);
 		//if (client_myds->encrypted==false) {
 			if (client_myds->myconn->userinfo->schemaname==NULL) {
+#ifdef PROXYSQLCLICKHOUSE
+				if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+					if (strlen(default_schema) == 0) {
+						free(default_schema);
+						default_schema = strdup((char *)"default");
+					}
+				}
+#endif /* PROXYSQLCLICKHOUSE */
 				client_myds->myconn->userinfo->set_schemaname(default_schema,strlen(default_schema));
 			}
 			int free_users=0;
