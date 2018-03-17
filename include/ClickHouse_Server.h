@@ -12,6 +12,7 @@ class ClickHouse_Session {
    public:
 	SQLite3DB *sessdb;
 	bool transfer_started;
+	bool schema_initialized;
 	uint8_t sid;	
 	ClickHouse_Session();
 	bool init();

@@ -2102,6 +2102,22 @@ __run_query:
 //				clickhouse::Client client(co);
 				//Block block;
 				if (clickhouse_sess->connected == true) {
+					if (clickhouse_sess->schema_initialized == false) {
+						if (sess && sess->client_myds) {
+							MySQL_Data_Stream *ds = sess->client_myds;
+							if (ds->myconn && ds->myconn->userinfo && ds->myconn->userinfo->schemaname) {
+								char *sn = ds->myconn->userinfo->schemaname;
+								char *use_query = NULL;
+								use_query = (char *)malloc(strlen(sn)+8);
+								sprintf(use_query,"USE %s", sn);
+								clickhouse::Query myq(use_query);
+								clickhouse_sess->client->Execute(myq);
+								free(use_query);
+							}
+						}
+						clickhouse_sess->schema_initialized = true;
+					}
+
 					if (expected_resultset) {
 						clickhouse_sess->client->Select(query, [](const Block& block) { ClickHouse_to_MySQL(block); } );
 
@@ -2174,6 +2190,7 @@ ClickHouse_Session::ClickHouse_Session() {
 	sessdb = new SQLite3DB();
     sessdb->open((char *)"file:mem_sqlitedb_clickhouse?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
 	transfer_started = false;
+	schema_initialized = false;
 }
 
 bool ClickHouse_Session::init() {
