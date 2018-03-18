@@ -509,6 +509,7 @@ int MySQL_Data_Stream::buffer2array() {
 						}
 					}
 					if (sanity_check == false) {
+						proxy_error("Unable to uncompress a compressed packet\n");
 						shut_soft();
 						return ret;
 					}
