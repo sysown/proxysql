@@ -283,6 +283,8 @@ MySQL_Session::MySQL_Session() {
 	init(); // we moved this out to allow CHANGE_USER
 
 	last_insert_id=0; // #1093
+
+	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 }
 
 void MySQL_Session::init() {
@@ -633,7 +635,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			return true;
 		}
 	}
-
+/*
 	if (
 		(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
 		||
@@ -665,6 +667,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		free(l);
 		return true;
 	}
+*/
 	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
 		PtrSize_t pkt_2;
@@ -2615,9 +2618,16 @@ handler_again:
 					if (qdt)
 						myconn->ProcessQueryAndSetStatusFlags(qdt);
 
-					// Support for LAST_INSERT_ID()
-					if (myconn->mysql->insert_id) {
-						last_insert_id=myconn->mysql->insert_id;
+					if (mirror == false) {
+						// Support for LAST_INSERT_ID()
+						if (myconn->mysql->insert_id) {
+							last_insert_id=myconn->mysql->insert_id;
+						}
+						if (myconn->mysql->affected_rows) {
+							if (myconn->mysql->affected_rows != ULLONG_MAX) {
+								last_HG_affected_rows = current_hostgroup;
+							}
+						}
 					}
 
 					switch (status) {
@@ -3831,6 +3841,73 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		current_hostgroup=qpo->destination_hostgroup;
 		return false;
 	}
+
+	// handle case #1421 , about LAST_INSERT_ID
+	if (CurrentQuery.QueryParserArgs.digest_text) {
+		char *dig=CurrentQuery.QueryParserArgs.digest_text;
+		if (strcasestr(dig,"LAST_INSERT_ID")) {
+			// we need to try to execute it where the last write was successful
+			if (last_HG_affected_rows >= 0) {
+				MySQL_Backend * _mybe = NULL;
+				_mybe = find_backend(last_HG_affected_rows);
+				if (_mybe) {
+					if (_mybe->server_myds) {
+						if (_mybe->server_myds->myconn) {
+							if (_mybe->server_myds->myconn->mysql) { // we have an established connection
+								// this seems to be the right backend
+								qpo->destination_hostgroup = last_HG_affected_rows;
+								current_hostgroup = qpo->destination_hostgroup;
+								return false; // execute it on backend!
+							}
+						}
+					}
+				}
+			}
+			// if we reached here, we don't know the right backend
+			// we try to determine if it is a simple "SELECT LAST_INSERT_ID()" and we return mysql->last_insert_id
+
+
+			if (
+				(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
+				||
+				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+			) {
+				char buf[32];
+				sprintf(buf,"%llu",last_insert_id);
+				unsigned int nTrx=NumActiveTransactions();
+				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+				if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+				MySQL_Data_Stream *myds=client_myds;
+				MySQL_Protocol *myprot=&client_myds->myprot;
+				myds->DSS=STATE_QUERY_SENT_DS;
+				int sid=1;
+				myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+				myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
+				myds->DSS=STATE_COLUMN_DEFINITION;
+				myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+				char **p=(char **)malloc(sizeof(char*)*1);
+				unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+				l[0]=strlen(buf);
+				p[0]=buf;
+				myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+				myds->DSS=STATE_ROW;
+				myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+				myds->DSS=STATE_SLEEP;
+				l_free(pkt->size,pkt->ptr);
+				free(p);
+				free(l);
+				RequestEnd(NULL);
+				return true;
+			}
+
+			// if we reached here, we don't know the right backend and we cannot answer the query directly
+			// We continue the normal way
+
+			// as a precaution, we reset cache_ttl
+			qpo->cache_ttl = 0;
+		}
+	}
+
 	if (qpo->cache_ttl>0) {
 		uint32_t resbuf=0;
 		unsigned char *aa=GloQC->get(
