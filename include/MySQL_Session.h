@@ -144,6 +144,7 @@ class MySQL_Session
 
 	uint32_t thread_session_id;
 	unsigned long long last_insert_id;
+	int last_HG_affected_rows;
 	enum session_status status;
 	int healthy;
 	int user_max_connections;
