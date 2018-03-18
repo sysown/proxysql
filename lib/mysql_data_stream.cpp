@@ -467,9 +467,36 @@ int MySQL_Data_Stream::buffer2array() {
 			if (payload_length) {
 				// the payload is compressed
 				destLen=payload_length;
-				dest=(Bytef *)l_alloc(destLen);
+				//dest=(Bytef *)l_alloc(destLen);
+				dest=(Bytef *)malloc(destLen);
 				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-				assert(rc==Z_OK); 
+				if (rc!=Z_OK) {
+					// for some reason, uncompress failed
+					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
+					// we try to assume it is not compressed, and we do some sanity check
+					memcpy(dest, _ptr, queueIN.pkt.size-7);
+					datalength=queueIN.pkt.size-7;
+					// some sanity check now
+					unsigned char _u;
+					bool sanity_check = false;
+					_u = *(u+9);
+					// 2nd and 3rd bytes are 0
+					if (_u == 0) {
+						_u = *(u+8);
+						if (_u == 0) {
+							_u = *(u+7);
+							// 1st byte = size - 7
+							unsigned int _size = _u ;
+							if (queueIN.pkt.size-7 == _size) {
+								sanity_check = true;
+							}
+						}
+					}
+					if (sanity_check == false) {
+						shut_soft();
+						return ret;
+					}
+				}
 				datalength=payload_length;
 				// change _ptr to the new buffer
 				_ptr=dest;
@@ -514,7 +541,8 @@ int MySQL_Data_Stream::buffer2array() {
 				}
 			}
 			if (payload_length) {
-				l_free(destLen,dest);
+				//l_free(destLen,dest);
+				free(dest);
 			}
 			l_free(queueIN.pkt.size,queueIN.pkt.ptr);
 			pkts_recv++;
