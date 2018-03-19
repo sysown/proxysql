@@ -143,16 +143,6 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				case clickhouse::Type::Code::FixedString:
 					s=block[i]->As<ColumnFixedString>()->At(r);
 					break;
-				case clickhouse::Type::Code::Nullable:
-					{
-						auto s_t = block[i]->As<ColumnNullable>();
-						if (s_t->IsNull(r)) {
-							s = "\\N";
-						} else {
-							s = s_t->Nested()->As<ColumnString>()->At(r);
-						}
-				}
-					break;
 				case clickhouse::Type::Code::Date:
 					{
 						std::time_t t=block[i]->As<ColumnDate>()->At(r);
@@ -171,6 +161,76 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 						memset(date,0,sizeof(date));
 						strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", tm);
 						s=date;
+					}
+					break;
+				case clickhouse::Type::Code::Nullable:
+					{
+						auto s_t = block[i]->As<ColumnNullable>();
+						if (s_t->IsNull(r)) {
+							s = "\\N";
+						} else {
+							clickhouse::Type::Code cnc = block[i]->Type()->GetNestedType()->GetCode();
+							switch (cnc) {
+								case clickhouse::Type::Code::Int8:
+									s=std::to_string(s_t->Nested()->As<ColumnInt8>()->At(r));
+									break;
+								case clickhouse::Type::Code::UInt8:
+									s=std::to_string(s_t->Nested()->As<ColumnUInt8>()->At(r));
+									break;
+								case clickhouse::Type::Code::Int16:
+									s=std::to_string(s_t->Nested()->As<ColumnInt16>()->At(r));
+									break;
+								case clickhouse::Type::Code::UInt16:
+									s=std::to_string(s_t->Nested()->As<ColumnUInt16>()->At(r));
+									break;
+								case clickhouse::Type::Code::Int32:
+									s=std::to_string(s_t->Nested()->As<ColumnInt32>()->At(r));
+									break;
+								case clickhouse::Type::Code::UInt32:
+									s=std::to_string(s_t->Nested()->As<ColumnUInt32>()->At(r));
+									break;
+								case clickhouse::Type::Code::Int64:
+									s=std::to_string(s_t->Nested()->As<ColumnInt64>()->At(r));
+									break;
+								case clickhouse::Type::Code::UInt64:
+									s=std::to_string(s_t->Nested()->As<ColumnUInt64>()->At(r));
+									break;
+								case clickhouse::Type::Code::Float32:
+									s=std::to_string(s_t->Nested()->As<ColumnFloat32>()->At(r));
+									break;
+								case clickhouse::Type::Code::Float64:
+									s=std::to_string(s_t->Nested()->As<ColumnFloat64>()->At(r));
+									break;
+								case clickhouse::Type::Code::String:
+									s=s_t->Nested()->As<ColumnString>()->At(r);
+									break;
+								case clickhouse::Type::Code::FixedString:
+									s=s_t->Nested()->As<ColumnFixedString>()->At(r);
+									break;
+								case clickhouse::Type::Code::Date:
+									{
+										std::time_t t=block[i]->As<ColumnDate>()->At(r);
+										struct tm *tm = localtime(&t);
+										char date[20];
+										memset(date,0,sizeof(date));
+										strftime(date, sizeof(date), "%Y-%m-%d", tm);
+										s=date;
+									}
+									break;
+								case clickhouse::Type::Code::DateTime:
+									{
+										std::time_t t=block[i]->As<ColumnDateTime>()->At(r);
+										struct tm *tm = localtime(&t);
+										char date[20];
+										memset(date,0,sizeof(date));
+										strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", tm);
+										s=date;
+									}
+									break;
+								default:
+									break;
+							}
+						}
 					}
 					break;
 				default:
