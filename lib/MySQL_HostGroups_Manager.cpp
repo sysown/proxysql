@@ -1695,6 +1695,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		}
 	}
 	sqlite3_finalize(statement);
+	delete incoming_group_replication_hostgroups;
 	incoming_group_replication_hostgroups=NULL;
 
 	// remove missing ones
@@ -2308,6 +2309,10 @@ void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_resul
 }
 
 void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3_result *s) {
+	if (incoming_group_replication_hostgroups) {
+		delete incoming_group_replication_hostgroups;
+		incoming_group_replication_hostgroups = NULL;
+	}
 	incoming_group_replication_hostgroups=s;
 }
 
