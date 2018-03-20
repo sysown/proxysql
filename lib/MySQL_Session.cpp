@@ -1282,7 +1282,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection while setting INIT CONNECT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -1359,7 +1359,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection while setting SQL_LOG_BIN on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -1426,7 +1426,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection while setting SQL_MODE on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -1494,7 +1494,7 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection while setting TIME_ZONE on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -1552,7 +1552,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection during INIT_DB on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -1756,7 +1756,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection during change user on %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -1809,7 +1809,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -1866,7 +1866,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr > 2000) {
+			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
@@ -2791,7 +2791,7 @@ handler_again:
 							handler_ret = -1;
 							return handler_ret;
 						}
-						if (myerr > 2000) {
+						if (myerr >= 2000) {
 							bool retry_conn=false;
 							// client error, serious
 							proxy_error("Detected a broken connection during query on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
