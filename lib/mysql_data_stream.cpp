@@ -797,9 +797,9 @@ int MySQL_Data_Stream::buffer2array() {
 		memcpy((unsigned char *)queueIN.pkt.ptr + queueIN.partial, queue_r_ptr(queueIN),b);
 		queue_r(queueIN,b);
 		queueIN.partial+=b;
-		if (queueIN.partial == 80) {
-			proxy_info("Breakpoint\n");
-		}
+//		if (queueIN.partial == 80) {
+//			proxy_info("Breakpoint\n");
+//		}
 		ret+=b;
 	}
 	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
