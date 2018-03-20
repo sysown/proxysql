@@ -3194,6 +3194,13 @@ __end_while_pool:
 						delete resultset;
 					}
 				}
+				if (MyHGM) {
+					SQLite3_result * resultset=MyHGM->SQL3_Get_ConnPool_Stats();
+					if (resultset) {
+						GloProxyStats->MyHGM_Handler_sets(resultset);
+						delete resultset;
+					}
+				}
 			}
 			if (GloProxyStats->MySQL_Query_Cache_timetoget(curtime)) {
 				if (GloQC) {

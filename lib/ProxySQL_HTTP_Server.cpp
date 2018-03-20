@@ -596,12 +596,12 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			s1 = generate_canvas((char *)"myChart4");
 			s->append(s1->c_str());
 			s->append("</div>\n");
-			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics(interval_i);
 			char **nm = NULL;
 			char **nl = NULL;
 			char **nv = NULL;
 			char *ts = NULL;
 
+			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_mysql_metrics(interval_i);
 			nm = (char **)malloc(sizeof(char *)*6);
 			nm[0] = (char *)"Client_Connections_aborted";
 			nm[1] = (char *)"Client_Connections_connected";
@@ -666,6 +666,39 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			}
 			free(nv);
 			free(ts);
+
+
+			SQLite3_result *myhgm_metrics_sqlite = GloProxyStats->get_myhgm_metrics(interval_i);
+			nm = (char **)malloc(sizeof(char *)*5);
+			nm[0] = (char *)"MyHGM_myconnpoll_destroy";
+			nm[1] = (char *)"MyHGM_myconnpoll_get";
+			nm[2] = (char *)"MyHGM_myconnpoll_get_ok";
+			nm[3] = (char *)"MyHGM_myconnpoll_push";
+			nm[4] = (char *)"MyHGM_myconnpoll_reset";
+			nl = (char **)malloc(sizeof(char *)*5);
+			nl[0] = (char *)"MyHGM ConnPoll Destroy";
+			nl[1] = (char *)"MyHGM ConnPoll Get";
+			nl[2] = (char *)"MyHGM ConnPoll Get OK";
+			nl[3] = (char *)"MyHGM ConnPoll Push";
+			nl[4] = (char *)"MyHGM ConnPoll Reset";
+			nv = (char **)malloc(sizeof(char *)*5);
+			nv[0] = extract_values(myhgm_metrics_sqlite,2,true);
+			nv[1] = extract_values(myhgm_metrics_sqlite,3,true);
+			nv[2] = extract_values(myhgm_metrics_sqlite,4,true);
+			nv[3] = extract_values(myhgm_metrics_sqlite,5,true);
+			nv[4] = extract_values(myhgm_metrics_sqlite,6,true);
+			ts = extract_ts(myhgm_metrics_sqlite,true);
+			s1 = generate_chart((char *)"myChart3",ts,5,nm,nl,nv);
+			s->append(s1->c_str());
+			free(nm);
+			free(nl);
+			for (int aa=0 ; aa<5 ; aa++) {
+				free(nv[aa]);
+			}
+			free(nv);
+			free(ts);
+
+
 
 			s->append("</body></html>");
 			response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
