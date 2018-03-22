@@ -387,6 +387,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_SERVERS_INCOMING);
 	mydb->execute(MYHGM_MYSQL_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	queue = wqueue<MySQL_Connection *>();
 	MyHostGroups=new PtrArray();
 	incoming_replication_hostgroups=NULL;
 	incoming_group_replication_hostgroups=NULL;

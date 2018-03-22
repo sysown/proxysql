@@ -532,16 +532,18 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 						continue; // nothing left to clean up
 					}
 					MySQL_STMT_Global_info *a = it->second;
-					if (__sync_add_and_fetch(&a->ref_count_client, 0) == 0) {
+					if ((__sync_add_and_fetch(&a->ref_count_client, 0) == 0) &&
+						(a->ref_count_server == 0) ) // this to avoid that IDs are incorrectly reused
+					{
 						uint64_t hash = a->hash;
 						auto s2 = map_stmt_hash_to_info.find(hash);
 						if (s2 != map_stmt_hash_to_info.end()) {
 							map_stmt_hash_to_info.erase(s2);
 						}
 						__sync_sub_and_fetch(&num_stmt_with_ref_client_count_zero,1);
-						if (a->ref_count_server == 0) {
+						//if (a->ref_count_server == 0) {
 							//__sync_sub_and_fetch(&num_stmt_with_ref_server_count_zero,1);
-						}
+						//}
 						// m.erase(it);
 						// delete a;
 						i++;
