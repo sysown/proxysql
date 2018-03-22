@@ -2906,6 +2906,13 @@ handler_again:
 										sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 										client_myds->pkt_sid++;
+										if (previous_status.size()) {
+											// an STMT_PREPARE failed
+											// we have a previous status, probably STMT_EXECUTE,
+											//    but returning to that status is not safe after STMT_PREPARE failed
+											// for this reason we exit immediately
+											wrong_pass=true;
+										}
 									}
 									break;
 								case PROCESSING_STMT_EXECUTE:
