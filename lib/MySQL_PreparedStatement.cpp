@@ -483,6 +483,7 @@ uint64_t MySQL_STMTs_local_v14::compute_hash(unsigned int hostgroup, char *user,
 }
 
 MySQL_STMT_Manager_v14::MySQL_STMT_Manager_v14() {
+	last_purge_time = time(NULL);
 	pthread_rwlock_init(&rwlock_, NULL);
         map_stmt_id_to_info= std::map<uint64_t, MySQL_STMT_Global_info *>();       // map using statement id
         map_stmt_hash_to_info = std::map<uint64_t, MySQL_STMT_Global_info *>();     // map using hashes
@@ -518,18 +519,27 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 			}
 		}
 		stmt_info->ref_count_client += _v;
-			uint64_t num_count_zero = __sync_add_and_fetch(&num_stmt_with_ref_client_count_zero, 0);
+			time_t ct = time(NULL);
+			uint64_t num_client_count_zero = __sync_add_and_fetch(&num_stmt_with_ref_client_count_zero, 0);
+			uint64_t num_server_count_zero = __sync_add_and_fetch(&num_stmt_with_ref_server_count_zero, 0);
+
 			size_t map_size = map_stmt_id_to_info.size();
-			if (map_size > (unsigned)mysql_thread___max_stmts_cache && num_count_zero > map_size/10) { // purge only if there is at least 10% gain
-				int max_purge = map_size / 5;  // purge up to 20%
+			if (
+				(ct > last_purge_time+1) &&
+				(map_size > (unsigned)mysql_thread___max_stmts_cache ) &&
+				(num_client_count_zero > map_size/10) &&
+				(num_server_count_zero > map_size/10)
+			) { // purge only if there is at least 10% gain
+				last_purge_time = ct;
+				int max_purge = map_size ;
 				int i = -1;
 				uint64_t *torem =
 				    (uint64_t *)malloc(max_purge * sizeof(uint64_t));
 				for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it =
 				         map_stmt_id_to_info.begin();
 				     it != map_stmt_id_to_info.end(); ++it) {
-					if ( (i == (max_purge - 1)) || (i == (num_count_zero - 1)) ) {
-						continue; // nothing left to clean up
+					if ( (i == (max_purge - 1)) || (i == (num_client_count_zero - 1)) ) {
+						break; // nothing left to clean up
 					}
 					MySQL_STMT_Global_info *a = it->second;
 					if ((__sync_add_and_fetch(&a->ref_count_client, 0) == 0) &&
