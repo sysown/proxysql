@@ -238,6 +238,7 @@ class MySQL_STMT_Manager_v14 {
 		uint64_t s_unique;
 		uint64_t s_total;
 	} statuses;
+	time_t last_purge_time;
 	public:
 	MySQL_STMT_Manager_v14();
 	~MySQL_STMT_Manager_v14();
