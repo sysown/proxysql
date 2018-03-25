@@ -976,6 +976,57 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	return 0;
 }
 
+int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, myds->fd, myds, thread->curtime);
+	}
+	myds->DSS=STATE_MARIADB_QUERY;
+	// we recreate local_stmts : see issue #752
+	delete myconn->local_stmts;
+	myconn->local_stmts=new MySQL_STMTs_local_v14(false); // false by default, it is a backend
+	int rc=myconn->async_change_user(myds->revents);
+	if (rc==0) {
+		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
+		//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+		myds->myconn->reset();
+		myconn->async_state_machine=ASYNC_IDLE;
+//		if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+			myds->return_MySQL_Connection_To_Pool();
+//		} else {
+//			myds->destroy_MySQL_Connection_From_Pool(true);
+//		}
+		delete mybe->server_myds;
+		mybe->server_myds=NULL;
+		set_status(NONE);
+		return -1;
+	} else {
+		if (rc==-1 || rc==-2) {
+			if (rc==-2) {
+				proxy_error("Change user timeout during COM_CHANGE_USER on %s , %d\n", myconn->parent->address, myconn->parent->port);
+			} else { // rc==-1
+				int myerr=mysql_errno(myconn->mysql);
+				proxy_error("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+			}
+			myds->destroy_MySQL_Connection_From_Pool(false);
+			myds->fd=0;
+			//delete mybe->server_myds;
+			//mybe->server_myds=NULL;
+			RequestEnd(myds); //fix bug #682
+			return -1;
+		} else {
+			// rc==1 , nothing to do for now
+			if (myds->mypolls==NULL) {
+				thread->mypolls.add(POLLIN|POLLOUT, myds->fd, myds, thread->curtime);
+			}
+		}
+	}
+	return 0;
+}
+
+
 void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	if (myds->myconn && myds->myconn->mysql) {
@@ -2482,6 +2533,16 @@ handler_again:
 			}
 			break;
 
+		case RESETTING_CONNECTION:
+			{
+				int rc = handler_again___status_RESETTING_CONNECTION();
+				if (rc==-1) { // we always destroy the session
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
 		case PROCESSING_STMT_PREPARE:
 		case PROCESSING_STMT_EXECUTE:
 		case PROCESSING_QUERY:
@@ -2707,7 +2768,11 @@ handler_again:
 							myds->wait_until=0;
 							myds->DSS=STATE_NOT_INITIALIZED;
 							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-								myds->destroy_MySQL_Connection_From_Pool(true);
+								if (mysql_thread___reset_connection_algorithm == 2) {
+									create_new_session_and_reset_connection(myds);
+								} else {
+									myds->destroy_MySQL_Connection_From_Pool(true);
+								}
 							} else {
 								myds->return_MySQL_Connection_To_Pool();
 							}
@@ -2864,7 +2929,11 @@ handler_again:
 											proxy_warning("Retrying query.\n");
 										}
 									}
-									myds->destroy_MySQL_Connection_From_Pool(true);
+									if (mysql_thread___reset_connection_algorithm == 2) {
+										create_new_session_and_reset_connection(myds);
+									} else {
+										myds->destroy_MySQL_Connection_From_Pool(true);
+									}
 									myds->fd=0;
 									if (retry_conn) {
 										myds->DSS=STATE_NOT_INITIALIZED;
@@ -2932,7 +3001,11 @@ handler_again:
 								if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 									myds->DSS=STATE_NOT_INITIALIZED;
 									if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-										myds->destroy_MySQL_Connection_From_Pool(true);
+										if (mysql_thread___reset_connection_algorithm == 2) {
+											create_new_session_and_reset_connection(myds);
+										} else {
+											myds->destroy_MySQL_Connection_From_Pool(true);
+										}
 									} else {
 										myds->return_MySQL_Connection_To_Pool();
 									}
@@ -4381,4 +4454,38 @@ void MySQL_Session::Memory_Stats() {
 	thread->status_variables.mysql_backend_buffers_bytes+=backend;
 	thread->status_variables.mysql_frontend_buffers_bytes+=frontend;
 	thread->status_variables.mysql_session_internal_bytes+=internal;
+}
+
+
+void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_myds) {
+	MySQL_Data_Stream *new_myds = NULL;
+	MySQL_Connection * mc = _myds->myconn;
+	// we remove the connection from the original data stream
+	_myds->detach_connection();
+	_myds->unplug_backend();
+
+	// we create a brand new session, a new data stream, and attach the connection to it
+	MySQL_Session * new_sess = new MySQL_Session();
+	new_sess->mybe = new_sess->find_or_create_backend(mc->parent->myhgc->hid);
+
+	new_myds = new_sess->mybe->server_myds;
+	new_myds->attach_connection(mc);
+	new_myds->assign_fd_from_mysql_conn();
+	new_myds->myds_type = MYDS_BACKEND;
+	new_sess->to_process = 1;
+	new_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
+	mc->last_time_used = thread->curtime;
+	new_myds->myprot.init(&new_myds, new_myds->myconn->userinfo, NULL);
+	new_sess->status = RESETTING_CONNECTION;
+	new_myds->DSS = STATE_MARIADB_QUERY;
+	thread->register_session_connection_handler(new_sess,true);
+	if (new_myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, new_myds->fd, new_myds, thread->curtime);
+	}
+	int rc = new_sess->handler();
+	if (rc==-1) {
+		unsigned int sess_idx = thread->mysql_sessions->len-1;
+		thread->unregister_session(sess_idx);
+		delete new_sess;
+	}
 }

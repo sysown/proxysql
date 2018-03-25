@@ -419,9 +419,15 @@ void MySQL_Connection::connect_cont(short event) {
 void MySQL_Connection::change_user_start() {
 	PROXY_TRACE();
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
-	MySQL_Connection_userinfo *_ui=myds->sess->client_myds->myconn->userinfo;
+	MySQL_Connection_userinfo *_ui = NULL;
+	if (myds->sess->client_myds == NULL) {
+		// if client_myds is not defined, we are using CHANGE_USER to reset the connection
+		_ui = userinfo;
+	} else {
+		_ui = myds->sess->client_myds->myconn->userinfo;
+		userinfo->set(_ui);	// fix for bug #605
+	}
 	char *auth_password=NULL;
-	userinfo->set(_ui);	// fix for bug #605
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
 			auth_password=userinfo->sha1_pass;
@@ -650,10 +656,14 @@ handler_again:
 			}
 			break;
 		case ASYNC_CHANGE_USER_CONT:
-			assert(myds->sess->status==CHANGING_USER_SERVER);
+			assert(myds->sess->status==CHANGING_USER_SERVER || myds->sess->status==RESETTING_CONNECTION);
 			change_user_cont(event);
 			if (async_exit_status) {
-				next_event(ASYNC_CHANGE_USER_CONT);
+				if (myds->sess->thread->curtime >= myds->wait_until) {
+					NEXT_IMMEDIATE(ASYNC_CHANGE_USER_TIMEOUT);
+				} else {
+					next_event(ASYNC_CHANGE_USER_CONT);
+				}
 			} else {
 				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_END);
 			}
@@ -669,6 +679,8 @@ handler_again:
 		case ASYNC_CHANGE_USER_SUCCESSFUL:
 			break;
 		case ASYNC_CHANGE_USER_FAILED:
+			break;
+		case ASYNC_CHANGE_USER_TIMEOUT:
 			break;
 		case ASYNC_PING_START:
 			ping_start();
@@ -1253,6 +1265,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 // 0 when the ping is completed successfully
 // -1 when the ping is completed not successfully
 // 1 when the ping is not completed
+// -2 on timeout
 // the calling function should check mysql error in mysql struct
 int MySQL_Connection::async_ping(short event) {
 	PROXY_TRACE();
@@ -1307,6 +1320,9 @@ int MySQL_Connection::async_change_user(short event) {
 		case ASYNC_CHANGE_USER_FAILED:
 			return -1;
 			break;
+		case ASYNC_CHANGE_USER_TIMEOUT:
+			return -2;
+			break;
 		case ASYNC_IDLE:
 			async_state_machine=ASYNC_CHANGE_USER_START;
 		default:
@@ -1322,6 +1338,9 @@ int MySQL_Connection::async_change_user(short event) {
 			break;
 		case ASYNC_CHANGE_USER_FAILED:
 			return -1;
+			break;
+		case ASYNC_CHANGE_USER_TIMEOUT:
+			return -2;
 			break;
 		default:
 			return 1;

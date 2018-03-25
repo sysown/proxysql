@@ -28,6 +28,7 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CHANGE_USER_END,
 	ASYNC_CHANGE_USER_SUCCESSFUL,
 	ASYNC_CHANGE_USER_FAILED,
+	ASYNC_CHANGE_USER_TIMEOUT,
 	ASYNC_PING_START,
 	ASYNC_PING_CONT,
 	ASYNC_PING_END,
@@ -127,6 +128,7 @@ enum session_status {
 	CHANGING_AUTOCOMMIT,
 	CHANGING_USER_CLIENT,
 	CHANGING_USER_SERVER,
+	RESETTING_CONNECTION,
 	SETTING_INIT_CONNECT,
 	SETTING_SQL_LOG_BIN,
 	SETTING_SQL_MODE,
@@ -620,6 +622,7 @@ __thread int mysql_thread___connect_timeout_server;
 __thread int mysql_thread___connect_timeout_server_max;
 __thread int mysql_thread___query_processor_iterations;
 __thread int mysql_thread___query_processor_regex;
+__thread int mysql_thread___reset_connection_algorithm;
 __thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
 __thread int mysql_thread___poll_timeout;
@@ -726,6 +729,7 @@ extern __thread int mysql_thread___connect_timeout_server;
 extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread int mysql_thread___query_processor_iterations;
 extern __thread int mysql_thread___query_processor_regex;
+extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
 extern __thread int mysql_thread___poll_timeout;
@@ -791,6 +795,3 @@ extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
 extern __thread unsigned int g_seed;
 #endif /* PROXYSQL_EXTERN */
-
-
-

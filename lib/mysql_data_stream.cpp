@@ -5,6 +5,8 @@
 #define UNIX_PATH_MAX    108
 #endif 
 
+extern MySQL_Threads_Handler *GloMTH;
+
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
 
@@ -1244,8 +1246,16 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	mc->last_time_used=sess->thread->curtime;
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
-	if ((intv) && (mc->last_time_used > mc->creation_time + intv)) {
-		destroy_MySQL_Connection_From_Pool(true);
+	if (
+		( (intv) && (mc->last_time_used > mc->creation_time + intv) )
+		||
+		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection )
+	) {
+		if (mysql_thread___reset_connection_algorithm == 2) {
+			sess->create_new_session_and_reset_connection(this);
+		} else {
+			destroy_MySQL_Connection_From_Pool(true);
+		}
 	} else {
 		detach_connection();
 		unplug_backend();

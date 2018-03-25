@@ -92,6 +92,7 @@ class MySQL_Session
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
+	int handler_again___status_RESETTING_CONNECTION();
 	void handler_again___new_thread_to_kill_connection();
 
 	bool handler_again___verify_backend_charset();
@@ -215,6 +216,7 @@ class MySQL_Session
 	void reset_all_backends();
 	void writeout();
 	void Memory_Stats();
+	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
 };
 
 #endif /* __CLASS_MYSQL_SESSION_ H */
