@@ -1902,6 +1902,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 
 int MySQL_Session::handler() {
 	handler_ret = 0;
+	bool prepared_stmt_with_no_params = false;
 	bool wrong_pass=false;
 	if (to_process==0) return 0; // this should be redundant if the called does the same check
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
@@ -2675,6 +2676,9 @@ handler_again:
 									NEXT_IMMEDIATE(st);
 								} else {
 									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,client_stmtid);
+									if (stmt_info->num_params == 0) {
+										prepared_stmt_with_no_params = true;
+									}
 								}
 							}
 							break;
@@ -2705,6 +2709,11 @@ handler_again:
 							myconn->async_state_machine=ASYNC_IDLE;
 							myconn->multiplex_delayed=true;
 							myds->DSS=STATE_MARIADB_GENERIC;
+						} else if (prepared_stmt_with_no_params==true) { // see issue #1432
+							myconn->async_state_machine=ASYNC_IDLE;
+							myds->DSS=STATE_MARIADB_GENERIC;
+							myds->wait_until=0;
+							myconn->multiplex_delayed=false;
 						} else {
 							myconn->multiplex_delayed=false;
 							myds->wait_until=0;
