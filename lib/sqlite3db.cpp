@@ -37,13 +37,14 @@ int SQLite3DB::open(char *__url, int flags) {
 	url=strdup(__url);
 	int rc;
 	rc=sqlite3_open_v2(url, &db, flags , NULL);
-	if(rc){
+	if (rc) {
     proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on sqlite3_open_v2(): %s\n", sqlite3_errmsg(db));
 		if (assert_on_error) {
 			assert(rc==0);
 		}
-		return -1;		
-  }
+		proxy_error("SQLITE CRITICAL error: Unable to open %s. Shutting down.\n", url);
+		exit(EXIT_SUCCESS);
+	}
 	return 0;
 }
 

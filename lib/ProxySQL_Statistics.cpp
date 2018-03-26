@@ -394,6 +394,10 @@ void ProxySQL_Statistics::system_cpu_sets() {
 		char *query1=NULL;
 		query1=(char *)"INSERT INTO system_cpu VALUES (?1, ?2, ?3)";
 		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		if (rc!=SQLITE_OK) {
+			proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+			exit(EXIT_SUCCESS);
+		}
 
 		time_t ts = time(NULL);
 
@@ -457,6 +461,10 @@ void ProxySQL_Statistics::system_memory_sets() {
 		char *query1=NULL;
 		query1=(char *)"INSERT INTO system_memory VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		if (rc!=SQLITE_OK) {
+			proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+			exit(EXIT_SUCCESS);
+		}
 
 		time_t ts = time(NULL);
 
@@ -537,7 +545,10 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) 
 	//char *query3=NULL;
 	query1=(char *)"INSERT INTO mysql_connections VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
-	assert(rc==SQLITE_OK);
+	if (rc!=SQLITE_OK) {
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		exit(EXIT_SUCCESS);
+	}
 	//rc=sqlite3_prepare_v2(mydb3, query2, -1, &statement2, 0);
 	//assert(rc==SQLITE_OK);
 	//rc=sqlite3_prepare_v2(mydb3, query3, -1, &statement3, 0);
@@ -656,7 +667,10 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	char *query1=NULL;
 	query1=(char *)"INSERT INTO mysql_query_cache VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
-	assert(rc==SQLITE_OK);
+	if (rc!=SQLITE_OK) {
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		exit(EXIT_SUCCESS);
+	}
 
 	uint64_t qc_values[9];
 	for (int i=0; i<9; i++) {
