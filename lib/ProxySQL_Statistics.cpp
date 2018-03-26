@@ -617,7 +617,10 @@ void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset) {
 	//char *query3=NULL;
 	query1=(char *)"INSERT INTO myhgm_connections VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
-	assert(rc==SQLITE_OK);
+	if (rc!=SQLITE_OK) {
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		exit(EXIT_SUCCESS);
+	}
 	//rc=sqlite3_prepare_v2(mydb3, query2, -1, &statement2, 0);
 	//assert(rc==SQLITE_OK);
 	//rc=sqlite3_prepare_v2(mydb3, query3, -1, &statement3, 0);
