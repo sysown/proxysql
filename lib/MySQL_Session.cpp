@@ -2226,8 +2226,12 @@ __get_pkts_from_client:
 									uint32_t client_global_id=0;
 									memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 									// FIXME: no input validation
+									uint64_t stmt_global_id=0;
+									stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_global_id);
 									SLDH->reset(client_global_id);
-									sess_STMTs_meta->erase(client_global_id);
+									if (stmt_global_id) {
+										sess_STMTs_meta->erase(stmt_global_id);
+									}
 									client_myds->myconn->local_stmts->client_close(client_global_id);
 								}
 								l_free(pkt.size,pkt.ptr);

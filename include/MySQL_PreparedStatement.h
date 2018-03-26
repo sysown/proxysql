@@ -84,6 +84,8 @@ class stmt_execute_metadata_t {
 	unsigned long *lengths;
 	void *pkt;
 	stmt_execute_metadata_t() {
+		size = 0;
+		stmt_id = 0;
 		binds=NULL;
 		is_nulls=NULL;
 		lengths=NULL;
@@ -92,10 +94,15 @@ class stmt_execute_metadata_t {
 	~stmt_execute_metadata_t() {
 		if (binds)
 			free(binds);
+		binds = NULL;
 		if (is_nulls)
 			free(is_nulls);
+		is_nulls = NULL;
 		if (lengths)
 			free(lengths);
+		lengths = NULL;
+		size = 0;
+		stmt_id = 0;
 	}
 };
 
