@@ -2664,7 +2664,6 @@ handler_again:
 								myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
 								if (previous_status.size() == 0)
 								client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
-								GloMyStmt->unlock();
 								CurrentQuery.mysql_stmt=NULL;
 								enum session_status st=status;
 								size_t sts=previous_status.size();
@@ -2673,12 +2672,14 @@ handler_again:
 									myds->DSS=STATE_MARIADB_GENERIC;
 									st=previous_status.top();
 									previous_status.pop();
+									GloMyStmt->unlock();
 									NEXT_IMMEDIATE(st);
 								} else {
 									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,client_stmtid);
 									if (stmt_info->num_params == 0) {
 										prepared_stmt_with_no_params = true;
 									}
+									GloMyStmt->unlock();
 								}
 							}
 							break;
