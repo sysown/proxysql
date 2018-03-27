@@ -1,3 +1,4 @@
+#include <openssl/rand.h>
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -64,18 +65,26 @@ char *sha1_pass_hex(char *sha1_pass) {
 
 
 double proxy_my_rnd(struct rand_struct *rand_st) {
-  rand_st->seed1= (rand_st->seed1*3+rand_st->seed2) % rand_st->max_value;
-  rand_st->seed2= (rand_st->seed1+rand_st->seed2+33) % rand_st->max_value;
-  return (((double) rand_st->seed1) / rand_st->max_value_dbl);
+	rand_st->seed1= (rand_st->seed1*3+rand_st->seed2) % rand_st->max_value;
+	rand_st->seed2= (rand_st->seed1+rand_st->seed2+33) % rand_st->max_value;
+	return (((double) rand_st->seed1) / rand_st->max_value_dbl);
 }
 
 void proxy_create_random_string(char *to, uint length, struct rand_struct *rand_st) {
-  uint i;
-  for (i=0; i<length ; i++) {
-    *to= (char) (proxy_my_rnd(rand_st) * 94 + 33);
-    to++;
-  }
-  *to= '\0';
+	int rc = 0;
+	uint i;
+	rc = RAND_bytes((unsigned char *)to,length);
+	if (rc!=1) {
+		for (i=0; i<length ; i++) {
+			*to= (char) (proxy_my_rnd(rand_st) * 94 + 33);
+			to++;
+		}
+	} else {
+		for (i=0; i<length ; i++) {
+			to++;
+		}
+	}
+	*to= '\0';
 }
 
 static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t len, char prefix) {
