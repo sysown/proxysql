@@ -1,0 +1,135 @@
+@@ -53,6 +53,10 @@
+ #include <ma_pvio.h>
+ #include <mariadb_async.h>
+ #include <ma_context.h>
++#include <openssl/ssl.h> /* SSL and SSL_CTX */
++#include <openssl/err.h> /* error reporting */
++#include <openssl/conf.h>
++#include <openssl/md4.h>
+ 
+ /* callback functions for read/write */
+ LIST *pvio_callback= NULL;
+@@ -215,6 +219,68 @@
+ }
+ /* }}} */
+ 
++#ifdef HAVE_TLS
++/* {{{ size_t ma_pvio_tls_write_async */
++static size_t ma_pvio_tls_write_async(MARIADB_PVIO *pvio, const uchar *buffer, size_t length)
++{
++  ssize_t res= 0;
++  struct mysql_async_context *b= pvio->mysql->options.extension->async_context;
++	int ssl_err;
++
++  if (!pvio->methods->async_read)
++  {
++    PVIO_SET_ERROR(pvio->mysql, CR_ASYNC_NOT_SUPPORTED, unknown_sqlstate, 0);
++    return -1;
++  }
++
++  for (;;)
++  {
++	res = ma_pvio_tls_write(pvio->ctls, buffer, length);
++	if (res > 0) {
++		return res;
++	} else {
++		ssl_err= SSL_get_error((SSL *)pvio->ctls->ssl, res);
++	  	if (ssl_err == SSL_ERROR_WANT_READ)
++    		b->events_to_wait_for|= MYSQL_WAIT_READ;
++  		else if (ssl_err == SSL_ERROR_WANT_WRITE)
++    		b->events_to_wait_for|= MYSQL_WAIT_WRITE;
++  		else
++    		return 1;
++	}
++  }
++}
++/* {{{ size_t ma_pvio_tls_read_async */
++static size_t ma_pvio_tls_read_async(MARIADB_PVIO *pvio, uchar *buffer, size_t length)
++{
++  ssize_t res= 0;
++  struct mysql_async_context *b= pvio->mysql->options.extension->async_context;
++	int ssl_err;
++
++  if (!pvio->methods->async_read)
++  {
++    PVIO_SET_ERROR(pvio->mysql, CR_ASYNC_NOT_SUPPORTED, unknown_sqlstate, 0);
++    return -1;
++  }
++
++  for (;;)
++  {
++	res = ma_pvio_tls_read(pvio->ctls, buffer, length);
++	if (res > 0) {
++		return res;
++	} else {
++		ssl_err= SSL_get_error((SSL *)pvio->ctls->ssl, res);
++	  	if (ssl_err == SSL_ERROR_WANT_READ)
++    		b->events_to_wait_for|= MYSQL_WAIT_READ;
++  		else if (ssl_err == SSL_ERROR_WANT_WRITE)
++    		b->events_to_wait_for|= MYSQL_WAIT_WRITE;
++  		else
++    		return 1;
++	}
++  }
++}
++/* }}} */
++#endif
++
+ /* {{{ size_t ma_pvio_read */
+ ssize_t ma_pvio_read(MARIADB_PVIO *pvio, uchar *buffer, size_t length)
+ {
+@@ -223,6 +289,13 @@
+     return -1;
+   if (IS_PVIO_ASYNC_ACTIVE(pvio))
+   {
++#ifdef HAVE_TLS
++    if (pvio->ctls)
++    {
++      r= ma_pvio_tls_read_async(pvio, buffer, length);
++      goto end;
++    }
++#endif
+     r= ma_pvio_read_async(pvio, buffer, length);
+     goto end;
+   }
+@@ -343,17 +416,15 @@
+   if (!pvio)
+    return -1;
+ 
+-  /* secure connection */
+-#ifdef HAVE_TLS
+-  if (pvio->ctls)
+-  {
+-    r= ma_pvio_tls_write(pvio->ctls, buffer, length);
+-    goto end;
+-  }
+-  else
+-#endif
+   if (IS_PVIO_ASYNC_ACTIVE(pvio))
+   {
++#ifdef HAVE_TLS
++    if (pvio->ctls)
++    {
++      r= ma_pvio_tls_write_async(pvio, buffer, length);
++      goto end;
++    }
++#endif
+     r= ma_pvio_write_async(pvio, buffer, length);
+     goto end;
+   }
+@@ -370,6 +441,15 @@
+     }
+   }
+ 
++  /* secure connection */
++#ifdef HAVE_TLS
++  if (pvio->ctls)
++  {
++    r= ma_pvio_tls_write(pvio->ctls, buffer, length);
++    goto end;
++  }
++#endif
++
+   if (pvio->methods->write)
+     r= pvio->methods->write(pvio, buffer, length);
+ end:

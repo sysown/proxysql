@@ -95,6 +95,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a:
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_alloc.c < ../ma_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}
