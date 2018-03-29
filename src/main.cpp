@@ -193,7 +193,8 @@ void ProxySQL_Main_init_SSL_module() {
 	SSL_METHOD *ssl_method;
 	OpenSSL_add_all_algorithms();
 	SSL_load_error_strings();
-	ssl_method = (SSL_METHOD *)TLSv1_server_method();
+	//ssl_method = (SSL_METHOD *)TLSv1_server_method();
+	ssl_method = (SSL_METHOD *)SSLv23_server_method();
 	GloVars.global.ssl_ctx = SSL_CTX_new(ssl_method);
 	if (GloVars.global.ssl_ctx==NULL)	{
 		ERR_print_errors_fp(stderr);
@@ -208,7 +209,7 @@ void ProxySQL_Main_init_SSL_module() {
 
 	bio_err = BIO_new_fp(stderr, BIO_NOCLOSE);
 
-	if (ssl_mkit(&x509, &pkey, 512, 0, 730) == 0) {
+	if (ssl_mkit(&x509, &pkey, 2048, 0, 730) == 0) {
 		proxy_error("Unable to initialize SSL. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
