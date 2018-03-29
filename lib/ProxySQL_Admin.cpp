@@ -5982,7 +5982,7 @@ void ProxySQL_Admin::add_admin_users() {
 
 void ProxySQL_Admin::__refresh_users() {
 	bool calculate_checksum = false;
-	if (checksum_variables.checksum_mysql_servers) {
+	if (checksum_variables.checksum_mysql_users) {
 		calculate_checksum = true;
 	}
 	if (calculate_checksum)
