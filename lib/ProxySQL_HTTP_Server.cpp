@@ -1,5 +1,7 @@
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
+#include "json.hpp"
+#include "inja.hpp"
 #include <vector>       // std::vector
 #include "re2/re2.h"
 #include "re2/regexp.h"
@@ -34,7 +36,6 @@
 #endif /* DEBUG */
 #define PROXYSQL_HTTP_SERVER_VERSION "1.4.1031" DEB
 
-
 extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -52,6 +53,15 @@ extern char * main_bundle_min_css_c;
 
 #define DENIED "<html><head><title>ProxySQL status page</title></head><body>Access denied</body></html>"
 #define OPAQUE "733b20011778ce330631c9afof70a870baddd964"
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+const char *find_embedded_file_all(const char *name, size_t *size);
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
 
 struct MemoryStruct {
 	char *memory;
@@ -441,6 +451,19 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	if (0 != strcmp (method, "GET"))
 		return MHD_NO;              /* unexpected method */
 
+	if (strcmp(url,"/render")==0) {
+		nlohmann::json dataa;
+		dataa["name"] = "world";
+		// /home/rcannao/ElaAdmin2/index.html.rend
+		inja::Environment env = inja::Environment();
+		//Environment env = Environment("/home/rcannao/ElaAdmin2/index.html.rend");
+		inja::Template temp = env.parse_template("../../ElaAdmin2/index.html.rend");
+		string s = env.render_template(temp, dataa); // "Hello world!"
+ 		response = MHD_create_response_from_buffer(s.length(), (void *) s.c_str(), MHD_RESPMEM_PERSISTENT);
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
+		return ret;
+	}
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");
 		interval_s = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"interval");
@@ -821,6 +844,14 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 		MHD_destroy_response (response);
 		delete s;
+		return ret;
+	}
+	size_t filesize;
+	const char *fil = find_embedded_file_all((const char *)url+1, &filesize);
+	if (fil) {
+		response = MHD_create_response_from_buffer(filesize, (void *) fil, MHD_RESPMEM_MUST_COPY);
+		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		MHD_destroy_response (response);
 		return ret;
 	}
 	response = MHD_create_response_from_buffer (strlen (EMPTY_PAGE), (void *) EMPTY_PAGE, MHD_RESPMEM_PERSISTENT);
