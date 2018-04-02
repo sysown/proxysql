@@ -4281,11 +4281,11 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
 		char *error=NULL;
-	  int cols=0;
-	  int affected_rows=0;
-	  SQLite3_result *resultset=NULL;
-	  char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mysql-%'";
-	  db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mysql-%'";
+		db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
 		int matching_rows=0;
 		if (error) {
 			proxy_error("Error on %s : %s\n", q, error);
@@ -4295,8 +4295,8 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 				SQLite3_row *r=*it;
 				matching_rows+=atoi(r->fields[0]);
 			}
-	  }
-	  if (resultset) delete resultset;
+		}
+		if (resultset) delete resultset;
 		if (matching_rows) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has MySQL variables - skipping\n");
 			return;
@@ -4306,35 +4306,53 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting MySQL variables from global_variables\n");
 		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'mysql-%'");
 	}
-	if (runtime) {
-		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
+	static char *a;
+	static char *b;
+	if (replace) {
+		a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+	} else {
+		a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 	}
-	char *a;
-	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
-  if (replace) {
-    a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
-  } else {
-    a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"mysql-%s\",\"%s\")";
-  }
-  int l=strlen(a)+200;
+	int rc;
+	sqlite3_stmt *statement1=NULL;
+	sqlite3_stmt *statement2=NULL;
+	sqlite3 *mydb3=db->get_db();
+	rc=sqlite3_prepare_v2(mydb3, a, -1, &statement1, 0);
+	assert(rc==SQLITE_OK);
+	if (runtime)  {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
+		b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+		rc=sqlite3_prepare_v2(mydb3, b, -1, &statement2, 0);
+		assert(rc==SQLITE_OK);
+	}
 	GloMTH->wrlock();
+	db->execute("BEGIN");
 	char **varnames=GloMTH->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
 		char *val=GloMTH->get_variable(varnames[i]);
-		l+=( varnames[i] ? strlen(varnames[i]) : 6);
-		l+=( val ? strlen(val) : 6);
-		char *query=(char *)malloc(l);
-		sprintf(query, a, varnames[i], val);
+		char *qualified_name=(char *)malloc(strlen(varnames[i])+7);
+		sprintf(qualified_name, "mysql-%s", varnames[i]);
+		rc=sqlite3_bind_text(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement1, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+		rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
 		if (runtime) {
-			db->execute(query);
-			sprintf(query, b, varnames[i], val);
+			rc=sqlite3_bind_text(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement2, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			SAFE_SQLITE3_STEP2(statement2);
+			rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
 		}
-		db->execute(query);
 		if (val)
 			free(val);
-		free(query);
+		free(qualified_name);
 	}
+	db->execute("COMMIT");
 	GloMTH->wrunlock();
+	sqlite3_finalize(statement1);
+	if (runtime)
+		sqlite3_finalize(statement2);
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
