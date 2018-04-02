@@ -963,7 +963,7 @@ __internal_loop:
                     strncpy(net,qr->client_addr,strlen(qr->client_addr)-strlen(pct));
                     if (strlen(sess->client_myds->addr.addr) >= strlen(net)) {              
                         if (strncmp(net,sess->client_myds->addr.addr,strlen(net))!=0) {
-                            proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->r
+                            proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
                             continue;
                         }
                     }
