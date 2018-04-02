@@ -49,6 +49,29 @@ MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (schemaname) free(schemaname);
 }
 
+void MySQL_Connection::compute_unknown_transaction_status() {
+	if (mysql) {
+		int _myerrno=mysql_errno(mysql);
+		if (_myerrno == 0) {
+			unknown_transaction_status = false; // no error
+			return;
+		}
+		if (_myerrno >= 2000 && _myerrno < 3000) { // client error
+			// do not change it
+			return;
+		}
+		if (_myerrno >= 1000 && _myerrno < 2000) { // server error
+			unknown_transaction_status = true;
+			return;
+		}
+		if (_myerrno >= 3000 && _myerrno < 4000) { // server error
+			unknown_transaction_status = true;
+			return;
+		}
+		// all other cases, server error
+	}
+}
+
 uint64_t MySQL_Connection_userinfo::compute_hash() {
 	int l=0;
 	if (username)
@@ -188,6 +211,7 @@ MySQL_Connection::MySQL_Connection() {
 	largest_query_length=0;
 	multiplex_delayed=false;
 	MyRS=NULL;
+	unknown_transaction_status = false;
 	creation_time=0;
 	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
@@ -965,6 +989,14 @@ handler_again:
 			}
 			break;
 		case ASYNC_QUERY_END:
+			if (mysql) {
+				int _myerrno=mysql_errno(mysql);
+				if (_myerrno == 0) {
+					unknown_transaction_status = false;
+				} else {
+					compute_unknown_transaction_status();
+				}
+			}
 			if (mysql_result) {
 				mysql_free_result(mysql_result);
 				mysql_result=NULL;
@@ -1121,6 +1153,7 @@ int MySQL_Connection::async_connect(short event) {
 		return 0;
 	}
 	if (async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
+		unknown_transaction_status = false;
 		async_state_machine=ASYNC_IDLE;
 		myds->wait_until=0;
 		creation_time = monotonic_time();
@@ -1129,6 +1162,7 @@ int MySQL_Connection::async_connect(short event) {
 	handler(event);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			myds->wait_until=0;
 			return 0;
@@ -1208,8 +1242,10 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	
 	if (async_state_machine==ASYNC_QUERY_END) {
 		if (mysql_errno(mysql)) {
+			compute_unknown_transaction_status();
 			return -1;
 		} else {
+			unknown_transaction_status = false;
 			return 0;
 		}
 	}
@@ -1217,17 +1253,21 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		query.stmt_meta=NULL;
 		async_state_machine=ASYNC_QUERY_END;
 		if (mysql_stmt_errno(query.stmt)) {
+			compute_unknown_transaction_status();
 			return -1;
 		} else {
+			unknown_transaction_status = false;
 			return 0;
 		}
 	}
 	if (async_state_machine==ASYNC_STMT_PREPARE_SUCCESSFUL || async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
 		query.stmt_meta=NULL;
 		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
+			compute_unknown_transaction_status();
 			return -1;
 		} else {
 			*_stmt=query.stmt;
+			unknown_transaction_status = false;
 			return 0;
 		}
 	}
@@ -1256,6 +1296,7 @@ int MySQL_Connection::async_ping(short event) {
 	assert(ret_mysql);
 	switch (async_state_machine) {
 		case ASYNC_PING_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1275,6 +1316,7 @@ int MySQL_Connection::async_ping(short event) {
 	// check again
 	switch (async_state_machine) {
 		case ASYNC_PING_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1297,6 +1339,7 @@ int MySQL_Connection::async_change_user(short event) {
 	assert(ret_mysql);
 	switch (async_state_machine) {
 		case ASYNC_CHANGE_USER_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1313,6 +1356,7 @@ int MySQL_Connection::async_change_user(short event) {
 	// check again
 	switch (async_state_machine) {
 		case ASYNC_CHANGE_USER_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1332,6 +1376,7 @@ int MySQL_Connection::async_select_db(short event) {
 	assert(ret_mysql);
 	switch (async_state_machine) {
 		case ASYNC_INITDB_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1348,6 +1393,7 @@ int MySQL_Connection::async_select_db(short event) {
 	// check again
 	switch (async_state_machine) {
 		case ASYNC_INITDB_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1367,6 +1413,7 @@ int MySQL_Connection::async_set_autocommit(short event, bool ac) {
 	assert(ret_mysql);
 	switch (async_state_machine) {
 		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1384,6 +1431,7 @@ int MySQL_Connection::async_set_autocommit(short event, bool ac) {
 	// check again
 	switch (async_state_machine) {
 		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1403,6 +1451,7 @@ int MySQL_Connection::async_set_names(short event, uint8_t c) {
 	assert(ret_mysql);
 	switch (async_state_machine) {
 		case ASYNC_SET_NAMES_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1420,6 +1469,7 @@ int MySQL_Connection::async_set_names(short event, uint8_t c) {
 	// check again
 	switch (async_state_machine) {
 		case ASYNC_SET_NAMES_SUCCESSFUL:
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 			break;
@@ -1464,6 +1514,7 @@ void MySQL_Connection::async_free_result() {
 			mysql_result=NULL;
 		}
 	}
+	unknown_transaction_status = false;
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		delete MyRS;
@@ -1476,7 +1527,7 @@ bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
 		ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-		if (ret == false && (mysql)->net.last_errno) {
+		if (ret == false && (mysql)->net.last_errno && unknown_transaction_status == true) {
 			ret = true;
 		}
 		if (ret == false) {
@@ -1662,8 +1713,10 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	}
 	if (async_state_machine==ASYNC_QUERY_END) {
 		if (mysql_errno(mysql)) {
+			compute_unknown_transaction_status();
 			return -1;
 		} else {
+			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 		}
