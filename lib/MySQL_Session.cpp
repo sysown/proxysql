@@ -942,7 +942,7 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	int rc=myconn->async_ping(myds->revents);
 	if (rc==0) {
 		myconn->async_state_machine=ASYNC_IDLE;
-		myconn->unknown_transaction_status = false;
+		myconn->compute_unknown_transaction_status();
 		if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->return_MySQL_Connection_To_Pool();
 		} else {
@@ -2731,7 +2731,6 @@ handler_again:
 								enum session_status st=status;
 								size_t sts=previous_status.size();
 								if (sts) {
-									myconn->unknown_transaction_status = false;
 									myconn->async_state_machine=ASYNC_IDLE;
 									myds->DSS=STATE_MARIADB_GENERIC;
 									st=previous_status.top();
@@ -2771,7 +2770,6 @@ handler_again:
 					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
 							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
-							myconn->unknown_transaction_status = false;
 							myconn->async_state_machine=ASYNC_IDLE;
 							myconn->multiplex_delayed=true;
 							myds->DSS=STATE_MARIADB_GENERIC;
@@ -2799,7 +2797,7 @@ handler_again:
 						}
 					} else {
 						myconn->multiplex_delayed=false;
-						myconn->unknown_transaction_status = false;
+						myconn->compute_unknown_transaction_status();
 						myconn->async_state_machine=ASYNC_IDLE;
 						myds->DSS=STATE_MARIADB_GENERIC;
 						if (transaction_persistent==true) {
@@ -2817,7 +2815,6 @@ handler_again:
 				} else {
 					if (rc==-1) {
 						int myerr=mysql_errno(myconn->mysql);
-						myconn->compute_unknown_transaction_status();
 						char *errmsg = NULL;
 						if (myerr == 0) {
 							if (CurrentQuery.mysql_stmt) {
@@ -4402,6 +4399,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 		// if there is a mysql connection, clean its status
 		if (myds->myconn) {
 			myds->myconn->async_free_result();
+			myds->myconn->compute_unknown_transaction_status();
 		}
 		myds->free_mysql_real_query();
 	}
