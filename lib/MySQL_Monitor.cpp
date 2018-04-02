@@ -400,7 +400,11 @@ void * monitor_connect_thread(void *arg) {
 	rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 	sqlite3_finalize(statement);
 	if (mmsd->mysql_error_msg) {
-		if (strncmp(mmsd->mysql_error_msg,"Access denied for user",strlen("Access denied for user"))==0) {
+		if (
+			(strncmp(mmsd->mysql_error_msg,"Access denied for user",strlen("Access denied for user"))==0)
+			||
+			(strncmp(mmsd->mysql_error_msg,"ProxySQL Error: Access denied for user",strlen("ProxySQL Error: Access denied for user"))==0)
+		) {
 			proxy_error("Server %s:%d is returning \"Access denied\" for monitoring user\n", mmsd->hostname, mmsd->port);
 		}
 	}
@@ -1403,7 +1407,7 @@ __end_monitor_ping_loop:
 				resultset=NULL;
 			}
 			char *new_query=NULL;
-			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
