@@ -1153,7 +1153,7 @@ int MySQL_Connection::async_connect(short event) {
 		return 0;
 	}
 	if (async_state_machine==ASYNC_CONNECT_SUCCESSFUL) {
-		unknown_transaction_status = false;
+		compute_unknown_transaction_status();
 		async_state_machine=ASYNC_IDLE;
 		myds->wait_until=0;
 		creation_time = monotonic_time();
@@ -1162,7 +1162,7 @@ int MySQL_Connection::async_connect(short event) {
 	handler(event);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_SUCCESSFUL:
-			unknown_transaction_status = false;
+			compute_unknown_transaction_status();
 			async_state_machine=ASYNC_IDLE;
 			myds->wait_until=0;
 			return 0;
@@ -1241,33 +1241,30 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	}
 	
 	if (async_state_machine==ASYNC_QUERY_END) {
+		compute_unknown_transaction_status();
 		if (mysql_errno(mysql)) {
-			compute_unknown_transaction_status();
 			return -1;
 		} else {
-			unknown_transaction_status = false;
 			return 0;
 		}
 	}
 	if (async_state_machine==ASYNC_STMT_EXECUTE_END) {
 		query.stmt_meta=NULL;
 		async_state_machine=ASYNC_QUERY_END;
+		compute_unknown_transaction_status();
 		if (mysql_stmt_errno(query.stmt)) {
-			compute_unknown_transaction_status();
 			return -1;
 		} else {
-			unknown_transaction_status = false;
 			return 0;
 		}
 	}
 	if (async_state_machine==ASYNC_STMT_PREPARE_SUCCESSFUL || async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
 		query.stmt_meta=NULL;
+		compute_unknown_transaction_status();
 		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
-			compute_unknown_transaction_status();
 			return -1;
 		} else {
 			*_stmt=query.stmt;
-			unknown_transaction_status = false;
 			return 0;
 		}
 	}
@@ -1514,7 +1511,7 @@ void MySQL_Connection::async_free_result() {
 			mysql_result=NULL;
 		}
 	}
-	unknown_transaction_status = false;
+	compute_unknown_transaction_status();
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
 		delete MyRS;
@@ -1712,11 +1709,10 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 		proxy_error("Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
 	}
 	if (async_state_machine==ASYNC_QUERY_END) {
+		compute_unknown_transaction_status();
 		if (mysql_errno(mysql)) {
-			compute_unknown_transaction_status();
 			return -1;
 		} else {
-			unknown_transaction_status = false;
 			async_state_machine=ASYNC_IDLE;
 			return 0;
 		}
