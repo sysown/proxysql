@@ -478,8 +478,20 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
   memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
   int l=sizeof(mysql_hdr);
 	_ptr[l]=0xfe; l++;
+	int16_t internal_status = status;
+	if (sess) {
+		switch (sess->session_type) {
+			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_ADMIN:
+			case PROXYSQL_SESSION_STATS:
+				internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				break;
+			default:
+				break;
+		}
+	}
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
-	memcpy(_ptr+l, &status, sizeof(uint16_t));
+	memcpy(_ptr+l, &internal_status, sizeof(uint16_t));
 	
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
@@ -570,7 +582,19 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	_ptr[l]=0x00; l++;
 	l+=write_encoded_length(_ptr+l, affected_rows, affected_rows_len, affected_rows_prefix);
 	l+=write_encoded_length(_ptr+l, last_insert_id, last_insert_id_len, last_insert_id_prefix);
-	memcpy(_ptr+l, &status, sizeof(uint16_t)); l+=sizeof(uint16_t);
+	int16_t internal_status = status;
+	if (sess) {
+		switch (sess->session_type) {
+			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_ADMIN:
+			case PROXYSQL_SESSION_STATS:
+				internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				break;
+			default:
+				break;
+		}
+	}
+	memcpy(_ptr+l, &internal_status, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	if (msg) {
 		l+=write_encoded_length(_ptr+l, msg_len, msg_len_len, msg_prefix);
