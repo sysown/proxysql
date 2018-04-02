@@ -92,6 +92,8 @@ class MySQL_Connection {
 	bool processing_prepared_statement_execute;
 	bool processing_multi_statement;
 	bool multiplex_delayed;
+	bool unknown_transaction_status;
+	void compute_unknown_transaction_status();
 	MySQL_Connection();
 	~MySQL_Connection();
 	bool set_autocommit(bool);
