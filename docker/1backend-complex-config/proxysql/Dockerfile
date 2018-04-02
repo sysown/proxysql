@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y\
 	git\
 	libmysqlclient-dev\
 	libssl-dev\
+	pkg-config\
 	libtool
 
 RUN cd /opt; git clone https://github.com/akopytov/sysbench.git
