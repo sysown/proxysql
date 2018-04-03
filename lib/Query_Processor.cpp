@@ -949,12 +949,31 @@ __internal_loop:
 			}
 		}
 
-		// match on client address
+		// match on client address, client address can use the % wildcard like in mysql.user
 		if (qr->client_addr && strlen(qr->client_addr)) {
 			if (sess->client_myds->addr.addr) {
-				if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
-					continue;
+				char *pct = strchr(qr->client_addr,'%');
+				if (*pct) {
+					// there is a wilcard
+					if (strlen(qr->client_addr) > 15) {
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has an invalid client_addr\n", qr->rule_id);
+						continue;
+					}
+					char net[16];
+					strncpy(net,qr->client_addr,strlen(qr->client_addr)-strlen(pct));
+					net[strlen(qr->client_addr)-strlen(pct)]=0;
+					if (strlen(sess->client_myds->addr.addr) >= strlen(net)) {              
+						if (strncmp(net,sess->client_myds->addr.addr,strlen(net))!=0) {
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
+							continue;
+						}
+					}
+				} else {
+					// no wildcard, just the IP
+					if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
+						continue;
+					}
 				}
 			}
 		}
