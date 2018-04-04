@@ -224,6 +224,7 @@ static char * mysql_thread_variables_names[]= {
 #ifdef IDLE_THREADS
 	(char *)"session_idle_ms",
 #endif // IDLE_THREADS
+	(char *)"have_ssl",
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
@@ -408,6 +409,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
+	variables.have_ssl = false; // disable by default for performance reason
 	variables.client_found_rows=true;
 	variables.commands_stats=true;
 	variables.multiplexing=true;
@@ -663,6 +665,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
 	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
+	if (!strcasecmp(name,"have_ssl")) return (int)variables.have_ssl;
 	if (!strcasecmp(name,"client_found_rows")) return (int)variables.client_found_rows;
 	if (!strcasecmp(name,"multiplexing")) return (int)variables.multiplexing;
 	if (!strcasecmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
@@ -1023,6 +1026,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 #endif /* DEBUG */
 	if (!strcasecmp(name,"have_compress")) {
 		return strdup((variables.have_compress ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"have_ssl")) {
+		return strdup((variables.have_ssl ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"client_found_rows")) {
 		return strdup((variables.client_found_rows ? "true" : "false"));
@@ -1804,7 +1810,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 				// for now disable CLIENT_SSL
 //				variables.server_capabilities &= ~CLIENT_SSL;
 //			}
-			variables.server_capabilities |= CLIENT_SSL;
+//			variables.server_capabilities |= CLIENT_SSL;
 			
 			return true;
 		} else {
@@ -1885,10 +1891,25 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	if (!strcasecmp(name,"have_compress")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.have_compress=true;
+			variables.server_capabilities |= CLIENT_COMPRESS;
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.have_compress=false;
+			variables.server_capabilities &= ~CLIENT_COMPRESS;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"have_ssl")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.have_ssl=true;
+			variables.server_capabilities |= CLIENT_SSL;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.have_ssl=false;
+			variables.server_capabilities &= ~CLIENT_SSL;
 			return true;
 		}
 		return false;
@@ -3393,6 +3414,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
+	mysql_thread___have_ssl=(bool)GloMTH->get_variable_int((char *)"have_ssl");
 	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
 	mysql_thread___forward_autocommit=(bool)GloMTH->get_variable_int((char *)"forward_autocommit");

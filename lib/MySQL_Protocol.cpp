@@ -1043,10 +1043,17 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
     }
   }
 
-  memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
-  _ptr[l]=0x00; l+=1; //0x00
+	memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
+	_ptr[l]=0x00; l+=1; //0x00
 	if (mysql_thread___have_compress) {
-		mysql_thread___server_capabilities |= CLIENT_COMPRESS; // FIXME: shouldn't be here
+		mysql_thread___server_capabilities |= CLIENT_COMPRESS;
+	} else {
+		mysql_thread___server_capabilities &= ~CLIENT_COMPRESS;
+	}
+	if (mysql_thread___have_ssl) {
+		mysql_thread___server_capabilities |= CLIENT_SSL;
+	} else {
+		mysql_thread___server_capabilities &= ~CLIENT_SSL;
 	}
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);

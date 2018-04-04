@@ -367,6 +367,7 @@ class MySQL_Threads_Handler
 		bool query_digests_lowercase;
 		bool default_reconnect;
 		bool have_compress;
+		bool have_ssl;
 		bool client_found_rows;
 		bool multiplexing;
 //		bool stmt_multiplexing;
