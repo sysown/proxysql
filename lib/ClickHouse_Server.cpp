@@ -989,7 +989,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 
 
 	if (sess->session_type == PROXYSQL_SESSION_CLICKHOUSE) {
-		if (!strncmp("SET ", query_no_space, 4)) {
+		if (!strncasecmp("SET ", query_no_space, 4)) {
 			if (
 				!strncasecmp("SET AUTOCOMMIT", query_no_space, 14) ||
 				!strncasecmp("SET NAMES ", query_no_space, 10) ||
@@ -997,7 +997,8 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 				!strncasecmp("SET COLLATION", query_no_space, 13) ||
 				!strncasecmp("SET SQL_AUTO_", query_no_space, 13) ||
 				!strncasecmp("SET SQL_SAFE_", query_no_space, 13) ||
-				!strncasecmp("SET SESSION TRANSACTION", query_no_space, 23)
+				!strncasecmp("SET SESSION TRANSACTION", query_no_space, 23) ||
+				!strncasecmp("SET WAIT_TIMEOUT", query_no_space, 16)
 			) {
 				GloClickHouseServer->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 				run_query=false;
