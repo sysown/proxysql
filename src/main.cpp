@@ -196,34 +196,224 @@ static void init_locks(void) {
 	CRYPTO_set_locking_callback((void (*)(int, int, const char *, int))lock_callback);
 }
 
+X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, int days, X509 *ca_x509, EVP_PKEY *ca_pkey) {
+	int rc;
+	X509 * x = NULL;
+	X509_NAME * name= NULL;
+	if ((x = X509_new()) == NULL) {
+		proxy_error("Unable to run X509_new()\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	X509_set_version(x, 3);
+	ASN1_INTEGER_set(X509_get_serialNumber(x), serial);
+	X509_gmtime_adj(X509_get_notBefore(x), 0);
+	X509_gmtime_adj(X509_get_notAfter(x), (long)60 * 60 * 24 * days);
+	rc = X509_set_pubkey(x, pkey);
+	if (rc==0){
+		proxy_error("Unable to set pubkey: %s\n", ERR_error_string(ERR_get_error(),NULL));
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	name = X509_get_subject_name(x);
+
+	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, cn, -1, -1, 0);
+
+	if (ca_x509) {
+		rc = X509_set_issuer_name(x, X509_get_subject_name(ca_x509));
+	} else {
+		rc = X509_set_issuer_name(x, name);
+	}
+	if (rc==0) {
+		proxy_error("Unable to set issuer: %s\n", ERR_error_string(ERR_get_error(),NULL));
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+
+	if (ca_pkey) {
+		rc = X509_sign(x, ca_pkey, EVP_md5());
+	} else {
+		rc = X509_sign(x, pkey, EVP_md5());
+	}
+	if (rc==0) {
+		proxy_error("Unable to X509 sign: %s\n", ERR_error_string(ERR_get_error(),NULL));
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	return x;
+}
+
+void write_x509(const char *filen, X509 *x) {
+	BIO * x509file = NULL;
+	x509file = BIO_new_file(filen, "w" );
+	if (!x509file ) {
+		proxy_error("Error on BIO_new_file\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	if (!PEM_write_bio_X509( x509file, x)) {
+		proxy_error("Error on PEM_write_bio_X509 for %s\n", filen);
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	BIO_free_all( x509file );
+}
+
+void write_rsa_key(const char *filen, RSA *rsa) {
+	BIO* pOut = BIO_new_file(filen, "w");
+	if (!pOut) {
+		proxy_error("Error on BIO_new_file\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	if (!PEM_write_bio_RSAPrivateKey( pOut, rsa, NULL, NULL, 0, NULL, NULL)) {
+		proxy_error("Error on PEM_write_bio_RSAPrivateKey for %s\n", filen);
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	BIO_free_all( pOut );
+}
+
+EVP_PKEY * rsa_key_read(const char *filen) {
+	EVP_PKEY * pkey = NULL;
+	RSA * rsa = NULL;
+
+	BIO * pIn = BIO_new_file(filen,"r");
+	if (!pIn) {
+		proxy_error("Error on BIO_new_file\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	rsa= PEM_read_bio_RSAPrivateKey( pIn , NULL, NULL,  NULL);
+	if (rsa==NULL) {
+		proxy_error("Error on PEM_read_bio_RSAPrivateKey for %s\n", filen);
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	pkey = EVP_PKEY_new();
+	EVP_PKEY_assign_RSA(pkey, rsa);
+	BIO_free(pIn);
+	return pkey;
+}
+
+X509 * read_x509(const char *filen) {
+	X509 * x = NULL;
+	BIO * x509file = NULL;
+	x509file = BIO_new_file(filen, "r" );
+	if (!x509file ) {
+		proxy_error("Error on BIO_new_file\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	x = PEM_read_bio_X509( x509file, NULL, NULL, NULL);
+	if (x == NULL) {
+		proxy_error("Error on PEM_read_bio_X509 for %s\n", filen);
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+	BIO_free_all( x509file );
+	return x;
+}
+
 
 int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
-	X509 *x;
+	X509 *x1;
+	X509 *x2;
 	EVP_PKEY *pk;
 	RSA *rsa;
 	DH *dh;
-	X509_NAME *name = NULL;
+	//X509_NAME *name = NULL;
 
-	if ((pkeyp == NULL) || (*pkeyp == NULL)) {
-		if ((pk = EVP_PKEY_new()) == NULL) {
-			abort();
-			return (0);
-		}
-	} else
-		pk = *pkeyp;
+	// relative path to datadir of ssl files
+	const char * ssl_key_rp = (const char *)"proxysql-key.pem";
+	const char * ssl_cert_rp = (const char *)"proxysql-cert.pem";
+	const char * ssl_ca_rp = (const char *)"proxysql-ca.pem";
 
-	if ((x509p == NULL) || (*x509p == NULL)) {
-		if ((x = X509_new()) == NULL)
-			goto err;
-	} else
-		x = *x509p;
+	// absolute path of ssl files
+	char *ssl_key_fp = NULL;
+	char *ssl_cert_fp = NULL;
+	char *ssl_ca_fp = NULL;
 
-	rsa = RSA_generate_key(bits, RSA_F4, NULL, NULL);
-	if (!EVP_PKEY_assign_RSA(pk, rsa)) {
-		abort();
-		goto err;
+	// how many files exists ?
+	int nfiles = 0;
+	bool ssl_key_exists = true;
+	bool ssl_cert_exists = true;
+	bool ssl_ca_exists = true;
+
+	// check if files exists
+	ssl_key_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_key_rp)+8);
+	sprintf(ssl_key_fp,"%s/%s",GloVars.datadir,ssl_key_rp);
+	if (access(ssl_key_fp, R_OK)) {
+		ssl_key_exists = false;
+		//free(ssl_key);
+		//ssl_key = NULL;
 	}
-	rsa = NULL;
+
+	ssl_cert_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_cert_rp)+8);
+	sprintf(ssl_cert_fp,"%s/%s",GloVars.datadir,ssl_cert_rp);
+	if (access(ssl_cert_fp, R_OK)) {
+		ssl_cert_exists = false;
+		//free(ssl_cert);
+		//ssl_cert = NULL;
+	}
+
+	ssl_ca_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_ca_rp)+8);
+	sprintf(ssl_ca_fp,"%s/%s",GloVars.datadir,ssl_ca_rp);
+	if (access(ssl_ca_fp, R_OK)) {
+		ssl_ca_exists = false;
+		//free(ssl_ca);
+		//ssl_ca = NULL;
+	}
+
+	nfiles += (ssl_key_exists ? 1 : 0);
+	nfiles += (ssl_cert_exists ? 1 : 0);
+	nfiles += (ssl_ca_exists ? 1 : 0);
+
+	if ((nfiles != 0 && nfiles != 3)) {
+		proxy_error("Only some SSL files are present. Either all files are present, or none. Exiting.\n");
+		proxy_error("%s : %s\n" , ssl_key_rp, (ssl_key_exists ? (char *)"YES" : (char *)"NO"));
+		proxy_error("%s : %s\n" , ssl_cert_rp, (ssl_cert_exists ? (char *)"YES" : (char *)"NO"));
+		proxy_error("%s : %s\n" , ssl_ca_rp, (ssl_ca_exists ? (char *)"YES" : (char *)"NO"));
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+
+	if (nfiles == 0) {
+		proxy_info("No SSL keys/certificates found in datadir (%s). Generating new keys/certificates.\n", GloVars.datadir);
+		if ((pkeyp == NULL) || (*pkeyp == NULL)) {
+			if ((pk = EVP_PKEY_new()) == NULL) {
+				proxy_error("Unable to run EVP_PKEY_new()\n");
+				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			}
+		} else
+			pk = *pkeyp;
+
+		rsa = RSA_new();
+
+		if (!rsa) {
+			proxy_error("Unable to run RSA_new()\n");
+			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+		}
+		BIGNUM *e= BN_new();
+		if (!e) {
+			proxy_error("Unable to run BN_new()\n");
+			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+		}
+		if (!BN_set_word(e, RSA_F4) || !RSA_generate_key_ex(rsa, bits, e, NULL)) {
+			RSA_free(rsa);
+			BN_free(e);
+			proxy_error("Unable to run BN_new()\n");
+			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+		}
+		BN_free(e);
+
+
+		write_rsa_key(ssl_key_fp, rsa);
+
+		if (!EVP_PKEY_assign_RSA(pk, rsa)) {
+			proxy_error("Unable to run EVP_PKEY_assign_RSA()\n");
+			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+		}
+		x1 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_CA_Certificate", 2, 3650, NULL, NULL);
+		write_x509(ssl_ca_fp, x1);
+		x2 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_Server_Certificate", 3, 3650, x1, pk);
+		write_x509(ssl_cert_fp, x2);
+
+		rsa = NULL;
+	} else {
+		proxy_info("SSL keys/certificates found in datadir (%s): loading them.\n", GloVars.datadir);
+		pk = rsa_key_read(ssl_key_fp);
+		x1 = read_x509(ssl_cert_fp);
+	}
+	*x509p = x1;
+	*pkeyp = pk;
 
 	dh = get_dh2048();
 
@@ -232,33 +422,13 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
 		exit(EXIT_SUCCESS); // EXIT_SUCCESS to avoid a restart loop
 	}
 
-	X509_set_version(x, 3);
-	ASN1_INTEGER_set(X509_get_serialNumber(x), serial);
-	X509_gmtime_adj(X509_get_notBefore(x), 0);
-	X509_gmtime_adj(X509_get_notAfter(x), (long)60 * 60 * 24 * days);
-	X509_set_pubkey(x, pk);
 
-	name = X509_get_subject_name(x);
-
-	X509_NAME_add_entry_by_txt(name, "C", MBSTRING_ASC, (const unsigned char *)"US", -1, -1, 0);
-	X509_NAME_add_entry_by_txt(name, "CN",
-							   MBSTRING_ASC, (const unsigned char *)"ProxySQL LLC", -1, -1, 0);
-
-	X509_set_issuer_name(x, name);
-
-	if (!X509_sign(x, pk, EVP_md5()))
-		goto err;
-
-	*x509p = x;
-	*pkeyp = pk;
-	return (1);
- err:
-	return (0);
-
+	return 1;
 }
 
 void ProxySQL_Main_init_SSL_module() {
 	SSL_library_init();
+	init_locks();
 	SSL_METHOD *ssl_method;
 	OpenSSL_add_all_algorithms();
 	SSL_load_error_strings();
@@ -274,7 +444,7 @@ void ProxySQL_Main_init_SSL_module() {
 	X509 *x509 = NULL;
 	EVP_PKEY *pkey = NULL;
 
-	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
+	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_OFF);
 
 	bio_err = BIO_new_fp(stderr, BIO_NOCLOSE);
 
@@ -282,12 +452,6 @@ void ProxySQL_Main_init_SSL_module() {
 		proxy_error("Unable to initialize SSL. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
-
-	//RSA_print_fp(stdout, pkey->pkey.rsa, 0);
-	//X509_print_fp(stdout, x509);
-
-	//PEM_write_PrivateKey(stdout, pkey, NULL, NULL, 0, NULL, NULL);
-	//PEM_write_X509(stdout, x509);
 
 
 	if ( SSL_CTX_use_certificate(GloVars.global.ssl_ctx, x509) <= 0 )	{
@@ -304,7 +468,6 @@ void ProxySQL_Main_init_SSL_module() {
 		proxy_error("Private key does not match the public certificate\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
-	init_locks();
 
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
