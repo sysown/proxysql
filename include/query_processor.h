@@ -14,6 +14,7 @@ struct _Query_Processor_rule_t {
 	char *schemaname;
 	int flagIN;
 	char *client_addr;
+	int client_addr_wildcard_position;
 	char *proxy_addr;
 	int proxy_port;
 	uint64_t digest;

@@ -7005,6 +7005,22 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
+			if (r->fields[4]) {
+				char *pct = NULL;
+				if (strlen(r->fields[4]) >= INET6_ADDRSTRLEN) {
+					proxy_error("Query rule with rule_id=%s has an invalid client_addr: %s\n", r->fields[0], r->fields[4]);
+					continue;
+				}
+				pct = strchr(r->fields[4],'%');
+				if (pct) { // there is a wildcard
+					if (strlen(pct) == 1) {
+						// % is at the end of the string, good
+					} else {
+						proxy_error("Query rule with rule_id=%s has a wildcard that is not at the end of client_addr: %s\n", r->fields[0], r->fields[4]);
+						continue;
+					}
+				}
+			}
 			nqpr=GloQPro->new_query_rule(
 				atoi(r->fields[0]), // rule_id
 				true,
