@@ -303,6 +303,10 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GROUP_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_group_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
 
+#define ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS "CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GALERA_HOSTGROUPS "CREATE TABLE runtime_mysql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
+
 
 // Cluster solution
 
@@ -1898,6 +1902,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool monitor_mysql_server_group_replication_log=false;
 
+	bool monitor_mysql_server_galera_log=false;
+
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
 	bool stats_proxysql_servers_status = false;
@@ -1952,6 +1958,8 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_replication_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_group_replication_hostgroups")
+				||
+				strstr(query_no_space,"runtime_mysql_galera_hostgroups")
 			) {
 				runtime_mysql_servers=true; refresh=true;
 			}
@@ -1984,6 +1992,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 	if (strstr(query_no_space,"mysql_server_group_replication_log")) {
 		monitor_mysql_server_group_replication_log=true; refresh=true;
+	}
+	if (strstr(query_no_space,"mysql_server_galera_log")) {
+		monitor_mysql_server_galera_log=true; refresh=true;
 	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
@@ -2073,6 +2084,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (monitor_mysql_server_group_replication_log) {
 			if (GloMyMon) {
 				GloMyMon->populate_monitor_mysql_server_group_replication_log();
+			}
+		}
+		if (monitor_mysql_server_galera_log) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_galera_log();
 			}
 		}
 		pthread_mutex_unlock(&admin_mutex);
@@ -2736,6 +2752,16 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			(strlen(query_no_space)==strlen("CHECKSUM MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))){
 			char *q=(char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL GROUP REPLICATION HOSTGROUPS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup";
+			tablename=(char *)"MYSQL GALERA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
@@ -3487,6 +3513,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GALERA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
@@ -3511,6 +3539,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_config,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -5753,6 +5782,7 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
@@ -5775,6 +5805,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
@@ -5815,6 +5846,7 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
@@ -5890,9 +5922,11 @@ void ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
 	admindb->execute("DELETE FROM main.mysql_servers");
 	admindb->execute("DELETE FROM main.mysql_replication_hostgroups");
 	admindb->execute("DELETE FROM main.mysql_group_replication_hostgroups");
+	admindb->execute("DELETE FROM main.mysql_galera_hostgroups");
 	admindb->execute("INSERT INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
 	admindb->execute("INSERT INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
 	admindb->execute("INSERT INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -5903,9 +5937,10 @@ void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
 	admindb->execute("DELETE FROM disk.mysql_servers");
 	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
 	admindb->execute("DELETE FROM disk.mysql_group_replication_hostgroups");
+	admindb->execute("DELETE FROM disk.mysql_galera_hostgroups");
 	admindb->execute("INSERT INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
 	admindb->execute("INSERT INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
+	admindb->execute("INSERT INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -6918,6 +6953,48 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		sqlite3_finalize(statement);
 	}
 	if(resultset) delete resultset;
+
+	// dump mysql_galera_hostgroups
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_galera_hostgroups";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_galera_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset=MyHGM->dump_table_mysql_galera_hostgroups();
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement=NULL;
+		sqlite3 *mydb3=admindb->get_db();
+		char *query=NULL;
+		if (_runtime) {
+			query=(char *)"INSERT INTO runtime_mysql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		} else {
+			query=(char *)"INSERT INTO mysql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		}
+		rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+		assert(rc==SQLITE_OK);
+		//proxy_info("New mysql_galera_hostgroups table\n");
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 5, atoi(r->fields[4])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		}
+		sqlite3_finalize(statement);
+	}
+	if(resultset) delete resultset;
 	resultset=NULL;
 }
 
@@ -6946,6 +7023,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	SQLite3_result *resultset=NULL;
 	SQLite3_result *resultset_replication=NULL;
 	SQLite3_result *resultset_group_replication=NULL;
+	SQLite3_result *resultset_galera=NULL;
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -7013,6 +7091,33 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		MyHGM->set_incoming_group_replication_hostgroups(resultset_group_replication);
 	}
 
+	// support for Galera, table mysql_galera_hostgroups
+
+	// look for invalid combinations
+	query=(char *)"SELECT a.* FROM mysql_galera_hostgroups a JOIN mysql_galera_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup UNION ALL SELECT a.* FROM mysql_galera_hostgroups a JOIN mysql_galera_hostgroups b ON a.writer_hostgroup=b.backup_writer_hostgroup WHERE b.backup_writer_hostgroup UNION ALL SELECT a.* FROM mysql_galera_hostgroups a JOIN mysql_galera_hostgroups b ON a.writer_hostgroup=b.offline_hostgroup WHERE b.offline_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			proxy_error("Incompatible entry in mysql_galera_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
+		}
+	}
+	if (resultset) delete resultset;
+	resultset=NULL;
+
+	query=(char *)"SELECT a.* FROM mysql_galera_hostgroups a LEFT JOIN mysql_galera_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_galera);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to MyHGM
+		MyHGM->set_incoming_galera_hostgroups(resultset_galera);
+	}
+
 	// commit all the changes
 	MyHGM->commit();
 
@@ -7026,6 +7131,10 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (resultset_group_replication) {
 		delete resultset_replication;
 		resultset_group_replication=NULL;
+	}
+	if (resultset_galera) {
+		delete resultset_galera;
+		resultset_galera=NULL;
 	}
 }
 
