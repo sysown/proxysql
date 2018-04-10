@@ -9,7 +9,7 @@
  
  /* callback functions for read/write */
  LIST *pvio_callback= NULL;
-@@ -215,6 +219,68 @@
+@@ -215,6 +219,78 @@
  }
  /* }}} */
  
@@ -30,7 +30,7 @@
 +  for (;;)
 +  {
 +	res = ma_pvio_tls_write(pvio->ctls, buffer, length);
-+	if (res > 0) {
++	if (res >= 0) {
 +		return res;
 +	} else {
 +		ssl_err= SSL_get_error((SSL *)pvio->ctls->ssl, res);
@@ -40,6 +40,11 @@
 +    		b->events_to_wait_for|= MYSQL_WAIT_WRITE;
 +  		else
 +    		return 1;
++		if (b->suspend_resume_hook)
++			(*b->suspend_resume_hook)(TRUE, b->suspend_resume_hook_user_data);
++		my_context_yield(&b->async_context);
++		if (b->suspend_resume_hook)
++			(*b->suspend_resume_hook)(FALSE, b->suspend_resume_hook_user_data);
 +	}
 +  }
 +}
@@ -59,7 +64,7 @@
 +  for (;;)
 +  {
 +	res = ma_pvio_tls_read(pvio->ctls, buffer, length);
-+	if (res > 0) {
++	if (res >= 0) {
 +		return res;
 +	} else {
 +		ssl_err= SSL_get_error((SSL *)pvio->ctls->ssl, res);
@@ -69,6 +74,11 @@
 +    		b->events_to_wait_for|= MYSQL_WAIT_WRITE;
 +  		else
 +    		return 1;
++		if (b->suspend_resume_hook)
++			(*b->suspend_resume_hook)(TRUE, b->suspend_resume_hook_user_data);
++		my_context_yield(&b->async_context);
++		if (b->suspend_resume_hook)
++			(*b->suspend_resume_hook)(FALSE, b->suspend_resume_hook_user_data);
 +	}
 +  }
 +}
@@ -78,7 +88,7 @@
  /* {{{ size_t ma_pvio_read */
  ssize_t ma_pvio_read(MARIADB_PVIO *pvio, uchar *buffer, size_t length)
  {
-@@ -223,6 +289,13 @@
+@@ -223,6 +299,13 @@
      return -1;
    if (IS_PVIO_ASYNC_ACTIVE(pvio))
    {
@@ -92,7 +102,7 @@
      r= ma_pvio_read_async(pvio, buffer, length);
      goto end;
    }
-@@ -343,17 +416,15 @@
+@@ -343,17 +426,15 @@
    if (!pvio)
     return -1;
  
@@ -117,7 +127,7 @@
      r= ma_pvio_write_async(pvio, buffer, length);
      goto end;
    }
-@@ -370,6 +441,15 @@
+@@ -370,6 +451,15 @@
      }
    }
  
