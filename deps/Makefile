@@ -78,6 +78,7 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mysql_async.c < ../mysql_async.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/password.c < ../password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c_tls.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/my_alloc.c < ../my_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/my_charset.c < ../my_charset.c.patch

@@ -1,0 +1,8 @@
+173c173,174
+<     if (!(SSL_context= SSL_CTX_new(TLSv1_client_method())))
+---
+>     /* SSLv23_client_method() also gives TLSv1.x */
+>     if (!(SSL_context= SSL_CTX_new(SSLv23_client_method())))
+179a181,182
+>     SSL_set_options(SSL_context, SSL_OP_NO_SSLv2);
+>     SSL_set_options(SSL_context, SSL_OP_NO_SSLv3);
