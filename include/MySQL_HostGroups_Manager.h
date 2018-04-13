@@ -498,7 +498,7 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result * SQL3_Connection_Pool(bool _reset);
 
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);
-	void push_MyConn_to_pool_array(MySQL_Connection **);
+	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
 	void replication_lag_action(int, char*, unsigned int, int);

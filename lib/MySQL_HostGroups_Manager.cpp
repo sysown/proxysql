@@ -1851,12 +1851,12 @@ __exit_push_MyConn_to_pool:
 		wrunlock();
 }
 
-void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca) {
+void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, unsigned int cnt) {
 	unsigned int i=0;
 	MySQL_Connection *c=NULL;
 	c=ca[i];
 	wrlock();
-	while (c) {
+	while (i<cnt) {
 		push_MyConn_to_pool(c,false);
 		i++;
 		c=ca[i];

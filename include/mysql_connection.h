@@ -72,6 +72,7 @@ class MySQL_Connection {
 	MYSQL_RES *mysql_result;
 	MYSQL_ROW mysql_row;
 	MySQL_ResultSet *MyRS;
+	MySQL_ResultSet *MyRS_reuse;
 	MySrvC *parent;
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;

@@ -1733,16 +1733,20 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	return ret;
 }
 
-MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
+MySQL_ResultSet::MySQL_ResultSet() {
+	buffer = NULL;
+}
+void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	transfer_started=false;
 	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
-	buffer=NULL;
+	if (buffer==NULL) {
 	//if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
 	// removing the previous assumption. We allocate this buffer also for prepared statements
 		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
 	//}
+	}
 	buffer_used=0;
 	myds=NULL;
 	sid=0;
