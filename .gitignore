@@ -45,6 +45,7 @@ oldcode/tests/connect_speed
 
 #binary
 src/proxysql
+src/*pem
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
