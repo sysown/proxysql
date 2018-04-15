@@ -2786,7 +2786,7 @@ __run_skip_1:
 
 //__mysql_thread_exit_add_mirror:
 
-	mypolls.poll_timeout = mysql_thread___poll_timeout/1000; // predefined default value
+	mypolls.poll_timeout = mysql_thread___poll_timeout*1000; // predefined default value
 	//mypolls.abs_poll_timeout = curtime + mypolls.poll_timeout;
 		for (n = 0; n < mypolls.len; n++) {
 			MySQL_Data_Stream *myds=NULL;
