@@ -1056,13 +1056,13 @@ void * monitor_galera_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status");
+	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT IF(VARIABLE_VALUE=4,'YES','NO') FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES WHERE VARIABLE_NAME='READ_ONLY') read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming viable_candidate=no and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_local_state is NOT 4 and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1078,7 +1078,7 @@ void * monitor_galera_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming viable_candidate=no and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_local_state is NOT 4 and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
