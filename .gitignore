@@ -49,6 +49,8 @@ binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
 
+src/proxy*.pem
+
 #core
 core
 
