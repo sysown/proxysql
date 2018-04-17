@@ -178,6 +178,7 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 		close(s);
 		return NULL;
 	}
+/*
 	memset(&a, 0, sizeof(a));
 	a.sin_port = htons(gtid_port);
 	a.sin_family = AF_INET;
@@ -186,9 +187,27 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 		close(s);
 		return NULL;
 	}
+*/
 	ioctl_FIONBIO(s,1);
 
-	int status = connect(s, (struct sockaddr *) &a, sizeof(a));
+	struct addrinfo hints;
+	struct addrinfo *res = NULL;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_protocol= IPPROTO_TCP;
+	hints.ai_family= AF_UNSPEC;
+	hints.ai_socktype= SOCK_STREAM;
+
+	char str_port[NI_MAXSERV+1];
+	sprintf(str_port,"%d", gtid_port);
+	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
+	if (gai_rc) {
+		freeaddrinfo(res);
+		//exit here
+		return NULL;
+	}
+
+	//int status = connect(s, (struct sockaddr *) &a, sizeof(a));
+	int status = connect(s, res->ai_addr, res->ai_addrlen);
 	if ((status == 0) || ((status == -1) && (errno == EINPROGRESS))) {
 		struct ev_io *c = (struct ev_io *)malloc(sizeof(struct ev_io));
 		if (c) {
