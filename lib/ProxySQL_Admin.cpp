@@ -7129,11 +7129,11 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		resultset_replication=NULL;
 	}
 	if (resultset_group_replication) {
-		delete resultset_replication;
+		//delete resultset_replication; // do not delete, resultset is stored in MyHGM
 		resultset_group_replication=NULL;
 	}
 	if (resultset_galera) {
-		delete resultset_galera;
+		//delete resultset_galera; // do not delete, resultset is stored in MyHGM
 		resultset_galera=NULL;
 	}
 }
