@@ -815,6 +815,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.frontend_use_db=0;
 	pthread_mutex_init(&readonly_mutex, NULL);
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
+	pthread_mutex_init(&Galera_Info_mutex, NULL);
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_init(&lock, NULL);
 #else
