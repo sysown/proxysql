@@ -40,7 +40,7 @@ MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
 MICROHTTPD_IDIR=$(MICROHTTPD_DIR)/include
 MICROHTTPD_LDIR=$(MICROHTTPD_DIR)/microhttpd/.libs
 
-CURL_DIR=$(DEPS_PATH)/curl/curl/
+CURL_DIR=$(DEPS_PATH)/curl/curl
 CURL_IDIR=$(CURL_DIR)/include
 CURL_LDIR=$(CURL_DIR)/lib/.libs
 
@@ -74,7 +74,7 @@ MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS=-lssl -lre2 -lmariadbclient -lpthread -lm -lz -liconv -lcrypto
+	MYLIBS=-lssl -lre2 -lmariadbclient -lpthread -lm -lz -liconv -lcrypto -lcurl
 endif
 ifeq ($(UNAME_S),Linux)
 	MYLIBS+= -ldl
