@@ -211,6 +211,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"shun_on_failures",
 	(char *)"shun_recovery_time_sec",
 	(char *)"query_retries_on_failure",
+	(char *)"client_multi_statements",
 	(char *)"connect_retries_on_failure",
 	(char *)"connect_retries_delay",
 	(char *)"connection_delay_multiplex_ms",
@@ -337,6 +338,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
+	variables.client_multi_statements=true;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -679,6 +681,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
 	if (!strcasecmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
 	if (!strcasecmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	if (!strcasecmp(name,"client_multi_statements")) return (int)variables.client_multi_statements;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 }
@@ -835,6 +838,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"shun_on_failures")) {
 		sprintf(intbuf,"%d",variables.shun_on_failures);
 		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"client_multi_statements")) {
+		return strdup((variables.client_multi_statements ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"connpoll_reset_queue_length")) {
 		sprintf(intbuf,"%d",variables.connpoll_reset_queue_length);
@@ -1566,6 +1572,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"client_multi_statements")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.client_multi_statements=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.client_multi_statements=false;
+			return true;
+		}
+		return false;
 	}
 	if (!strcasecmp(name,"connect_retries_on_failure")) {
 		int intv=atoi(value);
@@ -3292,6 +3309,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___shun_recovery_time_sec=GloMTH->get_variable_int((char *)"shun_recovery_time_sec");
 	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
+	mysql_thread___client_multi_statements=(bool)GloMTH->get_variable_int((char *)"client_multi_statements");
 	mysql_thread___connection_delay_multiplex_ms=GloMTH->get_variable_int((char *)"connection_delay_multiplex_ms");
 	mysql_thread___connection_max_age_ms=GloMTH->get_variable_int((char *)"connection_max_age_ms");
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");

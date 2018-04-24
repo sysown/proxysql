@@ -417,7 +417,8 @@ void MySQL_Connection::connect_start() {
 		client_flags += CLIENT_FOUND_ROWS;
 	if (parent->compression)
 		client_flags += CLIENT_COMPRESS;
-	client_flags += CLIENT_MULTI_STATEMENTS; // FIXME: add global variable
+	if (mysql_thread___client_multi_statements)
+		client_flags += CLIENT_MULTI_STATEMENTS;
 	char *auth_password=NULL;
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
