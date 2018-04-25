@@ -2872,7 +2872,7 @@ handler_again:
 							handler_ret = -1;
 							return handler_ret;
 						}
-						if (myerr >= 2000) {
+						if (myerr >= 2000 && myerr < 3000) {
 							bool retry_conn=false;
 							// client error, serious
 							proxy_error("Detected a broken connection during query on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
@@ -3771,6 +3771,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (strncasecmp(dig,(char *)"SET ",4)==0) {
 			int rc;
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
 			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
 			if (match_regexes && match_regexes[0]->match(dig)) {
 				re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
