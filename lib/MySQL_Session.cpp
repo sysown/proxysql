@@ -942,6 +942,7 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	int rc=myconn->async_ping(myds->revents);
 	if (rc==0) {
 		myconn->async_state_machine=ASYNC_IDLE;
+		myconn->compute_unknown_transaction_status();
 		if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->return_MySQL_Connection_To_Pool();
 		} else {
@@ -2796,6 +2797,7 @@ handler_again:
 						}
 					} else {
 						myconn->multiplex_delayed=false;
+						myconn->compute_unknown_transaction_status();
 						myconn->async_state_machine=ASYNC_IDLE;
 						myds->DSS=STATE_MARIADB_GENERIC;
 						if (transaction_persistent==true) {
@@ -4401,6 +4403,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 		// if there is a mysql connection, clean its status
 		if (myds->myconn) {
 			myds->myconn->async_free_result();
+			myds->myconn->compute_unknown_transaction_status();
 		}
 		myds->free_mysql_real_query();
 	}

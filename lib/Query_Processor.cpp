@@ -495,7 +495,23 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->regex_engine2=NULL;
 	newQR->hits=0;
 
+	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr=(client_addr ? strdup(client_addr) : NULL);
+	if (newQR->client_addr) {
+		char *pct = strchr(newQR->client_addr,'%');
+		if (pct) { // there is a wildcard . We assume Admin did already all the input validation
+			if (pct == newQR->client_addr) {
+				// client_addr == '%'
+				// % is at the end of the string, but also at the beginning
+				// becoming a catch all
+				newQR->client_addr_wildcard_position = 0;
+			} else {
+				// this math is valid also if (pct == newQR->client_addr)
+				// but we separate it to clarify that client_addr_wildcard_position is a match all
+				newQR->client_addr_wildcard_position = strlen(newQR->client_addr) - strlen(pct);
+			}
+		}
+	}
 	newQR->proxy_addr=(proxy_addr ? strdup(proxy_addr) : NULL);
 	newQR->proxy_port=proxy_port;
 	newQR->log=log;
@@ -957,9 +973,19 @@ __internal_loop:
 		// match on client address
 		if (qr->client_addr && strlen(qr->client_addr)) {
 			if (sess->client_myds->addr.addr) {
-				if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
-					continue;
+				if (qr->client_addr_wildcard_position == -1) { // no wildcard , old algorithm
+					if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
+						continue;
+					}
+				} else if (qr->client_addr_wildcard_position==0) {
+					// catch all!
+					// therefore we have a match
+				} else { // client_addr_wildcard_position > 0
+					if (strncmp(qr->client_addr,sess->client_myds->addr.addr,qr->client_addr_wildcard_position)!=0) {
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
+						continue;
+					}
 				}
 			}
 		}
