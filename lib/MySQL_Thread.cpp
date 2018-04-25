@@ -2846,6 +2846,7 @@ __run_skip_1a:
 			}
 			GloQPro->update_query_processor_stats();
 		}
+
 			if (rc == -1 && errno == EINTR)
 				// poll() timeout, try again
 				continue;
@@ -4770,15 +4771,16 @@ void MySQL_Thread::return_local_connections() {
 	if (cached_connections->len==0) {
 		return;
 	}
+/*
 	MySQL_Connection **ca=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*(cached_connections->len+1));
 	unsigned int i=0;
+*/
+//	ca[i]=NULL;
+	MyHGM->push_MyConn_to_pool_array((MySQL_Connection **)cached_connections->pdata, cached_connections->len);
+//	free(ca);
 	while (cached_connections->len) {
-		ca[i]=(MySQL_Connection *)cached_connections->remove_index_fast(0);
-		i++;
+		cached_connections->remove_index_fast(0);
 	}
-	ca[i]=NULL;
-	MyHGM->push_MyConn_to_pool_array(ca);
-	free(ca);
 }
 
 unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {

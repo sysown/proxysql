@@ -178,6 +178,7 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 		close(s);
 		return NULL;
 	}
+/*
 	memset(&a, 0, sizeof(a));
 	a.sin_port = htons(gtid_port);
 	a.sin_family = AF_INET;
@@ -186,9 +187,27 @@ struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_p
 		close(s);
 		return NULL;
 	}
+*/
 	ioctl_FIONBIO(s,1);
 
-	int status = connect(s, (struct sockaddr *) &a, sizeof(a));
+	struct addrinfo hints;
+	struct addrinfo *res = NULL;
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_protocol= IPPROTO_TCP;
+	hints.ai_family= AF_UNSPEC;
+	hints.ai_socktype= SOCK_STREAM;
+
+	char str_port[NI_MAXSERV+1];
+	sprintf(str_port,"%d", gtid_port);
+	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
+	if (gai_rc) {
+		freeaddrinfo(res);
+		//exit here
+		return NULL;
+	}
+
+	//int status = connect(s, (struct sockaddr *) &a, sizeof(a));
+	int status = connect(s, res->ai_addr, res->ai_addrlen);
 	if ((status == 0) || ((status == -1) && (errno == EINPROGRESS))) {
 		struct ev_io *c = (struct ev_io *)malloc(sizeof(struct ev_io));
 		if (c) {
@@ -1121,7 +1140,7 @@ bool MySQL_HostGroups_Manager::commit() {
 			//fprintf(stderr,"%lld\n", ptr);
 			if (ptr==0) {
 				if (GloMTH->variables.hostgroup_manager_verbose) {
-					proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%s\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]));
+					proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]));
 				}
 				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]), atoi(r->fields[8]), atoi(r->fields[9]), atoi(r->fields[10]), r->fields[11]); // add new fields here if adding more columns in mysql_servers
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), (MySerStatus) atoi(r->fields[4]), mysrvc, atoi(r->fields[0]));
@@ -1851,12 +1870,12 @@ __exit_push_MyConn_to_pool:
 		wrunlock();
 }
 
-void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca) {
+void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, unsigned int cnt) {
 	unsigned int i=0;
 	MySQL_Connection *c=NULL;
 	c=ca[i];
 	wrlock();
-	while (c) {
+	while (i<cnt) {
 		push_MyConn_to_pool(c,false);
 		i++;
 		c=ca[i];

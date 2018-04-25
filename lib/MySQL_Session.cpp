@@ -3044,7 +3044,10 @@ handler_again:
 							case 2:
 								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
-										delete myconn->MyRS;
+										if (myconn->MyRS_reuse) {
+											delete myconn->MyRS_reuse;
+										}
+										myconn->MyRS_reuse = myconn->MyRS;
 										myconn->MyRS=NULL;
 									}
 									NEXT_IMMEDIATE(PROCESSING_QUERY);
@@ -4187,7 +4190,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn) {
 	MYSQL_RES *stmt_result=myconn->query.stmt_result;
 	if (stmt_result) {
-		MySQL_ResultSet *MyRS=new MySQL_ResultSet(&client_myds->myprot, stmt_result, stmt->mysql, stmt);
+		MySQL_ResultSet *MyRS=new MySQL_ResultSet();
+		MyRS->init(&client_myds->myprot, stmt_result, stmt->mysql, stmt);
 		MyRS->get_resultset(client_myds->PSarrayOUT);
 		//removed  bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		delete MyRS;

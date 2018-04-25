@@ -21,7 +21,8 @@ class MySQL_ResultSet {
 	unsigned long long resultset_size;
 	PtrSizeArray PSarrayOUT;
 	//PtrSizeArray *PSarrayOUT;
-	MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
+	MySQL_ResultSet();
+	void init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROW row);
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);

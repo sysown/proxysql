@@ -212,6 +212,7 @@ MySQL_Connection::MySQL_Connection() {
 	largest_query_length=0;
 	multiplex_delayed=false;
 	MyRS=NULL;
+	MyRS_reuse=NULL;
 	unknown_transaction_status = false;
 	creation_time=0;
 	processing_multi_statement=false;
@@ -240,6 +241,11 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 	if (MyRS) {
 		delete MyRS;
+		MyRS = NULL;
+	}
+	if (MyRS_reuse) {
+		delete MyRS_reuse;
+		MyRS_reuse = NULL;
 	}
 	if (query.stmt) {
 		query.stmt=NULL;
@@ -533,6 +539,7 @@ void MySQL_Connection::real_query_start() {
 }
 
 void MySQL_Connection::real_query_cont(short event) {
+	if (event == 0) return;
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_query_cont(&interr ,mysql , mysql_status(event, true));
 }
@@ -901,7 +908,9 @@ handler_again:
 			break;
 
 		case ASYNC_NEXT_RESULT_CONT:
-			async_exit_status = mysql_next_result_cont(&interr, mysql, mysql_status(event, true));
+			if (event) {
+				async_exit_status = mysql_next_result_cont(&interr, mysql, mysql_status(event, true));
+			}
 			if (async_exit_status) {
 				next_event(ASYNC_NEXT_RESULT_CONT);
 			} else {
@@ -944,9 +953,23 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			} else {
 				if (myds->sess->mirror==false) {
-					MyRS=new MySQL_ResultSet(&myds->sess->client_myds->myprot, mysql_result, mysql);
+					if (MyRS_reuse == NULL) {
+						MyRS = new MySQL_ResultSet();
+						MyRS->init(&myds->sess->client_myds->myprot, mysql_result, mysql);
+					} else {
+						MyRS = MyRS_reuse;
+						MyRS_reuse = NULL;
+						MyRS->init(&myds->sess->client_myds->myprot, mysql_result, mysql);
+					}
 				} else {
-					MyRS=new MySQL_ResultSet(NULL, mysql_result, mysql);
+					if (MyRS_reuse == NULL) {
+						MyRS = new MySQL_ResultSet();
+						MyRS->init(NULL, mysql_result, mysql);
+					} else {
+						MyRS = MyRS_reuse;
+						MyRS_reuse = NULL;
+						MyRS->init(NULL, mysql_result, mysql);
+					}
 				}
 				async_fetch_row_start=false;
 				NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
@@ -1537,7 +1560,10 @@ void MySQL_Connection::async_free_result() {
 	compute_unknown_transaction_status();
 	async_state_machine=ASYNC_IDLE;
 	if (MyRS) {
-		delete MyRS;
+		if (MyRS_reuse) {
+			delete (MyRS_reuse);
+		}
+		MyRS_reuse = MyRS;
 		MyRS=NULL;
 	}
 }
