@@ -1,0 +1,29 @@
+[Unit]
+Description=High Performance Advanced Proxy for MySQL
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/proxysql -f  -c /etc/proxysql.cnf
+#StandardError=null  # all output is in stderr
+SyslogIdentifier=proxysql
+Restart=always
+User=proxysql
+Group=proxysql
+PermissionsStartOnly=true
+UMask=0007
+LimitNOFILE=102400
+LimitCORE=1073741824
+ProtectHome=yes
+ReadOnlyPaths=/
+ReadWritePaths=/var/lib/proxysql /var/run/proxysql
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectSystem=full
+PrivateDevices=yes
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
