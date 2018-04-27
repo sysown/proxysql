@@ -7631,23 +7631,36 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 	if (root.exists("mysql_replication_hostgroups")==true) {
 		const Setting &mysql_replication_hostgroups = root["mysql_replication_hostgroups"];
 		int count = mysql_replication_hostgroups.getLength();
-		char *q=(char *)"INSERT OR REPLACE INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment) VALUES (%d, %d, '%s')";
+		char *q=(char *)"INSERT OR REPLACE INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment, check_type) VALUES (%d, %d, '%s', '%s')";
 		for (i=0; i< count; i++) {
 			const Setting &line = mysql_replication_hostgroups[i];
 			int writer_hostgroup;
 			int reader_hostgroup;
 			std::string comment="";
+			std::string check_type="";
 			if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
 			if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
 			line.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(o)+32);
-			sprintf(query,q, writer_hostgroup, reader_hostgroup, o);
+			line.lookupValue("check_type", check_type);
+			if (
+				(strcasecmp(check_type.c_str(),(char *)"read_only"))
+				&& (strcasecmp(check_type.c_str(),(char *)"innodb_read_only"))
+				&& (strcasecmp(check_type.c_str(),(char *)"super_read_only"))
+			) {
+				check_type="read_only"
+			}
+			char *t1=strdup(check_type.c_str());
+			char *t=escape_string_single_quotes(t1, false);
+			char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(t)+32);
+			sprintf(query,q, writer_hostgroup, reader_hostgroup, o, t);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
+			if (t!=t1) free(t);
+			free(t1);
 			free(query);
 			rows++;
 		}
