@@ -129,6 +129,9 @@ deps/lz4/lz4-1.7.5/
 #libev
 deps/libev/libev-4.24/
 
+#libssl
+deps/libssl/openssl-1.1.0h/
+
 #google coredumper
 deps/google-coredumper/google-coredumper/
 

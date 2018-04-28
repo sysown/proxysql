@@ -11,11 +11,18 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev coredumper
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev coredumper libssl
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev coredumper
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev coredumper libssl
 endif
 .PHONY: default
+
+libssl/openssl/libssl.a:
+	cd libssl && rm -rf openssl-1.1.0h || true
+	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
+	cd libssl/openssl  && ./config
+	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
+libssl: libssl/openssl/libssl.a
 
 libev/libev/.libs/libev.a:
 	cd libev && rm -rf libev-4.24 || true
@@ -31,10 +38,11 @@ google-coredumper/google-coredumper/.libs/libcoredumper.a:
 coredumper: google-coredumper/google-coredumper/.libs/libcoredumper.a
 
 
-curl/curl/lib/.libs/libcurl.a:
+curl/curl/lib/.libs/libcurl.a: #libssl/openssl/libssl.a
 	cd curl && rm -rf curl-7.57.0 || true
 	cd curl && tar -zxf curl-7.57.0.tar.gz
-	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli && CC=${CC} CXX=${CXX} ${MAKE}
+	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-ssl && CC=${CC} CXX=${CXX} ${MAKE}
 curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
@@ -82,10 +90,10 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
-mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a:
+mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.0.2-src.tar.gz
-	cd mariadb-client-library/mariadb_client && cmake .
+	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/../../libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/../../libssl/openssl/ .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch

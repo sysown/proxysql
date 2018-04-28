@@ -7649,7 +7649,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 				&& (strcasecmp(check_type.c_str(),(char *)"innodb_read_only"))
 				&& (strcasecmp(check_type.c_str(),(char *)"super_read_only"))
 			) {
-				check_type="read_only"
+				check_type="read_only";
 			}
 			char *t1=strdup(check_type.c_str());
 			char *t=escape_string_single_quotes(t1, false);
