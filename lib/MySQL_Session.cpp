@@ -1174,7 +1174,7 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	}
 	if (autocommit != mybe->server_myds->myconn->IsAutoCommit()) {
 		// see case #485
-		if (mysql_thread___enforce_autocommit_on_reads == false) {
+		if (mysql_thread___enforce_autocommit_on_reads == false && autocommit == false) {
 			// enforce_autocommit_on_reads is disabled
 			// we need to check if it is a SELECT not FOR UPDATE
 			if (CurrentQuery.is_select_NOT_for_update()==false) {
