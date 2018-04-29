@@ -1310,11 +1310,11 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				}
 			}
 		}
-		if (_ret_use_ssl==true) {
+		//if (_ret_use_ssl==true) {
 			// if we reached here, use_ssl is false , but _ret_use_ssl is true
 			// it means that a client is required to use SSL , but it is not
-			ret=false;
-		}
+		//	ret=false;
+		//}
 	}
 	if (userinfo->username) free(userinfo->username);
 	if (userinfo->password) free(userinfo->password);
@@ -1468,6 +1468,11 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			}
 		}
 	}
+
+	if (_ret_use_ssl==true) {
+		(*myds)->sess->use_ssl = true;
+	}
+
 //	if (_ret_use_ssl==true) {
 //		// if we reached here, use_ssl is false , but _ret_use_ssl is true
 //		// it means that a client is required to use SSL , but it is not

@@ -3002,9 +3002,9 @@ __run_skip_1a:
 				exit(EXIT_FAILURE);
 			}
 
-//		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
-//			refresh_variables();
-//		}
+		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
+			refresh_variables();
+		}
 
 #ifdef IDLE_THREADS
 		if (idle_maintenance_thread==false) {

@@ -277,6 +277,7 @@ MySQL_Session::MySQL_Session() {
 	active_transactions=0;
 
 	with_gtid = false;
+	use_ssl = false;
 
 	match_regexes=NULL;
 /*
@@ -3475,10 +3476,20 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					}
 					free(client_addr);
 				} else {
-					// we are good!
-					client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
-					status=WAITING_CLIENT_DATA;
-					client_myds->DSS=STATE_CLIENT_AUTH_OK;
+					if (use_ssl == true && is_encrypted == false) {
+						*wrong_pass=true;
+						char *_a=(char *)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
+						char *_s=(char *)malloc(strlen(_a)+strlen(client_myds->myconn->userinfo->username)+32);
+						sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s);
+						__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
+						free(_s);
+					} else {
+						// we are good!
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
+						status=WAITING_CLIENT_DATA;
+						client_myds->DSS=STATE_CLIENT_AUTH_OK;
+					}
 				}
 			}
 //		} else {
