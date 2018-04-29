@@ -61,8 +61,10 @@ class ProxySQL_Poll {
 
   public:
 	unsigned int poll_timeout;
+#ifdef DEBUG
 	unsigned long loops;
 	StatCounters *loop_counters;
+#endif // DEBUG
   unsigned int len;
   unsigned int size;
   struct pollfd *fds;
@@ -73,13 +75,15 @@ class ProxySQL_Poll {
 	volatile int pending_listener_del;
 
   ProxySQL_Poll() {
+#ifdef DEBUG
 #ifdef PROXYSQL_STATSCOUNTERS_NOLOCK
 		loop_counters=new StatCounters(15,10);
 #else
 		loop_counters=new StatCounters(15,10,false);
 #endif
-		poll_timeout=0;
 		loops=0;
+#endif // DEBUG
+		poll_timeout=0;
 		len=0;
 		pending_listener_add=0;
 		pending_listener_del=0;
@@ -103,7 +107,16 @@ class ProxySQL_Poll {
     free(fds);
 		free(last_recv);
 		free(last_sent);
-		delete loop_counters;
+#ifdef DEBUG
+	delete loop_counters;
+	if (loops) {
+		unsigned long long last_loops_at=monotonic_time();
+		unsigned long long elapsed_time = last_loops_at-first_loops_at;
+		elapsed_time /= 1000;
+		float lpms = loops/elapsed_time;
+		proxy_info("Loops/ms = %f\n", lpms);
+	}
+#endif // DEBUG
   };
 
   void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
@@ -187,7 +200,8 @@ class MySQL_Thread
 	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
-	std::atomic<unsigned long long> atomic_curtime;
+	//std::atomic<unsigned long long> atomic_curtime;
+	volatile unsigned long long atomic_curtime; // changed from atomic to volatile
 	PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions_cache;
@@ -231,7 +245,8 @@ class MySQL_Thread
 		unsigned long long ConnPool_get_conn_failure;
 		unsigned long long gtid_binlog_collected;
 		unsigned long long gtid_session_collected;
-		unsigned int active_transactions;
+		volatile unsigned int active_transactions;
+		//std::atomic<unsigned int> active_transactions;
 	} status_variables;
 
 	struct {
@@ -264,6 +279,14 @@ class MySQL_Thread
 	MySQL_Connection * get_MyConn_local(unsigned int, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid);
 	void push_MyConn_local(MySQL_Connection *);
 	void return_local_connections();
+	void ping_idle_connections();
+	void process_mirror_sessions();
+	void MoveMydsToMaintenanceThreadIfNeeded(MySQL_Data_Stream *myds, unsigned int n);
+	void HandleEventFromEpoll(int i);
+	void ScanIdleClients();
+	void ProcessEventOnDataStream(MySQL_Data_Stream *myds, unsigned int n);
+	void MoveMydsBackToWorkerThreadIfNeeded();
+	void ComputeMinTimeToWait(MySQL_Data_Stream *myds);
 };
 
 
