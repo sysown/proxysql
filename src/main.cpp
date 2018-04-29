@@ -251,9 +251,9 @@ X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, i
 	}
 
 	if (ca_pkey) {
-		rc = X509_sign(x, ca_pkey, EVP_md5());
+		rc = X509_sign(x, ca_pkey, EVP_sha1());
 	} else {
-		rc = X509_sign(x, pkey, EVP_md5());
+		rc = X509_sign(x, pkey, EVP_sha1());
 	}
 	if (rc==0) {
 		proxy_error("Unable to X509 sign: %s\n", ERR_error_string(ERR_get_error(),NULL));
