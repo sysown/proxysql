@@ -5,6 +5,26 @@
 #define UNIX_PATH_MAX    108
 #endif 
 
+struct bio_st {
+	const BIO_METHOD *method;
+	long (*callback) (struct bio_st *, int, const char *, int, long, long);
+	char *cb_arg;
+	int init;
+	int shutdown;
+	int flags;
+	int retry_reason;
+	int num;
+	void *ptr;
+	struct bio_st *next_bio;
+	struct bio_st *prev_bio;
+	int references;
+	uint64_t num_read;
+	uint64_t num_write;
+	CRYPTO_EX_DATA ex_data;
+	CRYPTO_RWLOCK *lock;
+};
+
+
 extern MySQL_Threads_Handler *GloMTH;
 
 #ifdef DEBUG

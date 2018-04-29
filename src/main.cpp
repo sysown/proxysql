@@ -23,6 +23,29 @@
 #undef dlerror
 #endif
 
+struct dh_st {
+	int pad;
+	int version;
+	BIGNUM *p;
+	BIGNUM *g;
+	long length;
+	BIGNUM *pub_key;
+	BIGNUM *priv_key;
+	int flags;
+	BN_MONT_CTX *method_mont_p;
+	BIGNUM *q;
+	BIGNUM *j;
+	unsigned char *seed;
+	int seedlen;
+	BIGNUM *counter;
+	int references;
+	CRYPTO_EX_DATA ex_data;
+	const DH_METHOD *meth;
+	ENGINE *engine;
+	CRYPTO_RWLOCK *lock;
+};
+
+
 static pthread_mutex_t *lockarray;
 #include <openssl/crypto.h>
 
@@ -473,7 +496,6 @@ void ProxySQL_Main_init_SSL_module() {
 	EVP_PKEY_free(pkey);
 
 
-	CRYPTO_mem_leaks(bio_err);
 	BIO_free(bio_err);
 }
 

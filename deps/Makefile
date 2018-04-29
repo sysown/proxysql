@@ -93,7 +93,7 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.0.2-src.tar.gz
-	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/../../libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/../../libssl/openssl/ .
+	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
