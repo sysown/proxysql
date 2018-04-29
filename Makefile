@@ -731,7 +731,7 @@ binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb:
 binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb:
 	docker stop debian9_build || true
 	docker rm debian9_build || true
-	docker create --name debian9_build renecannao/proxysql:build-debian8 bash -c "while : ; do sleep 10 ; done"
+	docker create --name debian9_build renecannao/proxysql:build-debian9 bash -c "while : ; do sleep 10 ; done"
 	docker start debian9_build
 	docker exec debian9_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
@@ -754,7 +754,7 @@ binaries/proxysql_${CURVER}-debian9.4_amd64.deb:
 	sleep 2
 	docker exec debian9.4_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT}"
 	sleep 2
-	docker cp docker/images/proxysql/debian-9-build/proxysql.ctl debian9.4_build:/opt/proxysql/
+	docker cp docker/images/proxysql/debian-9.4-build/proxysql.ctl debian9.4_build:/opt/proxysql/
 	sleep 2
 	docker exec debian9.4_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
 	sleep 2
@@ -765,13 +765,13 @@ binaries/proxysql_${CURVER}-debian9.4_amd64.deb:
 binaries/proxysql_${CURVER}-dbg-debian9.4_amd64.deb:
 	docker stop debian9.4_build || true
 	docker rm debian9.4_build || true
-	docker create --name debian9.4_build renecannao/proxysql:build-debian8 bash -c "while : ; do sleep 10 ; done"
+	docker create --name debian9.4_build renecannao/proxysql:build-debian9.4 bash -c "while : ; do sleep 10 ; done"
 	docker start debian9.4_build
 	docker exec debian9.4_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
 	docker exec debian9.4_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT} debug"
 	sleep 2
-	docker cp docker/images/proxysql/debian-9-build/proxysql.ctl debian9.4_build:/opt/proxysql/
+	docker cp docker/images/proxysql/debian-9.4-build/proxysql.ctl debian9.4_build:/opt/proxysql/
 	sleep 2
 	docker exec debian9.4_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
 	sleep 2
@@ -788,7 +788,7 @@ binaries/proxysql_${CURVER}-clickhouse-debian9.4_amd64.deb:
 	sleep 2
 	docker exec debian9.4_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} clickhouse ${MAKEOPT}"
 	sleep 2
-	docker cp docker/images/proxysql/debian-9-build/proxysql.ctl debian9.4_build:/opt/proxysql/
+	docker cp docker/images/proxysql/debian-9.4-build/proxysql.ctl debian9.4_build:/opt/proxysql/
 	sleep 2
 	docker exec debian9.4_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
 	sleep 2
