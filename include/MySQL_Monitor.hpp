@@ -20,6 +20,8 @@
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GROUP_REPLICATION_LOG "CREATE TABLE mysql_server_group_replication_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , viable_candidate VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , transactions_behind INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GALERA_LOG "CREATE TABLE mysql_server_galera_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , viable_candidate VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , transactions_behind INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+
 /*
 struct cmp_str {
   bool operator()(char const *a, char const *b) const
@@ -117,9 +119,12 @@ class MySQL_Monitor {
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
+	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
 	std::map<std::string, MyGR_monitor_node *> Group_Replication_Hosts_Map;
 	SQLite3_result *Group_Replication_Hosts_resultset;
+	std::map<std::string, MyGR_monitor_node *> Galera_Hosts_Map;
+	SQLite3_result *Galera_Hosts_resultset;
 	unsigned int num_threads;
 	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
@@ -134,9 +139,11 @@ class MySQL_Monitor {
 	void * monitor_ping();
 	void * monitor_read_only();
 	void * monitor_group_replication();
+	void * monitor_galera();
 	void * monitor_replication_lag();
 	void * run();
 	void populate_monitor_mysql_server_group_replication_log();
+	void populate_monitor_mysql_server_galera_log();
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */
