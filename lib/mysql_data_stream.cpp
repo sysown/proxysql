@@ -761,18 +761,52 @@ unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
 	return mybuff;
 };
 
+#define RESULTSET_BUFLEN_DS_16K 16000
+#define RESULTSET_BUFLEN_DS_1M 1000*1024
 void MySQL_Data_Stream::buffer2resultset(unsigned char *ptr, unsigned int size) {
 	unsigned char *__ptr=ptr;
 	mysql_hdr hdr;
 	unsigned int l;
 	void *pkt;
+	void *buff = NULL;
+	unsigned int bl;
+	unsigned int bf;
 	while (__ptr<ptr+size) {
 		memcpy(&hdr,__ptr,sizeof(mysql_hdr));
+		l=hdr.pkt_length+sizeof(mysql_hdr); // amount of space we need
+		if (buff) {
+			if ( bf < l ) {
+				// we ran out of space
+				resultset->add(buff,bl-bf);
+				buff=NULL;
+			}
+		}
+		if (buff == NULL) {
+			if (__ptr+RESULTSET_BUFLEN_DS_1M <= ptr+size) {
+				bl = RESULTSET_BUFLEN_DS_1M;
+			} else {
+				bl = RESULTSET_BUFLEN_DS_16K;
+			}
+			if (l > bl) {
+				bl = l; // make sure there is the space to copy a packet
+			}
+			buff = malloc(bl);
+			bf = bl;
+		}
+		memcpy(buff + (bl-bf), __ptr, l);
+		bf -= l;
+		__ptr+=l;
+/*
 		l=hdr.pkt_length+sizeof(mysql_hdr);
 		pkt=l_alloc(l);
 		memcpy(pkt,__ptr,l);
 		resultset->add(pkt,l);
 		__ptr+=l;
+*/
+	}
+	if (buff) {
+		// last buffer to add
+		resultset->add(buff,bl-bf);
 	}
 };
 
