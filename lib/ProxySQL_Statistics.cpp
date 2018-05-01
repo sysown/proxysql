@@ -43,12 +43,16 @@ extern MySQL_Threads_Handler *GloMTH;
 
 ProxySQL_Statistics::ProxySQL_Statistics() {
 	statsdb_mem = new SQLite3DB();
+	proxy_info("Opening DB statsdb_mem: started\n");
 	statsdb_mem->open((char *)"file:statsdb_mem?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	proxy_info("Opening DB statsdb_mem: done\n");
 //	statsdb_disk = GloAdmin->statsdb_disk;
 	statsdb_disk = new SQLite3DB();
 //	char *dbname = (char *)malloc(strlen(GloVars.statsdb_disk)+50);
 //	sprintf(dbname,"file:%s?cache=shared",GloVars.statsdb_disk);
+	proxy_info("Opening DB statsdb_disk %s: started\n", (char *)GloVars.statsdb_disk);
 	statsdb_disk->open((char *)GloVars.statsdb_disk, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX );
+	proxy_info("Opening DB statsdb_disk: done\n");
 //	statsdb_disk->open((char *)GloVars.statsdb_disk, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_NOMUTEX);
 //	statsdb_disk->open(dbname, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_NOMUTEX);
 //	free(dbname);

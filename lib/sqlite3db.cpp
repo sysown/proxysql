@@ -39,6 +39,7 @@ int SQLite3DB::open(char *__url, int flags) {
 	rc=sqlite3_open_v2(url, &db, flags , NULL);
 	if(rc){
     proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on sqlite3_open_v2(): %s\n", sqlite3_errmsg(db));
+		proxy_error("SQLITE: Error on sqlite3_open_v2() while opening %s: %s\n", url, sqlite3_errmsg(db));
 		if (assert_on_error) {
 			assert(rc==0);
 		}
