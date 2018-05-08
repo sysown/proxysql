@@ -49,6 +49,15 @@ WRITER_IS_READER="${4:-1}"
 ERR_FILE="${5:-/dev/null}"
 RELOAD_CHECK_FILE="/var/lib/proxysql/reload"
 
+# Prevent duplicate execution
+BASENAME=`basename "$0"`
+pidof -x -o %PPID ${BASENAME}
+ANOTHER_PROCESS_IS_RUNNING=$?
+if [ ${ANOTHER_PROCESS_IS_RUNNING} -eq 0 ]; then
+  echo "`date` ###### Another process is already running. Abort! ######" >> ${ERR_FILE}
+  exit 0
+fi
+
 echo "0" > ${RELOAD_CHECK_FILE}
 
 if [ "$1" = '-h' -o "$1" = '--help'  -o -z "$1" ]
