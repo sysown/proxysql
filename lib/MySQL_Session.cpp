@@ -1189,6 +1189,7 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 						assert(0);
 						break;
 				}
+				proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . Current value=%d , required=%d . enforce_autocommit_on_reads=false. Select NOT for update = %d\n", this->thread, this, mybe->server_myds->myconn->IsAutoCommit(), autocommit, CurrentQuery.is_select_NOT_for_update());
 				NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 			}
 		} else {
@@ -1208,6 +1209,7 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 					assert(0);
 					break;
 			}
+			proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . Current value=%d , required=%d . enforce_autocommit_on_reads=true. Select NOT for update = %d\n", this->thread, this, mybe->server_myds->myconn->IsAutoCommit(), autocommit, CurrentQuery.is_select_NOT_for_update());
 			NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 		}
 	}
@@ -1852,8 +1854,10 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
+	proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . Calling set_autocommit = %d on connection %p\n", this->thread, this, autocommit, myds->myconn->mysql);
 	int rc=myconn->async_set_autocommit(myds->revents, autocommit);
 	if (rc==0) {
+		proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . set_autocommit = %d completed on connection %p. New value = %d\n", this->thread, this, autocommit, myconn->mysql, myconn->IsAutoCommit());
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -1861,6 +1865,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . set_autocommit = %d failed on connection %p. Error = %d\n", this->thread, this, autocommit, myconn->mysql, myerr);
 			if (myerr > 2000) {
 				bool retry_conn=false;
 				// client error, serious
@@ -1892,6 +1897,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 			}
 		} else {
 			// rc==1 , nothing to do for now
+			proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . set_autocommit = %d still running on connection %p\n", this->thread, this, autocommit, myconn->mysql);
 		}
 	}
 	return false;
@@ -2980,9 +2986,12 @@ handler_again:
 		case CHANGING_AUTOCOMMIT:
 			{
 				int rc=0;
+				proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . Calling handler_again___status_CHANGING_AUTOCOMMIT\n", this->thread, this);
 				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc))
+					proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . Calling handler_again___status_CHANGING_AUTOCOMMIT completed\n", this->thread, this);
 					goto handler_again;	// we changed status
 				if (rc==-1) { // we have an error we can't handle
+					proxy_info("CHANGING AUTOCOMMIT. Thread=%p, Session=%p . Calling handler_again___status_CHANGING_AUTOCOMMIT failed\n", this->thread, this);
 					handler_ret = -1;
 					return handler_ret;
 				}
