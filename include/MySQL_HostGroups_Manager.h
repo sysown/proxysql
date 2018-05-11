@@ -36,6 +36,8 @@
 
 #define MYHGM_MYSQL_GALERA_HOSTGROUPS "CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
 
+typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
+
 class MySrvConnList;
 class MySrvC;
 class MySrvList;
@@ -464,6 +466,9 @@ class MySQL_HostGroups_Manager {
 	//pthread_t GTID_syncer_thread_id;
 	//pthread_t HGCU_thread_id;
 
+	char rand_del[8];
+	pthread_mutex_t mysql_errors_mutex;
+	umap_mysql_errors mysql_errors_umap;
 
 	public:
 	pthread_rwlock_t gtid_rwlock;
@@ -558,6 +563,8 @@ class MySQL_HostGroups_Manager {
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
+
+	void add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *schemaname, int err_no, char *last_error);
 
 };
 

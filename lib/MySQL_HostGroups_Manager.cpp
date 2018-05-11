@@ -860,7 +860,19 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
 	gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
+
+	{
+		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+		rand_del[0] = '-';
+		for (int i = 1; i < 6; i++) {
+			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+		}
+		rand_del[6] = '-';
+		rand_del[7] = 0;
+	}
+	pthread_mutex_init(&mysql_errors_mutex, NULL);
 }
+
 void MySQL_HostGroups_Manager::init() {
 	//conn_reset_queue = NULL;
 	//conn_reset_queue = new wqueue<MySQL_Connection *>();
@@ -3988,4 +4000,96 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 	}
 	pthread_rwlock_unlock(&gtid_rwlock);
 	return result;
+}
+
+
+
+class MySQL_Errors_stats {
+	public:
+	int hostgroup;
+	char *hostname;
+	int port;
+	char *username;
+	char *schemaname;
+	int err_no;
+	char *last_error;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned long long count_star;
+	MySQL_Errors_stats(int hostgroup_, char *hostname_, int port_, char *username_, char *schemaname_, int err_no_, char *last_error_, time_t tn) {
+		hostgroup = hostgroup_;
+		if (hostname_) {
+			hostname = strdup(hostname_);
+		} else {
+			hostname = strdup((char *)"");
+		}
+		port = port_;
+		if (username_) {
+			username = strdup(username_);
+		} else {
+			username = strdup((char *)"");
+		}
+		if (schemaname_) {
+			schemaname = strdup(schemaname_);
+		} else {
+			schemaname = strdup((char *)"");
+		}
+		err_no = err_no_;
+		if (last_error_) {
+			last_error = strdup(last_error_);
+		} else {
+			last_error = strdup((char *)"");
+		}
+		last_seen = tn;
+		first_seen = tn;
+		count_star = 1;
+	}
+};
+
+void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *schemaname, int err_no, char *last_error) {
+	SpookyHash myhash;
+	uint64_t hash1;
+	uint64_t hash2;
+	MySQL_Errors_stats *mes = NULL;
+	size_t rand_del_len=strlen(rand_del);
+	time_t tn = time(NULL);
+	myhash.Init(11,4);
+	myhash.Update(&hostgroup,sizeof(hostgroup));
+	myhash.Update(rand_del,rand_del_len);
+	if (hostname) {
+		myhash.Update(hostname,strlen(hostname));
+	}
+	myhash.Update(rand_del,rand_del_len);
+	myhash.Update(&port,sizeof(port));
+	if (username) {
+		myhash.Update(username,strlen(username));
+	}
+	myhash.Update(rand_del,rand_del_len);
+	if (schemaname) {
+		myhash.Update(schemaname,strlen(schemaname));
+	}
+	myhash.Update(rand_del,rand_del_len);
+	myhash.Update(&err_no,sizeof(err_no));
+
+	myhash.Final(&hash1,&hash2);
+
+	std::unordered_map<uint64_t, void *>::iterator it;
+	pthread_mutex_lock(&mysql_errors_mutex);
+
+	it=mysql_errors_umap.find(hash1);
+
+	if (it != mysql_errors_umap.end()) {
+		// found
+		mes=(MySQL_Errors_stats *)it->second;
+		mes->last_seen = tn;
+		if (strcmp(mes->last_error,last_error)) {
+			free(mes->last_error);
+			mes->last_error = strdup(last_error);
+			mes->count_star++;
+		}
+	} else {
+		mes = new MySQL_Errors_stats(hostgroup, hostname, port, username, schemaname, err_no, last_error, tn);
+		mysql_errors_umap.insert(std::make_pair(hash1,(void *)mes));
+	}
+	pthread_mutex_unlock(&mysql_errors_mutex);
 }
