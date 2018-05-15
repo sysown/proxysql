@@ -3890,6 +3890,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							client_myds->DSS=STATE_QUERY_SENT_NET;
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+							client_myds->DSS=STATE_SLEEP;
+							status=WAITING_CLIENT_DATA;
 							free(errmsg);
 							return true;
 						} else {
