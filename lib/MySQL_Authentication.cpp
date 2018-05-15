@@ -499,6 +499,7 @@ uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type use
 			myhash.Update(&ad->max_connections,sizeof(ad->max_connections));
 			myhash.Update(ad->username,strlen(ad->username));
 			myhash.Update(ad->password,strlen(ad->password));
+			myhash.Update(ad->default_schema,strlen(ad->default_schema));
 		}
 		it++;
 	}
