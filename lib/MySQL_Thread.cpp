@@ -4201,8 +4201,14 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						pta[11]=strdup("Sleep");
 						break;
 					case CHANGING_USER_SERVER:
-						pta[11]=strdup("Change user");
+                                                pta[11]=strdup("Changing user server");
+                                                break;
+					case CHANGING_USER_CLIENT:
+						pta[11]=strdup("Change user client");
 						break;
+					case RESETTING_CONNECTION:
+                                                pta[11]=strdup("Resetting connection");
+                                                break;
 					case CHANGING_SCHEMA:
 						pta[11]=strdup("InitDB");
 						break;
@@ -4212,6 +4218,39 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case PROCESSING_STMT_PREPARE:
 						pta[11]=strdup("Prepare");
 						break;
+					case CONNECTING_CLIENT:
+                                                pta[11]=strdup("Connecting client");
+                                                break;
+					case PINGING_SERVER:
+                                                pta[11]=strdup("Pinging server");
+                                                break;
+					case WAITING_SERVER_DATA:
+                                                pta[11]=strdup("Waiting server data");
+                                                break;
+					case CHANGING_CHARSET:
+                                                pta[11]=strdup("Changing charset");
+                                                break;
+					case CHANGING_AUTOCOMMIT:
+                                                pta[11]=strdup("Changing autocommit");
+                                                break;
+					case SETTING_INIT_CONNECT:
+                                                pta[11]=strdup("Setting init connect");
+                                                break;
+					case SETTING_SQL_LOG_BIN:
+                                                pta[11]=strdup("Set log bin");
+                                                break;
+					case SETTING_SQL_MODE:
+                                                pta[11]=strdup("Set SQL mode");
+                                                break;
+					case SETTING_TIME_ZONE:
+                                                pta[11]=strdup("Set TZ");
+                                                break;
+					case FAST_FORWARD:
+                                                pta[11]=strdup("Fast forward");
+                                                break;
+					case NONE:
+                                                pta[11]=strdup("None");
+                                                break;
 					default:
 						sprintf(buf,"%d", sess->status);
 						pta[11]=strdup(buf);
