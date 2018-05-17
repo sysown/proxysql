@@ -5512,12 +5512,13 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset) {
 }
 
 void ProxySQL_Admin::stats___mysql_errors(bool reset) {
+	return; // FIXME FIXME feature not completed yet
 	if (!GloQPro) return;
 	SQLite3_result * resultset=NULL;
 	if (reset==true) {
-		resultset=MyHGM->get_mysql_errors_reset();
+//		resultset=MyHGM->get_mysql_errors_reset();
 	} else {
-		resultset=MyHGM->get_mysql_errors();
+//		resultset=MyHGM->get_mysql_errors();
 	}
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
