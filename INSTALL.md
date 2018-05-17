@@ -25,7 +25,10 @@ Make sure you have installed the equivalent for each of these packages for your 
 
 Shortcut commands for installing pre-requisites:
 ```
-# RHEL / CentOS Based:
+# RHEL / CentOS < 7:
+yum install automake bzip2 cmake make g++ gcc git openssl openssl-devel patch
+
+# CentOS 7.4+ / Fedora 28+:
 yum install automake bzip2 cmake make gcc-c++ gcc git openssl openssl-devel patch
 
 # Debian / Ubuntu Based:
