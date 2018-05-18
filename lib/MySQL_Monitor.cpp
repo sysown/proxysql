@@ -646,12 +646,22 @@ void * monitor_read_only_thread(void *arg) {
 			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
+		if (mmsd->interr) {
+			// error during query
+			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			goto __exit_monitor_read_only_thread;
+		}
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_read_only_thread;	// exit immediately
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
+	}
+	if (mmsd->interr) {
+		// error during query
+		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		goto __exit_monitor_read_only_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
@@ -691,7 +701,7 @@ __exit_monitor_read_only_thread:
 		time_now=time_now-(mmsd->t2 - start_time);
 		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
-		if (mmsd->result) {
+		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int k=0;
 			MYSQL_FIELD *fields=NULL;
@@ -723,13 +733,18 @@ __exit_monitor_read_only_thread:
 		} else {
 			rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 		}
+		if (mmsd->result) {
+			// make sure it is clear
+			mysql_free_result(mmsd->result);
+			mmsd->result=NULL;
+		}
 		rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
 
-		if (timeout_reached == false) {
+		if (timeout_reached == false && mmsd->interr == 0) {
 			MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // default behavior
 		} else {
 			char *error=NULL;
@@ -828,12 +843,23 @@ void * monitor_group_replication_thread(void *arg) {
 			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=nO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_group_replication_thread;
 		}
+		if (mmsd->interr) {
+			// error during query
+			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			goto __exit_monitor_group_replication_thread;
+		}
+
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_group_replication_thread;	// exit immediately
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
+	}
+	if (mmsd->interr) {
+		// error during query
+		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		goto __exit_monitor_group_replication_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
@@ -871,7 +897,7 @@ __exit_monitor_group_replication_thread:
 		bool viable_candidate=false;
 		bool read_only=true;
 		long long transactions_behind=-1;
-		if (mmsd->result) {
+		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int num_rows=0;
 			num_fields = mysql_num_fields(mmsd->result);
@@ -892,6 +918,11 @@ __exit_monitor_group_replication_thread:
 				read_only=false;
 			}
 			transactions_behind=atol(row[2]);
+			mysql_free_result(mmsd->result);
+			mmsd->result=NULL;
+		}
+		if (mmsd->result) {
+			// make sure it is clear
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
