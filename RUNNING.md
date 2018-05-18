@@ -1,7 +1,7 @@
 How to operate ProxySQL
 =======================
 
-First of all, ProxySQL is a daemon ran by an angel process. The angel process monitors the daemon and restarts it when it has crashed, in order to minimize downtime. The daemon accepts incoming traffic from MySQL clients and forwards it to backend MySQL servers.
+First of all, ProxySQL is a daemon run by an angel process. The angel process monitors the daemon and restarts it when it has crashed, in order to minimize downtime. The daemon accepts incoming traffic from MySQL clients and forwards it to backend MySQL servers.
 
 The proxy is designed to run for as long as possible without needing to be restarted. Most configurations can be done at runtime, through a configuration system that responds to SQL-like queries (["admin interface"](https://github.com/sysown/proxysql/blob/master/doc/admin_tables.md)). Runtime parameters, server grouping and traffic-related settings can all be changed at runtime.
 
