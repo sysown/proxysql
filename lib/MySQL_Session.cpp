@@ -4423,10 +4423,12 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	}
 	// reset status of the session
 	status=WAITING_CLIENT_DATA;
-	// reset status of client data stream
-	client_myds->DSS=STATE_SLEEP;
-	// finalize the query
-	CurrentQuery.end();
+	if (client_myds) {
+		// reset status of client data stream
+		client_myds->DSS=STATE_SLEEP;
+		// finalize the query
+		CurrentQuery.end();
+	}
 	started_sending_data_to_client=false;
 }
 
@@ -4512,6 +4514,7 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	mc->last_time_used = thread->curtime;
 	new_myds->myprot.init(&new_myds, new_myds->myconn->userinfo, NULL);
 	new_sess->status = RESETTING_CONNECTION;
+	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
 	if (new_myds->mypolls==NULL) {
