@@ -52,6 +52,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, verbosity, debugbuff);
 		pretime=curtime;
 	}
+#ifdef __GLIBC__
 	if (GloVars.global.gdbg_lvl[module].verbosity>=10) {
 		void *arr[20];
 		char **strings;
@@ -81,6 +82,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 //	} else {
 //		fprintf(stderr, "%s", longdebugbuff);
 	}
+#endif
 	if (strlen(longdebugbuff)) fprintf(stderr, "%s", longdebugbuff);
 #ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
 	pthread_mutex_unlock(&debug_mutex);
