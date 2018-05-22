@@ -31,10 +31,10 @@ Thread::Thread() : m_tid(0), m_running(0), m_detached(0) {}
 
 Thread::~Thread()
 {
-    if (m_running == 1 && m_detached == 0) {
-        pthread_detach(m_tid);
-    }
     if (m_running == 1) {
+        if (m_detached == 0) {
+             pthread_detach(m_tid);
+        }
         pthread_cancel(m_tid);
     }
 }
@@ -63,7 +63,7 @@ int Thread::join()
     if (m_running == 1) {
         result = pthread_join(m_tid, NULL);
         if (result == 0) {
-            m_detached = 0;
+            m_running = 0;
         }
     }
     return result;
