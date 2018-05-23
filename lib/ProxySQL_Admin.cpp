@@ -2017,8 +2017,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats___mysql_query_digests(true);
 		if (stats_mysql_errors)
 			//stats___mysql_errors(false);
-		if (stats_mysql_errors_reset)
+		if (stats_mysql_errors_reset) {
 			//stats___mysql_errors(true);
+		}
 		if (stats_mysql_connection_pool_reset) {
 			stats___mysql_connection_pool(true);
 		} else {
