@@ -3920,7 +3920,7 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 	if (GloVars.global.idle_threads) {
 		j+=num_threads;
 	}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
@@ -3929,9 +3929,10 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			if (GloVars.global.idle_threads) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 		}
 		pthread_mutex_lock(&thr->thread_mutex);
+/*
 	}
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
@@ -3941,9 +3942,11 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			if (GloVars.global.idle_threads) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 		}
+*/
 		thr->Get_Memory_Stats();
+/*
 	}
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
@@ -3953,8 +3956,9 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			if (GloVars.global.idle_threads) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 		}
+*/
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
 }
