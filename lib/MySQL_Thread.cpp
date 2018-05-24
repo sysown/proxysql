@@ -3984,7 +3984,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"info");
 	unsigned int i;
 	unsigned int i2;
-	signal_all_threads(1);
+//	signal_all_threads(1);
 	MySQL_Thread *thr=NULL;
 	i2=num_threads;
 #ifdef IDLE_THREADS
@@ -4005,6 +4005,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 			}
 #endif // IDLE_THREADS
 		}
+/*
 	}
 #ifdef IDLE_THREADS
 	for (i=0;i < ( (mysql_thread___session_idle_show_processlist && GloVars.global.idle_threads ) ? num_threads*2 : num_threads); i++) {
@@ -4018,6 +4019,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 #endif // IDLE_THREADS
 		}
+*/
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
@@ -4231,12 +4233,14 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				free(pta);
 			}
 		}
+/*
 	}
 #ifdef IDLE_THREADS
 	for (i=0;i < ( (mysql_thread___session_idle_show_processlist && GloVars.global.idle_threads ) ? num_threads*2 : num_threads); i++) {
 #else
 	for (i=0;i < num_threads; i++) {
 #endif // IDLE_THREADS
+*/
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
 			pthread_mutex_unlock(&thr->thread_mutex);
