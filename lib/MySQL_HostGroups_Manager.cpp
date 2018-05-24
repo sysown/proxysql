@@ -1096,7 +1096,7 @@ bool MySQL_HostGroups_Manager::commit() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		if (GloMTH->variables.hostgroup_manager_verbose) {
-			proxy_info("Dumping mysql_servers JEFT JOIN mysql_servers_incoming\n");
+			proxy_info("Dumping mysql_servers LEFT JOIN mysql_servers_incoming\n");
 			resultset->dump_to_stderr();
 		}
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {

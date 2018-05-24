@@ -2305,7 +2305,6 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			if (resultset) {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 				delete resultset;
-				fprintf(stderr,"hello\n");
 				run_query=false;
 				goto __run_query;
 			}
@@ -2318,7 +2317,6 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			if (resultset) {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 				delete resultset;
-				fprintf(stderr,"hello\n");
 				run_query=false;
 				goto __run_query;
 			}
