@@ -3914,7 +3914,6 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 void MySQL_Threads_Handler::Get_Memory_Stats() {
 	unsigned int i;
 	unsigned int j;
-	signal_all_threads(1);
 	MySQL_Thread *thr=NULL;
 	j=num_threads;
 #ifdef IDLE_THREADS
