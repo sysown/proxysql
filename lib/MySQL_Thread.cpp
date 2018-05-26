@@ -250,6 +250,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_query_interval",
 	(char *)"monitor_query_timeout",
 	(char *)"monitor_slave_lag_when_null",
+	(char *)"monitor_threads_min",
+	(char *)"monitor_threads_max",
+	(char *)"monitor_threads_queue_maxsize",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
@@ -364,6 +367,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_query_interval=60000;
 	variables.monitor_query_timeout=100;
 	variables.monitor_slave_lag_when_null=60;
+	variables.monitor_threads_min = 8;
+	variables.monitor_threads_max = 128;
+	variables.monitor_threads_queue_maxsize = 128;
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
@@ -614,6 +620,9 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 		if (!strcasecmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
 		if (!strcasecmp(name,"monitor_query_timeout")) return (int)variables.monitor_query_timeout;
 		if (!strcasecmp(name,"monitor_slave_lag_when_null")) return (int)variables.monitor_slave_lag_when_null;
+		if (!strcasecmp(name,"monitor_threads_min")) return (int)variables.monitor_threads_min;
+		if (!strcasecmp(name,"monitor_threads_max")) return (int)variables.monitor_threads_max;
+		if (!strcasecmp(name,"monitor_threads_queue_maxsize")) return (int)variables.monitor_threads_queue_maxsize;
 		if (!strcasecmp(name,"monitor_wait_timeout")) return (int)variables.monitor_wait_timeout;
 		if (!strcasecmp(name,"monitor_writer_is_also_reader")) return (int)variables.monitor_writer_is_also_reader;
 	}
@@ -826,6 +835,18 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_slave_lag_when_null")) {
 			sprintf(intbuf,"%d",variables.monitor_slave_lag_when_null);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_threads_min")) {
+			sprintf(intbuf,"%d",variables.monitor_threads_min);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_threads_max")) {
+			sprintf(intbuf,"%d",variables.monitor_threads_max);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_threads_queue_maxsize")) {
+			sprintf(intbuf,"%d",variables.monitor_threads_queue_maxsize);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
@@ -1307,6 +1328,33 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 604800) {
 				variables.monitor_slave_lag_when_null=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_threads_min")) {
+			int intv=atoi(value);
+			if (intv >= 2 && intv <= 16) {
+				variables.monitor_threads_min = intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_threads_max")) {
+			int intv=atoi(value);
+			if (intv >= 4 && intv <= 256) {
+				variables.monitor_threads_max = intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_threads_queue_maxsize")) {
+			int intv=atoi(value);
+			if (intv >= 16 && intv <= 1024) {
+				variables.monitor_threads_queue_maxsize = intv;
 				return true;
 			} else {
 				return false;
@@ -3397,6 +3445,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
 	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
 	mysql_thread___monitor_slave_lag_when_null=GloMTH->get_variable_int((char *)"monitor_slave_lag_when_null");
+	mysql_thread___monitor_threads_min = GloMTH->get_variable_int((char *)"monitor_threads_min");
+	mysql_thread___monitor_threads_max = GloMTH->get_variable_int((char *)"monitor_threads_max");
+	mysql_thread___monitor_threads_queue_maxsize = GloMTH->get_variable_int((char *)"monitor_threads_queue_maxsize");
 
 	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
 	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");
@@ -3884,6 +3935,66 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers";
 			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->num_threads : 0));
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{	// MySQL Monitor workers
+			pta[0]=(char *)"MySQL_Monitor_Workers_Aux";
+			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->aux_threads : 0));
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{	// MySQL Monitor workers
+			pta[0]=(char *)"MySQL_Monitor_Workers_Started";
+			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->started_threads : 0));
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_connect_check_OK";
+			sprintf(buf,"%llu", GloMyMon->connect_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_connect_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->connect_check_ERR);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_ping_check_OK";
+			sprintf(buf,"%llu", GloMyMon->ping_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_ping_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->ping_check_ERR);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_read_only_check_OK";
+			sprintf(buf,"%llu", GloMyMon->read_only_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_read_only_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->read_only_check_ERR);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_OK";
+			sprintf(buf,"%llu", GloMyMon->replication_lag_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->replication_lag_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}

@@ -329,6 +329,9 @@ class MySQL_Threads_Handler
 		int monitor_query_interval;
 		int monitor_query_timeout;
 		int monitor_slave_lag_when_null;
+		int monitor_threads_min;
+		int monitor_threads_max;
+		int monitor_threads_queue_maxsize;
 		char *monitor_username;
 		char *monitor_password;
 		char * monitor_replication_lag_use_percona_heartbeat;

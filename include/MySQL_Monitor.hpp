@@ -126,6 +126,16 @@ class MySQL_Monitor {
 	std::map<std::string, MyGR_monitor_node *> Galera_Hosts_Map;
 	SQLite3_result *Galera_Hosts_resultset;
 	unsigned int num_threads;
+	unsigned int aux_threads;
+	unsigned int started_threads;
+	unsigned long long connect_check_OK;
+	unsigned long long connect_check_ERR;
+	unsigned long long ping_check_OK;
+	unsigned long long ping_check_ERR;
+	unsigned long long read_only_check_OK;
+	unsigned long long read_only_check_ERR;
+	unsigned long long replication_lag_check_OK;
+	unsigned long long replication_lag_check_ERR;
 	wqueue<WorkItem*> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
 	bool shutdown;

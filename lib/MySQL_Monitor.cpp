@@ -321,7 +321,22 @@ MySQL_Monitor::MySQL_Monitor() {
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_group_replication_log_time_start ON mysql_server_group_replication_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_galera_log_time_start ON mysql_server_galera_log (time_start_us)");
 
-	num_threads=8;
+	num_threads=2;
+	aux_threads=0;
+	started_threads=0;
+
+	connect_check_OK = 0;
+	connect_check_ERR = 0;
+	ping_check_OK = 0;
+	ping_check_ERR = 0;
+	read_only_check_OK = 0;
+	read_only_check_ERR = 0;
+	replication_lag_check_OK = 0;
+	replication_lag_check_ERR = 0;
+
+
+
+/*
 	if (GloMTH) {
 		if (GloMTH->num_threads) {
 			num_threads=GloMTH->num_threads*2;
@@ -330,6 +345,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	if (num_threads>16) {
 		num_threads=16;	// limit to 16
 	}
+*/
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -388,11 +404,12 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 
 void * monitor_connect_thread(void *arg) {
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
+	bool connect_success = false;
 	mmsd->create_new_connection();
 
 	unsigned long long start_time=mysql_thr->curtime;
@@ -425,20 +442,28 @@ void * monitor_connect_thread(void *arg) {
 		) {
 			proxy_error("Server %s:%d is returning \"Access denied\" for monitoring user\n", mmsd->hostname, mmsd->port);
 		}
+	} else {
+		connect_success = true;
 	}
 	mysql_close(mmsd->mysql);
 	mmsd->mysql=NULL;
+	if (connect_success) {
+		__sync_fetch_and_add(&GloMyMon->connect_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->connect_check_ERR,1);
+	}
 	delete mysql_thr;
 	return NULL;
 }
 
 void * monitor_ping_thread(void *arg) {
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
+	bool ping_success = false;
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
 
@@ -500,6 +525,9 @@ __exit_monitor_ping_thread:
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
+		if (mmsd->mysql_error_msg == NULL) {
+			ping_success = true;
+		}
 	}
 __fast_exit_monitor_ping_thread:
 	if (mmsd->mysql) {
@@ -521,6 +549,11 @@ __fast_exit_monitor_ping_thread:
 				mmsd->mysql=NULL;
 			}
 		}
+	}
+	if (ping_success) {
+		__sync_fetch_and_add(&GloMyMon->ping_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->ping_check_ERR,1);
 	}
 	delete mysql_thr;
 	return NULL;
@@ -598,15 +631,15 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 void * monitor_read_only_thread(void *arg) {
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
 
-
+	bool read_only_success = false;
 	mmsd->t1=start_time;
 
 	bool crc=false;
@@ -744,6 +777,10 @@ __exit_monitor_read_only_thread:
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
 
+		if (mmsd->mysql_error_msg == NULL) {
+			read_only_success = true;
+		}
+
 		if (timeout_reached == false && mmsd->interr == 0) {
 			MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // default behavior
 		} else {
@@ -803,6 +840,11 @@ __fast_exit_monitor_read_only_thread:
 				mmsd->mysql=NULL;
 			}
 		}
+	}
+	if (read_only_success) {
+		__sync_fetch_and_add(&GloMyMon->read_only_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->read_only_check_ERR,1);
 	}
 	delete mysql_thr;
 	return NULL;
@@ -1251,13 +1293,15 @@ __fast_exit_monitor_galera_thread:
 
 void * monitor_replication_lag_thread(void *arg) {
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
+
+	bool replication_lag_success = false;
 
 	bool use_percona_heartbeat = false;
 	char * percona_heartbeat_table = mysql_thread___monitor_replication_lag_use_percona_heartbeat;
@@ -1383,6 +1427,9 @@ __exit_monitor_replication_lag_thread:
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
 			sqlite3_finalize(statement);
+			if (mmsd->mysql_error_msg == NULL) {
+				replication_lag_success = true;
+			}
 
 	}
 	if (mmsd->interr) { // check failed
@@ -1412,6 +1459,11 @@ __fast_exit_monitor_replication_lag_thread:
 				mmsd->mysql=NULL;
 			}
 		}
+	}
+	if (replication_lag_success) {
+		__sync_fetch_and_add(&GloMyMon->replication_lag_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->replication_lag_check_ERR,1);
 	}
 	delete mysql_thr;
 	return NULL;
@@ -2211,6 +2263,7 @@ __monitor_run:
 		threads[i] = new ConsumerThread(queue, 0);
 		threads[i]->start(128,false);
 	}
+	started_threads += num_threads;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize (&attr, 128*1024);
@@ -2233,28 +2286,70 @@ __monitor_run:
 			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 				mysql_thr->refresh_variables();
+				unsigned int old_num_threads = num_threads;
+				unsigned int threads_min = (unsigned int)mysql_thread___monitor_threads_min;
+				if (old_num_threads < threads_min) {
+					num_threads = threads_min;
+					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
+					started_threads += (num_threads - old_num_threads);
+					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
+						threads[i] = new ConsumerThread(queue, 0);
+						threads[i]->start(128,false);
+					}
+				}
 			}
 		}
 		monitor_enabled=mysql_thread___monitor_enabled;
 		if ( rand()%5 == 0) { // purge once in a while
 			My_Conn_Pool->purge_idle_connections();
 		}
-		usleep(500000);
+		usleep(200000);
 		int qsize=queue.size();
-		if (qsize>500) {
-			proxy_warning("Monitor queue too big, try to reduce frequency of checks: %d\n", qsize);
-			qsize=qsize/250;
-			proxy_info("Monitor is starting %d helper threads\n", qsize);
-			ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
-			for (int i=0; i<qsize; i++) {
-				threads_aux[i] = new ConsumerThread(queue, 245);
-				threads_aux[i]->start(128,false);
+		if (qsize > mysql_thread___monitor_threads_queue_maxsize/4) {
+			proxy_warning("Monitor queue too big: %d\n", qsize);
+			unsigned int threads_max = (unsigned int)mysql_thread___monitor_threads_max;
+			if (threads_max > num_threads) {
+				unsigned int new_threads = threads_max - num_threads;
+				if ((qsize / 4) < new_threads) {
+					new_threads = qsize/4; // try to not burst threads
+				}
+				if (new_threads) {
+					unsigned int old_num_threads = num_threads;
+					num_threads += new_threads;
+					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
+					started_threads += new_threads;
+					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
+						threads[i] = new ConsumerThread(queue, 0);
+						threads[i]->start(128,false);
+					}
+				}
 			}
-			for (int i=0; i<qsize; i++) {
-				threads_aux[i]->join();
-				delete threads_aux[i];
+			// check again. Do we need also aux threads?
+			usleep(50000);
+			qsize=queue.size();
+			if (qsize > mysql_thread___monitor_threads_queue_maxsize) {
+				qsize=qsize/50;
+				unsigned int threads_max = (unsigned int)mysql_thread___monitor_threads_max;
+				if ((qsize + num_threads) > (threads_max * 2)) { // allow a small bursts
+					qsize = threads_max * 2 - num_threads;
+				}
+				if (qsize > 0) {
+					proxy_info("Monitor is starting %d helper threads\n", qsize);
+					ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
+					aux_threads = qsize;
+					started_threads += aux_threads;
+					for (int i=0; i<qsize; i++) {
+						threads_aux[i] = new ConsumerThread(queue, 245);
+						threads_aux[i]->start(128,false);
+					}
+					for (int i=0; i<qsize; i++) {
+						threads_aux[i]->join();
+						delete threads_aux[i];
+					}
+					free(threads_aux);
+					aux_threads = 0;
+				}
 			}
-			free(threads_aux);
 		}
 	}
 	for (unsigned int i=0;i<num_threads; i++) {
