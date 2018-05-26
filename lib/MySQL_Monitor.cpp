@@ -2209,11 +2209,11 @@ __monitor_run:
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, 0);
-		threads[i]->start(64,false);
+		threads[i]->start(128,false);
 	}
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
-	pthread_attr_setstacksize (&attr, 64*1024);
+	pthread_attr_setstacksize (&attr, 128*1024);
 	pthread_t monitor_connect_thread;
 	pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL);
 	pthread_t monitor_ping_thread;
@@ -2242,13 +2242,13 @@ __monitor_run:
 		usleep(500000);
 		int qsize=queue.size();
 		if (qsize>500) {
-			proxy_error("Monitor queue too big, try to reduce frequency of checks: %d\n", qsize);
+			proxy_warning("Monitor queue too big, try to reduce frequency of checks: %d\n", qsize);
 			qsize=qsize/250;
-			proxy_error("Monitor is starting %d helper threads\n", qsize);
+			proxy_info("Monitor is starting %d helper threads\n", qsize);
 			ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
 			for (int i=0; i<qsize; i++) {
 				threads_aux[i] = new ConsumerThread(queue, 245);
-				threads_aux[i]->start(64,false);
+				threads_aux[i]->start(128,false);
 			}
 			for (int i=0; i<qsize; i++) {
 				threads_aux[i]->join();
