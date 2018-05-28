@@ -197,15 +197,22 @@ class PtrSizeArray {
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC SYSTEM_CLOCK
 #endif // CLOCK_MONOTONIC
+#ifndef CLOCK_REALTIME
+#define CLOCK_REALTIME SYSTEM_CLOCK
+#endif // CLOCK_REALTIME
+#ifndef CLOCK_THREAD_CPUTIME_ID
+#define CLOCK_THREAD_CPUTIME_ID SYSTEM_CLOCK
+#endif // CLOCK_REALTIME
 
 static void clock_gettime(int clk_id, struct timespec *tp) {
-	clock_serv_t cclock;
-	mach_timespec_t mts;
-	host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
-	//retval = clock_get_time(cclock, &mts);
-	mach_port_deallocate(mach_task_self(), cclock);
-	tp->tv_sec = mts.tv_sec;
-	tp->tv_nsec = mts.tv_nsec;
+	mach_timebase_info_data_t timebase;
+	mach_timebase_info(&timebase);
+	uint64_t time;
+	time = mach_absolute_time();
+	double nseconds = ((double)time * (double)timebase.numer)/((double)timebase.denom);
+	double seconds = ((double)time * (double)timebase.numer)/((double)timebase.denom * 1e9);
+	tp->tv_sec = seconds;
+	tp->tv_nsec = nseconds;
 }
 #endif /* mach_time_t */
 #endif /* __APPLE__ */

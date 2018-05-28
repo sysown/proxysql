@@ -1,7 +1,7 @@
 #include "proxysql.h"
 #include "proxysql_atomic.h"
 #include <cxxabi.h>
-
+#include "gen_utils.h"
 
 #ifdef DEBUG
 #ifdef DEBUG_EXTERN
@@ -21,9 +21,7 @@ static spinlock debug_spinlock;
 #endif /* DEBUG */
 
 static inline unsigned long long debug_monotonic_time() {
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
+	return monotonic_time();
 }
 
 
