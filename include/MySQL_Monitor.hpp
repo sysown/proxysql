@@ -20,7 +20,8 @@
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GROUP_REPLICATION_LOG "CREATE TABLE mysql_server_group_replication_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , viable_candidate VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , transactions_behind INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
-#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GALERA_LOG "CREATE TABLE mysql_server_galera_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , viable_candidate VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , transactions_behind INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+//#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GALERA_LOG "CREATE TABLE mysql_server_galera_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , viable_candidate VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , transactions_behind INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GALERA_LOG "CREATE TABLE mysql_server_galera_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , primary VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , wsrep_local_recv_queue INT DEFAULT 0 , wsrep_local_state INT DEFAULT 0 , wsrep_desync VARCHAR NOT NULL DEFAULT 'NO' , wsrep_reject_queries VARCHAR NOT NULL DEFAULT 'NO' , wsrep_sst_donor_rejects_queries VARCHAR NOT NULL DEFAULT 'NO' , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
 /*
 struct cmp_str {
@@ -32,6 +33,34 @@ struct cmp_str {
 */
 
 #define MyGR_Nentries	100
+#define Galera_Nentries	100
+
+typedef struct _Galera_status_entry_t {
+	unsigned long long start_time;
+	unsigned long long check_time;
+	long long wsrep_local_recv_queue;
+	int wsrep_local_state;
+	bool wsrep_reject_queries;
+	bool wsrep_desync;
+	bool wsrep_sst_donor_rejects_queries;
+	bool primary_partition;
+	bool read_only;
+	char *error;
+} Galera_status_entry_t;
+
+
+class Galera_monitor_node {
+	private:
+	int idx_last_entry;
+	public:
+	char *addr;
+	int port;
+	unsigned int writer_hostgroup;
+	Galera_status_entry_t last_entries[Galera_Nentries];
+	Galera_monitor_node(char *_a, int _p, int _whg);
+	~Galera_monitor_node();
+	bool add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, int _local_state, bool _desync, bool _reject, bool _sst_donor_reject, char *_error); // return true if status changed
+};
 
 typedef struct _MyGR_status_entry_t {
 //	char *address;
@@ -123,7 +152,7 @@ class MySQL_Monitor {
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
 	std::map<std::string, MyGR_monitor_node *> Group_Replication_Hosts_Map;
 	SQLite3_result *Group_Replication_Hosts_resultset;
-	std::map<std::string, MyGR_monitor_node *> Galera_Hosts_Map;
+	std::map<std::string, Galera_monitor_node *> Galera_Hosts_Map;
 	SQLite3_result *Galera_Hosts_resultset;
 	unsigned int num_threads;
 	unsigned int aux_threads;
