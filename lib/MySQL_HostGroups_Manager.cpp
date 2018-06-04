@@ -3606,7 +3606,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	free(query);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
-			proxy_warning("Group Replication: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
+			proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
@@ -3682,7 +3682,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 	free(query);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
-			proxy_warning("Group Replication: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
+			proxy_warning("Galera: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
