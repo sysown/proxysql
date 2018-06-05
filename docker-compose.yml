@@ -1,7 +1,7 @@
 version: "2.0"
 services:
   centos5_build:
-    image: renecannao/proxysql:build-centos5
+    image: proxysql/packaging:build-centos5
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
@@ -14,7 +14,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos5_dbg_build:
-    image: renecannao/proxysql:build-centos5
+    image: proxysql/packaging:build-centos5
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -27,7 +27,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos67_build:
-    image: renecannao/proxysql:build-centos6.7
+    image: proxysql/packaging:build-centos6.7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
@@ -40,7 +40,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos67_dbg_build:
-    image: renecannao/proxysql:build-centos6.7
+    image: proxysql/packaging:build-centos6.7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -53,7 +53,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos7_build:
-    image: renecannao/proxysql:build-centos7
+    image: proxysql/packaging:build-centos7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
@@ -66,7 +66,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos7_dbg_build:
-    image: renecannao/proxysql:build-centos7
+    image: proxysql/packaging:build-centos7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -79,7 +79,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos7_ch_build:
-    image: renecannao/proxysql:build-centos7
+    image: proxysql/packaging:build-centos7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -92,7 +92,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora24_build:
-    image: renecannao/proxysql:build-fedora24
+    image: proxysql/packaging:build-fedora24
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
@@ -105,7 +105,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora24_dbg_build:
-    image: renecannao/proxysql:build-fedora24
+    image: proxysql/packaging:build-fedora24
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -118,7 +118,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora24_ch_build:
-    image: renecannao/proxysql:build-fedora24
+    image: proxysql/packaging:build-fedora24
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -131,7 +131,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora27_build:
-    image: renecannao/proxysql:build-fedora27
+    image: proxysql/packaging:build-fedora27
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
@@ -144,7 +144,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora27_dbg_build:
-    image: renecannao/proxysql:build-fedora27
+    image: proxysql/packaging:build-fedora27
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -157,7 +157,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora27_ch_build:
-    image: renecannao/proxysql:build-fedora27
+    image: proxysql/packaging:build-fedora27
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -170,7 +170,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora28_build:
-    image: renecannao/proxysql:build-fedora28
+    image: proxysql/packaging:build-fedora28
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
@@ -183,7 +183,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora28_dbg_build:
-    image: renecannao/proxysql:build-fedora28
+    image: proxysql/packaging:build-fedora28
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -196,7 +196,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora28_ch_build:
-    image: renecannao/proxysql:build-fedora28
+    image: proxysql/packaging:build-fedora28
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -209,7 +209,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian7_build:
-    image: renecannao/proxysql:build-debian7
+    image: proxysql/packaging:build-debian7
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -222,7 +222,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian7_dbg_build:
-    image: renecannao/proxysql:build-debian7
+    image: proxysql/packaging:build-debian7
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -235,7 +235,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian8_build:
-    image: renecannao/proxysql:build-debian8
+    image: proxysql/packaging:build-debian8
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -248,7 +248,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian8_dbg_build:
-    image: renecannao/proxysql:build-debian8
+    image: proxysql/packaging:build-debian8
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -261,7 +261,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian9_build:
-    image: renecannao/proxysql:build-debian9
+    image: proxysql/packaging:build-debian9
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -274,7 +274,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian9_dbg_build:
-    image: renecannao/proxysql:build-debian9
+    image: proxysql/packaging:build-debian9
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -287,7 +287,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian9_ch_build:
-    image: renecannao/proxysql:build-debian9
+    image: proxysql/packaging:build-debian9
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -300,7 +300,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian9.4_build:
-    image: renecannao/proxysql:build-debian9.4
+    image: proxysql/packaging:build-debian9.4
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -313,7 +313,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian9.4_dbg_build:
-    image: renecannao/proxysql:build-debian9.4
+    image: proxysql/packaging:build-debian9.4
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -326,7 +326,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   debian9.4_ch_build:
-    image: renecannao/proxysql:build-debian9.4
+    image: proxysql/packaging:build-debian9.4
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -339,7 +339,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu12_build:
-    image: renecannao/proxysql:build-ubuntu12
+    image: proxysql/packaging:build-ubuntu12
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -352,7 +352,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu12_dbg_build:
-    image: renecannao/proxysql:build-ubuntu12
+    image: proxysql/packaging:build-ubuntu12
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -365,7 +365,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu14_build:
-    image: renecannao/proxysql:build-ubuntu14
+    image: proxysql/packaging:build-ubuntu14
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -378,7 +378,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu14_dbg_build:
-    image: renecannao/proxysql:build-ubuntu14
+    image: proxysql/packaging:build-ubuntu14
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -391,7 +391,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu16_build:
-    image: renecannao/proxysql:build-ubuntu16
+    image: proxysql/packaging:build-ubuntu16
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -404,7 +404,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu16_dbg_build:
-    image: renecannao/proxysql:build-ubuntu16
+    image: proxysql/packaging:build-ubuntu16
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -417,7 +417,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu16_ch_build:
-    image: renecannao/proxysql:build-ubuntu16
+    image: proxysql/packaging:build-ubuntu16
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -430,7 +430,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu18_build:
-    image: renecannao/proxysql:build-ubuntu18
+    image: proxysql/packaging:build-ubuntu18
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -443,7 +443,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu18_dbg_build:
-    image: renecannao/proxysql:build-ubuntu18
+    image: proxysql/packaging:build-ubuntu18
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -456,7 +456,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu18_ch_build:
-    image: renecannao/proxysql:build-ubuntu18
+    image: proxysql/packaging:build-ubuntu18
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/ch-entrypoint/:/opt/entrypoint/
