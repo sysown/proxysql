@@ -168,5 +168,7 @@ cleanall:
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd curl && rm -rf curl-7.57.0 || true
 	cd google-coredumper && rm -rf google-coredumper || true
+	cd libev && rm -rf libev-4.24 || true
+	cd libssl && rm -rf openssl-1.1.0h || true
 .PHONY: cleanall
 
