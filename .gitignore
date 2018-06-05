@@ -124,6 +124,8 @@ deps/protobuf/protobuf-2.6.1/
 deps/sqlite3/sqlite-amalgamation-3150000/
 deps/sqlite3/sqlite-amalgamation-3190200/
 
+deps/libssl/
+
 deps/clickhouse-cpp
 deps/cityhash/cityhash/
 deps/lz4/lz4-1.7.5/
