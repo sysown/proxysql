@@ -3945,6 +3945,26 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 								}
 							}
 						}
+					} else {
+						if (num_writers == 0 && num_backup_writers == 0) {
+							proxy_warning("Galera: we couldn't find any healthy node for writer HG %d\n", info->writer_hostgroup);
+							// ask Monitor to get the status of the whole cluster
+							char * s0 = GloMyMon->galera_find_last_node(info->writer_hostgroup);
+							if (s0) {
+								std::string s = string(s0);
+								std::size_t found=s.find_last_of(":");
+								std::string host=s.substr(0,found);
+								std::string port=s.substr(found+1);
+								int port_n = atoi(port.c_str());
+								proxy_info("Galera: trying to use server %s:%s as a writer for HG %d\n", host.c_str(), port.c_str(), info->writer_hostgroup);
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id IN (%d, %d, %d, %d)  AND hostname='%s' AND port=%d";
+								query=(char *)malloc(strlen(q) + s.length() + 512);
+								sprintf(query,q,info->writer_hostgroup, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup, host.c_str(), port_n);
+								mydb->execute(query);
+								free(query);
+								free(s0);
+							}
+						}
 					}
 				}
 			}

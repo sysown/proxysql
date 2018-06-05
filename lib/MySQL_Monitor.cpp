@@ -2640,3 +2640,61 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 	}
 	pthread_mutex_unlock(&GloMyMon->galera_mutex);
 }
+
+char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
+/*
+	sqlite3 *mondb=monitordb->get_db();
+	int rc;
+	//char *query=NULL;
+	char *query1=NULL;
+	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+	sqlite3_stmt *statement1=NULL;
+*/
+	char *str = NULL;
+	pthread_mutex_lock(&GloMyMon->galera_mutex);
+/*
+	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	assert(rc==SQLITE_OK);
+	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
+*/
+	std::map<std::string, Galera_monitor_node *>::iterator it2;
+	Galera_monitor_node *node=NULL;
+	Galera_monitor_node *writer_node=NULL;
+	unsigned int writer_nodes = 0;
+	unsigned long long curtime = monotonic_time();
+	unsigned long long ti = mysql_thread___monitor_galera_healthcheck_interval;
+	ti *= 2;
+	std::string s = "";
+	for (it2=GloMyMon->Galera_Hosts_Map.begin(); it2!=GloMyMon->Galera_Hosts_Map.end(); ++it2) {
+		node=it2->second;
+		if (node->writer_hostgroup == writer_hostgroup) {
+			Galera_status_entry_t * st = node->last_entry();
+			if (st) {
+				if (st->start_time >= curtime - ti) { // only consider recent checks
+					if (st->error == NULL) { // no check error
+						if (st->read_only == false) { // the server is writable (this check is arguable)
+							if (st->wsrep_sst_donor_rejects_queries == false) {
+								if (writer_nodes == 0) {
+									s=it2->first;
+									writer_node = node;
+								}
+								writer_nodes++;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if (writer_node && writer_nodes == 1) {
+		// we have only one node let
+		// we don't care if status
+		str = strdup(s.c_str());
+/*
+		std::size_t found=s.find_last_of(":");
+		std::string host=s.substr(0,found);
+		std::string port=s.substr(found+1);
+*/
+	}
+	pthread_mutex_unlock(&GloMyMon->galera_mutex);
+}

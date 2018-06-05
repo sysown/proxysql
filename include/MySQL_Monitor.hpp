@@ -60,6 +60,10 @@ class Galera_monitor_node {
 	Galera_monitor_node(char *_a, int _p, int _whg);
 	~Galera_monitor_node();
 	bool add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, int _local_state, bool _desync, bool _reject, bool _sst_donor_reject, char *_error); // return true if status changed
+	Galera_status_entry_t *last_entry() {
+		if (idx_last_entry == -1) return NULL;
+		return (&last_entries[idx_last_entry]);
+	}
 };
 
 typedef struct _MyGR_status_entry_t {
@@ -183,6 +187,7 @@ class MySQL_Monitor {
 	void * run();
 	void populate_monitor_mysql_server_group_replication_log();
 	void populate_monitor_mysql_server_galera_log();
+	char * galera_find_last_node(int);
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */
