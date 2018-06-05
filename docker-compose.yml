@@ -170,7 +170,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora28_build:
-    image: test/proxysql:build-fedora28
+    image: renecannao/proxysql:build-fedora28
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
@@ -183,7 +183,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora28_dbg_build:
-    image: test/proxysql:build-fedora28
+    image: renecannao/proxysql:build-fedora28
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -196,7 +196,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   fedora28_ch_build:
-    image: test/proxysql:build-fedora28
+    image: renecannao/proxysql:build-fedora28
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/ch-entrypoint/:/opt/entrypoint/
@@ -430,7 +430,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu18_build:
-    image: test/proxysql:build-ubuntu18
+    image: renecannao/proxysql:build-ubuntu18
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
@@ -443,7 +443,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu18_dbg_build:
-    image: test/proxysql:build-ubuntu18
+    image: renecannao/proxysql:build-ubuntu18
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
@@ -456,7 +456,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu18_ch_build:
-    image: test/proxysql:build-ubuntu18
+    image: renecannao/proxysql:build-ubuntu18
     volumes:
       - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/ch-entrypoint/:/opt/entrypoint/
