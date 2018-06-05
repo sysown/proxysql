@@ -59,7 +59,7 @@ ODIR= obj
 #CC=clang
 
 #CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
-#CXXFLAGS=-std=c++0x $(CFLAGS) $(LDIRS) $(LIBS)
+#CXXFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
 NOJEM=-DNOJEM
@@ -85,7 +85,7 @@ endif
 
 
 MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
-MYCXXFLAGS=-std=c++0x $(MYCFLAGS) $(PSQLCH)
+MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH)
 
 default: libproxysql.a
 .PHONY: default

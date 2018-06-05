@@ -76,7 +76,7 @@ else
 PSQLCH=
 endif
 
-MYCXXFLAGS=-std=c++0x $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH)
+MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH)
 
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
