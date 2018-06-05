@@ -3606,7 +3606,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	free(query);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
-			proxy_warning("Group Replication: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
+			proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
@@ -3682,7 +3682,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 	free(query);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
-			proxy_warning("Group Replication: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
+			proxy_warning("Galera: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
@@ -3943,6 +3943,26 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 									free(query);
 									to_move--;
 								}
+							}
+						}
+					} else {
+						if (num_writers == 0 && num_backup_writers == 0) {
+							proxy_warning("Galera: we couldn't find any healthy node for writer HG %d\n", info->writer_hostgroup);
+							// ask Monitor to get the status of the whole cluster
+							char * s0 = GloMyMon->galera_find_last_node(info->writer_hostgroup);
+							if (s0) {
+								std::string s = string(s0);
+								std::size_t found=s.find_last_of(":");
+								std::string host=s.substr(0,found);
+								std::string port=s.substr(found+1);
+								int port_n = atoi(port.c_str());
+								proxy_info("Galera: trying to use server %s:%s as a writer for HG %d\n", host.c_str(), port.c_str(), info->writer_hostgroup);
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id IN (%d, %d, %d, %d)  AND hostname='%s' AND port=%d";
+								query=(char *)malloc(strlen(q) + s.length() + 512);
+								sprintf(query,q,info->writer_hostgroup, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup, host.c_str(), port_n);
+								mydb->execute(query);
+								free(query);
+								free(s0);
 							}
 						}
 					}
