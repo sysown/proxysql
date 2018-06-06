@@ -2064,9 +2064,12 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
 			}
 			if (runtime_mysql_servers) {
+				int old_hostgroup_manager_verbose = mysql_thread___hostgroup_manager_verbose;
+				mysql_thread___hostgroup_manager_verbose = 0;
 				mysql_servers_wrlock();
 				save_mysql_servers_runtime_to_database(true);
 				mysql_servers_wrunlock();
+				mysql_thread___hostgroup_manager_verbose = old_hostgroup_manager_verbose;
 			}
 			if (runtime_proxysql_servers) {
 				mysql_servers_wrlock();

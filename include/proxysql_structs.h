@@ -646,6 +646,7 @@ __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___session_idle_ms;
+__thread int mysql_thread___hostgroup_manager_verbose;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -759,6 +760,7 @@ extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___session_idle_ms;
+extern __thread int mysql_thread___hostgroup_manager_verbose;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
