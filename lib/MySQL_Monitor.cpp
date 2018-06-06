@@ -2713,4 +2713,5 @@ char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
 */
 	}
 	pthread_mutex_unlock(&GloMyMon->galera_mutex);
+	return str;
 }
