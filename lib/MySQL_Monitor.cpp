@@ -1128,7 +1128,13 @@ void * monitor_galera_thread(void *arg) {
 		rc=mmsd->create_new_connection();
 		crc=true;
 		if (rc==false) {
-			goto __fast_exit_monitor_galera_thread;
+			unsigned long long now=monotonic_time();
+			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
+			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+			free(mmsd->mysql_error_msg);
+			mmsd->mysql_error_msg = new_error;
+			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			goto __exit_monitor_galera_thread;
 		}
 	}
 
@@ -1192,7 +1198,7 @@ __exit_monitor_galera_thread:
 		bool wsrep_reject_queries = true;
 		bool wsrep_sst_donor_rejects_queries = true;
 		long long wsrep_local_recv_queue=0;
-		if (mmsd->result) {
+		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int num_rows=0;
 			num_fields = mysql_num_fields(mmsd->result);
