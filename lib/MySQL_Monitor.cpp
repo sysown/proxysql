@@ -1839,7 +1839,7 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
 				bool rc_ping = true;
-				rc_ping = server_responds_to_ping(r->fields[0],atoi(r->fields[1]));
+				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
 				if (rc_ping) { // only if server is responding to pings
 					MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1], atoi(r->fields[2]), NULL, atoi(r->fields[4]), atoi(r->fields[0]));
 					mmsd->mondb=monitordb;
