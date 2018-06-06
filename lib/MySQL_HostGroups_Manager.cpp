@@ -3962,6 +3962,15 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 								sprintf(query,q,info->writer_hostgroup, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup, host.c_str(), port_n);
 								mydb->execute(query);
 								free(query);
+								bool writer_is_also_reader = info->writer_is_also_reader;
+								if (writer_is_also_reader) {
+									int read_HG = info->reader_hostgroup;
+									q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+									query=(char *)malloc(strlen(q) + s.length() + 128);
+									sprintf(query,q,read_HG, host.c_str(), port_n);
+									mydb->execute(query);
+									free(query);
+								}
 								free(s0);
 							}
 						}
