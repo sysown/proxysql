@@ -3967,7 +3967,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 									int read_HG = info->reader_hostgroup;
 									q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 									query=(char *)malloc(strlen(q) + s.length() + 128);
-									sprintf(query,q,read_HG, host.c_str(), port_n);
+									sprintf(query,q,read_HG, info->writer_hostgroup, host.c_str(), port_n);
 									mydb->execute(query);
 									free(query);
 								}
