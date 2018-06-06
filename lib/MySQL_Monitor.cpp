@@ -1267,8 +1267,18 @@ __end_process_galera_result:
 		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 			MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 		} else {
-			if (primary_partition == false) {
-				MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
+			if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+				if (primary_partition == false) {
+					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
+				} else {
+					if (wsrep_desync == true) {
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+					} else {
+						char msg[80];
+						sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+					}
+				}
 			} else {
 				if (read_only==true) {
 					if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
