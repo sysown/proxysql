@@ -2073,19 +2073,19 @@ void * MySQL_Monitor::monitor_group_replication() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = Group_Replication_Hosts_resultset->rows.begin() ; it != Group_Replication_Hosts_resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
-				mmsd->writer_hostgroup=atoi(r->fields[0]);
-				mmsd->writer_is_also_reader=atoi(r->fields[4]);
-				mmsd->max_transactions_behind=atoi(r->fields[5]);
-				mmsd->mondb=monitordb;
-				//pthread_t thr_;
-				//if ( pthread_create(&thr_, &attr, monitor_read_only_thread, (void *)mmsd) != 0 ) {
-				//	perror("Thread creation monitor_read_only_thread");
-				//}
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_group_replication_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
+					mmsd->writer_hostgroup=atoi(r->fields[0]);
+					mmsd->writer_is_also_reader=atoi(r->fields[4]);
+					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_group_replication_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) {
 					pthread_mutex_unlock(&group_replication_mutex);
 					return NULL;
@@ -2189,15 +2189,19 @@ void * MySQL_Monitor::monitor_galera() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = Galera_Hosts_resultset->rows.begin() ; it != Galera_Hosts_resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
-				mmsd->writer_hostgroup=atoi(r->fields[0]);
-				mmsd->writer_is_also_reader=atoi(r->fields[4]);
-				mmsd->max_transactions_behind=atoi(r->fields[5]);
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_galera_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
+					mmsd->writer_hostgroup=atoi(r->fields[0]);
+					mmsd->writer_is_also_reader=atoi(r->fields[4]);
+					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_galera_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) {
 					pthread_mutex_unlock(&galera_mutex);
 					return NULL;
