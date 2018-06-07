@@ -211,6 +211,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"shun_on_failures",
 	(char *)"shun_recovery_time_sec",
 	(char *)"query_retries_on_failure",
+	(char *)"client_multi_statements",
 	(char *)"connect_retries_on_failure",
 	(char *)"connect_retries_delay",
 	(char *)"connection_delay_multiplex_ms",
@@ -341,6 +342,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
+	variables.client_multi_statements=true;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -721,6 +723,22 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"autocommit_false_not_reusable")) return (int)variables.autocommit_false_not_reusable;
 	if (!strcasecmp(name,"autocommit_false_is_transaction")) return (int)variables.autocommit_false_is_transaction;
 	if (!strcasecmp(name,"verbose_query_error")) return (int)variables.verbose_query_error;
+	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
+	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
+	if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+	if (!strcasecmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
+	if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
+	if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
+	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
+#ifdef IDLE_THREADS
+	if (!strcasecmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
+#endif // IDLE_THREADS
+	if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
+	if (!strcasecmp(name,"default_reconnect")) return (int)variables.default_reconnect;
+	if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
+	if (!strcasecmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
+	if (!strcasecmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	if (!strcasecmp(name,"client_multi_statements")) return (int)variables.client_multi_statements;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 }
@@ -897,6 +915,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"shun_on_failures")) {
 		sprintf(intbuf,"%d",variables.shun_on_failures);
 		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"client_multi_statements")) {
+		return strdup((variables.client_multi_statements ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"connpoll_reset_queue_length")) {
 		sprintf(intbuf,"%d",variables.connpoll_reset_queue_length);
@@ -1702,6 +1723,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"client_multi_statements")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.client_multi_statements=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.client_multi_statements=false;
+			return true;
+		}
+		return false;
 	}
 	if (!strcasecmp(name,"connect_retries_on_failure")) {
 		int intv=atoi(value);
@@ -3427,6 +3459,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___shun_recovery_time_sec=GloMTH->get_variable_int((char *)"shun_recovery_time_sec");
 	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
+	mysql_thread___client_multi_statements=(bool)GloMTH->get_variable_int((char *)"client_multi_statements");
 	mysql_thread___connection_delay_multiplex_ms=GloMTH->get_variable_int((char *)"connection_delay_multiplex_ms");
 	mysql_thread___connection_max_age_ms=GloMTH->get_variable_int((char *)"connection_max_age_ms");
 	mysql_thread___connect_timeout_server=GloMTH->get_variable_int((char *)"connect_timeout_server");
