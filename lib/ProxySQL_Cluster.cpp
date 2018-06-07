@@ -9,6 +9,7 @@
 #endif /* DEBUG */
 #define PROXYSQL_CLUSTER_VERSION "0.1.0702" DEB
 
+#define QUERY_ERROR_RATE 20
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -64,6 +65,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	char *username = NULL;
 	char *password = NULL;
 	bool rc_bool = true;
+	int query_error_counter = 0;
+	char *query_error = NULL;
 	int cluster_check_status_frequency_count = 0;
 	MYSQL *conn = mysql_init(NULL);
 //		goto __exit_monitor_thread;
@@ -78,10 +81,16 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		if (username) { free(username); }
 		if (password) { free(password); }
 		GloProxyCluster->get_credentials(&username, &password);
-		// TODO: add options, like timeout
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
 			unsigned int timeout_long = 60;
+			if (conn == NULL) {
+				conn = mysql_init(NULL);
+				if (conn==NULL) {
+					proxy_error("Unable to run mysql_init()\n");
+					goto __exit_monitor_thread;
+				}
+			}
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
@@ -94,6 +103,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					//unsigned long long before_query_time=monotonic_time();
 					rc_query = mysql_query(conn,query1);
 					if ( rc_query == 0 ) {
+						query_error = NULL;
+						query_error_counter = 0;
 						MYSQL_RES *result = mysql_store_result(conn);
 						//unsigned long long after_query_time=monotonic_time();
 						//unsigned long long elapsed_time_us = (after_query_time - before_query_time);
@@ -117,6 +128,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						if (update_checksum) {
 							rc_query = mysql_query(conn,query3);
 							if ( rc_query == 0 ) {
+								query_error = NULL;
+								query_error_counter = 0;
 								MYSQL_RES *result = mysql_store_result(conn);
 								//unsigned long long after_query_time2=monotonic_time();
 								//unsigned long long elapsed_time_us2 = (after_query_time2 - before_query_time2);
@@ -132,6 +145,12 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								//		//usleep((ci-e_ms)*1000); // remember, usleep is in us
 								//	}
 								//}
+							} else {
+								query_error = query3;
+								if (query_error_counter == 0) {
+									proxy_error("Cluster: unable to run query on %s:%d using user %s : %s\n", node->hostname, node->port , username, query_error);
+								}
+								if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 							}
 						} else {
 							GloProxyCluster->Update_Node_Checksums(node->hostname, node->port);
@@ -150,14 +169,28 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								unsigned long long before_query_time=monotonic_time();
 								rc_query = mysql_query(conn,query2);
 								if ( rc_query == 0 ) {
+									query_error = NULL;
+									query_error_counter = 0;
 									MYSQL_RES *result = mysql_store_result(conn);
 									unsigned long long after_query_time=monotonic_time();
 									unsigned long long elapsed_time_us = (after_query_time - before_query_time);
 									rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us); 
 									mysql_free_result(result);
+								} else {
+									query_error = query2;
+									if (query_error_counter == 0) {
+										proxy_error("Cluster: unable to run query on %s:%d using user %s : %s\n", node->hostname, node->port , username, query_error);
+									}
+									if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 								}
 							}
 						}
+					} else {
+						query_error = query1;
+						if (query_error_counter == 0) {
+							proxy_error("Cluster: unable to run query on %s:%d using user %s : %s\n", node->hostname, node->port , username, query_error);
+						}
+						if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 					}
 					unsigned long long end_time=monotonic_time();
 					if (rc_query == 0) {
@@ -175,6 +208,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				if (conn->net.pvio) {
 					mysql_close(conn);
 					conn = NULL;
+					int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
+					usleep((ci)*1000); // remember, usleep is in us
 				}
 			} else {
 				proxy_warning("Cluster: unable to connect to peer %s:%d . Error: %s\n", node->hostname, node->port, mysql_error(conn));
