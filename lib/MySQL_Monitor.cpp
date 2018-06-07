@@ -1286,24 +1286,25 @@ __end_process_galera_result:
 					}
 				}
 			} else {
-				if (read_only==true) {
-					if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+				if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
+					if (wsrep_reject_queries) {
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
 					} else {
-						MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+						// wsrep_sst_donor_rejects_queries
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
 					}
 				} else {
-					if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
-						if (wsrep_reject_queries) {
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
+					if (read_only==true) {
+						if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
 						} else {
-							// wsrep_sst_donor_rejects_queries
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
+							MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
 						}
+					} else {
+						// the node is a writer
+						// TODO: for now we don't care about the number of writers
+						MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 					}
-					// the node is a writer
-					// TODO: for now we don't care about the number of writers
-					MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 				}
 			}
 		}
