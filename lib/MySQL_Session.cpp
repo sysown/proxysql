@@ -2951,6 +2951,7 @@ handler_again:
 									} else {
 										myds->destroy_MySQL_Connection_From_Pool(true);
 									}
+									myconn = myds->myconn; // re-initialize
 									myds->fd=0;
 									if (retry_conn) {
 										myds->DSS=STATE_NOT_INITIALIZED;
@@ -2984,17 +2985,21 @@ handler_again:
 
 							switch (status) {
 								case PROCESSING_QUERY:
-									MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
+									if (myconn) {
+										MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
+									} else {
+										MySQL_Result_to_MySQL_wire(NULL, NULL, myds);
+									}
 									break;
 								case PROCESSING_STMT_PREPARE:
 									{
 										char sqlstate[10];
-                                                                                if (myconn->mysql) {
-                                                                                        sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-                                                                                        client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
-                                                                                } else {
-                                                                                        client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
-                                                                                }
+										if (myconn && myconn->mysql) {
+											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+										} else {
+											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+										}
 										client_myds->pkt_sid++;
 										if (previous_status.size()) {
 											// an STMT_PREPARE failed
