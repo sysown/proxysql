@@ -2989,8 +2989,12 @@ handler_again:
 								case PROCESSING_STMT_PREPARE:
 									{
 										char sqlstate[10];
-										sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+                                                                                if (myconn->mysql) {
+                                                                                        sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+                                                                                        client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+                                                                                } else {
+                                                                                        client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+                                                                                }
 										client_myds->pkt_sid++;
 										if (previous_status.size()) {
 											// an STMT_PREPARE failed
@@ -3004,8 +3008,12 @@ handler_again:
 								case PROCESSING_STMT_EXECUTE:
 									{
 										char sqlstate[10];
-										sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+										if (myconn->mysql) {
+											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+										} else {
+											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+										}
 										client_myds->pkt_sid++;
 									}
 									break;
@@ -3890,6 +3898,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							client_myds->DSS=STATE_QUERY_SENT_NET;
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+							client_myds->DSS=STATE_SLEEP;
+							status=WAITING_CLIENT_DATA;
 							free(errmsg);
 							return true;
 						} else {
@@ -4233,6 +4243,11 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 }
 
 void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
+        if (mysql == NULL) {
+                // error
+                client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+                return;
+        }
 	if (MyRS) {
 		assert(MyRS->result);
 		bool transfer_started=MyRS->transfer_started;
@@ -4421,10 +4436,12 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	}
 	// reset status of the session
 	status=WAITING_CLIENT_DATA;
-	// reset status of client data stream
-	client_myds->DSS=STATE_SLEEP;
-	// finalize the query
-	CurrentQuery.end();
+	if (client_myds) {
+		// reset status of client data stream
+		client_myds->DSS=STATE_SLEEP;
+		// finalize the query
+		CurrentQuery.end();
+	}
 	started_sending_data_to_client=false;
 }
 
@@ -4510,6 +4527,7 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	mc->last_time_used = thread->curtime;
 	new_myds->myprot.init(&new_myds, new_myds->myconn->userinfo, NULL);
 	new_sess->status = RESETTING_CONNECTION;
+	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
 	if (new_myds->mypolls==NULL) {

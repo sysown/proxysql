@@ -647,6 +647,7 @@ __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___session_idle_ms;
+__thread int mysql_thread___hostgroup_manager_verbose;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -683,6 +684,9 @@ __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 __thread int mysql_thread___monitor_query_interval;
 __thread int mysql_thread___monitor_query_timeout;
 __thread int mysql_thread___monitor_slave_lag_when_null;
+__thread int mysql_thread___monitor_threads_min;
+__thread int mysql_thread___monitor_threads_max;
+__thread int mysql_thread___monitor_threads_queue_maxsize;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
@@ -758,6 +762,7 @@ extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___session_idle_ms;
+extern __thread int mysql_thread___hostgroup_manager_verbose;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
@@ -794,6 +799,9 @@ extern __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 extern __thread int mysql_thread___monitor_query_interval;
 extern __thread int mysql_thread___monitor_query_timeout;
 extern __thread int mysql_thread___monitor_slave_lag_when_null;
+extern __thread int mysql_thread___monitor_threads_min;
+extern __thread int mysql_thread___monitor_threads_max;
+extern __thread int mysql_thread___monitor_threads_queue_maxsize;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;

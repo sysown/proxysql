@@ -251,6 +251,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_query_interval",
 	(char *)"monitor_query_timeout",
 	(char *)"monitor_slave_lag_when_null",
+	(char *)"monitor_threads_min",
+	(char *)"monitor_threads_max",
+	(char *)"monitor_threads_queue_maxsize",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
@@ -334,11 +337,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize=0;
 	shutdown_=0;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 	pthread_rwlock_init(&rwlock,NULL);
-#else
-	spinlock_rwlock_init(&rwlock);
-#endif
 	pthread_attr_init(&attr);
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
@@ -370,6 +369,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_query_interval=60000;
 	variables.monitor_query_timeout=100;
 	variables.monitor_slave_lag_when_null=60;
+	variables.monitor_threads_min = 8;
+	variables.monitor_threads_max = 128;
+	variables.monitor_threads_queue_maxsize = 128;
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
@@ -509,19 +511,11 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 }
 
 void MySQL_Threads_Handler::wrlock() {
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&rwlock);
-#else
-	spin_wrlock(&rwlock);
-#endif
 }
 
 void MySQL_Threads_Handler::wrunlock() {
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
-#else
-	spin_wrunlock(&rwlock);
-#endif
 }
 
 void MySQL_Threads_Handler::commit() {
@@ -609,72 +603,120 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
 	if (!strncasecmp(name,"monitor_",8)) {
+		char a = name[8];
+		if (a == 'r' || a == 'R') {
+			if (!strcasecmp(name,"monitor_read_only_interval")) return (int)variables.monitor_read_only_interval;
+			if (!strcasecmp(name,"monitor_read_only_timeout")) return (int)variables.monitor_read_only_timeout;
+			if (!strcasecmp(name,"monitor_read_only_max_timeout_count")) return (int)variables.monitor_read_only_max_timeout_count;
+			if (!strcasecmp(name,"monitor_replication_lag_interval")) return (int)variables.monitor_replication_lag_interval;
+			if (!strcasecmp(name,"monitor_replication_lag_timeout")) return (int)variables.monitor_replication_lag_timeout;
+		}
+		if (a == 'g' || a == 'G') {
+			if (!strcasecmp(name,"monitor_groupreplication_healthcheck_interval")) return (int)variables.monitor_groupreplication_healthcheck_interval;
+			if (!strcasecmp(name,"monitor_groupreplication_healthcheck_timeout")) return (int)variables.monitor_groupreplication_healthcheck_timeout;
+			if (!strcasecmp(name,"monitor_galera_healthcheck_interval")) return (int)variables.monitor_galera_healthcheck_interval;
+			if (!strcasecmp(name,"monitor_galera_healthcheck_timeout")) return (int)variables.monitor_galera_healthcheck_timeout;
+		}
+		if (a == 'p' || a == 'P') {
+			if (!strcasecmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
+			if (!strcasecmp(name,"monitor_ping_max_failures")) return (int)variables.monitor_ping_max_failures;
+			if (!strcasecmp(name,"monitor_ping_timeout")) return (int)variables.monitor_ping_timeout;
+		}
+		if (a == 't' || a == 'T') {
+			if (!strcasecmp(name,"monitor_threads_min")) return (int)variables.monitor_threads_min;
+			if (!strcasecmp(name,"monitor_threads_max")) return (int)variables.monitor_threads_max;
+			if (!strcasecmp(name,"monitor_threads_queue_maxsize")) return (int)variables.monitor_threads_queue_maxsize;
+		}
+		if (a == 'c' || a == 'C') {
+			if (!strcasecmp(name,"monitor_connect_interval")) return (int)variables.monitor_connect_interval;
+			if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
+		}
+		if (a == 'q' || a == 'Q') {
+			if (!strcasecmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
+			if (!strcasecmp(name,"monitor_query_timeout")) return (int)variables.monitor_query_timeout;
+		}
+		if (a == 'w' || a == 'W') {
+			if (!strcasecmp(name,"monitor_wait_timeout")) return (int)variables.monitor_wait_timeout;
+			if (!strcasecmp(name,"monitor_writer_is_also_reader")) return (int)variables.monitor_writer_is_also_reader;
+		}
 		if (!strcasecmp(name,"monitor_enabled")) return (int)variables.monitor_enabled;
 		if (!strcasecmp(name,"monitor_history")) return (int)variables.monitor_history;
-		if (!strcasecmp(name,"monitor_connect_interval")) return (int)variables.monitor_connect_interval;
-		if (!strcasecmp(name,"monitor_connect_timeout")) return (int)variables.monitor_connect_timeout;
-		if (!strcasecmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
-		if (!strcasecmp(name,"monitor_ping_max_failures")) return (int)variables.monitor_ping_max_failures;
-		if (!strcasecmp(name,"monitor_ping_timeout")) return (int)variables.monitor_ping_timeout;
-		if (!strcasecmp(name,"monitor_read_only_interval")) return (int)variables.monitor_read_only_interval;
-		if (!strcasecmp(name,"monitor_read_only_timeout")) return (int)variables.monitor_read_only_timeout;
-		if (!strcasecmp(name,"monitor_read_only_max_timeout_count")) return (int)variables.monitor_read_only_max_timeout_count;
-		if (!strcasecmp(name,"monitor_replication_lag_interval")) return (int)variables.monitor_replication_lag_interval;
-		if (!strcasecmp(name,"monitor_replication_lag_timeout")) return (int)variables.monitor_replication_lag_timeout;
-		if (!strcasecmp(name,"monitor_groupreplication_healthcheck_interval")) return (int)variables.monitor_groupreplication_healthcheck_interval;
-		if (!strcasecmp(name,"monitor_groupreplication_healthcheck_timeout")) return (int)variables.monitor_groupreplication_healthcheck_timeout;
-		if (!strcasecmp(name,"monitor_galera_healthcheck_interval")) return (int)variables.monitor_galera_healthcheck_interval;
-		if (!strcasecmp(name,"monitor_galera_healthcheck_timeout")) return (int)variables.monitor_galera_healthcheck_timeout;
-		if (!strcasecmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
-		if (!strcasecmp(name,"monitor_query_timeout")) return (int)variables.monitor_query_timeout;
 		if (!strcasecmp(name,"monitor_slave_lag_when_null")) return (int)variables.monitor_slave_lag_when_null;
-		if (!strcasecmp(name,"monitor_wait_timeout")) return (int)variables.monitor_wait_timeout;
-		if (!strcasecmp(name,"monitor_writer_is_also_reader")) return (int)variables.monitor_writer_is_also_reader;
 	}
-	if (!strcasecmp(name,"shun_on_failures")) return (int)variables.shun_on_failures;
-	if (!strcasecmp(name,"shun_recovery_time_sec")) return (int)variables.shun_recovery_time_sec;
-	if (!strcasecmp(name,"query_retries_on_failure")) return (int)variables.query_retries_on_failure;
-	if (!strcasecmp(name,"connect_retries_on_failure")) return (int)variables.connect_retries_on_failure;
-	if (!strcasecmp(name,"connection_delay_multiplex_ms")) return (int)variables.connection_delay_multiplex_ms;
-	if (!strcasecmp(name,"connection_max_age_ms")) return (int)variables.connection_max_age_ms;
-	if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
-	if (!strcasecmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
-	if (!strcasecmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
+	if (!strncasecmp(name,"c",1)) {
+		if (!strcasecmp(name,"connect_retries_on_failure")) return (int)variables.connect_retries_on_failure;
+		if (!strcasecmp(name,"connection_delay_multiplex_ms")) return (int)variables.connection_delay_multiplex_ms;
+		if (!strcasecmp(name,"connection_max_age_ms")) return (int)variables.connection_max_age_ms;
+		if (!strcasecmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
+		if (!strcasecmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
+		if (!strcasecmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
+		if (!strcasecmp(name,"client_found_rows")) return (int)variables.client_found_rows;
+		if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
+		if (!strcasecmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
+	}
+	if (!strncasecmp(name,"s",1)) {
+		if (!strcasecmp(name,"shun_on_failures")) return (int)variables.shun_on_failures;
+		if (!strcasecmp(name,"shun_recovery_time_sec")) return (int)variables.shun_recovery_time_sec;
+#ifdef IDLE_THREADS
+		if (!strcasecmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
+#endif // IDLE_THREADS
+		if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
+		if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
+		if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
+#ifdef IDLE_THREADS
+		if (!strcasecmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
+#endif // IDLE_THREADS
+		if (!strcasecmp(name,"servers_stats")) return (int)variables.servers_stats;
+		if (!strcasecmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	}
+	if (!strncasecmp(name,"m",1)) {
+		if (!strcasecmp(name,"max_allowed_packet")) return (int)variables.max_allowed_packet;
+		if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
+		if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
+		if (!strcasecmp(name,"max_stmts_per_connection")) return (int)variables.max_stmts_per_connection;
+		if (!strcasecmp(name,"max_stmts_cache")) return (int)variables.max_stmts_cache;
+		if (!strcasecmp(name,"mirror_max_concurrency")) return (int)variables.mirror_max_concurrency;
+		if (!strcasecmp(name,"mirror_max_queue_length")) return (int)variables.mirror_max_queue_length;
+	}
+	if (!strncasecmp(name,"q",1)) {
+		if (!strcasecmp(name,"query_retries_on_failure")) return (int)variables.query_retries_on_failure;
+		if (!strcasecmp(name,"query_digests_max_digest_length")) return (int)variables.query_digests_max_digest_length;
+		if (!strcasecmp(name,"query_digests_max_query_length")) return (int)variables.query_digests_max_query_length;
+		if (!strcasecmp(name,"query_processor_iterations")) return (int)variables.query_processor_iterations;
+		if (!strcasecmp(name,"query_processor_regex")) return (int)variables.query_processor_regex;
+		if (!strcasecmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
+		if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
+		if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+	}
+	if (!strncasecmp(name,"p",1)) {
+		if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
+		if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
+		if (!strcasecmp(name,"poll_timeout")) return variables.poll_timeout;
+		if (!strcasecmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
+	}
+	if (!strncasecmp(name,"t",1)) {
+		if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) return (int)variables.throttle_connections_per_sec_to_hostgroup;
+		if (!strcasecmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
+		if (!strcasecmp(name,"threshold_resultset_size")) return (int)variables.threshold_resultset_size;
+		if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) return (int)variables.throttle_max_bytes_per_second_to_client;
+		if (!strcasecmp(name,"throttle_ratio_server_to_client")) return (int)variables.throttle_ratio_server_to_client;
+	}
+	if (!strncasecmp(name,"d",1)) {
+		if (!strcasecmp(name,"default_reconnect")) return (int)variables.default_reconnect;
+		if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
+		if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
+		if (!strcasecmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
+	}
 	if (!strcasecmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
-	if (!strcasecmp(name,"max_allowed_packet")) return (int)variables.max_allowed_packet;
-	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) return (int)variables.throttle_connections_per_sec_to_hostgroup;
-	if (!strcasecmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
 	if (!strcasecmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
 	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
-	if (!strcasecmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
-	if (!strcasecmp(name,"threshold_resultset_size")) return (int)variables.threshold_resultset_size;
-	if (!strcasecmp(name,"query_digests_max_digest_length")) return (int)variables.query_digests_max_digest_length;
-	if (!strcasecmp(name,"query_digests_max_query_length")) return (int)variables.query_digests_max_query_length;
 	if (!strcasecmp(name,"wait_timeout")) return (int)variables.wait_timeout;
-	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) return (int)variables.throttle_max_bytes_per_second_to_client;
-	if (!strcasecmp(name,"throttle_ratio_server_to_client")) return (int)variables.throttle_ratio_server_to_client;
-	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
-	if (!strcasecmp(name,"max_stmts_per_connection")) return (int)variables.max_stmts_per_connection;
-	if (!strcasecmp(name,"max_stmts_cache")) return (int)variables.max_stmts_cache;
-	if (!strcasecmp(name,"mirror_max_concurrency")) return (int)variables.mirror_max_concurrency;
-	if (!strcasecmp(name,"mirror_max_queue_length")) return (int)variables.mirror_max_queue_length;
-	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
-	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
-	if (!strcasecmp(name,"query_processor_iterations")) return (int)variables.query_processor_iterations;
-	if (!strcasecmp(name,"query_processor_regex")) return (int)variables.query_processor_regex;
 	if (!strcasecmp(name,"reset_connection_algorithm")) return (int)variables.reset_connection_algorithm;
-	if (!strcasecmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
-	if (!strcasecmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
-#ifdef IDLE_THREADS
-	if (!strcasecmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
-#endif // IDLE_THREADS
-	if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
-	if (!strcasecmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
 	if (!strcasecmp(name,"have_ssl")) return (int)variables.have_ssl;
-	if (!strcasecmp(name,"client_found_rows")) return (int)variables.client_found_rows;
+	if (!strcasecmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
 	if (!strcasecmp(name,"multiplexing")) return (int)variables.multiplexing;
 	if (!strcasecmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
 	if (!strcasecmp(name,"enforce_autocommit_on_reads")) return (int)variables.enforce_autocommit_on_reads;
@@ -841,6 +883,18 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_slave_lag_when_null")) {
 			sprintf(intbuf,"%d",variables.monitor_slave_lag_when_null);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_threads_min")) {
+			sprintf(intbuf,"%d",variables.monitor_threads_min);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_threads_max")) {
+			sprintf(intbuf,"%d",variables.monitor_threads_max);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_threads_queue_maxsize")) {
+			sprintf(intbuf,"%d",variables.monitor_threads_queue_maxsize);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
@@ -1325,6 +1379,33 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 604800) {
 				variables.monitor_slave_lag_when_null=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_threads_min")) {
+			int intv=atoi(value);
+			if (intv >= 2 && intv <= 16) {
+				variables.monitor_threads_min = intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_threads_max")) {
+			int intv=atoi(value);
+			if (intv >= 4 && intv <= 256) {
+				variables.monitor_threads_max = intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_threads_queue_maxsize")) {
+			int intv=atoi(value);
+			if (intv >= 16 && intv <= 1024) {
+				variables.monitor_threads_queue_maxsize = intv;
 				return true;
 			} else {
 				return false;
@@ -2547,11 +2628,7 @@ void MySQL_Thread::run() {
 	curtime=monotonic_time();
 	atomic_curtime=curtime;
 
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 	pthread_mutex_lock(&thread_mutex);
-#else
-	spin_wrlock(&thread_mutex);
-#endif
 	while (shutdown==0) {
 
 #ifdef IDLE_THREADS
@@ -2804,11 +2881,7 @@ __mysql_thread_exit_add_mirror:
 __run_skip_1a:
 #endif // IDLE_THREADS
 
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 		pthread_mutex_unlock(&thread_mutex);
-#else
-		spin_wrunlock(&thread_mutex);
-#endif
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
 			poll_listener_add(n);
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
@@ -2847,11 +2920,7 @@ __run_skip_1a:
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 		pthread_mutex_lock(&thread_mutex);
-#else
-		spin_wrlock(&thread_mutex);
-#endif
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
@@ -3017,17 +3086,9 @@ __run_skip_1a:
 					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
 					if (c) {
 						// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 						pthread_mutex_unlock(&thread_mutex);
-#else
-						spin_wrunlock(&thread_mutex);
-#endif
 						usleep(c*1000);
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 						pthread_mutex_lock(&thread_mutex);
-#else
-						spin_wrlock(&thread_mutex);
-#endif
 						// we enter in maintenance loop only if c is set
 						// when threads are signaling each other, there is no need to set maintenance_loop
 						maintenance_loop=true;
@@ -3447,6 +3508,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
 	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
 	mysql_thread___monitor_slave_lag_when_null=GloMTH->get_variable_int((char *)"monitor_slave_lag_when_null");
+	mysql_thread___monitor_threads_min = GloMTH->get_variable_int((char *)"monitor_threads_min");
+	mysql_thread___monitor_threads_max = GloMTH->get_variable_int((char *)"monitor_threads_max");
+	mysql_thread___monitor_threads_queue_maxsize = GloMTH->get_variable_int((char *)"monitor_threads_queue_maxsize");
 
 	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
 	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");
@@ -3480,6 +3544,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
+	mysql_thread___hostgroup_manager_verbose = GloMTH->get_variable_int((char *)"hostgroup_manager_verbose");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
 #ifdef IDLE_THREADS
 	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
@@ -3493,11 +3558,7 @@ void MySQL_Thread::refresh_variables() {
 }
 
 MySQL_Thread::MySQL_Thread() {
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 	pthread_mutex_init(&thread_mutex,NULL);
-#else
-	spinlock_rwlock_init(&thread_mutex);
-#endif
 	my_idle_conns=NULL;
 	cached_connections=NULL;
 	mysql_sessions=NULL;
@@ -3941,6 +4002,66 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			pta[1]=buf;
 			result->add_row(pta);
 		}
+		{	// MySQL Monitor workers
+			pta[0]=(char *)"MySQL_Monitor_Workers_Aux";
+			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->aux_threads : 0));
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{	// MySQL Monitor workers
+			pta[0]=(char *)"MySQL_Monitor_Workers_Started";
+			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->started_threads : 0));
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_connect_check_OK";
+			sprintf(buf,"%llu", GloMyMon->connect_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_connect_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->connect_check_ERR);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_ping_check_OK";
+			sprintf(buf,"%llu", GloMyMon->ping_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_ping_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->ping_check_ERR);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_read_only_check_OK";
+			sprintf(buf,"%llu", GloMyMon->read_only_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_read_only_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->read_only_check_ERR);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_OK";
+			sprintf(buf,"%llu", GloMyMon->replication_lag_check_OK);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_ERR";
+			sprintf(buf,"%llu", GloMyMon->replication_lag_check_ERR);
+			pta[1]=buf;
+			result->add_row(pta);
+		}
 	}
 	{	// ConnPool_get_conn_immediate
 		pta[0]=(char *)"ConnPool_get_conn_immediate";
@@ -3968,14 +4089,13 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 void MySQL_Threads_Handler::Get_Memory_Stats() {
 	unsigned int i;
 	unsigned int j;
-	signal_all_threads(1);
 	MySQL_Thread *thr=NULL;
 	j=num_threads;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
 		j+=num_threads;
 	}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
@@ -3984,13 +4104,10 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			if (GloVars.global.idle_threads) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 		}
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 		pthread_mutex_lock(&thr->thread_mutex);
-#else
-		spin_wrlock(&thr->thread_mutex);
-#endif
+/*
 	}
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
@@ -4000,9 +4117,11 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			if (GloVars.global.idle_threads) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 		}
+*/
 		thr->Get_Memory_Stats();
+/*
 	}
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
@@ -4012,13 +4131,10 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 			if (GloVars.global.idle_threads) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
-#endif /* IDLE_THREADS */
+#endif // IDLE_THREADS
 		}
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
+*/
 		pthread_mutex_unlock(&thr->thread_mutex);
-#else
-		spin_wrunlock(&thr->thread_mutex);
-#endif
 	}
 }
 
@@ -4043,7 +4159,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"info");
 	unsigned int i;
 	unsigned int i2;
-	signal_all_threads(1);
+//	signal_all_threads(1);
 	MySQL_Thread *thr=NULL;
 	i2=num_threads;
 #ifdef IDLE_THREADS
@@ -4055,23 +4171,16 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	for (i=0;i<i2;i++) {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 			pthread_mutex_lock(&thr->thread_mutex);
-#else
-			spin_wrlock(&thr->thread_mutex);
-#endif
 #ifdef IDLE_THREADS
 		} else {
 			if (mysql_thread___session_idle_show_processlist) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 				pthread_mutex_lock(&thr->thread_mutex);
-#else
-				spin_wrlock(&thr->thread_mutex);
-#endif
 			}
 #endif // IDLE_THREADS
 		}
+/*
 	}
 #ifdef IDLE_THREADS
 	for (i=0;i < ( (mysql_thread___session_idle_show_processlist && GloVars.global.idle_threads ) ? num_threads*2 : num_threads); i++) {
@@ -4085,6 +4194,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 #endif // IDLE_THREADS
 		}
+*/
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
@@ -4219,8 +4329,14 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 						pta[11]=strdup("Sleep");
 						break;
 					case CHANGING_USER_SERVER:
-						pta[11]=strdup("Change user");
+                                                pta[11]=strdup("Changing user server");
+                                                break;
+					case CHANGING_USER_CLIENT:
+						pta[11]=strdup("Change user client");
 						break;
+					case RESETTING_CONNECTION:
+                                                pta[11]=strdup("Resetting connection");
+                                                break;
 					case CHANGING_SCHEMA:
 						pta[11]=strdup("InitDB");
 						break;
@@ -4230,6 +4346,39 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case PROCESSING_STMT_PREPARE:
 						pta[11]=strdup("Prepare");
 						break;
+					case CONNECTING_CLIENT:
+                                                pta[11]=strdup("Connecting client");
+                                                break;
+					case PINGING_SERVER:
+                                                pta[11]=strdup("Pinging server");
+                                                break;
+					case WAITING_SERVER_DATA:
+                                                pta[11]=strdup("Waiting server data");
+                                                break;
+					case CHANGING_CHARSET:
+                                                pta[11]=strdup("Changing charset");
+                                                break;
+					case CHANGING_AUTOCOMMIT:
+                                                pta[11]=strdup("Changing autocommit");
+                                                break;
+					case SETTING_INIT_CONNECT:
+                                                pta[11]=strdup("Setting init connect");
+                                                break;
+					case SETTING_SQL_LOG_BIN:
+                                                pta[11]=strdup("Set log bin");
+                                                break;
+					case SETTING_SQL_MODE:
+                                                pta[11]=strdup("Set SQL mode");
+                                                break;
+					case SETTING_TIME_ZONE:
+                                                pta[11]=strdup("Set TZ");
+                                                break;
+					case FAST_FORWARD:
+                                                pta[11]=strdup("Fast forward");
+                                                break;
+					case NONE:
+                                                pta[11]=strdup("None");
+                                                break;
 					default:
 						sprintf(buf,"%d", sess->status);
 						pta[11]=strdup(buf);
@@ -4259,28 +4408,22 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				free(pta);
 			}
 		}
+/*
 	}
 #ifdef IDLE_THREADS
 	for (i=0;i < ( (mysql_thread___session_idle_show_processlist && GloVars.global.idle_threads ) ? num_threads*2 : num_threads); i++) {
 #else
 	for (i=0;i < num_threads; i++) {
 #endif // IDLE_THREADS
+*/
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 			pthread_mutex_unlock(&thr->thread_mutex);
-#else
-			spin_wrunlock(&thr->thread_mutex);
-#endif
 #ifdef IDLE_THREADS
 		} else {
 			if (mysql_thread___session_idle_show_processlist) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 				pthread_mutex_unlock(&thr->thread_mutex);
-#else
-				spin_wrunlock(&thr->thread_mutex);
-#endif
 			}
 #endif // IDLE_THREADS
 		}
@@ -4317,21 +4460,13 @@ bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 	signal_all_threads(1);
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 		pthread_mutex_lock(&thr->thread_mutex);
-#else
-		spin_wrlock(&thr->thread_mutex);
-#endif
 	}
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads)
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 		pthread_mutex_lock(&thr->thread_mutex);
-#else
-		spin_wrlock(&thr->thread_mutex);
-#endif
 	}
 #endif // IDLE_THREADS
 	for (i=0;i<num_threads;i++) {
@@ -4364,21 +4499,13 @@ bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 __exit_kill_session:
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 		pthread_mutex_unlock(&thr->thread_mutex);
-#else
-		spin_wrunlock(&thr->thread_mutex);
-#endif
 	}
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads)
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
-#ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
 		pthread_mutex_unlock(&thr->thread_mutex);
-#else
-		spin_wrunlock(&thr->thread_mutex);
-#endif
 	}
 #endif // IDLE_THREADS
 	return ret;

@@ -321,7 +321,22 @@ MySQL_Monitor::MySQL_Monitor() {
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_group_replication_log_time_start ON mysql_server_group_replication_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_galera_log_time_start ON mysql_server_galera_log (time_start_us)");
 
-	num_threads=8;
+	num_threads=2;
+	aux_threads=0;
+	started_threads=0;
+
+	connect_check_OK = 0;
+	connect_check_ERR = 0;
+	ping_check_OK = 0;
+	ping_check_ERR = 0;
+	read_only_check_OK = 0;
+	read_only_check_ERR = 0;
+	replication_lag_check_OK = 0;
+	replication_lag_check_ERR = 0;
+
+
+
+/*
 	if (GloMTH) {
 		if (GloMTH->num_threads) {
 			num_threads=GloMTH->num_threads*2;
@@ -330,6 +345,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	if (num_threads>16) {
 		num_threads=16;	// limit to 16
 	}
+*/
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -388,11 +404,12 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 
 void * monitor_connect_thread(void *arg) {
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
+	bool connect_success = false;
 	mmsd->create_new_connection();
 
 	unsigned long long start_time=mysql_thr->curtime;
@@ -425,20 +442,28 @@ void * monitor_connect_thread(void *arg) {
 		) {
 			proxy_error("Server %s:%d is returning \"Access denied\" for monitoring user\n", mmsd->hostname, mmsd->port);
 		}
+	} else {
+		connect_success = true;
 	}
 	mysql_close(mmsd->mysql);
 	mmsd->mysql=NULL;
+	if (connect_success) {
+		__sync_fetch_and_add(&GloMyMon->connect_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->connect_check_ERR,1);
+	}
 	delete mysql_thr;
 	return NULL;
 }
 
 void * monitor_ping_thread(void *arg) {
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
+	bool ping_success = false;
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
 
@@ -500,6 +525,9 @@ __exit_monitor_ping_thread:
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
+		if (mmsd->mysql_error_msg == NULL) {
+			ping_success = true;
+		}
 	}
 __fast_exit_monitor_ping_thread:
 	if (mmsd->mysql) {
@@ -521,6 +549,11 @@ __fast_exit_monitor_ping_thread:
 				mmsd->mysql=NULL;
 			}
 		}
+	}
+	if (ping_success) {
+		__sync_fetch_and_add(&GloMyMon->ping_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->ping_check_ERR,1);
 	}
 	delete mysql_thr;
 	return NULL;
@@ -598,15 +631,15 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 void * monitor_read_only_thread(void *arg) {
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
 
-
+	bool read_only_success = false;
 	mmsd->t1=start_time;
 
 	bool crc=false;
@@ -646,12 +679,22 @@ void * monitor_read_only_thread(void *arg) {
 			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
+		if (mmsd->interr) {
+			// error during query
+			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			goto __exit_monitor_read_only_thread;
+		}
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_read_only_thread;	// exit immediately
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
+	}
+	if (mmsd->interr) {
+		// error during query
+		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		goto __exit_monitor_read_only_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
@@ -691,7 +734,7 @@ __exit_monitor_read_only_thread:
 		time_now=time_now-(mmsd->t2 - start_time);
 		rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
-		if (mmsd->result) {
+		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int k=0;
 			MYSQL_FIELD *fields=NULL;
@@ -723,13 +766,22 @@ __exit_monitor_read_only_thread:
 		} else {
 			rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 		}
+		if (mmsd->result) {
+			// make sure it is clear
+			mysql_free_result(mmsd->result);
+			mmsd->result=NULL;
+		}
 		rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 		sqlite3_finalize(statement);
 
-		if (timeout_reached == false) {
+		if (mmsd->mysql_error_msg == NULL) {
+			read_only_success = true;
+		}
+
+		if (timeout_reached == false && mmsd->interr == 0) {
 			MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // default behavior
 		} else {
 			char *error=NULL;
@@ -789,6 +841,11 @@ __fast_exit_monitor_read_only_thread:
 			}
 		}
 	}
+	if (read_only_success) {
+		__sync_fetch_and_add(&GloMyMon->read_only_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->read_only_check_ERR,1);
+	}
 	delete mysql_thr;
 	return NULL;
 }
@@ -828,12 +885,23 @@ void * monitor_group_replication_thread(void *arg) {
 			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=nO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_group_replication_thread;
 		}
+		if (mmsd->interr) {
+			// error during query
+			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			goto __exit_monitor_group_replication_thread;
+		}
+
 		if (GloMyMon->shutdown==true) {
 			goto __fast_exit_monitor_group_replication_thread;	// exit immediately
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
+	}
+	if (mmsd->interr) {
+		// error during query
+		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		goto __exit_monitor_group_replication_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
@@ -871,7 +939,7 @@ __exit_monitor_group_replication_thread:
 		bool viable_candidate=false;
 		bool read_only=true;
 		long long transactions_behind=-1;
-		if (mmsd->result) {
+		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int num_rows=0;
 			num_fields = mysql_num_fields(mmsd->result);
@@ -892,6 +960,11 @@ __exit_monitor_group_replication_thread:
 				read_only=false;
 			}
 			transactions_behind=atol(row[2]);
+			mysql_free_result(mmsd->result);
+			mmsd->result=NULL;
+		}
+		if (mmsd->result) {
+			// make sure it is clear
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
@@ -1055,18 +1128,27 @@ void * monitor_galera_thread(void *arg) {
 		rc=mmsd->create_new_connection();
 		crc=true;
 		if (rc==false) {
-			goto __fast_exit_monitor_galera_thread;
+			unsigned long long now=monotonic_time();
+			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
+			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+			free(mmsd->mysql_error_msg);
+			mmsd->mysql_error_msg = new_error;
+			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			goto __exit_monitor_galera_thread;
 		}
 	}
 
 	mmsd->t1=monotonic_time();
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT IF(VARIABLE_VALUE=4,'YES','NO') FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, (SELECT IF(VARIABLE_VALUE=0 OR VARIABLE_VALUE='OFF','NO','YES') FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES WHERE VARIABLE_NAME='READ_ONLY') read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue");
+	//mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT IF(VARIABLE_VALUE=4,'YES','NO') FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, (SELECT IF(VARIABLE_VALUE=0 OR VARIABLE_VALUE='OFF','NO','YES') FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES WHERE VARIABLE_NAME='READ_ONLY') read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue");
+	// FIXME : INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated
+	// FIXME : future versions should be able to detect backend version and use PERFORMANCE SCHEMA instead
+	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , @@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_local_state is NOT 4 and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_cluster_status	 is NOT Primary\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1109,14 +1191,18 @@ __exit_monitor_galera_thread:
 			s=(char *)malloc(l+16);
 		}
 		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
-		bool viable_candidate=false;
+		bool primary_partition = false;
 		bool read_only=true;
-		long long transactions_behind=-1;
-		if (mmsd->result) {
+		bool wsrep_desync = true;
+		int wsrep_local_state = 0;
+		bool wsrep_reject_queries = true;
+		bool wsrep_sst_donor_rejects_queries = true;
+		long long wsrep_local_recv_queue=0;
+		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int num_rows=0;
 			num_fields = mysql_num_fields(mmsd->result);
-			if (num_fields!=3) {
+			if (num_fields!=7) {
 				proxy_error("Incorrect number of fields, please report a bug\n");
 				goto __end_process_galera_result;
 			}
@@ -1126,13 +1212,37 @@ __exit_monitor_galera_thread:
 				goto __end_process_galera_result;
 			}
 			MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-			if (!strcasecmp(row[0],"YES")) {
-				viable_candidate=true;
+			if (row[0]) {
+				wsrep_local_state = atoi(row[0]);
 			}
-			if (!strcasecmp(row[1],"NO")) {
-				read_only=false;
+			if (row[1]) {
+				if (!strcasecmp(row[1],"NO") || !strcasecmp(row[1],"OFF") || !strcasecmp(row[1],"0")) {
+					read_only=false;
+				}
 			}
-			transactions_behind=atol(row[2]);
+			if (row[2]) {
+				wsrep_local_recv_queue = atoll(row[2]);
+			}
+			if (row[3]) {
+				if (!strcasecmp(row[3],"NO") || !strcasecmp(row[3],"OFF") || !strcasecmp(row[3],"0")) {
+					wsrep_desync = false;
+				}
+			}
+			if (row[4]) {
+				if (!strcasecmp(row[4],"NONE")) {
+					wsrep_reject_queries = false;
+				}
+			}
+			if (row[5]) {
+				if (!strcasecmp(row[5],"NO") || !strcasecmp(row[5],"OFF") || !strcasecmp(row[5],"0")) {
+					wsrep_sst_donor_rejects_queries = false;
+				}
+			}
+			if (row[6]) {
+				if (!strcasecmp(row[6],"Primary")) {
+					primary_partition = true;
+				}
+			}
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
@@ -1144,15 +1254,17 @@ __end_process_galera_result:
 		pthread_mutex_lock(&GloMyMon->galera_mutex);
 		//auto it = 
 		// TODO : complete this
-		std::map<std::string, MyGR_monitor_node *>::iterator it2;
+		std::map<std::string, Galera_monitor_node *>::iterator it2;
 		it2 = GloMyMon->Galera_Hosts_Map.find(s);
-		MyGR_monitor_node *node=NULL;
+		Galera_monitor_node *node=NULL;
 		if (it2!=GloMyMon->Galera_Hosts_Map.end()) {
 			node=it2->second;
-			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
+			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
+			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
 		} else {
-			node = new MyGR_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
-			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
+			node = new Galera_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
+			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
+			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
 			GloMyMon->Galera_Hosts_Map.insert(std::make_pair(s,node));
 		}
 		pthread_mutex_unlock(&GloMyMon->galera_mutex);
@@ -1161,19 +1273,38 @@ __end_process_galera_result:
 		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 			MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 		} else {
-			if (viable_candidate==false) {
-				MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"viable_candidate=NO");
-			} else {
-				if (read_only==true) {
-					if (transactions_behind > mmsd->max_transactions_behind) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+			if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+				if (primary_partition == false) {
+					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
+				} else {
+					if (wsrep_desync == true) {
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
 					} else {
-						MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+						char msg[80];
+						sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+					}
+				}
+			} else {
+				if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
+					if (wsrep_reject_queries) {
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
+					} else {
+						// wsrep_sst_donor_rejects_queries
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
 					}
 				} else {
-					// the node is a writer
-					// TODO: for now we don't care about the number of writers
-					MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
+					if (read_only==true) {
+						if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+						} else {
+							MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+						}
+					} else {
+						// the node is a writer
+						// TODO: for now we don't care about the number of writers
+						MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
+					}
 				}
 			}
 		}
@@ -1220,13 +1351,15 @@ __fast_exit_monitor_galera_thread:
 
 void * monitor_replication_lag_thread(void *arg) {
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
+
+	bool replication_lag_success = false;
 
 	bool use_percona_heartbeat = false;
 	char * percona_heartbeat_table = mysql_thread___monitor_replication_lag_use_percona_heartbeat;
@@ -1352,6 +1485,9 @@ __exit_monitor_replication_lag_thread:
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
 				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
 			sqlite3_finalize(statement);
+			if (mmsd->mysql_error_msg == NULL) {
+				replication_lag_success = true;
+			}
 
 	}
 	if (mmsd->interr) { // check failed
@@ -1381,6 +1517,11 @@ __fast_exit_monitor_replication_lag_thread:
 				mmsd->mysql=NULL;
 			}
 		}
+	}
+	if (replication_lag_success) {
+		__sync_fetch_and_add(&GloMyMon->replication_lag_check_OK,1);
+	} else {
+		__sync_fetch_and_add(&GloMyMon->replication_lag_check_ERR,1);
 	}
 	delete mysql_thr;
 	return NULL;
@@ -1439,12 +1580,16 @@ void * MySQL_Monitor::monitor_connect() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_connect_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[0],atoi(r->fields[1]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_connect_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) return NULL;
 			}
 		}
@@ -1617,8 +1762,11 @@ __end_monitor_ping_loop:
 					if (resultset) {
 						if (resultset->rows_count) {
 							// disable host
-							proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections\n", addresses[j], ports[j], max_failures);
-							MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+							bool rc_shun = false;
+							rc_shun = MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+							if (rc_shun) {
+								proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections. Disabling other checks until the node comes back online.\n", addresses[j], ports[j], max_failures);
+							}
 						}
 						delete resultset;
 						resultset=NULL;
@@ -1716,6 +1864,39 @@ __sleep_monitor_ping_loop:
 	return NULL;
 }
 
+
+
+bool MySQL_Monitor::server_responds_to_ping(char *address, int port) {
+	bool ret = true; // default
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *new_query=NULL;
+	new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port=%d ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
+	char *buff=(char *)malloc(strlen(new_query)+strlen(address)+32);
+	int max_failures = mysql_thread___monitor_ping_max_failures;
+	sprintf(buff,new_query,address,port,max_failures,max_failures);
+	monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+	if (!error) {
+		if (resultset) {
+			if (resultset->rows_count) {
+				ret = false;
+			}
+			delete resultset;
+			resultset=NULL;
+		}
+	} else {
+		proxy_error("Error on %s : %s\n", buff, error);
+	}
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+	free(buff);
+	return ret;
+}
+
 void * MySQL_Monitor::monitor_read_only() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
@@ -1766,22 +1947,26 @@ void * MySQL_Monitor::monitor_read_only() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
-				mmsd->task_id = MON_READ_ONLY; // default
-				if (r->fields[3]) {
-					if (strcasecmp(r->fields[3],(char *)"innodb_read_only")==0) {
-						mmsd->task_id = MON_INNODB_READ_ONLY;
-					} else {
-						if (strcasecmp(r->fields[3],(char *)"super_read_only")==0) {
-							mmsd->task_id = MON_SUPER_READ_ONLY;
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[0],atoi(r->fields[1]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
+					mmsd->task_id = MON_READ_ONLY; // default
+					if (r->fields[3]) {
+						if (strcasecmp(r->fields[3],(char *)"innodb_read_only")==0) {
+							mmsd->task_id = MON_INNODB_READ_ONLY;
+						} else {
+							if (strcasecmp(r->fields[3],(char *)"super_read_only")==0) {
+								mmsd->task_id = MON_SUPER_READ_ONLY;
+							}
 						}
 					}
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_read_only_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
 				}
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_read_only_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
 				if (GloMyMon->shutdown) return NULL;
 			}
 		}
@@ -1889,19 +2074,19 @@ void * MySQL_Monitor::monitor_group_replication() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = Group_Replication_Hosts_resultset->rows.begin() ; it != Group_Replication_Hosts_resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
-				mmsd->writer_hostgroup=atoi(r->fields[0]);
-				mmsd->writer_is_also_reader=atoi(r->fields[4]);
-				mmsd->max_transactions_behind=atoi(r->fields[5]);
-				mmsd->mondb=monitordb;
-				//pthread_t thr_;
-				//if ( pthread_create(&thr_, &attr, monitor_read_only_thread, (void *)mmsd) != 0 ) {
-				//	perror("Thread creation monitor_read_only_thread");
-				//}
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_group_replication_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
+					mmsd->writer_hostgroup=atoi(r->fields[0]);
+					mmsd->writer_is_also_reader=atoi(r->fields[4]);
+					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_group_replication_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) {
 					pthread_mutex_unlock(&group_replication_mutex);
 					return NULL;
@@ -2005,15 +2190,19 @@ void * MySQL_Monitor::monitor_galera() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = Galera_Hosts_resultset->rows.begin() ; it != Galera_Hosts_resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
-				mmsd->writer_hostgroup=atoi(r->fields[0]);
-				mmsd->writer_is_also_reader=atoi(r->fields[4]);
-				mmsd->max_transactions_behind=atoi(r->fields[5]);
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_galera_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
+					mmsd->writer_hostgroup=atoi(r->fields[0]);
+					mmsd->writer_is_also_reader=atoi(r->fields[4]);
+					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_galera_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) {
 					pthread_mutex_unlock(&galera_mutex);
 					return NULL;
@@ -2100,12 +2289,16 @@ void * MySQL_Monitor::monitor_replication_lag() {
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1], atoi(r->fields[2]), NULL, atoi(r->fields[4]), atoi(r->fields[0]));
-				mmsd->mondb=monitordb;
-				WorkItem* item;
-				item=new WorkItem(mmsd,monitor_replication_lag_thread);
-				GloMyMon->queue.add(item);
-				usleep(us);
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[1], atoi(r->fields[2]), NULL, atoi(r->fields[4]), atoi(r->fields[0]));
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_replication_lag_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+				}
 				if (GloMyMon->shutdown) return NULL;
 			}
 		}
@@ -2178,11 +2371,12 @@ __monitor_run:
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, 0);
-		threads[i]->start(64,false);
+		threads[i]->start(128,false);
 	}
+	started_threads += num_threads;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
-	pthread_attr_setstacksize (&attr, 64*1024);
+	pthread_attr_setstacksize (&attr, 128*1024);
 	pthread_t monitor_connect_thread;
 	pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL);
 	pthread_t monitor_ping_thread;
@@ -2202,28 +2396,70 @@ __monitor_run:
 			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 				mysql_thr->refresh_variables();
+				unsigned int old_num_threads = num_threads;
+				unsigned int threads_min = (unsigned int)mysql_thread___monitor_threads_min;
+				if (old_num_threads < threads_min) {
+					num_threads = threads_min;
+					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
+					started_threads += (num_threads - old_num_threads);
+					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
+						threads[i] = new ConsumerThread(queue, 0);
+						threads[i]->start(128,false);
+					}
+				}
 			}
 		}
 		monitor_enabled=mysql_thread___monitor_enabled;
 		if ( rand()%5 == 0) { // purge once in a while
 			My_Conn_Pool->purge_idle_connections();
 		}
-		usleep(500000);
+		usleep(200000);
 		int qsize=queue.size();
-		if (qsize>500) {
-			proxy_error("Monitor queue too big, try to reduce frequency of checks: %d\n", qsize);
-			qsize=qsize/250;
-			proxy_error("Monitor is starting %d helper threads\n", qsize);
-			ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
-			for (int i=0; i<qsize; i++) {
-				threads_aux[i] = new ConsumerThread(queue, 245);
-				threads_aux[i]->start(64,false);
+		if (qsize > mysql_thread___monitor_threads_queue_maxsize/4) {
+			proxy_warning("Monitor queue too big: %d\n", qsize);
+			unsigned int threads_max = (unsigned int)mysql_thread___monitor_threads_max;
+			if (threads_max > num_threads) {
+				unsigned int new_threads = threads_max - num_threads;
+				if ((qsize / 4) < new_threads) {
+					new_threads = qsize/4; // try to not burst threads
+				}
+				if (new_threads) {
+					unsigned int old_num_threads = num_threads;
+					num_threads += new_threads;
+					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
+					started_threads += new_threads;
+					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
+						threads[i] = new ConsumerThread(queue, 0);
+						threads[i]->start(128,false);
+					}
+				}
 			}
-			for (int i=0; i<qsize; i++) {
-				threads_aux[i]->join();
-				delete threads_aux[i];
+			// check again. Do we need also aux threads?
+			usleep(50000);
+			qsize=queue.size();
+			if (qsize > mysql_thread___monitor_threads_queue_maxsize) {
+				qsize=qsize/50;
+				unsigned int threads_max = (unsigned int)mysql_thread___monitor_threads_max;
+				if ((qsize + num_threads) > (threads_max * 2)) { // allow a small bursts
+					qsize = threads_max * 2 - num_threads;
+				}
+				if (qsize > 0) {
+					proxy_info("Monitor is starting %d helper threads\n", qsize);
+					ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
+					aux_threads = qsize;
+					started_threads += aux_threads;
+					for (int i=0; i<qsize; i++) {
+						threads_aux[i] = new ConsumerThread(queue, 245);
+						threads_aux[i]->start(128,false);
+					}
+					for (int i=0; i<qsize; i++) {
+						threads_aux[i]->join();
+						delete threads_aux[i];
+					}
+					free(threads_aux);
+					aux_threads = 0;
+				}
 			}
-			free(threads_aux);
 		}
 	}
 	for (unsigned int i=0;i<num_threads; i++) {
@@ -2326,6 +2562,72 @@ bool MyGR_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct
 	return ret;
 }
 
+Galera_monitor_node::Galera_monitor_node(char *_a, int _p, int _whg) {
+	addr=NULL;
+	if (_a) {
+		addr=strdup(_a);
+	}
+	port=_p;
+	idx_last_entry=-1;
+	writer_hostgroup=_whg;
+	int i;
+	for (i=0;i<Galera_Nentries;i++) {
+		last_entries[i].error=NULL;
+		last_entries[i].start_time=0;
+	}
+}
+
+Galera_monitor_node::~Galera_monitor_node() {
+	if (addr) {
+		free(addr);
+	}
+}
+
+// return true if status changed
+bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, int _local_state, bool _desync, bool _reject, bool _sst_donor_reject, char *_error) {
+	bool ret=false;
+	if (idx_last_entry==-1) ret=true;
+	int prev_last_entry=idx_last_entry;
+	idx_last_entry++;
+	if (idx_last_entry>=Galera_Nentries) {
+		idx_last_entry=0;
+	}
+	last_entries[idx_last_entry].start_time=_st;
+	last_entries[idx_last_entry].check_time=_ct;
+	last_entries[idx_last_entry].wsrep_local_recv_queue=_tb;
+	last_entries[idx_last_entry].primary_partition=_pp;
+	last_entries[idx_last_entry].read_only=_ro;
+	last_entries[idx_last_entry].wsrep_local_state = _local_state;
+	last_entries[idx_last_entry].wsrep_desync = _desync;
+	last_entries[idx_last_entry].wsrep_reject_queries = _reject;
+	last_entries[idx_last_entry].wsrep_sst_donor_rejects_queries = _sst_donor_reject;
+	if (last_entries[idx_last_entry].error) {
+		free(last_entries[idx_last_entry].error);
+		last_entries[idx_last_entry].error=NULL;
+	}
+	if (_error) {
+		last_entries[idx_last_entry].error=strdup(_error);	// we always copy
+	}
+	if (ret==false) {
+		if (last_entries[idx_last_entry].primary_partition != last_entries[prev_last_entry].primary_partition) {
+			ret=true;
+		}
+		if (last_entries[idx_last_entry].read_only != last_entries[prev_last_entry].read_only) {
+			ret=true;
+		}
+		if (
+			(last_entries[idx_last_entry].error && last_entries[prev_last_entry].error==NULL)
+			||
+			(last_entries[idx_last_entry].error==NULL && last_entries[prev_last_entry].error)
+			||
+			(last_entries[idx_last_entry].error && last_entries[prev_last_entry].error && strcmp(last_entries[idx_last_entry].error,last_entries[prev_last_entry].error))
+		) {
+			ret=true;
+		}
+	}
+	return ret;
+}
+
 void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 	sqlite3 *mondb=monitordb->get_db();
 	int rc;
@@ -2370,14 +2672,14 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
-	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
 	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
 	assert(rc==SQLITE_OK);
 	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
-	std::map<std::string, MyGR_monitor_node *>::iterator it2;
-	MyGR_monitor_node *node=NULL;
+	std::map<std::string, Galera_monitor_node *>::iterator it2;
+	Galera_monitor_node *node=NULL;
 	for (it2=GloMyMon->Galera_Hosts_Map.begin(); it2!=GloMyMon->Galera_Hosts_Map.end(); ++it2) {
 		std::string s=it2->first;
 		node=it2->second;
@@ -2385,7 +2687,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 		std::string host=s.substr(0,found);
 		std::string port=s.substr(found+1);
 		int i;
-		for (i=0; i<MyGR_Nentries; i++) {
+		for (i=0; i<Galera_Nentries; i++) {
 			if (node->last_entries[i].start_time) {
 				rc=sqlite3_bind_text(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement1, 2, atoi(port.c_str())); assert(rc==SQLITE_OK);
@@ -2393,8 +2695,12 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 				rc=sqlite3_bind_int64(statement1, 4, node->last_entries[i].check_time ); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement1, 5, ( node->last_entries[i].primary_partition ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_text(statement1, 6, ( node->last_entries[i].read_only ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 7, node->last_entries[i].transactions_behind ); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 8, node->last_entries[i].error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 7, node->last_entries[i].wsrep_local_recv_queue ); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 8, node->last_entries[i].wsrep_local_state ); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 9, ( node->last_entries[i].wsrep_desync ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 10, ( node->last_entries[i].wsrep_reject_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 11, ( node->last_entries[i].wsrep_sst_donor_rejects_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 12, node->last_entries[i].error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				SAFE_SQLITE3_STEP2(statement1);
 				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
@@ -2402,4 +2708,63 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 		}
 	}
 	pthread_mutex_unlock(&GloMyMon->galera_mutex);
+}
+
+char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
+/*
+	sqlite3 *mondb=monitordb->get_db();
+	int rc;
+	//char *query=NULL;
+	char *query1=NULL;
+	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+	sqlite3_stmt *statement1=NULL;
+*/
+	char *str = NULL;
+	pthread_mutex_lock(&GloMyMon->galera_mutex);
+/*
+	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	assert(rc==SQLITE_OK);
+	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
+*/
+	std::map<std::string, Galera_monitor_node *>::iterator it2;
+	Galera_monitor_node *node=NULL;
+	Galera_monitor_node *writer_node=NULL;
+	unsigned int writer_nodes = 0;
+	unsigned long long curtime = monotonic_time();
+	unsigned long long ti = mysql_thread___monitor_galera_healthcheck_interval;
+	ti *= 2;
+	std::string s = "";
+	for (it2=GloMyMon->Galera_Hosts_Map.begin(); it2!=GloMyMon->Galera_Hosts_Map.end(); ++it2) {
+		node=it2->second;
+		if (node->writer_hostgroup == writer_hostgroup) {
+			Galera_status_entry_t * st = node->last_entry();
+			if (st) {
+				if (st->start_time >= curtime - ti) { // only consider recent checks
+					if (st->error == NULL) { // no check error
+						if (st->read_only == false) { // the server is writable (this check is arguable)
+							if (st->wsrep_sst_donor_rejects_queries == false) {
+								if (writer_nodes == 0) {
+									s=it2->first;
+									writer_node = node;
+								}
+								writer_nodes++;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if (writer_node && writer_nodes == 1) {
+		// we have only one node let
+		// we don't care if status
+		str = strdup(s.c_str());
+/*
+		std::size_t found=s.find_last_of(":");
+		std::string host=s.substr(0,found);
+		std::string port=s.substr(found+1);
+*/
+	}
+	pthread_mutex_unlock(&GloMyMon->galera_mutex);
+	return str;
 }

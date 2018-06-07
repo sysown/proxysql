@@ -655,6 +655,7 @@ void * mysql_shared_query_cache_funct(void *arg) {
 
 
 void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
+	GloVars.errorlog = NULL;
 	GloVars.parse(argc,argv);
 	GloVars.process_opts_pre();
 	GloVars.restart_on_missing_heartbeats = 10; // default
@@ -678,6 +679,15 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			rc=root.lookupValue("execute_on_exit_failure", execute_on_exit_failure);
 			if (rc==true) {
 				GloVars.execute_on_exit_failure=strdup(execute_on_exit_failure.c_str());
+			}
+		}
+		if (root.exists("errorlog")==true) {
+			// restart_on_missing_heartbeats datadir from config file
+			string errorlog_path;
+			bool rc;
+			rc=root.lookupValue("errorlog", errorlog_path);
+			if (rc==true) {
+				GloVars.errorlog = strdup(errorlog_path.c_str());
 			}
 		}
 	} else {
@@ -732,8 +742,10 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.statsdb_disk=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql_stats.db")+2);
 	sprintf(GloVars.statsdb_disk,"%s/%s",GloVars.datadir, (char *)"proxysql_stats.db");
 
-	GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
-	sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
+	if (GloVars.errorlog == NULL) {
+		GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
+		sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
+	}
 
 	GloVars.pid=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.pid")+2);
 	sprintf(GloVars.pid,"%s/%s",GloVars.datadir, (char *)"proxysql.pid");

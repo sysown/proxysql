@@ -709,6 +709,7 @@ handler_again:
 			}
 			break;
 		case ASYNC_CHANGE_USER_SUCCESSFUL:
+			mysql->server_status = SERVER_STATUS_AUTOCOMMIT; // we reset this due to bug https://jira.mariadb.org/browse/CONC-332
 			break;
 		case ASYNC_CHANGE_USER_FAILED:
 			break;

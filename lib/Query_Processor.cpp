@@ -1827,9 +1827,8 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 		string s = r->fields[0];
 		s.append(rand_del);
 		s.append(r->fields[1]);
-		s.append(rand_del);
+		s.append("---");
 		s.append(r->fields[2]);
-		s.append(rand_del);
 		int destination_hostgroup = atoi(r->fields[3]);
 		rules_fast_routing[s] = destination_hostgroup;
 	}
