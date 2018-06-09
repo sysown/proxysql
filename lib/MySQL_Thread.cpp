@@ -3256,11 +3256,34 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
 						// only if we aren't using MariaDB Client Library
 						int rb = 0;
-						rb = myds->read_from_net();
-						if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
-							status_variables.queries_frontends_bytes_recv += rb;
-						}
-						myds->read_pkts();
+						do {
+							rb = myds->read_from_net();
+							if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
+								status_variables.queries_frontends_bytes_recv += rb;
+							}
+							myds->read_pkts();
+
+							if (rb > 0 && myds->myds_type == MYDS_BACKEND) {
+								if (myds->sess->session_fast_forward) {
+									struct pollfd _fds;
+									nfds_t _nfds = 1;
+									_fds.fd = mypolls.fds[n].fd;
+									_fds.events = POLLIN;
+									_fds.revents = 0;
+									int _rc = poll(&_fds, _nfds, 0);
+									if ((_rc > 0) && _fds.revents == POLLIN) {
+										// there is more data
+									} else {
+										rb = 0; // exit loop
+									}
+								} else {
+									rb = 0; // exit loop
+								}
+							} else {
+								rb = 0; // exit loop
+							}
+						} while (rb > 0);
+
 					} else {
 						if (mypolls.fds[n].revents) {
 							myds->myconn->handler(mypolls.fds[n].revents);

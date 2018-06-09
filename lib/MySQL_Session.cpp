@@ -2519,12 +2519,14 @@ handler_again:
 				// register the mysql_data_stream
 				thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
+			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
+			while (mybe->server_myds->PSarrayIN->len) mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len-1,NULL);
 			// copy all packets from backend to frontend
-			for (unsigned int k=0; k < mybe->server_myds->PSarrayIN->len; k++) {
-				PtrSize_t pkt;
-				mybe->server_myds->PSarrayIN->remove_index(0,&pkt);
-				client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-			}
+			//for (unsigned int k=0; k < mybe->server_myds->PSarrayIN->len; k++) {
+			//	PtrSize_t pkt;
+			//	mybe->server_myds->PSarrayIN->remove_index(0,&pkt);
+			//	client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+			//}
 			break;
 		case CONNECTING_CLIENT:
 			//fprintf(stderr,"CONNECTING_CLIENT\n");

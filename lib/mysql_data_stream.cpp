@@ -25,6 +25,9 @@ struct bio_st {
 };
 
 
+#define RESULTSET_BUFLEN_DS_16K 16000
+#define RESULTSET_BUFLEN_DS_1M 1000*1024
+
 extern MySQL_Threads_Handler *GloMTH;
 
 #ifdef DEBUG
@@ -775,10 +778,41 @@ int MySQL_Data_Stream::buffer2array() {
 	if (fast_mode) {
 		queueIN.pkt.size=queue_data(queueIN);
 		ret=queueIN.pkt.size;
-		queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
-		memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
-		queue_r(queueIN, queueIN.pkt.size);
-		PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+		if (ret >= RESULTSET_BUFLEN_DS_16K) {
+			// legacy approach
+			queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
+			memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
+			queue_r(queueIN, queueIN.pkt.size);
+			PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+		} else {
+			if (PSarrayIN->len == 0) {
+				// it is empty, create a new block
+				// we allocate RESULTSET_BUFLEN_DS_16K instead of queueIN.pkt.size
+				// the block may be used later
+				queueIN.pkt.ptr=l_alloc(RESULTSET_BUFLEN_DS_16K);
+				memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
+				queue_r(queueIN, queueIN.pkt.size);
+				PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+			} else {
+				// get a pointer to the last entry in PSarrayIN
+				PtrSize_t *last_pkt = PSarrayIN->index(PSarrayIN->len - 1);
+				if ((last_pkt->size + queueIN.pkt.size) > RESULTSET_BUFLEN_DS_16K) {
+					// there is not enough space, create a new block
+					// we allocate RESULTSET_BUFLEN_DS_16K instead of queueIN.pkt.size
+					// the block may be used later
+					queueIN.pkt.ptr=l_alloc(RESULTSET_BUFLEN_DS_16K);
+					memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
+					queue_r(queueIN, queueIN.pkt.size);
+					PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+				} else {
+					// we append the packet at the end of the previous packet
+					memcpy(last_pkt->ptr+last_pkt->size, queue_r_ptr(queueIN) , queueIN.pkt.size);
+					last_pkt->size += queueIN.pkt.size;
+					queue_r(queueIN, queueIN.pkt.size);
+
+				}
+			}
+		}
 		queueIN.pkt.size=0;
 		return ret;
 	}
@@ -1120,8 +1154,6 @@ unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
 	return mybuff;
 };
 
-#define RESULTSET_BUFLEN_DS_16K 16000
-#define RESULTSET_BUFLEN_DS_1M 1000*1024
 void MySQL_Data_Stream::buffer2resultset(unsigned char *ptr, unsigned int size) {
 	unsigned char *__ptr=ptr;
 	mysql_hdr hdr;
