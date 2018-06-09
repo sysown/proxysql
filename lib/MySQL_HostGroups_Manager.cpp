@@ -4020,10 +4020,12 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 			sprintf(buf,"%llu", (int)gtid_si->events_read);
 			pta[3]=strdup(buf);
 		} else {
-			string host = it->first;
+			std::string s = it->first;
+			std::size_t found=s.find_last_of(":");
+			std::string host=s.substr(0,found);
+			std::string port=s.substr(found+1);
 			pta[0]=strdup(host.c_str());
-			sprintf(buf,"%d", (int)0);
-			pta[1]=strdup(buf);
+			pta[1]=strdup(port.c_str());
 			pta[2]=strdup((char *)"NULL");
 			pta[3]=strdup((char *)"0");
 		}
