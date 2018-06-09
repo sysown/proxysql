@@ -1300,6 +1300,33 @@ bool ProxySQL_daemonize_phase3() {
 
 int main(int argc, const char * argv[]) {
 
+
+	struct rlimit nlimit;
+	{
+		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
+		if (rc == 0) {
+			if (nlimit.rlim_cur <= 1024) {
+				proxy_error("Current RLIMIT_NOFILE is very low: %d .  Tune RLIMIT_NOFILE correctly before running ProxySQL\n", nlimit.rlim_cur);
+				if (nlimit.rlim_max > nlimit.rlim_cur) {
+					if (nlimit.rlim_max >= 102400) {
+						nlimit.rlim_cur = 102400;
+					} else {
+						nlimit.rlim_cur = nlimit.rlim_max;
+					}
+					proxy_warning("Automatically setting RLIMIT_NOFILE to %d\n", nlimit.rlim_cur);
+					rc = setrlimit(RLIMIT_NOFILE, &nlimit);
+					if (rc) {
+						proxy_error("Unable to increase RLIMIT_NOFILE: %s: \n", strerror(errno));
+					}
+				} else {
+					proxy_error("Unable to increase RLIMIT_NOFILE because rlim_max is low: %d\n", nlimit.rlim_max);
+				}
+			}
+		} else {
+			proxy_error("Call to getrlimit failed: %s\n", strerror(errno));
+		}
+	}
+
 	{
 		cpu_timer t;
 		ProxySQL_Main_init();
