@@ -1158,7 +1158,6 @@ void MySQL_Data_Stream::buffer2resultset(unsigned char *ptr, unsigned int size) 
 	unsigned char *__ptr=ptr;
 	mysql_hdr hdr;
 	unsigned int l;
-	void *pkt;
 	void *buff = NULL;
 	unsigned int bl;
 	unsigned int bf;
@@ -1184,7 +1183,7 @@ void MySQL_Data_Stream::buffer2resultset(unsigned char *ptr, unsigned int size) 
 			buff = malloc(bl);
 			bf = bl;
 		}
-		memcpy(buff + (bl-bf), __ptr, l);
+		memcpy((char *)buff + (bl-bf), __ptr, l);
 		bf -= l;
 		__ptr+=l;
 /*
