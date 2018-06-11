@@ -1013,6 +1013,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					char *m=(char *)malloc(strlen(s)+strlen(name)+1);
 					sprintf(m,s,name);
 					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
 				}
 				free(name);
 				return false;
@@ -2145,11 +2146,13 @@ SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename
 	}
 
 	if (resultset==NULL) {
+		free(q2);
 		free(tn);
 		return NULL;
 	}
 
 	if (resultset->rows_count==0) {
+		free(q2);
 		free(tn);
 		delete resultset;
 		*err=strdup((char *)"Table does not exist");
@@ -2214,16 +2217,19 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	}
 
 	if (resultset==NULL) {
+		free(q2);
 		free(tn);
 		return NULL;
 	}
 
 	if (resultset->rows_count==0) {
+		free(q2);
 		free(tn);
 		delete resultset;
 		*err=strdup((char *)"Table does not exist");
 		return NULL;
 	}
+	free(q2);
 	SQLite3_result *result=new SQLite3_result(18);
 	result->add_column_definition(SQLITE_TEXT,"Name");
 	result->add_column_definition(SQLITE_TEXT,"Engine");
@@ -2619,6 +2625,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			query=(char *)malloc(query_length);
 			memcpy(query,new_query->c_str(),query_length-1);
 			query[query_length-1]='\0';
+			delete new_query;
 			goto __run_query;
 		}
 	}
@@ -2634,6 +2641,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			memcpy(query,new_query->c_str(),query_length-1);
 			query[query_length-1]='\0';
 			GloAdmin->stats___mysql_global();
+			delete new_query;
 			goto __run_query;
 		}
 	}
@@ -2648,6 +2656,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			query=(char *)malloc(query_length);
 			memcpy(query,new_query->c_str(),query_length-1);
 			query[query_length-1]='\0';
+			delete new_query;
 			goto __run_query;
 		}
 	}
@@ -2662,6 +2671,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			query=(char *)malloc(query_length);
 			memcpy(query,new_query->c_str(),query_length-1);
 			query[query_length-1]='\0';
+			delete new_query;
 			goto __run_query;
 		}
 	}
@@ -7373,6 +7383,7 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 		sprintf(query,q, prefix, n, value_string.c_str());
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
+		free(query);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	free(groupname);

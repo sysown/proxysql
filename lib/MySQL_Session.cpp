@@ -3499,6 +3499,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1040,(char *)"42000", b);
 						free(b);
 					}
+					free(addr);
 					free(client_addr);
 				} else {
 					if (use_ssl == true && is_encrypted == false) {
