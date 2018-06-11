@@ -188,6 +188,7 @@ class MySQL_Monitor {
 	void populate_monitor_mysql_server_group_replication_log();
 	void populate_monitor_mysql_server_galera_log();
 	char * galera_find_last_node(int);
+	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);
 };
 
