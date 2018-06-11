@@ -63,7 +63,7 @@ int Thread::join()
     if (m_running == 1) {
         result = pthread_join(m_tid, NULL);
         if (result == 0) {
-            m_detached = 0;
+            m_running = 0;
         }
     }
     return result;

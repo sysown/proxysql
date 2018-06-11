@@ -3822,6 +3822,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				if (rc && ( i==0 || i==1) ) {
 					//fprintf(stderr,"sql_log_bin=%d\n", i);
 					client_myds->myconn->options.sql_log_bin=i;
+#ifdef DEBUG
+					proxy_info("Setting SQL_LOG_BIN to %d\n", i);
+#endif
 					if (command_type == _MYSQL_COM_QUERY) {
 						client_myds->DSS=STATE_QUERY_SENT_NET;
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -3834,8 +3837,23 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						return true;
 					}
 				} else {
-					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
-					return false;
+					int kq = 0;
+					kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"SET @@SESSION.SQL_LOG_BIN = @MYSQLDUMP_TEMP_LOG_BIN;" , CurrentQuery.QueryLength);
+					if (kq == 0) {
+						client_myds->DSS=STATE_QUERY_SENT_NET;
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
+						l_free(pkt->size,pkt->ptr);
+						RequestEnd(NULL);
+						return true;
+					} else {
+						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+						return false;
+					}
 				}
 			}
 			if (match_regexes && match_regexes[1]->match(dig)) {
@@ -3988,8 +4006,23 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return true;
 							}
 						} else {
-							proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
-							return false;
+							int kq = 0;
+							kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"/*!40101 SET SQL_MODE=@OLD_SQL_MODE */" , CurrentQuery.QueryLength);
+							if (kq == 0) {
+								client_myds->DSS=STATE_QUERY_SENT_NET;
+								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+								if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
+								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+								client_myds->DSS=STATE_SLEEP;
+								status=WAITING_CLIENT_DATA;
+								l_free(pkt->size,pkt->ptr);
+								RequestEnd(NULL);
+								return true;
+							} else {
+								string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+								proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+								return false;
+							}
 						}
 					}
 				}
@@ -4006,6 +4039,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				delete opt2;
 				if (rc) {
 					//fprintf(stderr,"time_zone='%s'\n", s.c_str());
+#ifdef DEBUG
+					proxy_info("Setting TIME_ZONE to %s\n", s.c_str());
+#endif
 					uint32_t time_zone_int=SpookyHash::Hash32(s.c_str(),s.length(),10);
 					if (client_myds->myconn->options.time_zone_int != time_zone_int) {
 						//fprintf(stderr,"time_zone_int='%u'\n", time_zone_int);
@@ -4027,8 +4063,23 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						return true;
 					}
 				} else {
-					proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nq.c_str());
-					return false;
+					int kq = 0;
+					kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */" , CurrentQuery.QueryLength);
+					if (kq == 0) {
+						client_myds->DSS=STATE_QUERY_SENT_NET;
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
+						l_free(pkt->size,pkt->ptr);
+						RequestEnd(NULL);
+						return true;
+					} else {
+						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+						return false;
+					}
 				}
 			}
 		}

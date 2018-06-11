@@ -44,7 +44,7 @@ COREDUMPER_DIR=$(DEPS_PATH)/google-coredumper/google-coredumper
 COREDUMPER_IDIR=$(COREDUMPER_DIR)/src
 COREDUMPER_LDIR=$(COREDUMPER_DIR)/.libs
 
-CURL_DIR=$(DEPS_PATH)/curl/curl/
+CURL_DIR=$(DEPS_PATH)/curl/curl
 CURL_IDIR=$(CURL_DIR)/include
 CURL_LDIR=$(CURL_DIR)/lib/.libs
 
