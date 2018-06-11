@@ -382,4 +382,5 @@ void SQLite3_result::dump_to_stderr() {
 		s.append("+");
 	}
 	fprintf(stderr,"%s\n",s.c_str());
+	free(columns_lengths);
 }
