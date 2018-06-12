@@ -3995,7 +3995,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 								SQLite3_result *resultset2=NULL;
 								q = (char *)"SELECT hostname, port FROM mysql_servers_incoming WHERE hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 								query=(char *)malloc(strlen(q) + 256);
-								sprintf(query,q,info->writer_hostgroup, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
+								sprintf(query,q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 								mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset2);
 								free(query);
 								if (resultset2) {
