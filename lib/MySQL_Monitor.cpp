@@ -1286,13 +1286,13 @@ __end_process_galera_result:
 					}
 				}
 			} else {
-				if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
+				//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
 					if (wsrep_reject_queries) {
 						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
-					} else {
-						// wsrep_sst_donor_rejects_queries
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
-					}
+				//	} else {
+				//		// wsrep_sst_donor_rejects_queries
+				//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
+				//	}
 				} else {
 					if (read_only==true) {
 						if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
@@ -2771,16 +2771,12 @@ char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
 
 std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_hostgroup) {
 	std::vector<string> * result = new std::vector<string>();
-//	std::vector<Galera_monitor_node *> tmp_list;
-	char *str = NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
 	std::map<std::string, Galera_monitor_node *>::iterator it2;
 	Galera_monitor_node *node=NULL;
-	unsigned int writer_nodes = 0;
 	unsigned long long curtime = monotonic_time();
 	unsigned long long ti = mysql_thread___monitor_galera_healthcheck_interval;
 	ti *= 2;
-	//std::string s = "";
 	for (it2=GloMyMon->Galera_Hosts_Map.begin(); it2!=GloMyMon->Galera_Hosts_Map.end(); ++it2) {
 		node=it2->second;
 		if (node->writer_hostgroup == writer_hostgroup) {
@@ -2790,7 +2786,6 @@ std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_
 					if (st->error == NULL) { // no check error
 						if (st->read_only == false) { // the server is writable (this check is arguable)
 							if (st->wsrep_sst_donor_rejects_queries == false) {
-								//tmp_list.push_back(node);
 								string s = it2->first;
 								result->push_back(s);
 							}
