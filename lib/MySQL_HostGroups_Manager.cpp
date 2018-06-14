@@ -264,7 +264,7 @@ bool GTID_Server_Data::readall() {
 		int myerr = errno;
 		proxy_error("Read returned %d bytes, error %d\n", rc, myerr);
 		if (
-			//(rc == 0) ||
+			(rc == 0) ||
 			(rc==-1 && myerr != EINTR && myerr != EAGAIN)
 		) {
 			ret = false;
