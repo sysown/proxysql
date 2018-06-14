@@ -2781,7 +2781,7 @@ __mysql_thread_exit_add_mirror:
 					}
 				}
 #endif // IDLE_THREADS
-				if (myds->wait_until) {
+				if (unlikely(myds->wait_until)) {
 					if (myds->wait_until > curtime) {
 						if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
 							mypolls.poll_timeout= myds->wait_until - curtime;
@@ -2789,7 +2789,7 @@ __mysql_thread_exit_add_mirror:
 					}
 				}
 				if (myds->sess) {
-					if (myds->sess->pause_until > 0) {
+					if (unlikely(myds->sess->pause_until > 0)) {
 						if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
 							mypolls.poll_timeout= myds->sess->pause_until - curtime;
 						}
@@ -2808,7 +2808,7 @@ __mysql_thread_exit_add_mirror:
 						myds->set_pollout();
 					}
 				}
-				if (myds->sess->pause_until > curtime) {
+				if (unlikely(myds->sess->pause_until > curtime)) {
 					if (myds->myds_type==MYDS_FRONTEND) {
 						myds->remove_pollout();
 					}
