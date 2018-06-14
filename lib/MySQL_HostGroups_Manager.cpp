@@ -3810,6 +3810,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	bool found_reader=false;
 	int read_HG=-1;
 	bool need_converge=false;
+	int max_writers = 0;
 	if (resultset) {
 		// let's get info about this cluster
 		pthread_mutex_lock(&Galera_Info_mutex);
@@ -3822,6 +3823,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			read_HG=info->reader_hostgroup;
 			need_converge=info->need_converge;
 			info->need_converge=false;
+			max_writers = info->max_writers;
 		}
 		pthread_mutex_unlock(&Galera_Info_mutex);
 
@@ -3839,6 +3841,26 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				}
 			}
 		}
+
+		if (need_converge == false) {
+			SQLite3_result *resultset2=NULL;
+			q = (char *)"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count) {
+					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int nwriters = atoi(r->fields[0]);
+						if (nwriters > max_writers) {
+							proxy_warning("Galera: too many writers in HG %d. Max=%d, current=%d\n", _writer_hostgroup, max_writers, nwriters);
+							need_converge = true;
+						}
+					}
+				}
+				delete resultset2;
+			}
+		}
+
 		if (need_converge==false) {
 			if (found_writer) { // maybe no-op
 				if (writer_is_also_reader==found_reader) { // either both true or both false
