@@ -2795,23 +2795,22 @@ __mysql_thread_exit_add_mirror:
 						}
 					}
 				}
-			}
-			if (myds) myds->revents=0;
-			if (mypolls.myds[n] && mypolls.myds[n]->myds_type!=MYDS_LISTENER) {
-				if (myds && myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
-					mypolls.myds[n]->set_pollout();
+			myds->revents=0;
+			if (myds->myds_type!=MYDS_LISTENER) {
+				if (myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
+					myds->set_pollout();
 				} else {
-					if (mypolls.myds[n]->DSS > STATE_MARIADB_BEGIN && mypolls.myds[n]->DSS < STATE_MARIADB_END) {
+					if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END) {
 						mypolls.fds[n].events = POLLIN;
 						if (mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
 							mypolls.fds[n].events |= POLLOUT;
 					} else {
-						mypolls.myds[n]->set_pollout();
+						myds->set_pollout();
 					}
 				}
-				if (myds && myds->sess->pause_until > curtime) {
+				if (myds->sess->pause_until > curtime) {
 					if (myds->myds_type==MYDS_FRONTEND) {
-						mypolls.myds[n]->remove_pollout();
+						myds->remove_pollout();
 					}
 					if (myds->myds_type==MYDS_BACKEND) {
 						if (mysql_thread___throttle_ratio_server_to_client) {
@@ -2819,7 +2818,7 @@ __mysql_thread_exit_add_mirror:
 						}
 					}
 				}
-				if (myds && myds->myds_type==MYDS_BACKEND) {
+				if (myds->myds_type==MYDS_BACKEND) {
 					if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
 						unsigned int buffered_data=0;
 						buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
@@ -2832,7 +2831,7 @@ __mysql_thread_exit_add_mirror:
 						}
 					}
 				}
-
+			}
 			}
 			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 		}
