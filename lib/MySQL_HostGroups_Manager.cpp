@@ -3643,12 +3643,12 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				char *q1 = NULL;
 				char *q2 = NULL;
 				char *error=NULL;
-				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
-				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers_incoming.comment FROM mysql_servers_incoming JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
 				query = (char *)malloc(strlen(q2)+128);
 				sprintf(query,q1,_writer_hostgroup);
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
-				if (error = NULL) {
+				if (error == NULL) {
 					if (resultset_servers) {
 						checksum_current = resultset_servers->raw_checksum();
 					}
@@ -3659,7 +3659,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				}
 				sprintf(query,q2,_writer_hostgroup);
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
-				if (error = NULL) {
+				if (error == NULL) {
 					if (resultset_servers) {
 						checksum_incoming = resultset_servers->raw_checksum();
 					}
