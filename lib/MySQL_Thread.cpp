@@ -2898,6 +2898,7 @@ __run_skip_1a:
 		GloMyLogger->flush();
 
 		pre_poll_time=curtime;
+		int ttw = ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout );
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events,0,sizeof(struct epoll_event)*MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -2906,9 +2907,9 @@ __run_skip_1a:
 		} else {
 #endif // IDLE_THREADS
 		//this is the only portion of code not protected by a global mutex
-		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 > (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout )  );
+		proxy_debug(PROXY_DEBUG_NET,5,"Calling poll with timeout %d\n", ttw );
 		// poll is called with a timeout of mypolls.poll_timeout if set , or mysql_thread___poll_timeout
-		rc=poll(mypolls.fds,mypolls.len, ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout ) );
+		rc=poll(mypolls.fds,mypolls.len, ttw);
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
 #ifdef IDLE_THREADS
 		}
@@ -2929,7 +2930,7 @@ __run_skip_1a:
 #ifdef IDLE_THREADS
 			idle_maintenance_thread==false &&
 #endif // IDLE_THREADS
-			(curtime >= pre_poll_time + mypolls.poll_timeout)) {
+			(curtime >= (pre_poll_time + ttw))) {
 				poll_timeout_bool=true;
 			}
 		unsigned int maintenance_interval = 1000000; // hardcoded value for now
