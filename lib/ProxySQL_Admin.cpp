@@ -192,9 +192,11 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_4_4 "CREATE TABLE mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 // mysql_servers in v2.0.0
-#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0 "CREATE TABLE mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0a "CREATE TABLE mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0b "CREATE TABLE mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0b
 
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_3_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_4_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
@@ -8198,6 +8200,8 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v110");
 		// create new table
 		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
+		// fix bug #1224
+		configdb->execute("UPDATE mysql_servers_v110 SET weight = 10000000 WHERE weight > 10000000");
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag FROM mysql_servers_v110");
 	}
@@ -8212,6 +8216,8 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v120");
 		// create new table
 		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
+		// fix bug #1224
+		configdb->execute("UPDATE mysql_servers_v120 SET weight = 10000000 WHERE weight > 10000000");
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms FROM mysql_servers_v120");
 	}
@@ -8222,12 +8228,14 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
 		//drop any existing table with suffix _v122
 		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v122");
-                // rename current table to add suffix _v122
-                configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v122");
-                // create new table
-                configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
-                // copy fields from old table
-                configdb->execute("INSERT OR IGNORE INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_v122");
+		// rename current table to add suffix _v122
+		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v122");
+		// create new table
+		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
+		// fix bug #1224
+		configdb->execute("UPDATE mysql_servers_v122 SET weight = 10000000 WHERE weight > 10000000");
+		// copy fields from old table
+		configdb->execute("INSERT OR IGNORE INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_v122");
 	}
 	rci=configdb->check_table_structure((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V1_4_4); // 1.4.4 has the same column of 1.2.2
 	if (rci) {
@@ -8236,12 +8244,30 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
 		//drop any existing table with suffix _v144
 		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v144");
-                // rename current table to add suffix _v144
-                configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v144");
-                // create new table
-                configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
-                // copy fields from old table
-                configdb->execute("INSERT OR IGNORE INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_v144");
+		// rename current table to add suffix _v144
+		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v144");
+		// create new table
+		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
+		// fix bug #1224
+		configdb->execute("UPDATE mysql_servers_v144 SET weight = 10000000 WHERE weight > 10000000");
+		// copy fields from old table
+		configdb->execute("INSERT OR IGNORE INTO mysql_servers (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_v144");
+	}
+	rci=configdb->check_table_structure((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_0a);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version 2.0.0a of table mysql_servers\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
+		//drop any existing table with suffix _v200a
+		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v200a");
+		// rename current table to add suffix _v200a
+		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v200a");
+		// create new table
+		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
+		// fix bug #1224
+		configdb->execute("UPDATE mysql_servers_v200a SET weight = 10000000 WHERE weight > 10000000");
+		// copy fields from old table
+		configdb->execute("INSERT OR IGNORE INTO mysql_servers SELECT * FROM mysql_servers_v200a");
 	}
 	rci=configdb->check_table_structure((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V1_0); // issue #643
 	if (rci) {
