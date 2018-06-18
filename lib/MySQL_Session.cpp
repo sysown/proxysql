@@ -1686,6 +1686,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}		
 	}
 	if (mybe->server_myds->myconn==NULL) {
+		thread->needs_session_ordering = true;
 		pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
 		*_rc=1;
 		return false;

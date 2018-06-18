@@ -201,6 +201,7 @@ class MySQL_Thread
 
 	bool epoll_thread;
 	bool poll_timeout_bool;
+	bool needs_session_ordering;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss

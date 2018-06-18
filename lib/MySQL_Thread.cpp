@@ -2981,10 +2981,10 @@ __run_skip_1a:
 #ifdef IDLE_THREADS
 		if (idle_maintenance_thread==false) {
 #endif // IDLE_THREADS
-			for (n=0; n<mysql_sessions->len; n++) {
-				MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
-				_sess->to_process=0;
-			}
+//			for (n=0; n<mysql_sessions->len; n++) {
+//				MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
+//				_sess->to_process=0;
+//			}
 #ifdef IDLE_THREADS
 		}
 #endif // IDLE_THREADS
@@ -3330,7 +3330,7 @@ void MySQL_Thread::process_all_sessions() {
 		sess_sort=false;
 	}
 #endif // IDLE_THREADS
-	if (sess_sort && mysql_sessions->len > 3) {
+	if (needs_session_ordering && sess_sort && mysql_sessions->len > 3) {
 		unsigned int a=0;
 		for (n=0; n<mysql_sessions->len; n++) {
 			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
@@ -3349,6 +3349,7 @@ void MySQL_Thread::process_all_sessions() {
 			}
 		}
 	}
+	needs_session_ordering = false; // reset here
 	for (n=0; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
 #ifdef DEBUG
@@ -3431,6 +3432,7 @@ void MySQL_Thread::process_all_sessions() {
 						delete sess;
 					}
 				}
+				sess->to_process=0;
 			} else {
 				if (sess->killed==true) {
 					// this is a special cause, if killed the session needs to be executed no matter if paused
@@ -3611,6 +3613,7 @@ MySQL_Thread::MySQL_Thread() {
 
 	last_maintenance_time=0;
 	maintenance_loop=true;
+	needs_session_ordering = false;
 
 	status_variables.backend_stmt_prepare=0;
 	status_variables.backend_stmt_execute=0;

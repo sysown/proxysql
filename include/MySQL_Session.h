@@ -123,12 +123,18 @@ class MySQL_Session
 	void * operator new(size_t);
 	void operator delete(void *);
 
+	MySQL_Backend *mybe;
+	unsigned long long pause_until;
+	bool mirror;
+	bool healthy;
+	bool to_process;
+	bool killed;
+
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;
 
 	// uint64_t
 	unsigned long long start_time;
-	unsigned long long pause_until;
 
 	unsigned long long idle_since;
 
@@ -136,7 +142,6 @@ class MySQL_Session
 	MySQL_Thread *thread;
 	Query_Processor_Output *qpo;
 	StatCounters *command_counters;
-	MySQL_Backend *mybe;
 	PtrArray *mybes;
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
@@ -146,7 +151,6 @@ class MySQL_Session
 	unsigned long long last_insert_id;
 	int last_HG_affected_rows;
 	enum session_status status;
-	int healthy;
 	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
@@ -156,18 +160,15 @@ class MySQL_Session
 	int active_transactions;
 	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
-	int to_process;
 	int pending_connect;
 	enum proxysql_session_type session_type;
 
 	// bool
 	bool autocommit;
-	bool killed;
 	//bool admin;
 	bool max_connections_reached;
 	bool client_authenticated;
 	bool connections_handler;
-	bool mirror;
 	//bool stats;
 	bool schema_locked;
 	bool transaction_persistent;

@@ -58,9 +58,13 @@ class MySQL_Data_Stream
 	void * operator new(size_t);
 	void operator delete(void *);
 
+	MySQL_Session *sess;  // pointer to the session using this data stream
+	unsigned long long wait_until;
+	ProxySQL_Poll *mypolls;
+	PtrSizeArray *PSarrayOUT;
+	queue_t queueOUT;
 	queue_t queueIN;
 	uint64_t pkts_recv; // counter of received packets
-	queue_t queueOUT;
 	uint64_t pkts_sent; // counter of sent packets
 
 	struct {
@@ -78,21 +82,17 @@ class MySQL_Data_Stream
 
 	PtrSize_t multi_pkt;
 
-	unsigned long long pause_until;
-	unsigned long long wait_until;
 	unsigned long long killed_at;
+	unsigned long long pause_until;
 	unsigned long long max_connect_time;
 
 	PtrSizeArray *PSarrayIN;
-	PtrSizeArray *PSarrayOUT;
 	//PtrSizeArray *PSarrayOUTpending;
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
 
-	ProxySQL_Poll *mypolls;
 	//int listener;
 	MySQL_Connection *myconn;
-	MySQL_Session *sess;  // pointer to the session using this data stream
 	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
 	SSL *ssl;
 	BIO *rbio_ssl;
