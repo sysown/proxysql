@@ -3700,7 +3700,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				}
 				wrunlock();
 			} else {
-				proxy_warning("Galera: skipping setting offline node %s:%d from hostroup %d because won't change the list of ONLINE nodes\n", _hostname, _port, _writer_hostgroup);
+				proxy_warning("Galera: skipping setting offline node %s:%d from hostgroup %d because won't change the list of ONLINE nodes\n", _hostname, _port, _writer_hostgroup);
 			}
 			GloAdmin->mysql_servers_wrunlock();
 			free(query);
@@ -3900,36 +3900,74 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				mydb->execute(query);
 			}
 			converge_galera_config(_writer_hostgroup);
-			commit();
-			wrlock();
-			SQLite3_result *resultset2=NULL;
-			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup);
-			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
-			if (resultset2) {
-				if (resultset2->rows_count) {
-					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
-						SQLite3_row *r=*it;
-						int writer_hostgroup=atoi(r->fields[0]);
-						int backup_writer_hostgroup=atoi(r->fields[1]);
-						int reader_hostgroup=atoi(r->fields[2]);
-						int offline_hostgroup=atoi(r->fields[3]);
-//						int max_writers=atoi(r->fields[4]);
-//						int int_writer_is_also_reader=atoi(r->fields[5]);
-						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-						sprintf(query,q,_writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
-						mydb->execute(query);
-						generate_mysql_servers_table(&writer_hostgroup);
-						generate_mysql_servers_table(&backup_writer_hostgroup);
-						generate_mysql_servers_table(&reader_hostgroup);
-						generate_mysql_servers_table(&offline_hostgroup);
+			uint64_t checksum_current = 0;
+			uint64_t checksum_incoming = 0;
+			{
+				int cols=0;
+				int affected_rows=0;
+				SQLite3_result *resultset_servers=NULL;
+				char *query=NULL;
+				char *q1 = NULL;
+				char *q2 = NULL;
+				char *error=NULL;
+				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers_incoming.comment FROM mysql_servers_incoming JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				query = (char *)malloc(strlen(q2)+128);
+				sprintf(query,q1,_writer_hostgroup);
+				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+				if (error == NULL) {
+					if (resultset_servers) {
+						checksum_current = resultset_servers->raw_checksum();
 					}
 				}
-				delete resultset2;
-				resultset2=NULL;
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = NULL;
+				}
+				sprintf(query,q2,_writer_hostgroup);
+				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+				if (error == NULL) {
+					if (resultset_servers) {
+						checksum_incoming = resultset_servers->raw_checksum();
+					}
+				}
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = NULL;
+				}
+				free(query);
 			}
-			wrunlock();
+			if (checksum_current && checksum_incoming && (checksum_incoming!=checksum_current)) {
+				commit();
+				wrlock();
+				SQLite3_result *resultset2=NULL;
+				q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
+				sprintf(query,q,_writer_hostgroup);
+				mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+				if (resultset2) {
+					if (resultset2->rows_count) {
+						for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+							SQLite3_row *r=*it;
+							int writer_hostgroup=atoi(r->fields[0]);
+							int backup_writer_hostgroup=atoi(r->fields[1]);
+							int reader_hostgroup=atoi(r->fields[2]);
+							int offline_hostgroup=atoi(r->fields[3]);
+							q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
+							sprintf(query,q,_writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
+							mydb->execute(query);
+							generate_mysql_servers_table(&writer_hostgroup);
+							generate_mysql_servers_table(&backup_writer_hostgroup);
+							generate_mysql_servers_table(&reader_hostgroup);
+							generate_mysql_servers_table(&offline_hostgroup);
+						}
+					}
+					delete resultset2;
+					resultset2=NULL;
+				}
+				wrunlock();
+			} else {
+				proxy_warning("Galera: skipping setting node %s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _hostname, _port, _writer_hostgroup);
+			}
 			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 		}
