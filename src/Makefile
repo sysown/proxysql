@@ -40,21 +40,12 @@ MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
 MICROHTTPD_IDIR=$(MICROHTTPD_DIR)/include
 MICROHTTPD_LDIR=$(MICROHTTPD_DIR)/microhttpd/.libs
 
-CURL_DIR=$(DEPS_PATH)/curl/curl
-CURL_IDIR=$(CURL_DIR)/include
-CURL_LDIR=$(CURL_DIR)/lib/.libs
-
 IDIR=../include
 LDIR=../lib
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR) -I$(CURL_IDIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(CURL_LDIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR)
 
 UNAME_S := $(shell uname -s)
-
-ifeq ($(UNAME_S),Darwin)
-	IDIRS+= -I/usr/local/include -I/usr/local/opt/openssl/include
-	LDIRS+= -L/usr/local/lib
-endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
@@ -75,7 +66,12 @@ endif
 
 ifeq ($(UNAME_S),Darwin)
 	MYLIBS=-lssl -lre2 -lmariadbclient -lpthread -lm -lz -liconv -lcrypto -lcurl
+else
+	CURL_DIR=$(DEPS_PATH)/curl/curl
+	IDIRS+= -L$(CURL_DIR)/include
+	LDIRS+= -L$(CURL_DIR)/lib/.libs
 endif
+
 ifeq ($(UNAME_S),Linux)
 	MYLIBS+= -ldl
 endif
