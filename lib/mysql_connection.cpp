@@ -611,6 +611,11 @@ MDB_ASYNC_ST MySQL_Connection::handler(short event) {
 		// it is the first time handler() is being called
 		async_state_machine=ASYNC_CONNECT_START;
 		myds->wait_until=myds->sess->thread->curtime+mysql_thread___connect_timeout_server*1000;
+		if (myds->max_connect_time) {
+			if (myds->wait_until > myds->max_connect_time) {
+				myds->wait_until = myds->max_connect_time;
+			}
+		}
 	}
 handler_again:
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"async_state_machine=%d\n", async_state_machine);
