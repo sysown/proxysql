@@ -2784,10 +2784,12 @@ std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_
 			if (st) {
 				if (st->start_time >= curtime - ti) { // only consider recent checks
 					if (st->error == NULL) { // no check error
-						if (st->read_only == false) { // the server is writable (this check is arguable)
-							if (st->wsrep_sst_donor_rejects_queries == false) {
-								string s = it2->first;
-								result->push_back(s);
+						if (st->wsrep_reject_queries == false) {
+							if (st->read_only == false) { // the server is writable (this check is arguable)
+								if (st->wsrep_sst_donor_rejects_queries == false) {
+									string s = it2->first;
+									result->push_back(s);
+								}
 							}
 						}
 					}
