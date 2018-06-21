@@ -3670,7 +3670,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				}
 				free(query);
 			}
-			if (checksum_current && checksum_incoming && (checksum_incoming!=checksum_current)) {
+			if (checksum_incoming!=checksum_current) {
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;
@@ -3845,6 +3845,8 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 		if (need_converge == false) {
 			SQLite3_result *resultset2=NULL;
 			q = (char *)"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
+			query=(char *)malloc(strlen(q)+32);
+			sprintf(query,q,_writer_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
 			if (resultset2) {
 				if (resultset2->rows_count) {
@@ -3859,6 +3861,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				}
 				delete resultset2;
 			}
+			free(query);
 		}
 
 		if (need_converge==false) {
@@ -3937,7 +3940,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				}
 				free(query);
 			}
-			if (checksum_current && checksum_incoming && (checksum_incoming!=checksum_current)) {
+			if (checksum_incoming!=checksum_current) {
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;
