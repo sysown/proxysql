@@ -596,7 +596,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	}
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
-	if (msg) {
+	if (msg && strlen(msg)) {
 		l+=write_encoded_length(_ptr+l, msg_len, msg_len_len, msg_prefix);
 		memcpy(_ptr+l, msg, msg_len);
 	}

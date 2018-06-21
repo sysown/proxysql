@@ -512,7 +512,8 @@ static void * GTID_syncer_run() {
 	MyHGM->gtid_ev_timer = (struct ev_timer *)malloc(sizeof(struct ev_timer));
 	ev_async_init(MyHGM->gtid_ev_async, gtid_async_cb);
 	ev_async_start(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
-	ev_timer_init(MyHGM->gtid_ev_timer, gtid_timer_cb, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
+	//ev_timer_init(MyHGM->gtid_ev_timer, gtid_timer_cb, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
+	ev_timer_init(MyHGM->gtid_ev_timer, gtid_timer_cb, 3, 0);
 	ev_timer_start(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_timer);
 	//ev_ref(gtid_ev_loop);
 	ev_run(MyHGM->gtid_ev_loop, 0);
@@ -2026,7 +2027,8 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	while (i<cnt) {
 		push_MyConn_to_pool(c,false);
 		i++;
-		c=ca[i];
+		if (i<cnt)
+			c=ca[i];
 	}
 	wrunlock();
 }
