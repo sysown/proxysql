@@ -2980,10 +2980,18 @@ handler_again:
 											proxy_warning("Retrying query.\n");
 										}
 									}
-									if (mysql_thread___reset_connection_algorithm == 2) {
-										create_new_session_and_reset_connection(myds);
-									} else {
-										myds->destroy_MySQL_Connection_From_Pool(true);
+									switch (myerr) {
+										case 1047: // WSREP has not yet prepared node for application use
+										case 1053: // Server shutdown in progress
+											myds->destroy_MySQL_Connection_From_Pool(false);
+											break;
+										default:
+											if (mysql_thread___reset_connection_algorithm == 2) {
+												create_new_session_and_reset_connection(myds);
+											} else {
+												myds->destroy_MySQL_Connection_From_Pool(true);
+											}
+											break;
 									}
 									myconn = myds->myconn; // re-initialize
 									myds->fd=0;
