@@ -981,6 +981,7 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 		return 0;
 	}
 	int rc;
+	mydb->execute("DELETE FROM mysql_servers_incoming");
 	sqlite3_stmt *statement1=NULL;
 	sqlite3_stmt *statement32=NULL;
 	sqlite3 *mydb3=mydb->get_db();
