@@ -3,7 +3,7 @@ Description=High Performance Advanced Proxy for MySQL
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
 User=mysql
 Group=mysql
 PermissionsStartOnly=true

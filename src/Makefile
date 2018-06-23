@@ -65,6 +65,10 @@ endif
 
 MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH)
 
+ifeq ($(SYSTEMD),1)
+CXXFLAGS+= -DSYSTEMD
+endif
+
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
@@ -81,6 +85,10 @@ ifeq ($(UNAME_S),Linux)
 endif
 ifeq ($(UNAME_S),FreeBSD)
 	MYLIBS+= -lexecinfo
+endif
+
+ifeq ($(SYSTEMD),1)
+	MYLIBS+= -lsystemd
 endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a

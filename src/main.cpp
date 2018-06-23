@@ -6,6 +6,11 @@
 #include <fcntl.h>
 #endif
 
+#ifdef SYSTEMD
+#include <systemd/sd-daemon.h>
+#endif
+
+
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
 
@@ -1032,6 +1037,10 @@ __start_label:
 		unsigned int missed_heartbeats = 0;
 		unsigned long long previous_time = monotonic_time();
 		unsigned int inner_loops = 0;
+#ifdef SYSTEMD
+                sd_notifyf(0, "READY=1\n"
+                              "STATUS=ProxySQL is now processing requests...");
+#endif
 		while (glovars.shutdown==0) {
 			usleep(200000);
 			if (disable_watchdog) {
@@ -1100,6 +1109,9 @@ __start_label:
 
 __shutdown:
 
+#ifdef SYSTEMD
+        sd_notify(0, "STOPPING=1");
+#endif
 	proxy_info("Starting shutdown...\n");
 
 	ProxySQL_Main_init_phase4___shutdown();
