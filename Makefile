@@ -658,11 +658,13 @@ cleanall:
 install: src/proxysql
 	install -m 0755 src/proxysql /usr/bin
 	install -m 0600 etc/proxysql.cnf /etc
-	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
 ifeq ($(SYSTEMD), 1)
 	install -m 0644 systemd/proxysql.service /usr/lib/systemd/system/
+	install -m 0644 systemd/proxysql.conf /usr/lib/tmpfiles.d/proxysql.conf
+	systemd-tmpfiles --create
 	systemctl enable proxysql.service
 else
+	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
 	install -m 0755 etc/init.d/proxysql /etc/init.d
 ifeq ($(DISTRO),"CentOS Linux")
 		chkconfig --level 0123456 proxysql on
@@ -687,7 +689,9 @@ uninstall:
 	rmdir /var/lib/proxysql 2>/dev/null || true
 ifeq ($(SYSTEMD), 1)
 		systemctl stop proxysql.service
+		systemctl disable proxysql.service
 		rm /usr/lib/systemd/system/proxysql.service
+		rm /usr/lib/tmpfiles.d/proxysql.conf
 else
 ifeq ($(DISTRO),"CentOS Linux")
 		chkconfig --level 0123456 proxysql off

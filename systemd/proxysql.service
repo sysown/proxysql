@@ -1,6 +1,7 @@
 [Unit]
 Description=High Performance Advanced Proxy for MySQL
 After=network.target
+ConditionPathIsDirectory=/var/lib/proxysql
 
 [Service]
 Type=simple
@@ -9,8 +10,6 @@ Group=mysql
 PermissionsStartOnly=true
 LimitNOFILE=102400
 LimitCORE=1073741824
-ExecStartPre=/bin/mkdir -p /var/lib/proxysql
-ExecStartPre=/bin/chown mysql:mysql -R /var/lib/proxysql /etc/proxysql.cnf
 ExecStart=/usr/bin/proxysql -f
 Restart=always
 
