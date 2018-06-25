@@ -8,6 +8,43 @@ PROXYSQL_HOSTNAME="localhost"
 PROXYSQL_PORT="6032"
 #
 
+#Globals
+PROG=$(basename $0)
+PID=$$
+PIDFILE=/tmp/$PROG.pid
+
+
+LockFile() {
+    ## Manage LockFile ##
+    # Usage:  LockFile [ create | remove | test ] #
+    _LockCmd=$1
+    rcode=0
+    case $_LockCmd in
+        test)   [ -f $PIDFILE ] && _LockPid=$(cat $PIDFILE) && rcode=1
+                [ $_LockPid ] && [ -d /proc/$_LockPid ] && rcode=2
+                [ $rcode -eq 1 ] && echo "Stale Lockfile (pid:$_LockPid)"
+                [ $rcode -eq 2 ] && echo "Active Lockfile (pid:$_LockPid)" 
+                return $rcode
+                ;;
+        remove) [ -f $PIDFILE ] && rm -f $PIDFILE
+                ;;
+        create) LockFile test
+                RetVal=$?
+                [ $RetVal -eq 2 ] && echo "Error: $PROG already running." && exit 1
+                if [ $RetVal -eq 1 ]; then
+                    echo "Info: Removing stale lockfile."
+                    LockFile remove
+                fi
+                touch $PIDFILE
+                echo $PID > $PIDFILE
+                ;;
+        *)  echo "[Internal Error] $FUNCNAME: unknown argument '$_LockCmd'."
+                ;;
+    esac
+
+}
+
+
 function usage()
 {
   cat << EOF
@@ -38,8 +75,10 @@ to find nodes wsrep_local_state=4 (SYNCED) or wsrep_local_state=2 (DONOR/DESYNC)
 This is to avoid $0 to mark all nodes as OFFLINE_SOFT
 
 EOF
+LockFile remove
 }
 
+LockFile create
 
 # DEFAULTS
 HOSTGROUP_WRITER_ID="${1}"
@@ -332,5 +371,5 @@ else
     echo "`date` ###### Not loading mysql_servers, no change needed ######" >> ${ERR_FILE}
 fi
 
-
+LockFile remove
 exit 0
