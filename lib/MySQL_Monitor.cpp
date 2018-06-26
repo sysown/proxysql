@@ -480,6 +480,7 @@ void * monitor_ping_thread(void *arg) {
 
 	mmsd->t1=monotonic_time();
 	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
+	mmsd->interr=0; // reset the value
 	mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
@@ -661,6 +662,7 @@ void * monitor_read_only_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
+	mmsd->interr=0; // reset the value
 	if (mmsd->task_id == MON_INNODB_READ_ONLY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'innodb_read_only'");
 	} else {
@@ -876,6 +878,7 @@ void * monitor_group_replication_thread(void *arg) {
 	mmsd->t1=monotonic_time();
 	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
 	//mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
+	mmsd->interr=0; // reset the value
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
@@ -1142,6 +1145,7 @@ void * monitor_galera_thread(void *arg) {
 	//mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT IF(VARIABLE_VALUE=4,'YES','NO') FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, (SELECT IF(VARIABLE_VALUE=0 OR VARIABLE_VALUE='OFF','NO','YES') FROM INFORMATION_SCHEMA.GLOBAL_VARIABLES WHERE VARIABLE_NAME='READ_ONLY') read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue");
 	// FIXME : INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated
 	// FIXME : future versions should be able to detect backend version and use PERFORMANCE SCHEMA instead
+	mmsd->interr=0; // reset the value
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , @@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
@@ -1377,6 +1381,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
+	mmsd->interr=0; // reset the value
 	if (percona_heartbeat_table) {
 		int l = strlen(percona_heartbeat_table);
 		if (l) {
