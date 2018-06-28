@@ -1,10 +1,35 @@
 #file proxysql.cfg
 
-# This config file is parsed using libconfig , and its grammar is described in:
-# http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar
-# Grammar is also copied at the end of this file
+########################################################################################
+# This config file is parsed using libconfig , and its grammar is described in:        
+# http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar 
+# Grammar is also copied at the end of this file                                       
+########################################################################################
 
-
+########################################################################################
+# IMPORTANT INFORMATION REGARDING THIS CONFIGURATION FILE:                             
+########################################################################################
+# On startup, ProxySQL reads its config file (if present) to determine its datadir. 
+# What happens next depends on if the database file (disk) is present in the defined
+# datadir (i.e. "/var/lib/proxysql/proxysql.db").
+#
+# If the database file is found, ProxySQL initializes its in-memory configuration from 
+# the persisted on-disk database. So, disk configuration gets loaded into memory and 
+# then propagated towards the runtime configuration. 
+#
+# If the database file is not found and a config file exists, the config file is parsed 
+# and its content is loaded into the in-memory database, to then be both saved on-disk 
+# database and loaded at runtime.
+#
+# IMPORTANT: If a database file is found, the config file is NOT parsed. In this case
+#            ProxySQL initializes its in-memory configuration from the persisted on-disk
+#            database ONLY. In other words, the configuration found in the proxysql.cnf
+#            file is only used to initial the on-disk database read on the first startup.
+#
+# In order to FORCE a re-initialise of the on-disk database from the configuration file 
+# the ProxySQL service should be started with "service proxysql initial".
+#
+########################################################################################
 
 datadir="/var/lib/proxysql"
 
