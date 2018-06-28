@@ -141,3 +141,8 @@ proxysql-tests.ini
 
 #heaptrack
 heaptrack.*
+
+#eclipse
+.cproject
+.project
+.settings/
