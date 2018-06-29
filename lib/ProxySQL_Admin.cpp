@@ -8281,7 +8281,7 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
 		// fix bug #1224
 		configdb->execute("UPDATE mysql_servers_v200a SET weight = 10000000 WHERE weight > 10000000");
-		configdb->execute("UPDATE mysql_servers_v200a SET compression = 1 WHERE weight > 0");
+		configdb->execute("UPDATE mysql_servers_v200a SET compression = 1 WHERE compression > 0");
 		// copy fields from old table
 		configdb->execute("INSERT OR IGNORE INTO mysql_servers SELECT * FROM mysql_servers_v200a");
 	}
