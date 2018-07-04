@@ -204,8 +204,13 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	// alwasy try to open a config file
 	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
 		GloVars.configfile_open=true;
+		proxy_info("Using config file %s\n", GloVars.config_file);
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
+		if (GloVars.__cmd_proxysql_config_file) {
+			proxy_error("Unable to open config file %s specified in the command line. Aborting!\n", GloVars.config_file);
+			exit(EXIT_SUCCESS); // we exit gracefully to avoid restart
+		}
 	}
 	char *t=getcwd(NULL, 512);
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
