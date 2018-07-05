@@ -6,11 +6,11 @@ All the while getting the unlimited freedom that comes with a GPL license.
 
 Its development is driven by the lack of open source proxies that provide high performance.  
 
-Official website: http://www.proxysql.com/  
-Benchmarks and old blog posts can be found at http://www.proxysql.blogspot.com/  
-Forum: https://groups.google.com/forum/#proxysql/  
-Wiki: https://github.com/sysown/proxysql/wiki/  
-Linkedin group: https://www.linkedin.com/groups/13581070/
+- [Official website](http://www.proxysql.com/)
+- [Documentation](https://github.com/sysown/proxysql/wiki)
+- [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)
+- [Forum](https://groups.google.com/forum/#proxysql/)
+- [Linkedin group](https://www.linkedin.com/groups/13581070/)
 
 Getting started
 ===============
