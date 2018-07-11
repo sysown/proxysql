@@ -3814,7 +3814,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
-	{	// Queries bytes recv
+	{	// Queries bytes sent
 		pta[0]=(char *)"Queries_backends_bytes_sent";
 		sprintf(buf,"%llu",get_queries_backends_bytes_sent());
 		pta[1]=buf;
@@ -3826,7 +3826,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
-	{	// Queries bytes recv
+	{	// Queries bytes sent
 		pta[0]=(char *)"Queries_frontends_bytes_sent";
 		sprintf(buf,"%llu",get_queries_frontends_bytes_sent());
 		pta[1]=buf;
