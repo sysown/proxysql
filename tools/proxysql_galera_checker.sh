@@ -1,4 +1,5 @@
 #!/bin/bash
+PATH=$PATH:/sbin
 ## inspired by Percona clustercheck.sh
 
 # CHANGE THOSE
