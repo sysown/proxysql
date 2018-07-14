@@ -103,6 +103,10 @@ class stmt_execute_metadata_t {
 		lengths = NULL;
 		size = 0;
 		stmt_id = 0;
+		if (pkt) {
+			free(pkt);
+			pkt = NULL;
+		}
 	}
 };
 
@@ -139,7 +143,6 @@ class MySQL_STMTs_meta {
 		num_entries=0;
 	}
 	~MySQL_STMTs_meta() {
-		// FIXME: destructor not there yet
 		for (std::map<uint32_t, stmt_execute_metadata_t *>::iterator it=m.begin(); it!=m.end(); ++it) {
 			stmt_execute_metadata_t *sem=it->second;
 			delete sem;

@@ -625,6 +625,7 @@ static void * HGCU_thread_run() {
 		}
 		free(statuses);
 		free(errs);
+		free(ret);
 	}
 }
 
