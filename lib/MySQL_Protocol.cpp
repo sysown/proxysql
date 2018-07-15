@@ -1333,6 +1333,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	uint32_t  pass_len;
 	unsigned char *user=NULL;
 	char *db=NULL;
+	char *db_tmp = NULL;
 	unsigned char pass[128];
 	char *password=NULL;
 	bool use_ssl=false;
@@ -1340,9 +1341,9 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 	memset(pass,0,128);
 	void *sha1_pass=NULL;
-#ifdef DEBUG
+//#ifdef DEBUG
 	unsigned char *_ptr=pkt;
-#endif
+//#endif
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	//Copy4B(&hdr,pkt);
@@ -1369,7 +1370,13 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pass[pass_len] = 0;
 
 	pkt += pass_len;
-	db = (capabilities & CLIENT_CONNECT_WITH_DB ? (char *)pkt : NULL);
+	if (capabilities & CLIENT_CONNECT_WITH_DB) {
+		unsigned int remaining = len - (pkt - _ptr);
+		db_tmp = strndup((const char *)pkt, remaining);
+		if (db_tmp) {
+			db = db_tmp;
+		}
+	}
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
@@ -1495,7 +1502,10 @@ __exit_process_pkt_handshake_response:
 		free(sha1_pass);
 		sha1_pass=NULL;
 	}
-
+	if (db_tmp) {
+		free(db_tmp);
+		db_tmp=NULL;
+	}
 	return ret;
 }
 
