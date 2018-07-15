@@ -1586,8 +1586,8 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	ret->num_params=num_params;
 	// we keep a pointer to the packet
 	// this is extremely important because:
-  // * binds[X].buffer does NOT point to a new allocated buffer
-  // * binds[X].buffer points to offset inside the original packet
+	// * binds[X].buffer does NOT point to a new allocated buffer
+	// * binds[X].buffer points to offset inside the original packet
 	// FIXME: there is still no free for pkt, so that will be a memory leak that needs to be fixed
 	ret->pkt=ptr;
 	uint8_t new_params_bound_flag;
@@ -1655,11 +1655,22 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				binds[i].length=&lengths[i];
 			}
 		}
+
 		for (i=0;i<num_params;i++) {
-			if (is_nulls[i]==true) {
+			unsigned long *_l = 0;
+			my_bool * _is_null;
+			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
+			if (_data) {
+				// Data was sent via STMT_SEND_LONG_DATA so no data in the packet.
+				binds[i].length = _l;
+				binds[i].buffer = _data;
+				binds[i].is_null = _is_null;
+				continue;
+			} else if (is_nulls[i]==true) {
 				// the parameter is NULL, no need to read any data from the packet
 				continue;
 			}
+
 			enum enum_field_types buffer_type=binds[i].buffer_type;
 			switch (buffer_type) {
 				case MYSQL_TYPE_TINY:
