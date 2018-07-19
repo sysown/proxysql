@@ -2316,18 +2316,6 @@ __get_pkts_from_client:
 										stmt_info=NULL;
 										break;
 									}
-									// handle cases in which data was sent via STMT_SEND_LONG_DATA
-									for (uint16_t ii=0; ii<stmt_meta->num_params; ii++) {
-										void *_data=NULL;
-										unsigned long *_l=0;
-										my_bool * _is_null;
-										_data=SLDH->get(stmt_global_id,ii,&_l, &_is_null);
-										if (_data) { // data was sent via STMT_SEND_LONG_DATA
-											stmt_meta->binds[ii].length=_l;
-											stmt_meta->binds[ii].buffer=_data;
-											stmt_meta->binds[ii].is_null = _is_null;
-										}
-									}
 									if (stmt_meta_found==false) {
 										// previously we didn't find any metadata
 										// but as we reached here, stmt_meta is not null and we save the metadata
