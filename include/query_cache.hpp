@@ -23,6 +23,7 @@ struct __QC_entry_t {
 	QC_entry_t *self; // pointer to itself
 	uint32_t klen; // length of the key : FIXME: not sure if still relevant
 	uint32_t length; // length of the value
+	unsigned long long create_ms; // when the entry was created, monotonic, millisecond granularity
 	unsigned long long expire_ms; // when the entry will expire, monotonic , millisecond granularity
 	unsigned long long access_ms; // when the entry was read last , monotonic , millisecond granularity
 	uint32_t ref_count; // reference counter
@@ -48,8 +49,8 @@ class Query_Cache {
 	Query_Cache();
 	~Query_Cache();
 	void print_version();
-	bool set(uint64_t , const unsigned char *, uint32_t, unsigned char *, uint32_t, unsigned long long, unsigned long long);
-	unsigned char * get(uint64_t , const unsigned char *, const uint32_t, uint32_t *, unsigned long long);
+	bool set(uint64_t , const unsigned char *, uint32_t, unsigned char *, uint32_t, unsigned long long, unsigned long long, unsigned long long);
+	unsigned char * get(uint64_t , const unsigned char *, const uint32_t, uint32_t *, unsigned long long, unsigned long long);
 	uint64_t flush();
 	SQLite3_result * SQL3_getStats();
 };
