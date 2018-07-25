@@ -190,12 +190,12 @@ void KV_BtreeArray::purge_some(unsigned long long QCnow_ms, bool aggressive) {
 			if (drop_entry) {
 				qce=(QC_entry_t *)ptrArray->remove_index_fast(i);
 
-		    btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
+		        btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
   				lookup = bt_map.find(qce->key);
-     		if (lookup != bt_map.end()) {
+     		    if (lookup != bt_map.end()) {
 					bt_map.erase(lookup);
-				}
-				i--;
+                }
+                i--;
 				freed_memory+=qce->length;
 				removed_entries++;
 				free(qce->value);
@@ -278,14 +278,32 @@ void KV_BtreeArray::empty() {
 	spin_wrlock(&lock);
 #endif
 	btree::btree_map<uint64_t, QC_entry_t *>::iterator lookup;
+	QC_entry_t *qce = NULL;
+
+	uint64_t freed_memory=0;
+	uint64_t removed_entries=0;
 
 	while (bt_map.size()) {
 		lookup = bt_map.begin();
 		if ( lookup != bt_map.end() ) {
 			lookup->second->expire_ms=EXPIRE_DROPIT;
+		    __sync_fetch_and_sub(&lookup->second->ref_count,1);
 			bt_map.erase(lookup);
 		}
 	}
+
+    while(ptrArray->len) {
+        qce=(QC_entry_t *)ptrArray->remove_index_fast(0);
+        freed_memory+=qce->length;
+        removed_entries++;
+        free(qce->value);
+        free(qce);
+    }
+
+    THR_DECREASE_CNT(__thr_num_deleted,Glo_num_entries,removed_entries,1);
+    __sync_fetch_and_add(&Glo_cntPurge,removed_entries);
+    __sync_fetch_and_add(&Glo_total_freed_memory,freed_memory);
+    __sync_fetch_and_sub(&Glo_size_values,freed_memory);
 #ifdef PROXYSQL_QC_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&lock);
 #else
