@@ -4193,7 +4193,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			(const unsigned char *)CurrentQuery.QueryPointer ,
 			CurrentQuery.QueryLength ,
 			&resbuf ,
-			thread->curtime/1000
+			thread->curtime/1000 ,
+			qpo->cache_ttl
 		);
 		if (aa) {
 			l_free(pkt->size,pkt->ptr);
@@ -4432,6 +4433,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 						CurrentQuery.QueryLength,
 						aa ,
 						client_myds->resultset_length ,
+						thread->curtime/1000 ,
 						thread->curtime/1000 ,
 						thread->curtime/1000 + qpo->cache_ttl
 					);
