@@ -1971,6 +1971,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_digests=false;
+			proxy_warning("Setting mysql-query_digests=false . This is risky and not recommended\n");
 			return true;
 		}
 		return false;
