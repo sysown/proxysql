@@ -664,12 +664,12 @@ void * monitor_read_only_thread(void *arg) {
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
 	if (mmsd->task_id == MON_INNODB_READ_ONLY) {
-		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'innodb_read_only'");
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.innodb_read_only");
 	} else {
 		if (mmsd->task_id == MON_SUPER_READ_ONLY) {
-			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'super_read_only'");
+			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.super_read_only");
 		} else {
-			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'read_only'");
+			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only");
 		}
 	}
 	while (mmsd->async_exit_status) {
@@ -745,7 +745,7 @@ __exit_monitor_read_only_thread:
 			fields = mysql_fetch_fields(mmsd->result);
 			for(k = 0; k < num_fields; k++) {
 				//if (strcmp("VARIABLE_NAME", fields[k].name)==0) {
-				if (strcmp((char *)"Value", (char *)fields[k].name)==0) {
+				if (strcmp((char *)"@@global.read_only", (char *)fields[k].name)==0) {
 					j=k;
 				}
 			}
