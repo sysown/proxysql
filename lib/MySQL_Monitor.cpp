@@ -610,7 +610,7 @@ void * monitor_read_only_thread(void *arg) {
 	}
 
 	mmsd->t1=monotonic_time();
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW GLOBAL VARIABLES LIKE 'read_only'");
+	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only");
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
@@ -674,7 +674,7 @@ __exit_monitor_read_only_thread:
 			fields = mysql_fetch_fields(mmsd->result);
 			for(k = 0; k < num_fields; k++) {
 				//if (strcmp("VARIABLE_NAME", fields[k].name)==0) {
-				if (strcmp((char *)"Value", (char *)fields[k].name)==0) {
+				if (strcmp((char *)"@@global.read_only", (char *)fields[k].name)==0) {
 					j=k;
 				}
 			}
