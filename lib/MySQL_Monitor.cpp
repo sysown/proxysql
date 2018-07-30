@@ -1558,7 +1558,7 @@ void * MySQL_Monitor::monitor_connect() {
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers GROUP BY hostname, port";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -1587,6 +1587,15 @@ void * MySQL_Monitor::monitor_connect() {
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_connect_interval/2/resultset->rows_count;
+				us*=40;
+				if (us > 1000000) {
+					us = 10000;
+				}
+				us = us + rand()%us;
+				if (resultset->rows_count==1) {
+					// only 1 server, sleep also before creating the job
+					usleep(us);
+				}
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
@@ -1672,7 +1681,7 @@ void * MySQL_Monitor::monitor_ping() {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port ORDER BY RANDOM()";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -1700,6 +1709,15 @@ void * MySQL_Monitor::monitor_ping() {
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_ping_interval/2/resultset->rows_count;
+				us*=40;
+				if (us > 1000000) {
+					us = 10000;
+				}
+				us = us + rand()%us;
+				if (resultset->rows_count==1) {
+					// only 1 server, sleep also before creating the job
+					usleep(us);
+				}
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
@@ -1926,7 +1944,7 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -1954,6 +1972,15 @@ void * MySQL_Monitor::monitor_read_only() {
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_read_only_interval/2/resultset->rows_count;
+				us*=40;
+				if (us > 1000000) {
+					us = 10000;
+				}
+				us = us + rand()%us;
+				if (resultset->rows_count==1) {
+					// only 1 server, sleep also before creating the job
+					usleep(us);
+				}
 			}
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
