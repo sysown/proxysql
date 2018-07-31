@@ -130,7 +130,7 @@ libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
 
 re2/re2/obj/libre2.a:
-	cd re2 && rm -rf re2
+	cd re2 && rm -rf re2-2018-07-01
 #	cd re2 && tar -zxf re2-20140304.tgz
 	cd re2 && tar -zxf re2.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
@@ -160,7 +160,7 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd libconfig && rm -rf libconfig-1.4.9
-	cd re2 && rm -rf re2
+	cd re2 && rm -rf re2-2018-07-01
 	cd pcre && rm -rf pcre-8.39
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
