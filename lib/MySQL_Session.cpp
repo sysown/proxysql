@@ -3445,6 +3445,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				free_users=1;
 			}
 			if (max_connections_reached==true || free_users<=0) {
+				client_authenticated=false;
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
 				if (max_connections_reached==true) {
