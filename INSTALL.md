@@ -22,9 +22,10 @@ Make sure you have installed the equivalent for each of these packages for your 
 - openssl
 - openssl-devel   # Only for RHEL / CentOS based
 - libssl-dev      # Only for Debian / Ubuntu based
+- curl            # Only for OSX, must not be system curl
 
 Shortcut commands for installing pre-requisites:
-```
+```bash
 # RHEL / CentOS < 7:
 yum install automake bzip2 cmake make g++ gcc git openssl openssl-devel patch
 
@@ -33,6 +34,15 @@ yum install automake bzip2 cmake make gcc-c++ gcc git openssl openssl-devel patc
 
 # Debian / Ubuntu Based:
 apt-get install automake bzip2 cmake make g++ gcc git openssl libssl-dev patch
+```
+
+On Mac OSX, Proxysql's dependencies are not fully satisfied by the tools included with the XCode/clang toolkit. The Proxysql build system needs to be told where to find non-system `curl` (and possibly `openssl`) libraries. Using the [Homebrew](https://brew.sh/) OSX package manager, dependencies can be installed and located on OSX like this:
+
+```bash
+brew install automake bzip2 cmake make git patch openssl curl
+export OPENSSL_ROOT_DIR="$(brew --prefix openssl)"
+export CXXFLAGS="${CXXFLAGS:-} -I$(brew --prefix openssl)/include -I$(brew --prefix curl)/include"
+export LDFLAGS="${LDFLAGS:-} -L$(brew --prefix openssl)/lib -L$(brew --prefix curl)/lib"
 ```
 
 Go to the directory where you cloned the repo (or unpacked the tarball) and run:
