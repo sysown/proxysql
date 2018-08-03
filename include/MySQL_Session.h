@@ -220,4 +220,91 @@ class MySQL_Session
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
 };
 
+#define KILL_QUERY       1
+#define KILL_CONNECTION  2
+
+class KillArgs {
+	public:
+	char *username;
+	char *password;
+	char *hostname;
+	unsigned int port;
+	unsigned long id;
+	int kill_type;
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt) {
+		username=strdup(u);
+		password=strdup(p);
+		hostname=strdup(h);
+		port=P;
+		id=i;
+		kill_type=kt;
+	};
+	~KillArgs() {
+		free(username);
+		free(password);
+		free(hostname);
+	};
+};
+
+void * kill_query_thread(void *arg);
+/*
+	KillArgs *ka=(KillArgs *)arg;
+	MYSQL *mysql;
+	mysql=mysql_init(NULL);
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
+	if (!mysql) {
+		goto __exit_kill_query_thread;
+	}
+	MYSQL *ret;
+	if (ka->port) {
+		switch (ka->kill_type) {
+			case KILL_QUERY:
+				proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+				break;
+			case KILL_CONNECTION:
+				proxy_warning("KILL CONNECTION %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+				break;
+			default:
+				break;
+		}
+		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
+	} else {
+		switch (ka->kill_type) {
+			case KILL_QUERY:
+				proxy_warning("KILL QUERY %lu on localhost\n", ka->id);
+				break;
+			case KILL_CONNECTION:
+				proxy_warning("KILL CONNECTION %lu on localhost\n", ka->id);
+				break;
+			default:
+				break;
+		}
+		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
+	}
+	if (!ret) {
+		goto __exit_kill_query_thread;
+	}
+	char buf[100];
+	switch (ka->kill_type) {
+		case KILL_QUERY:
+			sprintf(buf,"KILL QUERY %lu", ka->id);
+			break;
+		case KILL_CONNECTION:
+			sprintf(buf,"KILL CONNECTION %lu", ka->id);
+			break;
+		default:
+			sprintf(buf,"KILL %lu", ka->id);
+			break;
+	}
+	// FIXME: these 2 calls are blocking, fortunately on their own thread
+	mysql_query(mysql,buf);
+	mysql_close(mysql);
+__exit_kill_query_thread:
+	delete ka;
+	return NULL;
+}
+*/
+
+extern Query_Processor *GloQPro;
+extern Query_Cache *GloQC;
 #endif /* __CLASS_MYSQL_SESSION_ H */

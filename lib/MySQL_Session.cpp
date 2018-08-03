@@ -50,6 +50,10 @@ bool Session_Regex::match(char *m) {
 	return rc;
 }
 
+/*
+#define KILL_QUERY       1
+#define KILL_CONNECTION  2
+
 class KillArgs {
 	public:
 	char *username;
@@ -57,12 +61,14 @@ class KillArgs {
 	char *hostname;
 	unsigned int port;
 	unsigned long id;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i) {
+	int kill_type;
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt) {
 		username=strdup(u);
 		password=strdup(p);
 		hostname=strdup(h);
 		port=P;
 		id=i;
+		kill_type=kt;
 	};
 	~KillArgs() {
 		free(username);
@@ -70,8 +76,8 @@ class KillArgs {
 		free(hostname);
 	};
 };
-
-static void * kill_query_thread(void *arg) {
+*/
+void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
 	mysql=mysql_init(NULL);
@@ -81,17 +87,45 @@ static void * kill_query_thread(void *arg) {
 	}
 	MYSQL *ret;
 	if (ka->port) {
-		proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+		switch (ka->kill_type) {
+			case KILL_QUERY:
+				proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+				break;
+			case KILL_CONNECTION:
+				proxy_warning("KILL CONNECTION %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+				break;
+			default:
+				break;
+		}
 		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
 	} else {
-		proxy_warning("KILL QUERY %lu on localhost\n", ka->id);
+		switch (ka->kill_type) {
+			case KILL_QUERY:
+				proxy_warning("KILL QUERY %lu on localhost\n", ka->id);
+				break;
+			case KILL_CONNECTION:
+				proxy_warning("KILL CONNECTION %lu on localhost\n", ka->id);
+				break;
+			default:
+				break;
+		}
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
 		goto __exit_kill_query_thread;
 	}
 	char buf[100];
-	sprintf(buf,"KILL QUERY %lu", ka->id);
+	switch (ka->kill_type) {
+		case KILL_QUERY:
+			sprintf(buf,"KILL QUERY %lu", ka->id);
+			break;
+		case KILL_CONNECTION:
+			sprintf(buf,"KILL CONNECTION %lu", ka->id);
+			break;
+		default:
+			sprintf(buf,"KILL %lu", ka->id);
+			break;
+	}
 	// FIXME: these 2 calls are blocking, fortunately on their own thread
 	mysql_query(mysql,buf);
 	mysql_close(mysql);
@@ -99,7 +133,6 @@ __exit_kill_query_thread:
 	delete ka;
 	return NULL;
 }
-
 
 extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
@@ -1048,7 +1081,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 					auth_password=ui->password;
 				}
 			}
-			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id);
+			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id, KILL_QUERY);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
