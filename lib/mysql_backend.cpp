@@ -22,7 +22,7 @@ MySQL_Backend::~MySQL_Backend() {
 void MySQL_Backend::reset() {
 	if (server_myds && server_myds->myconn) {
 		MySQL_Connection *mc=server_myds->myconn;
-		if (mysql_thread___multiplexing && (server_myds->DSS==STATE_MARIADB_GENERIC || server_myds->DSS==STATE_READY) && mc->reusable==true && mc->IsActiveTransaction()==false && mc->MultiplexDisabled()==false) {
+		if (mysql_thread___multiplexing && (server_myds->DSS==STATE_MARIADB_GENERIC || server_myds->DSS==STATE_READY) && mc->reusable==true && mc->IsActiveTransaction()==false && mc->MultiplexDisabled()==false && mc->async_state_machine==ASYNC_IDLE) {
 			server_myds->myconn->last_time_used=server_myds->sess->thread->curtime;
 			server_myds->return_MySQL_Connection_To_Pool();
 		} else {

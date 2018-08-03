@@ -1521,12 +1521,35 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
-		// overall, the backend seems healthy and so it is the connection. Try to reset it
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
-		to_del=false;
-		//c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
-		queue.add(c);
-	} else {
+		if (c->async_state_machine==ASYNC_IDLE) {
+			// overall, the backend seems healthy and so it is the connection. Try to reset it
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+			to_del=false;
+			//c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
+			queue.add(c);
+		} else {
+		// the connection seems health, but we are trying to destroy it
+		// probably because there is a long running query
+		// therefore we will try to kill the connection
+			MySQL_Connection_userinfo *ui=c->userinfo;
+			char *auth_password=NULL;
+			if (ui->password) {
+				if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
+					auth_password=ui->sha1_pass;
+				} else {
+					auth_password=ui->password;
+				}
+			}
+			KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION);
+			pthread_attr_t attr;
+			pthread_attr_init(&attr);
+			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+			pthread_attr_setstacksize (&attr, 256*1024);
+			pthread_t pt;
+			pthread_create(&pt, &attr, &kill_query_thread, ka);
+		}
+	}
+	if (to_del) {
 		// we lock only this part of the code because we need to remove the connection from ConnectionsUsed
 		if (_lock) {
 			wrlock();
@@ -1537,8 +1560,6 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
                 if (_lock) {
 			wrunlock();
 		}
-	}
-	if (to_del) {
 		delete c;
 	}
 }
