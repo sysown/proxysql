@@ -11,6 +11,10 @@
 
 #define PROXYSQL_DEBUG_PTHREAD_MUTEX
 
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC SYSTEM_CLOCK
+#endif // CLOCK_MONOTONIC
+
 #ifdef DEBUG
 static unsigned long long pretime=0;
 #ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
