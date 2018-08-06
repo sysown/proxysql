@@ -415,6 +415,7 @@ class MySQL_Threads_Handler
 		int query_cache_size_MB;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
+		bool kill_backend_connection_when_disconnect;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

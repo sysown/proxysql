@@ -286,6 +286,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_show_processlist",
@@ -419,6 +420,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connpoll_reset_queue_length = 50;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
+	variables.kill_backend_connection_when_disconnect=true;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms=1000;
@@ -672,6 +674,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
 	if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 	if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
+	if (!strcasecmp(name,"kill_backend_connection_when_disconnect")) return (int)variables.kill_backend_connection_when_disconnect;
 	if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
 #ifdef IDLE_THREADS
 	if (!strcasecmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
@@ -1051,6 +1054,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"stats_time_query_processor")) {
 		return strdup((variables.stats_time_query_processor ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"kill_backend_connection_when_disconnect")) {
+		return strdup((variables.kill_backend_connection_when_disconnect ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		return strdup((variables.sessions_sort ? "true" : "false"));
@@ -2029,6 +2035,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.sessions_sort=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"kill_backend_connection_when_disconnect")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.kill_backend_connection_when_disconnect=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.kill_backend_connection_when_disconnect=false;
 			return true;
 		}
 		return false;
@@ -3389,6 +3406,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
+	mysql_thread___kill_backend_connection_when_disconnect=(bool)GloMTH->get_variable_int((char *)"kill_backend_connection_when_disconnect");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
 #ifdef IDLE_THREADS
 	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
