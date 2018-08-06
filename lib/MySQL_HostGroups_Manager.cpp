@@ -2324,22 +2324,24 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 		// the connection seems health, but we are trying to destroy it
 		// probably because there is a long running query
 		// therefore we will try to kill the connection
-			MySQL_Connection_userinfo *ui=c->userinfo;
-			char *auth_password=NULL;
-			if (ui->password) {
-				if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
-					auth_password=ui->sha1_pass;
-				} else {
-					auth_password=ui->password;
+			if (mysql_thread___kill_backend_connection_when_disconnect) {
+				MySQL_Connection_userinfo *ui=c->userinfo;
+				char *auth_password=NULL;
+				if (ui->password) {
+					if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
+						auth_password=ui->sha1_pass;
+					} else {
+						auth_password=ui->password;
+					}
 				}
+				KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION);
+				pthread_attr_t attr;
+				pthread_attr_init(&attr);
+				pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+				pthread_attr_setstacksize (&attr, 256*1024);
+				pthread_t pt;
+				pthread_create(&pt, &attr, &kill_query_thread, ka);
 			}
-			KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION);
-			pthread_attr_t attr;
-			pthread_attr_init(&attr);
-			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-			pthread_attr_setstacksize (&attr, 256*1024);
-			pthread_t pt;
-			pthread_create(&pt, &attr, &kill_query_thread, ka);
 		}
 	}
 	if (to_del) {
