@@ -67,3 +67,53 @@ c) if #b fails, it calls get_variable() with the same name
 d) if #c succeed, update the value in the table; if #c fails, delete the row
    from the table
 
+
+Global variable scope
+Some variables are specific to a certain module (for example Admin), while
+other variables could have a less specific scope.
+For example, global variable mysql-stats_time_query_processor is relavent
+only in MySQL_Thread module, while global variable mysql-monitor_username is
+relevant in many modules: MySQL_Thread, MySQL_Monitor, and
+MySQL_Hostgroups_Manager.
+If a global variable is relevant only in a specific module, it is defined in
+the specific module only (Admin, MySQL_Thread, ClickHouse Server, etc).
+When a global variable is relevant in many modules, it is defined as a thread
+local storage, in proxysql_structs.h .
+For historical reasons (legacy code), a lot of global variables that are
+relevant only to MySQL_Thread are still defined as thread local storage.
+No matter if a thread local storage is used or not, the thread using it will
+always make a local copy so that it can safely access its own copy with no
+locking needed.
+
+
+Variable type
+Variables can be of 3 types:
+- string
+- interger
+- boolean
+
+
+Adding a new global variable
+Adding a new global variable requires:
+- define the scope of it
+- register its name in the relevant module
+- define its default value (to be assigned during the creation of the module)
+- define its input validation in set_variable()
+- define the retrieval method in refresh_variables() and get_variable_*()
+  (depending from data type)
+- add the code where the variable itself is evaluated and action is taken
+
+For example:
+- if the scope is global, define a variable named mysql_thread___variable_name
+  in proxysql_struct.h
+- if the scope is not global, define a variable named variable_name in
+  MySQL_Thread_Handler::variables and MySQL_Thread::variables
+- register the name variable_name in mysql_thread_variables_names[]
+- define its default in MySQL_Threads_Handler::MySQL_Threads_Handler()
+- define the input validation (range, possible values, etc) in
+  MySQL_Threads_Handler::set_variable(), where the value is processed
+- in MySQL_Thread::refresh_variables() defines how to copy the global value
+  into the local value, either in mysql_thread___variable_name or
+  variables.variable_name, calling MySQL_Threads_Handler::get_variable_int()
+- if the variable is a pointer of char, remember to free it when it goes out
+  of scope
