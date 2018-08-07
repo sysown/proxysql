@@ -163,6 +163,8 @@ binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm:
 	docker rm centos5_build || true
 	docker create --name centos5_build renecannao/proxysql:build-centos5 bash -c "while : ; do sleep 10 ; done"
 	docker start centos5_build
+	docker exec centos5_build bash -c "yum makecache fast || true"
+	docker exec centos5_build bash -c "yum update -y nss curl libcurl || true"
 	docker exec centos5_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec centos5_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT}"
 	docker exec -it centos5_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
@@ -187,6 +189,8 @@ binaries/proxysql-${CURVER}-1-dbg-centos5.x86_64.rpm:
 	docker rm centos5_build || true
 	docker create --name centos5_build renecannao/proxysql:build-centos5 bash -c "while : ; do sleep 10 ; done"
 	docker start centos5_build
+	docker exec centos5_build bash -c "yum makecache fast || true"
+	docker exec centos5_build bash -c "yum update -y nss curl libcurl || true"
 	docker exec centos5_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
 	docker exec centos5_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT} debug"
@@ -214,7 +218,8 @@ binaries/proxysql-${CURVER}-1-centos67.x86_64.rpm:
 	docker rm centos67_build || true
 	docker create --name centos67_build renecannao/proxysql:build-centos6.7 bash -c "while : ; do sleep 10 ; done"
 	docker start centos67_build
-	docker exec centos67_build bash -c "yum update -y nss curl libcurl"
+	docker exec centos67_build bash -c "yum makecache fast || true"
+	docker exec centos67_build bash -c "yum update -y nss curl libcurl || true"
 	docker exec centos67_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	docker exec centos67_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT}"
 	docker exec -it centos67_build bash -c "cd /opt/proxysql ; mkdir -p proxysql/usr/bin; mkdir -p proxysql/etc; cp src/proxysql proxysql/usr/bin/; cp -a etc proxysql ; mkdir -p proxysql/usr/share/proxysql/tools ; cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools ; mv proxysql proxysql-${CURVER} ; tar czvf proxysql-${CURVER}.tar.gz proxysql-${CURVER}"
@@ -237,6 +242,8 @@ binaries/proxysql-${CURVER}-1-dbg-centos67.x86_64.rpm:
 	docker rm centos67_build || true
 	docker create --name centos67_build renecannao/proxysql:build-centos6.7 bash -c "while : ; do sleep 10 ; done"
 	docker start centos67_build
+	docker exec centos67_build bash -c "yum makecache fast || true"
+	docker exec centos67_build bash -c "yum update -y nss curl libcurl || true"
 	docker exec centos67_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
 	docker exec centos67_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT} debug"
@@ -264,7 +271,8 @@ binaries/proxysql-${CURVER}-1-centos7.x86_64.rpm:
 	docker rm centos7_build || true
 	docker create --name centos7_build renecannao/proxysql:build-centos7 bash -c "while : ; do sleep 10 ; done"
 	docker start centos7_build
-	docker exec centos7_build bash -c "yum update -y nss curl libcurl"
+	docker exec centos7_build bash -c "yum makecache fast || true"
+	docker exec centos7_build bash -c "yum update -y nss curl libcurl || true"
 	docker exec centos7_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
 	docker exec centos7_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT}"
@@ -292,6 +300,8 @@ binaries/proxysql-${CURVER}-clickhouse-1-centos7.x86_64.rpm:
 	docker rm centos7_build || true
 	docker create --name centos7_build renecannao/proxysql:build-centos7 bash -c "while : ; do sleep 10 ; done"
 	docker start centos7_build
+	docker exec centos7_build bash -c "yum makecache fast || true"
+	docker exec centos7_build bash -c "yum update -y nss curl libcurl || true"
 	docker exec centos7_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
 	docker exec centos7_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps_clickhouse && ${MAKE} clickhouse ${MAKEOPT}"
@@ -319,6 +329,8 @@ binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm:
 	docker rm centos7_build || true
 	docker create --name centos7_build renecannao/proxysql:build-centos7 bash -c "while : ; do sleep 10 ; done"
 	docker start centos7_build
+	docker exec centos7_build bash -c "yum makecache fast || true"
+	docker exec centos7_build bash -c "yum update -y nss curl libcurl || true"
 	docker exec centos7_build bash -c "cd /opt; git clone -b v${CURVER} https://github.com/sysown/proxysql.git proxysql"
 	sleep 2
 	docker exec centos7_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT} debug"
