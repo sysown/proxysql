@@ -81,6 +81,13 @@ void proxy_create_random_string(char *to, uint length, struct rand_struct *rand_
 		}
 	} else {
 		for (i=0; i<length ; i++) {
+			if (*to < 0) {
+				*to += 128;
+			} else {
+				if (*to == 0) {
+					*to = 'a';
+				}
+			}
 			to++;
 		}
 	}
@@ -1061,11 +1068,12 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 //#endif
 
   int i;
-  for (i=0;i<8;i++) {
-    if ((*myds)->myconn->scramble_buff[i]==0) {
-      (*myds)->myconn->scramble_buff[i]='a';
-    }
-  }
+
+//  for (i=0;i<8;i++) {
+//    if ((*myds)->myconn->scramble_buff[i]==0) {
+//      (*myds)->myconn->scramble_buff[i]='a';
+//    }
+//  }
 
 	memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
 	_ptr[l]=0x00; l+=1; //0x00
@@ -1093,11 +1101,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 //#endif
   //create_random_string(scramble_buf+8,12,&rand_st);
 
-  for (i=8;i<20;i++) {
-    if ((*myds)->myconn->scramble_buff[i]==0) {
-      (*myds)->myconn->scramble_buff[i]='a';
-    }
-  }
+//  for (i=8;i<20;i++) {
+//    if ((*myds)->myconn->scramble_buff[i]==0) {
+//      (*myds)->myconn->scramble_buff[i]='a';
+//    }
+//  }
 
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00
