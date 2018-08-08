@@ -716,12 +716,12 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
-				rc_query = mysql_query(conn, "SELECT username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections FROM runtime_mysql_users");
+				rc_query = mysql_query(conn, "SELECT username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, comment FROM runtime_mysql_users");
 				if ( rc_query == 0 ) {
 					MYSQL_RES *result = mysql_store_result(conn);
 					GloAdmin->admindb->execute("DELETE FROM mysql_users");
 					MYSQL_ROW row;
-					char *q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+					char *q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 					sqlite3_stmt *statement1 = NULL;
 					sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 					rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
@@ -739,6 +739,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 						rc=sqlite3_bind_int64(statement1, 10, atoll(row[9])); assert(rc==SQLITE_OK); // backend
 						rc=sqlite3_bind_int64(statement1, 11, atoll(row[10])); assert(rc==SQLITE_OK); // frontend
 						rc=sqlite3_bind_int64(statement1, 12, atoll(row[11])); assert(rc==SQLITE_OK); // max_connection
+						rc=sqlite3_bind_text(statement1, 13, row[12], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
 
 						SAFE_SQLITE3_STEP2(statement1);
 						rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
