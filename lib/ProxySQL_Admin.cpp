@@ -7976,6 +7976,41 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                         rows++;
                 }
         }
+    if (root.exists("mysql_galera_hostgroups")==true) {
+            const Setting &mysql_galera_hostgroups = root["mysql_galera_hostgroups"];
+            int count = mysql_galera_hostgroups.getLength();
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (%d, %d, %d, %d, %d, %d, %d, %d, '%s')";
+            for (i=0; i< count; i++) {
+                    const Setting &line = mysql_galera_hostgroups[i];
+                    int writer_hostgroup;
+                    int backup_writer_hostgroup;
+                    int reader_hostgroup;
+                    int offline_hostgroup;
+                    int active=1; // default
+                    int max_writers;
+                    int writer_is_also_reader;
+                    int max_transactions_behind;
+                    std::string comment="";
+                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
+                    if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) continue;
+                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
+                    if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) continue;
+                    if (line.lookupValue("max_writers", max_writers)==false) max_writers=1;
+                    if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
+                    if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
+                    line.lookupValue("comment", comment);
+                    char *o1=strdup(comment.c_str());
+                    char *o=escape_string_single_quotes(o1, false);
+                    char *query=(char *)malloc(strlen(q)+strlen(o)+128); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, o);
+                    //fprintf(stderr, "%s\n", query);
+                    admindb->execute(query);
+                    if (o!=o1) free(o);
+                    free(o1);
+                    free(query);
+                    rows++;
+            }
+    }
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
 }
