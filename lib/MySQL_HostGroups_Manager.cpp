@@ -3497,7 +3497,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
-					if (GloMTH->variables.hostgroup_manager_verbose) {
+					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
 						proxy_info("Group replication: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
 					}
 					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
@@ -4071,7 +4071,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
-					if (GloMTH->variables.hostgroup_manager_verbose) {
+					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
 						proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
 					}
 					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {

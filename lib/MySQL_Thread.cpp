@@ -1469,7 +1469,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"hostgroup_manager_verbose")) {
 		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1) {
+		if (intv >= 0 && intv <= 2) {
 			variables.hostgroup_manager_verbose=intv;
 			return true;
 		} else {
