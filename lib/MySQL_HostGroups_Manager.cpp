@@ -3497,7 +3497,9 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
-					proxy_info("Group replication: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					if (GloMTH->variables.hostgroup_manager_verbose) {
+						proxy_info("Group replication: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					}
 					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
 						SQLite3_row *r=*it;
 						if (to_move) {
@@ -3515,7 +3517,9 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 				} else {
 					if (num_writers < info->max_writers && num_backup_writers) { // or way too low writer
 						int to_move= ( (info->max_writers - num_writers) < num_backup_writers ? (info->max_writers - num_writers) : num_backup_writers);
-						proxy_info("Group replication: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						if (GloMTH->variables.hostgroup_manager_verbose) {
+							proxy_info("Group replication: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						}
 						for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 							SQLite3_row *r=*it;
 							if (to_move) {
@@ -3658,7 +3662,6 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			}
 		}
 		if (set_offline) {
-			proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
@@ -3715,6 +3718,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				free(query);
 			}
 			if (checksum_incoming!=checksum_current) {
+				proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;
@@ -3921,7 +3925,6 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	if (resultset) { // if we reach there, there is some action to perform
 		if (resultset->rows_count) {
 			need_converge=false;
-			proxy_warning("Galera: setting host %s:%d as writer\n", _hostname, _port);
 
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
@@ -3985,6 +3988,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				free(query);
 			}
 			if (checksum_incoming!=checksum_current) {
+				proxy_warning("Galera: setting host %s:%d as writer\n", _hostname, _port);
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;
@@ -4067,7 +4071,9 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
-					proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					if (GloMTH->variables.hostgroup_manager_verbose) {
+						proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					}
 					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
 						SQLite3_row *r=*it;
 						if (to_move) {
@@ -4085,7 +4091,9 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				} else {
 					if (num_writers < info->max_writers && num_backup_writers) { // or way too low writer
 						int to_move= ( (info->max_writers - num_writers) < num_backup_writers ? (info->max_writers - num_writers) : num_backup_writers);
-						proxy_info("Galera: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						if (GloMTH->variables.hostgroup_manager_verbose) {
+							proxy_info("Galera: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						}
 						for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 							SQLite3_row *r=*it;
 							if (to_move) {
