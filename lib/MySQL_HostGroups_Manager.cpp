@@ -4017,7 +4017,9 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				}
 				wrunlock();
 			} else {
-				proxy_warning("Galera: skipping setting node %s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _hostname, _port, _writer_hostgroup);
+				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+					proxy_warning("Galera: skipping setting node %s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _hostname, _port, _writer_hostgroup);
+				}
 			}
 			GloAdmin->mysql_servers_wrunlock();
 			free(query);
