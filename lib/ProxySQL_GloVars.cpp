@@ -38,6 +38,10 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(execute_on_exit_failure);
 		execute_on_exit_failure = NULL;
 	}
+	if (ldap_auth_plugin) {
+		free(ldap_auth_plugin);
+		ldap_auth_plugin = NULL;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
@@ -75,6 +79,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	checksums_values.dumped_at = 0;
 	checksums_values.global_checksum = 0;
 	execute_on_exit_failure = NULL;
+	ldap_auth_plugin = NULL;
 #ifdef DEBUG
 	global.gdb=0;
 #endif

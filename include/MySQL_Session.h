@@ -182,6 +182,8 @@ class MySQL_Session
 
 	Session_Regex **match_regexes;
 
+	void *ldap_ctx;
+
 	MySQL_Session();
 	~MySQL_Session();
 

@@ -20,6 +20,7 @@ extern const MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * cons
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
 
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
@@ -332,6 +333,7 @@ MySQL_Session::MySQL_Session() {
 	last_insert_id=0; // #1093
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
+	ldap_ctx = NULL;
 }
 
 void MySQL_Session::init() {
@@ -407,6 +409,10 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+	}
+	if (ldap_ctx) {
+		GloMyLdapAuth->ldap_ctx_free(ldap_ctx);
+		ldap_ctx = NULL;
 	}
 }
 
@@ -3515,7 +3521,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				switch (session_type) {
 					case PROXYSQL_SESSION_MYSQL:
 					case PROXYSQL_SESSION_SQLITE:
-						free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						if (ldap_ctx==NULL) {
+							free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						} else {
+							free_users=GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						}
 						break;
 #ifdef PROXYSQLCLICKHOUSE
 					case PROXYSQL_SESSION_CLICKHOUSE:
@@ -4231,7 +4241,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		reset();
 		init();
 		if (client_authenticated) {
-			GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+			if (ldap_ctx==NULL) {
+				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+			} else {
+				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+			}
 		}
 		client_authenticated=false;
 		if (client_myds->myprot.process_pkt_COM_CHANGE_USER((unsigned char *)pkt->ptr, pkt->size)==true) {

@@ -151,6 +151,7 @@ static int old_wait_timeout;
 
 extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
 extern MySQL_Threads_Handler *GloMTH;
@@ -206,6 +207,11 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_0_0
 
 #define ADMIN_SQLITE_RUNTIME_MYSQL_USERS "CREATE TABLE runtime_mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING_V2_0_0 "CREATE TABLE mysql_ldap_mapping (priority INTEGER PRIMARY KEY NOT NULL , frontend_entity VARCHAR NOT NULL , backend_entity VARCHAR NOT NULL , comment VARCHAR , UNIQUE (frontend_entity))"
+#define ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING_V2_0_0
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_LDAP_MAPPING "CREATE TABLE runtime_mysql_ldap_mapping (priority INTEGER PRIMARY KEY NOT NULL , frontend_entity VARCHAR NOT NULL , backend_entity VARCHAR NOT NULL , comment VARCHAR , UNIQUE (frontend_entity))"
 
 #define ADMIN_SQLITE_RUNTIME_CHECKSUMS_VALUES "CREATE TABLE runtime_checksums_values (name VARCHAR NOT NULL , version INT NOT NULL , epoch INT NOT NULL , checksum VARCHAR NOT NULL , PRIMARY KEY (name))"
 
@@ -742,6 +748,8 @@ bool is_valid_global_variable(const char *var_name) {
 	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
+		return true;
+	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
 	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server->has_variable(var_name + 13)) {
 		return true;
@@ -1381,6 +1389,102 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+
+		if (GloMyLdapAuth) {
+		if ((query_no_space_length>20) && ( (!strncasecmp("SAVE LDAP VARIABLES ", query_no_space, 20)) || (!strncasecmp("LOAD LDAP VARIABLES ", query_no_space, 20))) ) {
+	
+			if (
+				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO MEMORY") && !strncasecmp("LOAD LDAP VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO MEM") && !strncasecmp("LOAD LDAP VARIABLES TO MEM",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("LOAD LDAP VARIABLES FROM DISK") && !strncasecmp("LOAD LDAP VARIABLES FROM DISK",query_no_space, query_no_space_length))
+			) {
+				proxy_info("Received %s command\n", query_no_space);
+				l_free(*ql,*q);
+				*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'ldap-%'");
+				*ql=strlen(*q)+1;
+				return true;
+			}
+	
+			if (
+				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM MEMORY") && !strncasecmp("SAVE LDAP VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM MEM") && !strncasecmp("SAVE LDAP VARIABLES FROM MEM",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("SAVE LDAP VARIABLES TO DISK") && !strncasecmp("SAVE LDAP VARIABLES TO DISK",query_no_space, query_no_space_length))
+			) {
+				proxy_info("Received %s command\n", query_no_space);
+				l_free(*ql,*q);
+				*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'ldap-%'");
+				*ql=strlen(*q)+1;
+				return true;
+			}
+	
+			if (
+				(query_no_space_length==strlen("LOAD LDAP VARIABLES FROM MEMORY") && !strncasecmp("LOAD LDAP VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("LOAD LDAP VARIABLES FROM MEM") && !strncasecmp("LOAD LDAP VARIABLES FROM MEM",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO RUNTIME") && !strncasecmp("LOAD LDAP VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO RUN") && !strncasecmp("LOAD LDAP VARIABLES TO RUN",query_no_space, query_no_space_length))
+			) {
+				proxy_info("Received %s command\n", query_no_space);
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				SPA->load_ldap_variables_to_runtime();
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ldap variables to RUNTIME\n");
+				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+				return false;
+			}
+	
+	/*
+			if (
+				(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
+			) {
+				proxy_info("Received %s command\n", query_no_space);
+				if (GloVars.configfile_open) {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+					if (GloVars.confFile->OpenFile(NULL)==true) {
+						int rows=0;
+						ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+						rows=SPA->Read_Global_Variables_from_configfile("mysql");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+						GloVars.confFile->CloseFile();
+					} else {
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+						char *s=(char *)"Unable to open or parse config file %s";
+						char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+						sprintf(m,s,GloVars.config_file);
+						SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+						free(m);
+					}
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+				}
+				return false;
+			}
+	*/
+			if (
+				(query_no_space_length==strlen("SAVE LDAP VARIABLES TO MEMORY") && !strncasecmp("SAVE LDAP VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("SAVE LDAP VARIABLES TO MEM") && !strncasecmp("SAVE LDAP VARIABLES TO MEM",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM RUNTIME") && !strncasecmp("SAVE LDAP VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+				||
+				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM RUN") && !strncasecmp("SAVE LDAP VARIABLES FROM RUN",query_no_space, query_no_space_length))
+			) {
+				proxy_info("Received %s command\n", query_no_space);
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				SPA->save_ldap_variables_from_runtime();
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved ldap variables from RUNTIME\n");
+				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+				return false;
+			}
+		}
+	}
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21))) ) {
 
@@ -2072,6 +2176,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				flush_clickhouse_variables___runtime_to_database(admindb, false, false, false, true);
 #endif /* PROXYSQLCLICKHOUSE */
 				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
+				flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
 			}
 			if (runtime_mysql_servers) {
 				int old_hostgroup_manager_verbose = mysql_thread___hostgroup_manager_verbose;
@@ -2951,6 +3056,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (GloMyLdapAuth) {
+		if (query_no_space_length==strlen("SHOW LDAP VARIABLES") && !strncasecmp("SHOW LDAP VARIABLES",query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'ldap-\%' ORDER BY variable_name");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+	}
+
 	if (query_no_space_length==strlen("SHOW ADMIN VARIABLES") && !strncasecmp("SHOW ADMIN VARIABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name");
@@ -3599,6 +3713,10 @@ bool ProxySQL_Admin::init() {
 		insert_into_tables_defs(tables_defs_admin,"runtime_clickhouse_users", ADMIN_SQLITE_TABLE_RUNTIME_CLICKHOUSE_USERS);
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+
+	if (GloMyLdapAuth) {
+		insert_into_tables_defs(tables_defs_admin,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
+	}
 	
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
@@ -3620,6 +3738,10 @@ bool ProxySQL_Admin::init() {
 		insert_into_tables_defs(tables_defs_config,"clickhouse_users", ADMIN_SQLITE_TABLE_CLICKHOUSE_USERS);
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+
+	if (GloMyLdapAuth) {
+		insert_into_tables_defs(tables_defs_config,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
+	}
 
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
@@ -3730,6 +3852,7 @@ bool ProxySQL_Admin::init() {
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 #endif /* PROXYSQLCLICKHOUSE */
 	flush_sqliteserver_variables___database_to_runtime(admindb,true);
+	flush_ldap_variables___database_to_runtime(admindb,true);
 
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);
@@ -3773,6 +3896,12 @@ void ProxySQL_Admin::init_sqliteserver_variables() {
 	flush_sqliteserver_variables___runtime_to_database(configdb, false, false, false);
 	flush_sqliteserver_variables___runtime_to_database(admindb, false, true, false);
 	flush_sqliteserver_variables___database_to_runtime(admindb,true);
+}
+
+void ProxySQL_Admin::init_ldap_variables() {
+	flush_ldap_variables___runtime_to_database(configdb, false, false, false);
+	flush_ldap_variables___runtime_to_database(admindb, false, true, false);
+	flush_ldap_variables___database_to_runtime(admindb,true);
 }
 
 void ProxySQL_Admin::admin_shutdown() {
@@ -4355,6 +4484,123 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	sqlite3_finalize(statement1);
 	if (runtime)
 		sqlite3_finalize(statement2);
+	for (int i=0; varnames[i]; i++) {
+		free(varnames[i]);
+	}
+	free(varnames);
+}
+
+void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing LDAP variables. Replace:%d\n", replace);
+	if (
+		( GloMyLdapAuth == NULL )
+	) {
+		return;
+	}
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT substr(variable_name,6) vn, variable_value FROM global_variables WHERE variable_name LIKE 'ldap-%'";
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return;
+	} else {
+		GloMyLdapAuth->wrlock();
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			bool rc=GloMyLdapAuth->set_variable(r->fields[0],r->fields[1]);
+			if (rc==false) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+				if (replace) {
+					char *val=GloMyLdapAuth->get_variable(r->fields[0]);
+					char q[1000];
+					if (val) {
+						if (strcmp(val,r->fields[1])) {
+							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
+							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"ldap-%s\",\"%s\")",r->fields[0],val);
+							db->execute(q);
+						}
+						free(val);
+					} else {
+						if (strcmp(r->fields[0],(char *)"session_debug")==0) {
+							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"ldap-%s\"",r->fields[0]);
+							db->execute(q);
+						} else {
+							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+						}
+						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"ldap-%s\"",r->fields[0]);
+						db->execute(q);
+					}
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
+			}
+		}
+		GloMyLdapAuth->wrunlock();
+	}
+	if (resultset) delete resultset;
+}
+
+void ProxySQL_Admin::flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing LDAP variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	if (onlyifempty) {
+		char *error=NULL;
+	  int cols=0;
+	  int affected_rows=0;
+	  SQLite3_result *resultset=NULL;
+	  char *q=(char *)"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'ldap-%'";
+	  db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+		int matching_rows=0;
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			return;
+		} else {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				matching_rows+=atoi(r->fields[0]);
+			}
+	  }
+	  if (resultset) delete resultset;
+		if (matching_rows) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Table global_variables has LDAP variables - skipping\n");
+			return;
+		}
+	}
+	if (del) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Deleting LDAP variables from global_variables\n");
+		db->execute("DELETE FROM global_variables WHERE variable_name LIKE 'ldap-%'");
+	}
+	if (runtime) {
+		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'ldap-%'");
+	}
+	char *a;
+	char *b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(\"ldap-%s\",\"%s\")";
+  if (replace) {
+    a=(char *)"REPLACE INTO global_variables(variable_name, variable_value) VALUES(\"ldap-%s\",\"%s\")";
+  } else {
+    a=(char *)"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(\"ldap-%s\",\"%s\")";
+  }
+  int l=strlen(a)+200;
+	GloMyLdapAuth->wrlock();
+	char **varnames=GloMyLdapAuth->get_variables_list();
+	for (int i=0; varnames[i]; i++) {
+		char *val=GloMyLdapAuth->get_variable(varnames[i]);
+		l+=( varnames[i] ? strlen(varnames[i]) : 6);
+		l+=( val ? strlen(val) : 6);
+		char *query=(char *)malloc(l);
+		sprintf(query, a, varnames[i], val);
+		if (runtime) {
+			db->execute(query);
+			sprintf(query, b, varnames[i], val);
+		}
+		db->execute(query);
+		if (val)
+			free(val);
+		free(query);
+	}
+	GloMyLdapAuth->wrunlock();
 	for (int i=0; varnames[i]; i++) {
 		free(varnames[i]);
 	}
@@ -5964,6 +6210,9 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
  		admindb->execute("INSERT OR IGNORE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+	if (GloMyLdapAuth) {
+		admindb->execute("INSERT OR IGNORE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -5987,6 +6236,9 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
  		admindb->execute("INSERT OR REPLACE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+	if (GloMyLdapAuth) {
+		admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -6007,6 +6259,9 @@ void ProxySQL_Admin::__delete_disktable() {
 		admindb->execute("DELETE FROM disk.clickhouse_users");
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+	if (GloMyLdapAuth) {
+		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
+	}
 }
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
@@ -6028,6 +6283,9 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
  		admindb->execute("INSERT OR REPLACE INTO disk.clickhouse_users SELECT * FROM main.clickhouse_users");
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+	if (GloMyLdapAuth) {
+ 		admindb->execute("INSERT OR REPLACE INTO disk.mysql_ldap_mapping SELECT * FROM main.mysql_ldap_mapping");
+	}
 }
 
 
@@ -6036,6 +6294,10 @@ void ProxySQL_Admin::flush_mysql_users__from_disk_to_memory() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	admindb->execute("DELETE FROM main.mysql_users");
 	admindb->execute("INSERT INTO main.mysql_users SELECT * FROM disk.mysql_users");
+	if (GloMyLdapAuth) {
+		admindb->execute("DELETE FROM main.mysql_ldap_mapping");
+		admindb->execute("INSERT INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -6045,6 +6307,10 @@ void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("INSERT INTO disk.mysql_users SELECT * FROM main.mysql_users");
+	if (GloMyLdapAuth) {
+		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
+		admindb->execute("INSERT INTO dick.mysql_ldap_mapping SELECT * FROM main.mysql_ldap_mapping");
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }

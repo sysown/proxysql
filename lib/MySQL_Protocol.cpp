@@ -3,6 +3,7 @@
 #include "cpp.h"
 
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern MySQL_Threads_Handler *GloMTH;
 
 #ifdef PROXYSQLCLICKHOUSE
@@ -1368,6 +1369,8 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	char *password=NULL;
 	bool use_ssl=false;
 	bool _ret_use_ssl=false;
+	unsigned char *auth_plugin = NULL;
+	int auth_plugin_id = 0;
 
 	memset(pass,0,128);
 	void *sha1_pass=NULL;
@@ -1414,8 +1417,39 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		if (db_tmp) {
 			db = db_tmp;
 		}
+		pkt++;
+		if (db) {
+			pkt+=strlen(db);
+		}
+	} else {
+		db = NULL;
+	}
+	if (pass[pass_len-1] == 0) {
+		pass_len--; // remove the extra 0 if present
+	}
+	if (_ptr+len > pkt) {
+		if (capabilities & CLIENT_PLUGIN_AUTH) {
+			auth_plugin = pkt;
+		}
+	}
+	if (auth_plugin == NULL) {
+		auth_plugin = (unsigned char *)"mysql_native_password"; // default
+		auth_plugin_id = 1;
 	}
 
+	if (auth_plugin_id == 0) {
+		if (strncmp((char *)auth_plugin,(char *)"mysql_native_password",strlen((char *)"mysql_native_password"))==0) {
+			auth_plugin_id = 1;
+		}
+	}
+	if (auth_plugin_id == 0) {
+		if (strncmp((char *)auth_plugin,(char *)"mysql_clear_password",strlen((char *)"mysql_clear_password"))==0) {
+			auth_plugin_id = 2;
+		}
+	}
+	if (auth_plugin_id == 0) { // unknown plugin
+		return false;
+	}
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
 	int default_hostgroup=-1;
@@ -1433,12 +1467,14 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
 	}
 	//assert(default_hostgroup>=0);
-	(*myds)->sess->default_hostgroup=default_hostgroup;
-	(*myds)->sess->default_schema=default_schema; // just the pointer is passed
-	(*myds)->sess->schema_locked=schema_locked;
-	(*myds)->sess->transaction_persistent=transaction_persistent;
-	(*myds)->sess->session_fast_forward=fast_forward;
-	(*myds)->sess->user_max_connections=max_connections;
+	if (password) {
+		(*myds)->sess->default_hostgroup=default_hostgroup;
+		(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+		(*myds)->sess->schema_locked=schema_locked;
+		(*myds)->sess->transaction_persistent=transaction_persistent;
+		(*myds)->sess->session_fast_forward=fast_forward;
+		(*myds)->sess->user_max_connections=max_connections;
+	}
 	if (password==NULL) {
 		// this is a workaround for bug #603
 		if (
@@ -1462,28 +1498,89 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 				ret=false;
 			}
 		} else {
-			ret=false;
+			ret=false; // by default, assume this will fail
+			// try LDAP
+			if (auth_plugin_id==2) {
+				if (GloMyLdapAuth) {
+					(*myds)->sess->ldap_ctx = GloMyLdapAuth->ldap_ctx_init();
+					password = GloMyLdapAuth->lookup((*myds)->sess->ldap_ctx, (char *)user, (char *)pass, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass); 
+					if (password) {
+						(*myds)->sess->default_hostgroup=default_hostgroup;
+						(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+						(*myds)->sess->schema_locked=schema_locked;
+						(*myds)->sess->transaction_persistent=transaction_persistent;
+						(*myds)->sess->session_fast_forward=fast_forward;
+						(*myds)->sess->user_max_connections=max_connections;
+						if (strncmp(password,(char *)pass,strlen(password))==0) {
+							ret=true;
+						}
+					}
+				}
+			}
 		}
 	} else {
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
 			if (password[0]!='*') { // clear text password
-				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-					ret=true;
+				if (auth_plugin_id == 1) { // mysql_native_password
+					proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+					if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+						ret=true;
+					}
+				} else { // mysql_clear_password
+					if (strncmp(password,(char *)pass,strlen(password))==0) {
+						ret=true;
+					}
 				}
 			} else {
-				if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || PROXYSQL_SESSION_ADMIN || PROXYSQL_SESSION_STATS) {
-					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
-					if (ret) {
-						if (sha1_pass==NULL) {
-							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+				if (auth_plugin_id == 1) {
+					if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || PROXYSQL_SESSION_ADMIN || PROXYSQL_SESSION_STATS) {
+						ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+						if (ret) {
+							if (sha1_pass==NULL) {
+								// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+								GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+							}
+							if (userinfo->sha1_pass)
+								free(userinfo->sha1_pass);
+							userinfo->sha1_pass=sha1_pass_hex(reply);
 						}
-						if (userinfo->sha1_pass)
-							free(userinfo->sha1_pass);
-						userinfo->sha1_pass=sha1_pass_hex(reply);
+					}
+				} else { // mysql_clear_password
+					if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || PROXYSQL_SESSION_ADMIN || PROXYSQL_SESSION_STATS) {
+/*
+						char sha1_2[SHA_DIGEST_LENGTH+1];
+						sha1_2[SHA_DIGEST_LENGTH]='\0';
+						proxy_compute_sha1_hash((unsigned char *)reply,(char *)pass,pass_len);
+						proxy_compute_sha1_hash((unsigned char *)sha1_2,reply,strlen(reply));
+						uint8 hash_stage2[SHA_DIGEST_LENGTH];
+						unhex_pass(hash_stage2,sha1_2);
+*/
+						uint8 hash_stage1[SHA_DIGEST_LENGTH];
+						uint8 hash_stage2[SHA_DIGEST_LENGTH];
+						SHA_CTX sha1_context;
+						SHA1_Init(&sha1_context);
+						SHA1_Update(&sha1_context, pass, pass_len);
+						SHA1_Final(hash_stage1, &sha1_context);
+						SHA1_Init(&sha1_context);
+						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
+						SHA1_Final(hash_stage2, &sha1_context);
+						char *double_hashed_password = sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
+
+						if (strcasecmp(double_hashed_password,password)==0) {
+							ret = true;
+							if (sha1_pass==NULL) {
+								// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+								GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,hash_stage1);
+							}
+							if (userinfo->sha1_pass)
+								free(userinfo->sha1_pass);
+							userinfo->sha1_pass=sha1_pass_hex((char *)hash_stage1);
+						} else {
+							ret = false;
+						}
+						free(double_hashed_password);
 					}
 				}
 			}

@@ -17,6 +17,15 @@
 #include <libdaemon/dexec.h>
 #include "ev.h"
 
+/*
+extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
+	return NULL;
+}
+*/
+
+volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
+void * __mysql_ldap_auth;
+
 
 // MariaDB client library redefines dlerror(), see https://mariadb.atlassian.net/browse/CONC-101
 #ifdef dlerror
@@ -532,7 +541,7 @@ void * __qc;
 void * __mysql_thread;
 void * __mysql_threads_handler;
 void * __query_processor;
-void * __mysql_auth; 
+//void * __mysql_auth; 
 
 
 
@@ -561,6 +570,7 @@ int socket_fd;
 
 Query_Cache *GloQC;
 MySQL_Authentication *GloMyAuth;
+MySQL_LDAP_Authentication *GloMyLdapAuth;
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -690,6 +700,13 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			if (rc==true) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
 			}
+		if (root.exists("ldap_auth_plugin")==true) {
+			string ldap_auth_plugin;
+			bool rc;
+			rc=root.lookupValue("ldap_auth_plugin", ldap_auth_plugin);
+			if (rc==true) {
+				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
+			}
 		}
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
@@ -771,6 +788,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloQPro=NULL;
 	GloMTH=NULL;
 	GloMyAuth=NULL;
+	GloMyLdapAuth = NULL;
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -809,6 +827,10 @@ void ProxySQL_Main_init_Auth_module() {
 	GloMyAuth = new MySQL_Authentication();
 	GloMyAuth->print_version();
 	GloAdmin->init_users();
+	//GloMyLdapAuth = create_MySQL_LDAP_Authentication();
+	if (GloMyLdapAuth) {
+		GloMyLdapAuth->print_version();
+	}
 }
 
 void ProxySQL_Main_init_Query_module() {
@@ -1029,6 +1051,33 @@ void ProxySQL_Main_init() {
 
 
 
+static void LoadPlugins() {
+	if (GloVars.ldap_auth_plugin) {
+		dlerror();
+		char * dlsym_error = NULL;
+		dlerror();
+		dlsym_error=NULL;
+		__mysql_ldap_auth = dlopen(GloVars.ldap_auth_plugin, RTLD_NOW);
+		if (!__mysql_ldap_auth) {
+			cerr << "Cannot load library: " << dlerror() << '\n';
+			exit(EXIT_FAILURE);
+		} else {
+			dlerror();
+			create_MySQL_LDAP_Authentication = (create_MySQL_LDAP_Authentication_t *) dlsym(__mysql_ldap_auth, "create_MySQL_LDAP_Authentication_func");
+			dlsym_error = dlerror();
+			if (dlsym_error!=NULL) {
+				cerr << "Cannot load symbol create_MySQL_LDAP_Authentication: " << dlsym_error << '\n';
+				exit(EXIT_FAILURE);
+			}
+		}
+		if (__mysql_ldap_auth==NULL || dlsym_error) {
+			proxy_error("Unable to load MySQL_LDAP_Authentication from %s\n", GloVars.ldap_auth_plugin);
+			exit(EXIT_FAILURE);
+		} else {
+			GloMyLdapAuth = create_MySQL_LDAP_Authentication();
+		}
+	}
+}
 
 
 
@@ -1047,6 +1096,8 @@ void ProxySQL_Main_init_phase2___not_started() {
 	if (GloVars.configfile_open) {
 		GloVars.confFile->CloseFile();
 	}
+
+	LoadPlugins();
 
 	ProxySQL_Main_init_Auth_module();
 
@@ -1133,6 +1184,11 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+
+	// LDAP
+	if (GloMyLdapAuth) {
+		GloAdmin->init_ldap_variables();
+	}
 }
 
 
@@ -1549,6 +1605,11 @@ finish:
 	daemon_pid_file_remove();
 
 //	l_mem_destroy(__thr_sfp);
+
+#ifdef RUNNING_ON_VALGRIND
+	if (RUNNING_ON_VALGRIND==0) {
+		dlclose(__mysql_ldap_auth);
+	}
+#endif
 	return 0;
 }
-
