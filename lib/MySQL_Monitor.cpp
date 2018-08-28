@@ -744,8 +744,7 @@ __exit_monitor_read_only_thread:
 			num_fields = mysql_num_fields(mmsd->result);
 			fields = mysql_fetch_fields(mmsd->result);
 			for(k = 0; k < num_fields; k++) {
-				//if (strcmp("VARIABLE_NAME", fields[k].name)==0) {
-				if (strcmp((char *)"@@global.read_only", (char *)fields[k].name)==0) {
+ 				if (strcmp((char *)"@@global.innodb_read_only", (char *)fields[k].name)==0 || strcmp((char *)"@@global.super_read_only", (char *)fields[k].name)==0 || strcmp((char *)"@@global.read_only", (char *)fields[k].name)==0) {
 					j=k;
 				}
 			}
@@ -1958,12 +1957,10 @@ void * MySQL_Monitor::monitor_read_only() {
 					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
 					mmsd->task_id = MON_READ_ONLY; // default
 					if (r->fields[3]) {
-						if (strcasecmp(r->fields[3],(char *)"@@global.innodb_read_only")==0) {
+						if (strcasecmp(r->fields[3],(char *)"innodb_read_only")==0) {
 							mmsd->task_id = MON_INNODB_READ_ONLY;
-						} else {
-							if (strcasecmp(r->fields[3],(char *)"@@global.super_read_only")==0) {
-								mmsd->task_id = MON_SUPER_READ_ONLY;
-							}
+						} else if (strcasecmp(r->fields[3],(char *)"super_read_only")==0) {
+							mmsd->task_id = MON_SUPER_READ_ONLY;
 						}
 					}
 					mmsd->mondb=monitordb;
