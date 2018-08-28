@@ -9,7 +9,7 @@ Its development is driven by the lack of open source proxies that provide high p
 - [Official website](http://www.proxysql.com/)
 - [Documentation](https://github.com/sysown/proxysql/wiki)
 - [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)
-- [Forum](https://groups.google.com/forum/#proxysql/)
+- [Forum](https://groups.google.com/forum/#!forum/proxysql/)
 - [Linkedin group](https://www.linkedin.com/groups/13581070/)
 
 Getting started
