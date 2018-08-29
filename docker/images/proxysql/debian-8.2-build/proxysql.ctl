@@ -22,3 +22,4 @@ File: postinst
  #!/bin/sh -e
  if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
  update-rc.d proxysql defaults
+ chmod 600 /etc/proxysql/cnf

@@ -49,6 +49,7 @@ rm -rf /var/run/%{name}
 %files
 %defattr(-,root,root,-)
 %config(noreplace) %{_sysconfdir}/%{name}.cnf
+%attr(600,root,root) %{_sysconfdir}/%{name}.cnf
 %{_bindir}/*
 %{_sysconfdir}/init.d/%{name}
 /usr/share/proxysql/tools/proxysql_galera_checker.sh
