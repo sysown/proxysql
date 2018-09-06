@@ -7026,7 +7026,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	int cols2 = 0;
 	int affected_rows2 = 0;
 	SQLite3_result *resultset2 = NULL;
-	char *query2=(char *)"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM main.mysql_query_rules_fast_routing";
+	char *query2=(char *)"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM main.mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN";
 	admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
@@ -7037,6 +7037,8 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		if (checksum_variables.checksum_mysql_query_rules) {
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			uint64_t hash1 = resultset->raw_checksum();
+			uint64_t hash2 = resultset2->raw_checksum();
+			hash1 += hash2;
 			uint32_t d32[2];
 			char buf[20];
 			memcpy(&d32, &hash1, sizeof(hash1));
