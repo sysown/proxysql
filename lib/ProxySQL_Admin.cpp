@@ -3232,8 +3232,14 @@ __end_while_pool:
 			for (i=0; i<nfds; i++) {
 				char *add=NULL; char *port=NULL;
 				close(fds[i].fd);
-				c_split_2(socket_names[i], ":" , &add, &port);
-				if (atoi(port)==0) { unlink(socket_names[i]); }
+				if (socket_names[i]) {
+					c_split_2(socket_names[i], ":" , &add, &port);
+					if (port) {
+						if (atoi(port)==0) {
+							unlink(socket_names[i]);
+						}
+					}
+				}
 			}
 			nfds=0;
 			fds[nfds].fd=GloAdmin->pipefd[0];
@@ -3243,27 +3249,29 @@ __end_while_pool:
 			unsigned int j;
 			i=0; j=0;
 			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
+				bool free_mem = false;
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
-
-                                char *h = NULL;
-                                if (*sn == '[') {
-                                        char *p = strchr(sn, ']');
-                                        if (p == NULL)
-                                                proxy_error("Invalid IPv6 address: %s\n", sn);
-
-                                        h = ++sn; // remove first '['
-                                        *p = '\0';
-                                        sn = p++; // remove last ']'
-                                        add = h;
-                                        port = ++p; // remove ':'
-                                } else {
-                                        c_split_2(sn, ":" , &add, &port);
-                                }
+				char *h = NULL;
+				if (*sn == '[') {
+					char *p = strchr(sn, ']');
+					if (p == NULL)
+						proxy_error("Invalid IPv6 address: %s\n", sn);
+					h = ++sn; // remove first '['
+					*p = '\0';
+					sn = p++; // remove last ']'
+					add = h;
+					port = ++p; // remove ':'
+				} else {
+					c_split_2(sn, ":" , &add, &port);
+					free_mem=true;
+				}
 
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
-				if (add) free(add);
-				if (port) free(port);
+				if (free_mem) {
+					if (add) free(add);
+					if (port) free(port);
+				}
 			}
 			S_amll.wrunlock();
 		}
