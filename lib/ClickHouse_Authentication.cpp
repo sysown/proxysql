@@ -36,7 +36,7 @@ void ClickHouse_Authentication::print_version() {
 	};
 
 void ClickHouse_Authentication::set_all_inactive(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	ch_creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
@@ -44,7 +44,7 @@ void ClickHouse_Authentication::set_all_inactive(enum cred_username_type usertyp
 #endif
 	unsigned int i;
 	for (i=0; i<cg.cred_array->len; i++) {
-		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
+		ch_account_details_t *ado=(ch_account_details_t *)cg.cred_array->index(i);
 		ado->__active=false;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
@@ -55,7 +55,7 @@ void ClickHouse_Authentication::set_all_inactive(enum cred_username_type usertyp
 }
 
 void ClickHouse_Authentication::remove_inactives(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	ch_creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
@@ -64,7 +64,7 @@ void ClickHouse_Authentication::remove_inactives(enum cred_username_type usertyp
 	unsigned int i;
 __loop_remove_inactives:
 	for (i=0; i<cg.cred_array->len; i++) {
-		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
+		ch_account_details_t *ado=(ch_account_details_t *)cg.cred_array->index(i);
 		if (ado->__active==false) {
 			del(ado->username,usertype,false);
 			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
@@ -84,17 +84,17 @@ bool ClickHouse_Authentication::add(char * username, char * password, enum cred_
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	ch_creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 	
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	// few changes will follow, due to issue #802
-	account_details_t *ad=NULL;
+	ch_account_details_t *ad=NULL;
 	bool new_ad=false;
 	if (lookup != cg.bt_map.end()) {
 		ad=lookup->second;
@@ -111,7 +111,7 @@ bool ClickHouse_Authentication::add(char * username, char * password, enum cred_
 			ad->default_schema=strdup(default_schema);
 		}
   } else {
-		ad=(account_details_t *)malloc(sizeof(account_details_t));
+		ad=(ch_account_details_t *)malloc(sizeof(ch_account_details_t));
 		ad->username=strdup(username);
 		ad->default_schema=strdup(default_schema);
 		ad->password=strdup(password);
@@ -139,7 +139,7 @@ bool ClickHouse_Authentication::add(char * username, char * password, enum cred_
 	return true;
 };
 
-int ClickHouse_Authentication::dump_all_users(account_details_t ***ads, bool _complete) {
+int ClickHouse_Authentication::dump_all_users(ch_account_details_t ***ads, bool _complete) {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&creds_frontends.lock);
 	pthread_rwlock_rdlock(&creds_backends.lock);
@@ -150,16 +150,16 @@ int ClickHouse_Authentication::dump_all_users(account_details_t ***ads, bool _co
 	int total_size;
 	int idx_=0;
 	unsigned i=0;
-	account_details_t **_ads;
+	ch_account_details_t **_ads;
 	total_size=creds_frontends.cred_array->len;
 	if (_complete) {
 		total_size+=creds_backends.cred_array->len;
 	}
 	if (!total_size) goto __exit_dump_all_users;
-	_ads=(account_details_t **)malloc(sizeof(account_details_t *)*total_size);
+	_ads=(ch_account_details_t **)malloc(sizeof(ch_account_details_t *)*total_size);
 	for (i=0; i<creds_frontends.cred_array->len; i++) {
-		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
-		account_details_t *ado=(account_details_t *)creds_frontends.cred_array->index(i);
+		ch_account_details_t *ad=(ch_account_details_t *)malloc(sizeof(ch_account_details_t));
+		ch_account_details_t *ado=(ch_account_details_t *)creds_frontends.cred_array->index(i);
 		ad->username=strdup(ado->username);
 		ad->max_connections=ado->max_connections;
 		ad->default_hostgroup=ado->default_hostgroup;
@@ -185,8 +185,8 @@ int ClickHouse_Authentication::dump_all_users(account_details_t ***ads, bool _co
 	}
 	if (_complete==true) {
 	for (i=0; i<creds_backends.cred_array->len; i++) {
-		account_details_t *ad=(account_details_t *)malloc(sizeof(account_details_t));
-		account_details_t *ado=(account_details_t *)creds_backends.cred_array->index(i);
+		ch_account_details_t *ad=(ch_account_details_t *)malloc(sizeof(ch_account_details_t));
+		ch_account_details_t *ado=(ch_account_details_t *)creds_backends.cred_array->index(i);
 		ad->num_connections_used=0;
 		ad->username=strdup(ado->username);
 		ad->password=strdup(ado->password);
@@ -224,17 +224,17 @@ int ClickHouse_Authentication::increase_frontend_user_connections(char *username
 	myhash->Update(username,strlen(username));
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
-	creds_group_t &cg=creds_frontends;
+	ch_creds_group_t &cg=creds_frontends;
 	int ret=0;
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator it;
+	std::map<uint64_t, ch_account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
-		account_details_t *ad=it->second;
+		ch_account_details_t *ad=it->second;
 		if (ad->max_connections > ad->num_connections_used) {
 			ret=ad->max_connections-ad->num_connections_used;
 			ad->num_connections_used++;
@@ -258,16 +258,16 @@ void ClickHouse_Authentication::decrease_frontend_user_connections(char *usernam
 	myhash->Update(username,strlen(username));
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
-	creds_group_t &cg=creds_frontends;
+	ch_creds_group_t &cg=creds_frontends;
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator it;
+	std::map<uint64_t, ch_account_details_t *>::iterator it;
 	it = cg.bt_map.find(hash1);
 	if (it != cg.bt_map.end()) {
-		account_details_t *ad=it->second;
+		ch_account_details_t *ad=it->second;
 		if (ad->num_connections_used > 0) {
 			ad->num_connections_used--;
 		}
@@ -288,7 +288,7 @@ bool ClickHouse_Authentication::del(char * username, enum cred_username_type use
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	ch_creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 	if (set_lock)
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
@@ -296,10 +296,10 @@ bool ClickHouse_Authentication::del(char * username, enum cred_username_type use
 #else
 		spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
-		account_details_t *ad=lookup->second;
+		ch_account_details_t *ad=lookup->second;
 		cg.cred_array->remove_fast(ad);
 		cg.bt_map.erase(lookup);
 		free(ad->username);
@@ -327,17 +327,17 @@ bool ClickHouse_Authentication::set_SHA1(char * username, enum cred_username_typ
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	ch_creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
-		account_details_t *ad=lookup->second;
+		ch_account_details_t *ad=lookup->second;
 		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
 		if (sha_pass) {
 			ad->sha1_pass=malloc(SHA_DIGEST_LENGTH);
@@ -361,17 +361,17 @@ char * ClickHouse_Authentication::lookup(char * username, enum cred_username_typ
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	ch_creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&cg.lock);
 #else
 	spin_rdlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
-		account_details_t *ad=lookup->second;
+		ch_account_details_t *ad=lookup->second;
 		ret=l_strdup(ad->password);
 		if (use_ssl) *use_ssl=ad->use_ssl;
 		if (default_hostgroup) *default_hostgroup=ad->default_hostgroup;
@@ -397,19 +397,19 @@ char * ClickHouse_Authentication::lookup(char * username, enum cred_username_typ
 }
 
 bool ClickHouse_Authentication::_reset(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	ch_creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
 
 	while (cg.bt_map.size()) {
 		lookup = cg.bt_map.begin();
 		if ( lookup != cg.bt_map.end() ) {
-			account_details_t *ad=lookup->second;
+			ch_account_details_t *ad=lookup->second;
      	cg.bt_map.erase(lookup);
 			free(ad->username);
 			free(ad->password);
