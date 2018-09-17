@@ -751,6 +751,36 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	}
 	if ( (pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
+		if (strstr((const char *)unstripped,(const char *)"time_zone")) {
+			string nq1 = string(unstripped);
+			re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+			opt2->set_case_sensitive(false);
+			char *pattern=(char *)"(?:|SESSION +|@@|@@session.)TIME_ZONE *(?:|:)= *(?:'||\")((\\w|/|:|\\d|\\+|-)*)(?:'||\") *(?:(|;|-- .*|#.*))$";
+			re2::RE2 *re=new RE2(pattern, *opt2);
+			string s1;
+			int rc=RE2::PartialMatch(nq1, *re, &s1);
+			delete re;
+			delete opt2;
+			if (rc) {
+#ifdef DEBUG
+				proxy_info("Setting TIME_ZONE to %s\n", s1.c_str());
+#endif
+				uint32_t time_zone_int=SpookyHash::Hash32(s1.c_str(),s1.length(),10);
+				if (client_myds->myconn->options.time_zone_int != time_zone_int) {
+					client_myds->myconn->options.time_zone_int = time_zone_int;
+					if (client_myds->myconn->options.time_zone) {
+						free(client_myds->myconn->options.time_zone);
+					}
+					client_myds->myconn->options.time_zone=strdup(s1.c_str());
+				}
+			}
+			char *com = strchr(unstripped,',');
+			if (com) {
+				char *a = unstripped;
+				unstripped=strndup((const char *)a,(com-a));
+				free(a);
+			}
+		}
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
 		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
