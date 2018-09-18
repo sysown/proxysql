@@ -161,7 +161,7 @@ The field `comment` can be used to store any arbitrary data.
 
 ## mysql_query_rules
 
-Documentation moved to the [wiki](../../../wiki/MySQL-Query-Rules)
+Documentation moved to the [wiki](../../../wiki/Main-(runtime)#mysql_query_rules)
 
 ## global_variables
 
