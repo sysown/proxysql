@@ -234,6 +234,7 @@ class MySQL_Thread
 	struct {
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
+		bool query_cache_stores_empty_result;
 	} variables;
 
 #ifdef PROXYSQL_MYSQL_PTHREAD_MUTEX
@@ -415,6 +416,7 @@ class MySQL_Threads_Handler
 		int query_cache_size_MB;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
+		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
 	} variables;
 	struct {
