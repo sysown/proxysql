@@ -867,6 +867,9 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 				sprintf(errmsg,m,csname);
 			}
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+#ifdef DEBUG
+			proxy_error("Error : %s\n", errmsg);
+#endif // DEBUG
 			free(errmsg);
 		} else {
 			client_myds->myconn->set_charset(c->nr);
@@ -1665,6 +1668,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			char buf[256];
 			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf);
+#ifdef DEBUG
+			proxy_error("Error : %s\n", buf);
+#endif // DEBUG
 			RequestEnd(mybe->server_myds);
 			//enum session_status st;
 			while (previous_status.size()) {
@@ -3825,6 +3831,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							client_myds->DSS=STATE_QUERY_SENT_NET;
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+#ifdef DEBUG
+							proxy_error("Error : %s\n", errmsg);
+#endif // DEBUG
 							client_myds->DSS=STATE_SLEEP;
 							status=WAITING_CLIENT_DATA;
 							free(errmsg);
