@@ -6715,7 +6715,7 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", qd);
 		admindb->execute(qd);
 	}
-	account_details_t **ads=NULL;
+	ch_account_details_t **ads=NULL;
 	int num_users;
 	int i;
 /*
@@ -6750,7 +6750,7 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 	}
 	for (i=0; i<num_users; i++) {
 	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
-		account_details_t *ad=ads[i];
+		ch_account_details_t *ad=ads[i];
 		sqlite3_stmt *statement1=NULL;
 		if (ads[i]->default_hostgroup >= 0) {
 			char *q=NULL;
@@ -6799,7 +6799,6 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 		free(ad->username);
 		free(ad->password); // this is not initialized with dump_all_users( , false)
 		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
-		free(ad->comment);
 		free(ad);
 	}
 	if (_runtime) {
