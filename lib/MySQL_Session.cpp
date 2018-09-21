@@ -749,6 +749,35 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 		}
 	}
+	if ( (pkt->size < 60) && (pkt->size > 11) && (strncasecmp((char *)"SET CHAR",(char *)pkt->ptr+5,8)==0) ) { // issue #1692
+		int offset=0;
+		if ((strncasecmp((char *)"SET CHARSET ",(char *)pkt->ptr+5,12)==0)) {
+			offset=17;
+		} else {
+			if ((strncasecmp((char *)"SET CHARACTER SET ",(char *)pkt->ptr+5,18)==0)) {
+				offset=23;
+			}
+		}
+		if (offset) {
+			char *idx=NULL;
+			idx=(char *)pkt->ptr+offset;
+		//idx=(char *)memchr(p,'=',pkt->size-37);
+		//if (idx) { // we found =
+			PtrSize_t pkt_2;
+			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-(idx-(char *)pkt->ptr);
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			mysql_hdr Hdr;
+			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
+			Hdr.pkt_length=pkt_2.size-5;
+			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
+			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+15,idx,pkt->size-(idx-(char *)pkt->ptr));
+			l_free(pkt->size,pkt->ptr);
+			pkt->size=pkt_2.size;
+			pkt->ptr=pkt_2.ptr;
+		}
+	}
 	if ( (pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
 		if (strstr((const char *)unstripped,(const char *)"time_zone")) {
