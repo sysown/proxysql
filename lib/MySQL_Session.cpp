@@ -749,8 +749,67 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 		}
 	}
+	if ( (pkt->size < 60) && (pkt->size > 11) && (strncasecmp((char *)"SET CHAR",(char *)pkt->ptr+5,8)==0) ) { // issue #1692
+		int offset=0;
+		if ((strncasecmp((char *)"SET CHARSET ",(char *)pkt->ptr+5,12)==0)) {
+			offset=17;
+		} else {
+			if ((strncasecmp((char *)"SET CHARACTER SET ",(char *)pkt->ptr+5,18)==0)) {
+				offset=23;
+			}
+		}
+		if (offset) {
+			char *idx=NULL;
+			idx=(char *)pkt->ptr+offset;
+		//idx=(char *)memchr(p,'=',pkt->size-37);
+		//if (idx) { // we found =
+			PtrSize_t pkt_2;
+			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-(idx-(char *)pkt->ptr);
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			mysql_hdr Hdr;
+			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
+			Hdr.pkt_length=pkt_2.size-5;
+			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
+			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+15,idx,pkt->size-(idx-(char *)pkt->ptr));
+			l_free(pkt->size,pkt->ptr);
+			pkt->size=pkt_2.size;
+			pkt->ptr=pkt_2.ptr;
+		}
+	}
 	if ( (pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
+		if (strstr((const char *)unstripped,(const char *)"time_zone")) {
+			string nq1 = string(unstripped);
+			re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+			opt2->set_case_sensitive(false);
+			char *pattern=(char *)"(?:|SESSION +|@@|@@session.)TIME_ZONE *(?:|:)= *(?:'||\")((\\w|/|:|\\d|\\+|-)*)(?:'||\") *(?:(|;|-- .*|#.*))$";
+			re2::RE2 *re=new RE2(pattern, *opt2);
+			string s1;
+			int rc=RE2::PartialMatch(nq1, *re, &s1);
+			delete re;
+			delete opt2;
+			if (rc) {
+#ifdef DEBUG
+				proxy_info("Setting TIME_ZONE to %s\n", s1.c_str());
+#endif
+				uint32_t time_zone_int=SpookyHash::Hash32(s1.c_str(),s1.length(),10);
+				if (client_myds->myconn->options.time_zone_int != time_zone_int) {
+					client_myds->myconn->options.time_zone_int = time_zone_int;
+					if (client_myds->myconn->options.time_zone) {
+						free(client_myds->myconn->options.time_zone);
+					}
+					client_myds->myconn->options.time_zone=strdup(s1.c_str());
+				}
+			}
+			char *com = strchr(unstripped,',');
+			if (com) {
+				char *a = unstripped;
+				unstripped=strndup((const char *)a,(com-a));
+				free(a);
+			}
+		}
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
 		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
@@ -837,6 +896,9 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 				sprintf(errmsg,m,csname);
 			}
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+#ifdef DEBUG
+			proxy_error("Error : %s\n", errmsg);
+#endif // DEBUG
 			free(errmsg);
 		} else {
 			client_myds->myconn->set_charset(c->nr);
@@ -1635,6 +1697,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			char buf[256];
 			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf);
+#ifdef DEBUG
+			proxy_error("Error : %s\n", buf);
+#endif // DEBUG
 			RequestEnd(mybe->server_myds);
 			//enum session_status st;
 			while (previous_status.size()) {
@@ -3795,6 +3860,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							client_myds->DSS=STATE_QUERY_SENT_NET;
 							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+#ifdef DEBUG
+							proxy_error("Error : %s\n", errmsg);
+#endif // DEBUG
 							client_myds->DSS=STATE_SLEEP;
 							status=WAITING_CLIENT_DATA;
 							free(errmsg);
