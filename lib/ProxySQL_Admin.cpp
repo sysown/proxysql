@@ -6104,6 +6104,7 @@ void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
 	admindb->execute("DELETE FROM disk.mysql_galera_hostgroups");
 	admindb->execute("INSERT INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
 	admindb->execute("INSERT INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
+	admindb->execute("INSERT INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
 	admindb->execute("INSERT INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
