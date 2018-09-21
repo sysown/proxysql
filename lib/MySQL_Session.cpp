@@ -4446,22 +4446,24 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
 			if (qpo && qpo->cache_ttl>0) { // the resultset should be cached
 				if (mysql_errno(mysql)==0) { // no errors
-					client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
-					client_myds->resultset_length=MyRS->resultset_size;
-					unsigned char *aa=client_myds->resultset2buffer(false);
-					while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
-					GloQC->set(
-						client_myds->myconn->userinfo->hash ,
-						(const unsigned char *)CurrentQuery.QueryPointer,
-						CurrentQuery.QueryLength,
-						aa ,
-						client_myds->resultset_length ,
-						thread->curtime/1000 ,
-						thread->curtime/1000 ,
-						thread->curtime/1000 + qpo->cache_ttl
-					);
-					l_free(client_myds->resultset_length,aa);
-					client_myds->resultset_length=0;
+					if (thread->variables.query_cache_stores_empty_result || MyRS->num_rows) {
+						client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
+						client_myds->resultset_length=MyRS->resultset_size;
+						unsigned char *aa=client_myds->resultset2buffer(false);
+						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
+						GloQC->set(
+							client_myds->myconn->userinfo->hash ,
+							(const unsigned char *)CurrentQuery.QueryPointer,
+							CurrentQuery.QueryLength,
+							aa ,
+							client_myds->resultset_length ,
+							thread->curtime/1000 ,
+							thread->curtime/1000 ,
+							thread->curtime/1000 + qpo->cache_ttl
+						);
+						l_free(client_myds->resultset_length,aa);
+						client_myds->resultset_length=0;
+					}
 				}
 			}
 		}
