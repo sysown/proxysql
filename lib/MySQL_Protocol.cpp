@@ -1067,6 +1067,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	if (mysql_thread___have_compress) {
 		mysql_thread___server_capabilities |= CLIENT_COMPRESS; // FIXME: shouldn't be here
 	}
+	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
   memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
