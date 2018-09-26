@@ -4446,7 +4446,14 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
 			if (qpo && qpo->cache_ttl>0) { // the resultset should be cached
 				if (mysql_errno(mysql)==0) { // no errors
-					if (thread->variables.query_cache_stores_empty_result || MyRS->num_rows) {
+					if (
+						(qpo->cache_empty_result==1)
+						|| (
+							(qpo->cache_empty_result == -1)
+							&&
+							(thread->variables.query_cache_stores_empty_result || MyRS->num_rows)
+						)
+					) {
 						client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
 						client_myds->resultset_length=MyRS->resultset_size;
 						unsigned char *aa=client_myds->resultset2buffer(false);
