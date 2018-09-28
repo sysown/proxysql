@@ -17,11 +17,13 @@ SetParser::SetParser(std::string nq) {
 }
 
 std::map<std::string,std::vector<string>> SetParser::parse() {
-  re2::RE2::Replace(&query, "^\\s*SET\\s+", "");
 
   re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
   opt2->set_case_sensitive(false);
   opt2->set_longest_match(false);
+
+  re2::RE2 re0("^\\s*SET\\s+", *opt2);
+  re2::RE2::Replace(&query, re0, "");
 
   std::map<std::string,std::vector<string>> result;
 
@@ -31,7 +33,7 @@ std::map<std::string,std::vector<string>> SetParser::parse() {
 #define SESSION "(?:|SESSION +|@@|@@session.)"
 #define VAR "(\\w+)"
 #define SPACES " *"
-#define VAR_VALUE "((?:[\\w/]|,)+)"
+#define VAR_VALUE "((?:[\\w/\\d:\\+\\-]|,)+)"
 
   const string pattern="(?:" NAMES SPACES QUOTES NAME_VALUE QUOTES "(?: +COLLATE +" QUOTES NAME_VALUE QUOTES "|)" "|" SESSION VAR SPACES "(?:|:)=" SPACES QUOTES VAR_VALUE QUOTES ") *,? *";
   re2::RE2 re(pattern, *opt2);
