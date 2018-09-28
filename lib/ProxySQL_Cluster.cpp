@@ -111,7 +111,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						update_checksum = GloProxyCluster->Update_Global_Checksum(node->hostname, node->port, result);
 						mysql_free_result(result);
 						// FIXME: update metrics are not updated for now. We only check checksum
-						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us); 
+						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
 						//unsigned long long elapsed_time_ms = elapsed_time_us / 1000;
 /*
 						int e_ms = (int)elapsed_time_ms;
@@ -174,7 +174,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 									MYSQL_RES *result = mysql_store_result(conn);
 									unsigned long long after_query_time=monotonic_time();
 									unsigned long long elapsed_time_us = (after_query_time - before_query_time);
-									rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us); 
+									rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
 									mysql_free_result(result);
 								} else {
 									query_error = query2;
@@ -221,7 +221,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		} else {
 			sleep(1);	// do not monitor if the username is empty
 		}
-		rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, NULL, 0); // added extra check, see #1323 
+		rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, NULL, 0); // added extra check, see #1323
 	}
 __exit_monitor_thread:
 	if (conn)
@@ -618,7 +618,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 			if (rc_conn) {
 				MYSQL_RES *result1 = NULL;
 				MYSQL_RES *result2 = NULL;
-				rc_query = mysql_query(conn,"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment FROM runtime_mysql_query_rules");
+				rc_query = mysql_query(conn,"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment FROM runtime_mysql_query_rules");
 				if ( rc_query == 0 ) {
 					MYSQL_RES *result1 = mysql_store_result(conn);
 					rc_query = mysql_query(conn,"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing");
@@ -629,7 +629,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						GloAdmin->admindb->execute("DELETE FROM mysql_query_rules");
 						GloAdmin->admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
 						MYSQL_ROW row;
-						char *q = (char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, log, apply, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)";
+						char *q = (char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)";
 						sqlite3_stmt *statement1 = NULL;
 						sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 						rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
@@ -652,20 +652,22 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 							rc=sqlite3_bind_text(statement1, 15, row[13], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // replace_pattern
 							rc=sqlite3_bind_text(statement1, 16, row[14], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // destination_hostgroup
 							rc=sqlite3_bind_text(statement1, 17, row[15], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cache_ttl
-							rc=sqlite3_bind_text(statement1, 18, row[16], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // reconnect
-							rc=sqlite3_bind_text(statement1, 19, row[17], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // timeout
-							rc=sqlite3_bind_text(statement1, 20, row[18], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // retries
-							rc=sqlite3_bind_text(statement1, 21, row[19], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // delay
-							rc=sqlite3_bind_text(statement1, 22, row[20], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // next_query_flagIN
-							rc=sqlite3_bind_text(statement1, 23, row[21], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_flagOUT
-							rc=sqlite3_bind_text(statement1, 24, row[22], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_hostgroup
-							rc=sqlite3_bind_text(statement1, 25, row[23], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // error_msg
-							rc=sqlite3_bind_text(statement1, 26, row[24], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // OK_msg
-							rc=sqlite3_bind_text(statement1, 27, row[25], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // sticky_conn
-							rc=sqlite3_bind_text(statement1, 28, row[26], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // multiplex
-							rc=sqlite3_bind_text(statement1, 29, row[27], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // log
-							rc=sqlite3_bind_text(statement1, 30, row[28], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // apply
-							rc=sqlite3_bind_text(statement1, 31, row[29], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
+              rc=sqlite3_bind_text(statement1, 18, row[16], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cache_empty_result
+							rc=sqlite3_bind_text(statement1, 19, row[17], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // reconnect
+							rc=sqlite3_bind_text(statement1, 20, row[18], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // timeout
+							rc=sqlite3_bind_text(statement1, 21, row[19], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // retries
+							rc=sqlite3_bind_text(statement1, 22, row[20], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // delay
+							rc=sqlite3_bind_text(statement1, 23, row[21], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // next_query_flagIN
+							rc=sqlite3_bind_text(statement1, 24, row[22], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_flagOUT
+							rc=sqlite3_bind_text(statement1, 25, row[23], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_hostgroup
+							rc=sqlite3_bind_text(statement1, 26, row[24], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // error_msg
+							rc=sqlite3_bind_text(statement1, 27, row[25], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // OK_msg
+							rc=sqlite3_bind_text(statement1, 28, row[26], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // sticky_conn
+							rc=sqlite3_bind_text(statement1, 29, row[27], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // multiplex
+              rc=sqlite3_bind_text(statement1, 30, row[28], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // gtid_from_hostgroup
+							rc=sqlite3_bind_text(statement1, 31, row[29], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // log
+							rc=sqlite3_bind_text(statement1, 32, row[30], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // apply
+							rc=sqlite3_bind_text(statement1, 33, row[31], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
 							SAFE_SQLITE3_STEP2(statement1);
 							rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
 							rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
@@ -1041,7 +1043,7 @@ __exit_pull_proxysql_servers_from_peer:
 
 void ProxySQL_Node_Entry::set_metrics(MYSQL_RES *_r, unsigned long long _response_time) {
 	MYSQL_ROW row;
-	metrics_idx_prev = metrics_idx;	
+	metrics_idx_prev = metrics_idx;
 	metrics_idx++;
 	if (metrics_idx == PROXYSQL_NODE_METRICS_LEN) {
 		metrics_idx = 0;
@@ -1089,7 +1091,7 @@ ProxySQL_Cluster_Nodes::ProxySQL_Cluster_Nodes() {
 }
 
 void ProxySQL_Cluster_Nodes::set_all_inactive() {
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {	
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry *node = it->second;
 		node->set_active(false);
 		it++;
@@ -1097,7 +1099,7 @@ void ProxySQL_Cluster_Nodes::set_all_inactive() {
 }
 
 void ProxySQL_Cluster_Nodes::remove_inactives() {
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {	
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry *node = it->second;
 		if (node->get_active() == false) {
 			delete node;
@@ -1109,7 +1111,7 @@ void ProxySQL_Cluster_Nodes::remove_inactives() {
 }
 
 ProxySQL_Cluster_Nodes::~ProxySQL_Cluster_Nodes() {
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {	
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry *node = it->second;
 		delete node;
 		it = umap_proxy_nodes.erase(it);
@@ -1555,7 +1557,7 @@ SQLite3_result * ProxySQL_Cluster_Nodes::dump_table_proxysql_servers() {
 	char buf[32];
 	int k;
 	pthread_mutex_lock(&mutex);
-	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {	
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
 		ProxySQL_Node_Entry * node = it->second;
 		char **pta=(char **)malloc(sizeof(char *)*colnum);
 		pta[0]=strdup(node->get_hostname());
