@@ -756,7 +756,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 		}
 	}
-	if ( (pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0) ) {
+	if (
+		(pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0)
+		&&
+		(memchr((const void *)((char *)pkt->ptr+5),',',pkt->size-15)==NULL) // there is no comma
+	) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
 		bool collation_specified = false;
@@ -3910,7 +3914,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					}
 				}
 			}
-			if (match_regexes && (match_regexes[1]->match(dig) || match_regexes[2]->match(dig))) {
+			if (
+				(
+					match_regexes && (match_regexes[1]->match(dig) || match_regexes[2]->match(dig))
+				) ||
+				( strncasecmp(dig,(char *)"SET NAMES", strlen((char *)"SET NAMES")) == 0)
+			) {
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse();
