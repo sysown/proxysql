@@ -64,6 +64,7 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 
 static void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
+	while (MyHGM==NULL) usleep(10000);
 	while(1) {
 		MySQL_Connection *myconn= NULL;
 		myconn = (MySQL_Connection *)MyHGM->queue.remove();
