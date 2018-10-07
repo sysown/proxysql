@@ -113,6 +113,7 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	void init();
 	void reset();
+	void add_ldap_comment_to_pkt(PtrSize_t *);
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()

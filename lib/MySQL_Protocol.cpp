@@ -1455,8 +1455,8 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	int default_hostgroup=-1;
 	char *default_schema=NULL;
 	bool schema_locked;
-	bool transaction_persistent;
-	bool fast_forward;
+	bool transaction_persistent = true;
+	bool fast_forward = false;
 	int max_connections;
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
@@ -1502,8 +1502,9 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			// try LDAP
 			if (auth_plugin_id==2) {
 				if (GloMyLdapAuth) {
+					char *backend_username = NULL;
 					(*myds)->sess->ldap_ctx = GloMyLdapAuth->ldap_ctx_init();
-					password = GloMyLdapAuth->lookup((*myds)->sess->ldap_ctx, (char *)user, (char *)pass, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass); 
+					password = GloMyLdapAuth->lookup((*myds)->sess->ldap_ctx, (char *)user, (char *)pass, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &backend_username);
 					if (password) {
 						(*myds)->sess->default_hostgroup=default_hostgroup;
 						(*myds)->sess->default_schema=default_schema; // just the pointer is passed
@@ -1512,7 +1513,30 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 						(*myds)->sess->session_fast_forward=fast_forward;
 						(*myds)->sess->user_max_connections=max_connections;
 						if (strncmp(password,(char *)pass,strlen(password))==0) {
-							ret=true;
+							if (backend_username) {
+								free(password);
+								password=NULL;
+								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+								if (password) {
+									(*myds)->sess->default_hostgroup=default_hostgroup;
+									(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+									(*myds)->sess->schema_locked=schema_locked;
+									(*myds)->sess->transaction_persistent=transaction_persistent;
+									(*myds)->sess->session_fast_forward=fast_forward;
+									(*myds)->sess->user_max_connections=max_connections;
+									userinfo->set(backend_username, NULL, NULL, NULL);
+									if (sha1_pass==NULL) {
+										// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
+										GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
+									}
+									if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+									userinfo->sha1_pass=sha1_pass_hex(reply);
+									userinfo->fe_username=strdup((const char *)user);
+									ret=true;
+								}
+							} else {
+								ret=true;
+							}
 						}
 					}
 				}
@@ -1625,14 +1649,17 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		(*myds)->myconn->options.max_allowed_pkt=max_pkt;
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
-		userinfo->username=strdup((const char *)user);
+		if (!userinfo->username) // if set already, ignore
+			userinfo->username=strdup((const char *)user);
 		userinfo->password=strdup((const char *)password);
 		if (db) userinfo->set_schemaname(db,strlen(db));
 	} else {
 		// we always duplicate username and password, or crashes happen
-		userinfo->username=strdup((const char *)user);
+		if (!userinfo->username) // if set already, ignore
+			userinfo->username=strdup((const char *)user);
 		if (pass_len) userinfo->password=strdup((const char *)"");
 	}
+	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 
 __exit_process_pkt_handshake_response:
 	if (password) {

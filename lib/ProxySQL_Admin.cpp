@@ -208,10 +208,10 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_RUNTIME_MYSQL_USERS "CREATE TABLE runtime_mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING_V2_0_0 "CREATE TABLE mysql_ldap_mapping (priority INTEGER PRIMARY KEY NOT NULL , frontend_entity VARCHAR NOT NULL , backend_entity VARCHAR NOT NULL , comment VARCHAR , UNIQUE (frontend_entity))"
+#define ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING_V2_0_0 "CREATE TABLE mysql_ldap_mapping (priority INTEGER CHECK (priority >= 1 AND priority <= 1000000) PRIMARY KEY , frontend_entity VARCHAR NOT NULL , backend_entity VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (frontend_entity))"
 #define ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING_V2_0_0
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_LDAP_MAPPING "CREATE TABLE runtime_mysql_ldap_mapping (priority INTEGER PRIMARY KEY NOT NULL , frontend_entity VARCHAR NOT NULL , backend_entity VARCHAR NOT NULL , comment VARCHAR , UNIQUE (frontend_entity))"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_LDAP_MAPPING "CREATE TABLE runtime_mysql_ldap_mapping (priority INTEGER PRIMARY KEY NOT NULL , frontend_entity VARCHAR NOT NULL , backend_entity VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (frontend_entity))"
 
 #define ADMIN_SQLITE_RUNTIME_CHECKSUMS_VALUES "CREATE TABLE runtime_checksums_values (name VARCHAR NOT NULL , version INT NOT NULL , epoch INT NOT NULL , checksum VARCHAR NOT NULL , PRIMARY KEY (name))"
 
@@ -2006,6 +2006,7 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool runtime_scheduler=false;
 	bool runtime_mysql_users=false;
+	bool runtime_mysql_ldap_mapping=false;
 	bool runtime_mysql_servers=false;
 	bool runtime_mysql_query_rules=false;
 	bool runtime_mysql_query_rules_fast_routing=false;
@@ -2088,6 +2089,11 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (strstr(query_no_space,"runtime_mysql_users")) {
 				runtime_mysql_users=true; refresh=true;
+			}
+			if (GloMyLdapAuth) {
+				if (strstr(query_no_space,"runtime_mysql_ldap_mapping")) {
+					runtime_mysql_ldap_mapping=true; refresh=true;
+				}
 			}
 			if (strstr(query_no_space,"runtime_mysql_query_rules")) {
 				runtime_mysql_query_rules=true; refresh=true;
@@ -2193,6 +2199,9 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (runtime_mysql_users) {
 				save_mysql_users_runtime_to_database(true);
+			}
+			if (runtime_mysql_ldap_mapping) {
+				save_mysql_ldap_mapping_runtime_to_database(true);
 			}
 			if (runtime_mysql_query_rules) {
 				save_mysql_query_rules_from_runtime(true);
@@ -3619,6 +3628,18 @@ void ProxySQL_Admin::print_version() {
   fprintf(stderr,"Standard ProxySQL Admin rev. %s -- %s -- %s\n", PROXYSQL_ADMIN_VERSION, __FILE__, __TIMESTAMP__);
 };
 
+void ProxySQL_Admin::init_ldap() {
+	if (GloMyLdapAuth) {
+		insert_into_tables_defs(tables_defs_admin,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
+		insert_into_tables_defs(tables_defs_admin,"runtime_mysql_ldap_mapping", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_LDAP_MAPPING);
+		insert_into_tables_defs(tables_defs_config,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
+		if (variables.hash_passwords==true) {
+			proxy_info("Impossible to set admin-hash_passwords=true when LDAP is enabled. Reverting to false\n");
+			variables.hash_passwords=false;
+		}
+	}
+}
+
 bool ProxySQL_Admin::init() {
 	cpu_timer cpt;
 
@@ -3714,10 +3735,6 @@ bool ProxySQL_Admin::init() {
 	}
 #endif /* PROXYSQLCLICKHOUSE */
 
-	if (GloMyLdapAuth) {
-		insert_into_tables_defs(tables_defs_admin,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
-	}
-	
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
@@ -3738,10 +3755,6 @@ bool ProxySQL_Admin::init() {
 		insert_into_tables_defs(tables_defs_config,"clickhouse_users", ADMIN_SQLITE_TABLE_CLICKHOUSE_USERS);
 	}
 #endif /* PROXYSQLCLICKHOUSE */
-
-	if (GloMyLdapAuth) {
-		insert_into_tables_defs(tables_defs_config,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
-	}
 
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_query_rules", STATS_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_commands_counters", STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS);
@@ -3852,7 +3865,6 @@ bool ProxySQL_Admin::init() {
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 #endif /* PROXYSQLCLICKHOUSE */
 	flush_sqliteserver_variables___database_to_runtime(admindb,true);
-	flush_ldap_variables___database_to_runtime(admindb,true);
 
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		set_variable((char *)"mysql_ifaces",GloVars.__cmd_proxysql_admin_socket);
@@ -3902,6 +3914,8 @@ void ProxySQL_Admin::init_ldap_variables() {
 	flush_ldap_variables___runtime_to_database(configdb, false, false, false);
 	flush_ldap_variables___runtime_to_database(admindb, false, true, false);
 	flush_ldap_variables___database_to_runtime(admindb,true);
+	check_and_build_standard_tables(admindb, tables_defs_admin);
+	check_and_build_standard_tables(configdb, tables_defs_config);
 }
 
 void ProxySQL_Admin::admin_shutdown() {
@@ -5148,6 +5162,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	if (!strcasecmp(name,"hash_passwords")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.hash_passwords=true;
+			if (GloMyLdapAuth) {
+				proxy_info("Impossible to set admin-hash_passwords=true when LDAP is enabled. Reverting to false\n");
+				variables.hash_passwords=false;
+			}
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
@@ -5536,6 +5554,25 @@ void ProxySQL_Admin::stats___mysql_global() {
 		}
 		delete resultset;
 		resultset=NULL;
+	}
+
+	if (GloMyLdapAuth) {
+		resultset=GloMyLdapAuth->SQL3_getStats();
+		if (resultset) {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				int arg_len=0;
+				for (int i=0; i<2; i++) {
+					arg_len+=strlen(r->fields[i]);
+				}
+				char *query=(char *)malloc(strlen(a)+arg_len+32);
+				sprintf(query,a,r->fields[0],r->fields[1]);
+				statsdb->execute(query);
+				free(query);
+			}
+			delete resultset;
+			resultset=NULL;
+		}
 	}
 
 	statsdb->execute("COMMIT");
@@ -6309,7 +6346,7 @@ void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
 	admindb->execute("INSERT INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	if (GloMyLdapAuth) {
 		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
-		admindb->execute("INSERT INTO dick.mysql_ldap_mapping SELECT * FROM main.mysql_ldap_mapping");
+		admindb->execute("INSERT INTO disk.mysql_ldap_mapping SELECT * FROM main.mysql_ldap_mapping");
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
@@ -6470,6 +6507,9 @@ void ProxySQL_Admin::__refresh_users() {
 		__add_active_users(USERNAME_BACKEND);
 		__add_active_users(USERNAME_FRONTEND);
 //	}
+	if (GloMyLdapAuth) {
+		__add_active_users_ldap();
+	}
 	GloMyAuth->remove_inactives(USERNAME_BACKEND);
 	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
 	uint64_t hash1 = 0;
@@ -6479,6 +6519,9 @@ void ProxySQL_Admin::__refresh_users() {
 	if (calculate_checksum) {
 		hash1 = GloMyAuth->get_runtime_checksum();
 		//uint64_t hash1 = hashB + hashF; // overflow allowed
+		if (GloMyLdapAuth) {
+			hash1 += GloMyLdapAuth->get_ldap_mapping_runtime_checksum();
+		}
 		uint32_t d32[2];
 		char buf[20];
 		memcpy(&d32, &hash1, sizeof(hash1));
@@ -6568,6 +6611,27 @@ void ProxySQL_Admin::__delete_inactive_clickhouse_users() {
 	//free(query);
 }
 #endif /* PROXYSQLCLICKHOUSE */
+
+void ProxySQL_Admin::__add_active_users_ldap() {
+	if (GloMyLdapAuth==NULL)
+		return;
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT priority, frontend_entity, backend_entity, comment FROM mysql_ldap_mapping ORDER BY priority";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		GloMyLdapAuth->load_mysql_ldap_mapping(resultset);
+	}
+	if (resultset) delete resultset;
+	resultset=NULL;
+}
+
+
 
 #define ADDUSER_STMT_RAW
 void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *__user, uint64_t *hash1) {
@@ -6972,6 +7036,72 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		sqlite3_finalize(b_statement1);
 	}
 	free(ads);
+}
+
+void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) {
+	if (GloMyLdapAuth==NULL) {
+		return;
+	}
+	char *query=NULL;
+	SQLite3_result *resultset=NULL;
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_ldap_mapping";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_ldap_mapping";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset=GloMyLdapAuth->dump_table_mysql_ldap_mapping();
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement1=NULL;
+		sqlite3_stmt *statement8=NULL;
+		sqlite3 *mydb3=admindb->get_db();
+		char *query1=NULL;
+		char *query8=NULL;
+		if (_runtime) {
+			query1=(char *)"INSERT INTO runtime_mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4)";
+			query8=(char *)"INSERT INTO runtime_mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4), (?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12), (?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32)";
+		} else {
+			query1=(char *)"INSERT INTO mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4)";
+			query8=(char *)"INSERT INTO mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4), (?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12), (?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32)";
+		}
+		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		assert(rc==SQLITE_OK);
+		rc=sqlite3_prepare_v2(mydb3, query8, -1, &statement8, 0);
+		assert(rc==SQLITE_OK);
+		int row_idx=0;
+		int max_bulk_row_idx=resultset->rows_count/8;
+		max_bulk_row_idx=max_bulk_row_idx*8;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r1=*it;
+			int idx=row_idx%8;
+			if (row_idx<max_bulk_row_idx) { // bulk
+				rc=sqlite3_bind_int64(statement8, (idx*7)+1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement8, (idx*7)+2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement8, (idx*7)+3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement8, (idx*7)+4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				if (idx==7) {
+					SAFE_SQLITE3_STEP2(statement8);
+					rc=sqlite3_clear_bindings(statement8); assert(rc==SQLITE_OK);
+					rc=sqlite3_reset(statement8); assert(rc==SQLITE_OK);
+				}
+			} else { // single row
+				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				SAFE_SQLITE3_STEP2(statement1);
+				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			}
+			row_idx++;
+		}
+		sqlite3_finalize(statement1);
+		sqlite3_finalize(statement8);
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
 }
 
 #ifdef PROXYSQLCLICKHOUSE

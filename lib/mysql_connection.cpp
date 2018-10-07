@@ -39,11 +39,13 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	password=NULL;
 	sha1_pass=NULL;
 	schemaname=NULL;
+	fe_username=NULL;
 	hash=0;
 }
 
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
+	if (fe_username) free(fe_username);
 	if (password) free(password);
 	if (sha1_pass) free(sha1_pass);
 	if (schemaname) free(schemaname);

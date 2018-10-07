@@ -459,7 +459,10 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
 }
 
 void ProxySQL_Main_init_SSL_module() {
-	SSL_library_init();
+	int rc = SSL_library_init();
+	if (rc==0) {
+		proxy_error("%s\n", SSL_alert_desc_string_long(rc));
+	}
 	init_locks();
 	SSL_METHOD *ssl_method;
 	OpenSSL_add_all_algorithms();
@@ -700,6 +703,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			if (rc==true) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
 			}
+		}
 		if (root.exists("ldap_auth_plugin")==true) {
 			string ldap_auth_plugin;
 			bool rc;
@@ -1075,6 +1079,10 @@ static void LoadPlugins() {
 			exit(EXIT_FAILURE);
 		} else {
 			GloMyLdapAuth = create_MySQL_LDAP_Authentication();
+			if (GloMyLdapAuth) {
+				GloAdmin->init_ldap();
+				GloAdmin->load_ldap_variables_to_runtime();
+			}
 		}
 	}
 }

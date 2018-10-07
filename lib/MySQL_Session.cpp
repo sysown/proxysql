@@ -2262,6 +2262,11 @@ __get_pkts_from_client:
 
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 									mybe->server_myds->killed_at=0;
+									if (GloMyLdapAuth) {
+										if (session_type==PROXYSQL_SESSION_MYSQL) {
+											add_ldap_comment_to_pkt(&pkt);
+										}
+									}
 									mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
@@ -4721,4 +4726,30 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 		thread->unregister_session(sess_idx);
 		delete new_sess;
 	}
+}
+
+void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
+	if (GloMyLdapAuth==NULL)
+		return;
+	if (ldap_ctx==NULL)
+		return;
+	if (client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
+		return;
+	if (client_myds->myconn->userinfo->fe_username==NULL)
+		return;
+	char *fe=client_myds->myconn->userinfo->fe_username;
+	char *a = (char *)"/* proxysql-ldap-user=%s */ ";
+	char *b = (char *)malloc(strlen(a)+strlen(fe));
+	sprintf(b,a,fe);
+	PtrSize_t _new_pkt;
+	_new_pkt.ptr = malloc(strlen(b) + _pkt->size);
+	memcpy(_new_pkt.ptr , _pkt->ptr, 5);
+	unsigned char *_c=(unsigned char *)_new_pkt.ptr;
+	_c+=5;
+	memcpy(_c,b,strlen(b));
+	_c+=strlen(b);
+	memcpy(_c, (char *)_pkt->ptr+5, _pkt->size-5);
+	l_free(_pkt->size,_pkt->ptr);
+	_pkt->size = _pkt->size + strlen(b);
+	_pkt->ptr = _new_pkt.ptr;
 }
