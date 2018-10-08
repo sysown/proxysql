@@ -1261,6 +1261,11 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	) {
 		return -1;
 	}
+	if (myds) {
+		if (myds->DSS != STATE_MARIADB_QUERY) {
+			myds->DSS = STATE_MARIADB_QUERY;
+		}
+	}
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
 			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end

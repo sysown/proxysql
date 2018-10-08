@@ -485,9 +485,9 @@ uint64_t MySQL_STMTs_local_v14::compute_hash(unsigned int hostgroup, char *user,
 MySQL_STMT_Manager_v14::MySQL_STMT_Manager_v14() {
 	last_purge_time = time(NULL);
 	pthread_rwlock_init(&rwlock_, NULL);
-        map_stmt_id_to_info= std::map<uint64_t, MySQL_STMT_Global_info *>();       // map using statement id
-        map_stmt_hash_to_info = std::map<uint64_t, MySQL_STMT_Global_info *>();     // map using hashes
-        free_stmt_ids = std::stack<uint64_t> ();
+	map_stmt_id_to_info= std::map<uint64_t, MySQL_STMT_Global_info *>();       // map using statement id
+	map_stmt_hash_to_info = std::map<uint64_t, MySQL_STMT_Global_info *>();     // map using hashes
+	free_stmt_ids = std::stack<uint64_t> ();
 
 	next_statement_id =
 	    1;  // we initialize this as 1 because we 0 is not allowed

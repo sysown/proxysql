@@ -42,7 +42,7 @@ curl/curl/lib/.libs/libcurl.a: #libssl/openssl/libssl.a
 	cd curl && rm -rf curl-7.57.0 || true
 	cd curl && tar -zxf curl-7.57.0.tar.gz
 	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
-	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-ssl && CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-ssl && CC=${CC} CXX=${CXX} ${MAKE}
 curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
@@ -130,12 +130,12 @@ libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
 
 re2/re2/obj/libre2.a:
-	cd re2 && rm -rf re2
+	cd re2 && rm -rf re2-2018-07-01
 #	cd re2 && tar -zxf re2-20140304.tgz
 	cd re2 && tar -zxf re2.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2 && patch re2/util/mutex.h < mutex.h.patch
-	cd re2/re2 && sed -i -e 's/-O3 /-O3 -DMEMORY_SANITIZER /' Makefile
+	cd re2/re2 && sed -i -e 's/-O3 /-O3 -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
 
 re2: re2/re2/obj/libre2.a
@@ -160,7 +160,7 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd libconfig && rm -rf libconfig-1.4.9
-	cd re2 && rm -rf re2
+	cd re2 && rm -rf re2-2018-07-01
 	cd pcre && rm -rf pcre-8.39
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true

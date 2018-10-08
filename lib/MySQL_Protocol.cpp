@@ -81,6 +81,13 @@ void proxy_create_random_string(char *to, uint length, struct rand_struct *rand_
 		}
 	} else {
 		for (i=0; i<length ; i++) {
+			if (*to < 0) {
+				*to += 128;
+			} else {
+				if (*to == 0) {
+					*to = 'a';
+				}
+			}
 			to++;
 		}
 	}
@@ -1061,11 +1068,12 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 //#endif
 
   int i;
-  for (i=0;i<8;i++) {
-    if ((*myds)->myconn->scramble_buff[i]==0) {
-      (*myds)->myconn->scramble_buff[i]='a';
-    }
-  }
+
+//  for (i=0;i<8;i++) {
+//    if ((*myds)->myconn->scramble_buff[i]==0) {
+//      (*myds)->myconn->scramble_buff[i]='a';
+//    }
+//  }
 
 	memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 8); l+=8;
 	_ptr[l]=0x00; l+=1; //0x00
@@ -1079,6 +1087,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_SSL;
 	}
+	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
   memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
@@ -1093,11 +1102,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 //#endif
   //create_random_string(scramble_buf+8,12,&rand_st);
 
-  for (i=8;i<20;i++) {
-    if ((*myds)->myconn->scramble_buff[i]==0) {
-      (*myds)->myconn->scramble_buff[i]='a';
-    }
-  }
+//  for (i=8;i<20;i++) {
+//    if ((*myds)->myconn->scramble_buff[i]==0) {
+//      (*myds)->myconn->scramble_buff[i]='a';
+//    }
+//  }
 
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00
@@ -1349,6 +1358,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	uint32_t  pass_len;
 	unsigned char *user=NULL;
 	char *db=NULL;
+	char *db_tmp = NULL;
 	unsigned char pass[128];
 	char *password=NULL;
 	bool use_ssl=false;
@@ -1356,9 +1366,9 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 	memset(pass,0,128);
 	void *sha1_pass=NULL;
-#ifdef DEBUG
+//#ifdef DEBUG
 	unsigned char *_ptr=pkt;
-#endif
+//#endif
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	//Copy4B(&hdr,pkt);
@@ -1393,7 +1403,13 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pass[pass_len] = 0;
 
 	pkt += pass_len;
-	db = (capabilities & CLIENT_CONNECT_WITH_DB ? (char *)pkt : NULL);
+	if (capabilities & CLIENT_CONNECT_WITH_DB) {
+		unsigned int remaining = len - (pkt - _ptr);
+		db_tmp = strndup((const char *)pkt, remaining);
+		if (db_tmp) {
+			db = db_tmp;
+		}
+	}
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
@@ -1525,7 +1541,10 @@ __exit_process_pkt_handshake_response:
 		free(sha1_pass);
 		sha1_pass=NULL;
 	}
-
+	if (db_tmp) {
+		free(db_tmp);
+		db_tmp=NULL;
+	}
 	return ret;
 }
 
@@ -1576,8 +1595,8 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	ret->num_params=num_params;
 	// we keep a pointer to the packet
 	// this is extremely important because:
-  // * binds[X].buffer does NOT point to a new allocated buffer
-  // * binds[X].buffer points to offset inside the original packet
+	// * binds[X].buffer does NOT point to a new allocated buffer
+	// * binds[X].buffer points to offset inside the original packet
 	// FIXME: there is still no free for pkt, so that will be a memory leak that needs to be fixed
 	ret->pkt=ptr;
 	uint8_t new_params_bound_flag;
@@ -1645,11 +1664,22 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				binds[i].length=&lengths[i];
 			}
 		}
+
 		for (i=0;i<num_params;i++) {
-			if (is_nulls[i]==true) {
+			unsigned long *_l = 0;
+			my_bool * _is_null;
+			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
+			if (_data) {
+				// Data was sent via STMT_SEND_LONG_DATA so no data in the packet.
+				binds[i].length = _l;
+				binds[i].buffer = _data;
+				binds[i].is_null = _is_null;
+				continue;
+			} else if (is_nulls[i]==true) {
 				// the parameter is NULL, no need to read any data from the packet
 				continue;
 			}
+
 			enum enum_field_types buffer_type=binds[i].buffer_type;
 			switch (buffer_type) {
 				case MYSQL_TYPE_TINY:

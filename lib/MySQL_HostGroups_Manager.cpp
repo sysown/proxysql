@@ -625,6 +625,7 @@ static void * HGCU_thread_run() {
 		}
 		free(statuses);
 		free(errs);
+		free(ret);
 	}
 }
 
@@ -2313,12 +2314,37 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
-		// overall, the backend seems healthy and so it is the connection. Try to reset it
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
-		to_del=false;
-		//c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
-		queue.add(c);
-	} else {
+		if (c->async_state_machine==ASYNC_IDLE) {
+			// overall, the backend seems healthy and so it is the connection. Try to reset it
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+			to_del=false;
+			//c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
+			queue.add(c);
+		} else {
+		// the connection seems health, but we are trying to destroy it
+		// probably because there is a long running query
+		// therefore we will try to kill the connection
+			if (mysql_thread___kill_backend_connection_when_disconnect) {
+				MySQL_Connection_userinfo *ui=c->userinfo;
+				char *auth_password=NULL;
+				if (ui->password) {
+					if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
+						auth_password=ui->sha1_pass;
+					} else {
+						auth_password=ui->password;
+					}
+				}
+				KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION);
+				pthread_attr_t attr;
+				pthread_attr_init(&attr);
+				pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+				pthread_attr_setstacksize (&attr, 256*1024);
+				pthread_t pt;
+				pthread_create(&pt, &attr, &kill_query_thread, ka);
+			}
+		}
+	}
+	if (to_del) {
 		// we lock only this part of the code because we need to remove the connection from ConnectionsUsed
 		if (_lock) {
 			wrlock();
@@ -2329,8 +2355,6 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
                 if (_lock) {
 			wrunlock();
 		}
-	}
-	if (to_del) {
 		delete c;
 	}
 }
@@ -3473,7 +3497,9 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
-					proxy_info("Group replication: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+						proxy_info("Group replication: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					}
 					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
 						SQLite3_row *r=*it;
 						if (to_move) {
@@ -3491,7 +3517,9 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 				} else {
 					if (num_writers < info->max_writers && num_backup_writers) { // or way too low writer
 						int to_move= ( (info->max_writers - num_writers) < num_backup_writers ? (info->max_writers - num_writers) : num_backup_writers);
-						proxy_info("Group replication: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						if (GloMTH->variables.hostgroup_manager_verbose) {
+							proxy_info("Group replication: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						}
 						for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 							SQLite3_row *r=*it;
 							if (to_move) {
@@ -3607,7 +3635,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	char *q=NULL;
 	char *error=NULL;
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
-	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
+	query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 	sprintf(query,q,_hostname,_port);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
@@ -3634,7 +3662,6 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			}
 		}
 		if (set_offline) {
-			proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
@@ -3691,6 +3718,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				free(query);
 			}
 			if (checksum_incoming!=checksum_current) {
+				proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;
@@ -3755,7 +3783,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT reader_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			query=(char *)malloc(strlen(q)+strlen(_hostname)+512);
 			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
@@ -3897,13 +3925,12 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	if (resultset) { // if we reach there, there is some action to perform
 		if (resultset->rows_count) {
 			need_converge=false;
-			proxy_warning("Galera: setting host %s:%d as writer\n", _hostname, _port);
 
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+256);
+			query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
@@ -3961,6 +3988,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				free(query);
 			}
 			if (checksum_incoming!=checksum_current) {
+				proxy_warning("Galera: setting host %s:%d as writer\n", _hostname, _port);
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;
@@ -3989,7 +4017,9 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				}
 				wrunlock();
 			} else {
-				proxy_warning("Galera: skipping setting node %s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _hostname, _port, _writer_hostgroup);
+				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+					proxy_warning("Galera: skipping setting node %s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _hostname, _port, _writer_hostgroup);
+				}
 			}
 			GloAdmin->mysql_servers_wrunlock();
 			free(query);
@@ -4043,7 +4073,9 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
-					proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+						proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
+					}
 					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
 						SQLite3_row *r=*it;
 						if (to_move) {
@@ -4061,7 +4093,9 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				} else {
 					if (num_writers < info->max_writers && num_backup_writers) { // or way too low writer
 						int to_move= ( (info->max_writers - num_writers) < num_backup_writers ? (info->max_writers - num_writers) : num_backup_writers);
-						proxy_info("Galera: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						if (GloMTH->variables.hostgroup_manager_verbose) {
+							proxy_info("Galera: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
+						}
 						for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 							SQLite3_row *r=*it;
 							if (to_move) {
