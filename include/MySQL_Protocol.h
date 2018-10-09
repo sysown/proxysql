@@ -72,7 +72,7 @@ class MySQL_Protocol {
 	// - a pointer to unsigned int, used to return the size of the packet if not NULL 
 	// for now,  they all return true
 	bool generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg);
-	bool generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message);
+	bool generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message, bool track=false);
 	bool generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status, MySQL_ResultSet *myrs=NULL);
 //	bool generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema);
 	//bool generate_COM_PING(bool send, void **ptr, unsigned int *len);

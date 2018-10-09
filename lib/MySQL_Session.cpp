@@ -847,7 +847,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 				errmsg=(char *)malloc(strlen(csname)+strlen(m));
 				sprintf(errmsg,m,csname);
 			}
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg,true);
 			free(errmsg);
 		} else {
 			client_myds->myconn->set_charset(c->nr);
@@ -1697,7 +1697,10 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			}
 			char buf[256];
 			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf);
+			if (thread) {
+				thread->status_variables.max_connect_timeout_err++;
+			}
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf, true);
 			RequestEnd(mybe->server_myds);
 			//enum session_status st;
 			while (previous_status.size()) {
@@ -1798,11 +1801,14 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 					if (myerr) {
 						char sqlstate[10];
 						sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql),true);
 					} else {
 						char buf[256];
 						sprintf(buf,"Max connect failure while reaching hostgroup %d", current_hostgroup);
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000",buf);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000",buf,true);
+						if (thread) {
+							thread->status_variables.max_connect_timeout_err++;
+						}
 					}
 					if (session_fast_forward==false) {
 						// see bug #979
@@ -2409,7 +2415,7 @@ __get_pkts_from_client:
 										// we couldn't find it
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
-										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Prepared statement doesn't exist");
+										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Prepared statement doesn't exist", true);
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
 										break;
@@ -2427,7 +2433,7 @@ __get_pkts_from_client:
 									if (stmt_meta==NULL) {
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
-										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Error in prepared statement execution");
+										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Error in prepared statement execution", true);
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
 										//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
@@ -2530,9 +2536,37 @@ __get_pkts_from_client:
 				break;
 			case NONE:
 			default:
-				proxy_error("Unexpected packet from client, disconnecting the client\n");
-				handler_ret = -1;
-				return handler_ret;
+				{
+					char buf[INET6_ADDRSTRLEN];
+					switch (client_myds->client_addr->sa_family) {
+						case AF_INET: {
+							struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
+							inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+							break;
+						}
+						case AF_INET6: {
+							struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
+							inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+							break;
+						}
+						default:
+							sprintf(buf, "localhost");
+							break;
+						}
+					if (pkt.size == 5) {
+						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+						if (c==_MYSQL_COM_QUIT) {
+							proxy_error("Unexpected COM_QUIT from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+							l_free(pkt.size,pkt.ptr);
+							handler_ret = -1;
+							return handler_ret;
+						}
+					}
+					proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+					handler_ret = -1;
+					return handler_ret;
+				}
 				break;
 		}
 	}
@@ -3364,7 +3398,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 		}
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
 		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
 		free(_s);
 	}
 }
@@ -3488,13 +3522,13 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
 				if (max_connections_reached==true) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Too many connections\n");
-					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"08004", (char *)"Too many connections");
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"08004", (char *)"Too many connections", true);
 				} else { // see issue #794
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", client_myds->myconn->userinfo->username, used_users);
 					char *a=(char *)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
 					char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username)+16);
 					sprintf(b,a,client_myds->myconn->userinfo->username,used_users);
-					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1226,(char *)"42000", b);
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1226,(char *)"42000", b, true);
 					free(b);
 				}
 				__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
@@ -3554,7 +3588,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						char *a=(char *)"User '%s' can only connect locally";
 						char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username));
 						sprintf(b,a,client_myds->myconn->userinfo->username);
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1040,(char *)"42000", b);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1040,(char *)"42000", b, true);
 						free(b);
 					}
 					free(addr);
@@ -3565,7 +3599,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						char *_a=(char *)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
 						char *_s=(char *)malloc(strlen(_a)+strlen(client_myds->myconn->userinfo->username)+32);
 						sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
 						__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 						free(_s);
 					} else {
@@ -3625,7 +3659,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		//if (client_myds->encrypted == false) {
 		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
 		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 		free(_s);
 		client_myds->DSS=STATE_SLEEP;
@@ -3688,12 +3722,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		/* FIXME: temporary */
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported", true);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported", true);
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -3830,7 +3864,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (pkt->size > (unsigned int) mysql_thread___max_allowed_packet) {
 		// ER_NET_PACKET_TOO_LARGE
 		client_myds->DSS=STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01",(char *)"Got a packet bigger than 'max_allowed_packet' bytes");
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01",(char *)"Got a packet bigger than 'max_allowed_packet' bytes", true);
 		l_free(pkt->size,pkt->ptr);
 		RequestEnd(NULL);
 		return true;
@@ -3984,7 +4018,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								sprintf(errmsg,m,value1.c_str());
 							}
 							client_myds->DSS=STATE_QUERY_SENT_NET;
-							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
+							client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg, true);
 							client_myds->DSS=STATE_SLEEP;
 							status=WAITING_CLIENT_DATA;
 							free(errmsg);
@@ -4229,7 +4263,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
 			sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
 			free(_s);
 		}
 	} else {

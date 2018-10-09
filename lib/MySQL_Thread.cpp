@@ -3675,6 +3675,8 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.ConnPool_get_conn_failure=0;
 	status_variables.active_transactions=0;
 	status_variables.gtid_session_collected = 0;
+	status_variables.generated_pkt_err = 0;
+	status_variables.max_connect_timeout_err = 0;
 
 	match_regexes=NULL;
 
@@ -4138,6 +4140,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// ConnPool_get_conn_failure
 		pta[0]=(char *)"ConnPool_get_conn_failure";
 		sprintf(buf,"%llu",get_ConnPool_get_conn_failure());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Generated ERR packet
+		pta[0]=(char *)"generated_error_packets";
+		sprintf(buf,"%llu",get_generated_pkt_err());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Max Connect Timeout
+		pta[0]=(char *)"max_connect_timeouts";
+		sprintf(buf,"%llu",get_max_connect_timeout());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5056,6 +5070,32 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_failure() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_failure,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_generated_pkt_err() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.generated_pkt_err,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_max_connect_timeout() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.max_connect_timeout_err,0);
 		}
 	}
 	return q;

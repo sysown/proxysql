@@ -522,7 +522,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message) {
+bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message, bool track) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
@@ -563,6 +563,11 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
 #endif
+	if (track)
+		if (*myds)
+			if ((*myds)->sess)
+				if ((*myds)->sess->thread)
+					(*myds)->sess->thread->status_variables.generated_pkt_err++;
 	return true;
 }
 
