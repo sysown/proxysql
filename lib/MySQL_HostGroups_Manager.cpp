@@ -2334,7 +2334,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 						auth_password=ui->password;
 					}
 				}
-				KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION);
+				KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION, NULL);
 				pthread_attr_t attr;
 				pthread_attr_init(&attr);
 				pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

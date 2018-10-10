@@ -231,6 +231,10 @@ class MySQL_Thread
 		unsigned long long gtid_session_collected;
 		unsigned long long generated_pkt_err;
 		unsigned long long max_connect_timeout_err;
+		unsigned long long unexpected_com_quit;
+		unsigned long long unexpected_packet;
+		unsigned long long killed_connections;
+		unsigned long long killed_queries;
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -489,6 +493,10 @@ class MySQL_Threads_Handler
 	unsigned long long get_ConnPool_get_conn_failure();
 	unsigned long long get_generated_pkt_err();
 	unsigned long long get_max_connect_timeout();
+	unsigned long long get_unexpected_com_quit();
+	unsigned long long get_unexpected_packet();
+	unsigned long long get_killed_connections();
+	unsigned long long get_killed_queries();
 	iface_info *MLM_find_iface_from_fd(int fd) {
 		return MLM->find_iface_from_fd(fd);
 	}

@@ -81,6 +81,7 @@ class KillArgs {
 void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
+	MySQL_Thread * thread = ka->mt;
 	mysql=mysql_init(NULL);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	if (!mysql) {
@@ -91,9 +92,15 @@ void * kill_query_thread(void *arg) {
 		switch (ka->kill_type) {
 			case KILL_QUERY:
 				proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+				if (thread) {
+					thread->status_variables.killed_queries++;
+				}
 				break;
 			case KILL_CONNECTION:
 				proxy_warning("KILL CONNECTION %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
+				if (thread) {
+					thread->status_variables.killed_connections++;
+				}
 				break;
 			default:
 				break;
@@ -1086,7 +1093,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 					auth_password=ui->password;
 				}
 			}
-			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id, KILL_QUERY);
+			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->mysql->thread_id, KILL_QUERY, thread);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -2559,11 +2566,17 @@ __get_pkts_from_client:
 							proxy_error("Unexpected COM_QUIT from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 							l_free(pkt.size,pkt.ptr);
+							if (thread) {
+								thread->status_variables.unexpected_com_quit++;
+							}
 							handler_ret = -1;
 							return handler_ret;
 						}
 					}
 					proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+					if (thread) {
+						thread->status_variables.unexpected_packet++;
+					}
 					handler_ret = -1;
 					return handler_ret;
 				}

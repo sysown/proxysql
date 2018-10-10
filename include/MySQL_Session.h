@@ -225,19 +225,21 @@ class MySQL_Session
 
 class KillArgs {
 	public:
+	MySQL_Thread *mt;
 	char *username;
 	char *password;
 	char *hostname;
 	unsigned int port;
 	unsigned long id;
 	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt) {
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt) {
 		username=strdup(u);
 		password=strdup(p);
 		hostname=strdup(h);
 		port=P;
 		id=i;
 		kill_type=kt;
+		mt=_mt;
 	};
 	~KillArgs() {
 		free(username);
