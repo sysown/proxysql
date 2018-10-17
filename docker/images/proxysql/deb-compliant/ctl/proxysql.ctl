@@ -10,8 +10,8 @@ Architecture: amd64
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/
- etc/proxysql.cnf /
- etc/init.d/proxysql /
+ etc/proxysql.cnf /etc/proxysql.cnf
+ etc/init.d/proxysql /etc/init.d/proxysql
  tools/proxysql_galera_checker.sh /usr/share/proxysql/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/
 Description: High performance MySQL proxy
