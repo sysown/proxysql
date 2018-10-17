@@ -8268,9 +8268,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 		// upgrade is required
 		proxy_warning("Detected version v2.0.0b of table mysql_query_rules\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
-		// drop any existing table with suffix _v200a
+		// drop any existing table with suffix _v200b
 		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_200b");
-		// rename current table to add suffix _v200a
+		// rename current table to add suffix _v200b
 		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v200b");
 		// create new table
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
@@ -8280,16 +8280,16 @@ void ProxySQL_Admin::disk_upgrade_mysql_query_rules() {
 	rci=configdb->check_table_structure((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_V2_0_0c);
 	if (rci) {
 		// upgrade is required
-		proxy_warning("Detected version v2.0.0b of table mysql_query_rules\n");
+		proxy_warning("Detected version v2.0.0c of table mysql_query_rules\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_query_rules in progress\n");
-		// drop any existing table with suffix _v200a
+		// drop any existing table with suffix _v200c
 		configdb->execute("DROP TABLE IF EXISTS mysql_query_rules_200c");
-		// rename current table to add suffix _v200a
+		// rename current table to add suffix _v200c
 		configdb->execute("ALTER TABLE mysql_query_rules RENAME TO mysql_query_rules_v200c");
 		// create new table
 		configdb->build_table((char *)"mysql_query_rules",(char *)ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES,false);
 		// copy fields from old table
-		configdb->execute("INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment) SELECT rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment FROM mysql_query_rules_v200c");
+		configdb->execute("INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment) SELECT rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, OK_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment FROM mysql_query_rules_v200c");
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
@@ -8445,9 +8445,9 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// upgrade is required
 		proxy_warning("Detected version 2.0.0b of table mysql_servers\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_servers in progress\n");
-		//drop any existing table with suffix _v200a
+		//drop any existing table with suffix _v200b
 		configdb->execute("DROP TABLE IF EXISTS mysql_servers_v200b");
-		// rename current table to add suffix _v200a
+		// rename current table to add suffix _v200b
 		configdb->execute("ALTER TABLE mysql_servers RENAME TO mysql_servers_v200b");
 		// create new table
 		configdb->build_table((char *)"mysql_servers",(char *)ADMIN_SQLITE_TABLE_MYSQL_SERVERS,false);
