@@ -1509,7 +1509,14 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 	char *query=NULL;
 	unsigned long query_length=0;
 	if (myconn->async_state_machine==ASYNC_IDLE) {
-		char *q=(char *)"SET SQL_MODE='%s'";
+		char *q=NULL;
+		if (strlen(myconn->options.sql_mode) > 6) {
+			if (strncasecmp(myconn->options.sql_mode,(char *)"CONCAT",6)==0) {
+				q=(char *)"SET SQL_MODE=%s";
+			}
+		} else {
+			q=(char *)"SET SQL_MODE='%s'";
+		}
 		query=(char *)malloc(strlen(q)+strlen(myconn->options.sql_mode));
 		sprintf(query,q,myconn->options.sql_mode);
 		query_length=strlen(query);
