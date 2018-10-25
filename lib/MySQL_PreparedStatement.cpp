@@ -870,7 +870,7 @@ class PS_global_stats {
 	unsigned long long ref_count_client;
 	unsigned long long ref_count_server;
 	char *query;
-	PS_global_stats(uint64_t stmt_id, unsigned int h, char *u, char *s, uint64_t d, char *q, unsigned long long ref_c, unsigned long long ref_s) {
+	PS_global_stats(uint64_t stmt_id, unsigned int h, char *s, char *u, uint64_t d, char *q, unsigned long long ref_c, unsigned long long ref_s) {
 		statement_id = stmt_id;
 		hid=h;
 		digest=d;
