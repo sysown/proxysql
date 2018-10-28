@@ -707,6 +707,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+	if (query_no_space_length==strlen("PROXYSQL FLUSH QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH QUERY CACHE",query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH QUERY CACHE command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (GloQC) {
+			GloQC->flush();
+		}
+		SPA->flush_error_log();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+
 	if (
 		(query_no_space_length==strlen("PROXYSQL FLUSH CONFIGDB") && !strncasecmp("PROXYSQL FLUSH CONFIGDB",query_no_space, query_no_space_length)) // see #923
 	) {
