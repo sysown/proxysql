@@ -3914,8 +3914,10 @@ void ProxySQL_Admin::init_ldap_variables() {
 	flush_ldap_variables___runtime_to_database(configdb, false, false, false);
 	flush_ldap_variables___runtime_to_database(admindb, false, true, false);
 	flush_ldap_variables___database_to_runtime(admindb,true);
+	admindb->execute((char *)"DETACH DATABASE disk");
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);
+	__attach_db(admindb, configdb, (char *)"disk");
 }
 
 void ProxySQL_Admin::admin_shutdown() {
