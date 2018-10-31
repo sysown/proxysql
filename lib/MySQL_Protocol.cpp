@@ -1262,9 +1262,8 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 
 
 bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len) {
-	// FIXME: very buggy function, it doesn't perform any real check
 	bool ret=false;
-  int cur=sizeof(mysql_hdr);
+	int cur=sizeof(mysql_hdr);
 	unsigned char *user=NULL;
 	char *password=NULL;
 	char *db=NULL;
@@ -1351,7 +1350,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		free(sha1_pass);
 		sha1_pass=NULL;
 	}
-
+	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 	return ret;
 }
 
