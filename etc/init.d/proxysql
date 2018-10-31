@@ -58,6 +58,45 @@ testpid() {
 	fi
 }
 
+is_pid_child_of_docker() {
+	which docker &> /dev/null
+	if [ "$?" -eq 1 ] ; then
+		return 0;
+	fi
+
+	IFS=$'\n'
+	docker_pids=($(docker ps -q | xargs docker inspect --format '{{.State.Pid}}'))
+	local child_pid=$1
+
+	for i in "${docker_pids[@]}"
+	do
+		if [ "$i" -eq "$child_pid" ] ; then
+			return 1;
+		fi
+	done
+
+	return 0
+}
+
+safe_kill() {
+	local pid=$1
+	local param=$2
+
+	parent_pid=`ps -f $pid | grep proxysql |  awk '{print $3}'`
+	if [ -n "$parent_pid" ]; then
+
+		is_pid_child_of_docker $parent_pid		
+		is_child=$?
+
+		if [[ $is_child -eq 0 ]]; then			
+			kill $param $pid
+		fi
+
+	else ##the process has not parent, I can kill it
+		kill $param $pid
+	fi
+}
+
 initial() {
 	OPTS="--initial $OPTS"
 	start
@@ -106,7 +145,7 @@ stop() {
 		# Note: we send a kill to all the processes, not just to the child
 		for i in `pgrep -x proxysql` ; do
 			if [ "$i" != "$$" ]; then
-				kill $i
+				safe_kill $i
 			fi
 		done
 	#  Loop until it does.
@@ -143,7 +182,7 @@ stop() {
 			echo "  Attempting a forced exit..."
 			for i in `pgrep proxysql` ; do
 				if [ "$i" != "$$" ]; then
-					kill -9 $i
+					safe_kill $i '-9'
 				fi
 			done
 		fi
