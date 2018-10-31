@@ -3918,6 +3918,7 @@ void ProxySQL_Admin::init_ldap_variables() {
 	check_and_build_standard_tables(admindb, tables_defs_admin);
 	check_and_build_standard_tables(configdb, tables_defs_config);
 	__attach_db(admindb, configdb, (char *)"disk");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
 }
 
 void ProxySQL_Admin::admin_shutdown() {
