@@ -1333,12 +1333,12 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	unsigned char *user=NULL;
 	char *db=NULL;
 	char *db_tmp = NULL;
-	unsigned char pass[128];
+	unsigned char *pass = NULL;
+	MySQL_Connection *myconn = NULL;
 	char *password=NULL;
 	bool use_ssl=false;
 	bool _ret_use_ssl=false;
 
-	memset(pass,0,128);
 	void *sha1_pass=NULL;
 //#ifdef DEBUG
 	unsigned char *_ptr=pkt;
@@ -1365,6 +1365,11 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pkt     += strlen((char *)user) + 1;
 
 	pass_len = (capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
+	if (pass_len > (len - (pkt - _ptr))) {
+		ret = false;
+		goto __exit_process_pkt_handshake_response;
+	}
+	pass = (unsigned char *)malloc(pass_len+1);
 	memcpy(pass, pkt, pass_len);
 	pass[pass_len] = 0;
 
@@ -1459,7 +1464,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
             (capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, password, pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
 	assert(sess);
 	assert(sess->client_myds);
-	MySQL_Connection *myconn=sess->client_myds->myconn;
+	myconn=sess->client_myds->myconn;
 	assert(myconn);
 	myconn->set_charset(charset);
 	// enable compression
@@ -1493,6 +1498,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	}
 
 __exit_process_pkt_handshake_response:
+	free(pass);
 	if (password) {
 		free(password);
 		password=NULL;
