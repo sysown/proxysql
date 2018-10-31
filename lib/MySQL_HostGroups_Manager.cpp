@@ -1747,12 +1747,12 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		if (it2!=Group_Replication_Info_Map.end()) {
 			info=it2->second;
 			bool changed=false;
-			changed=info->update(backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, (bool)writer_is_also_reader, r->fields[8]);
+			changed=info->update(backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, writer_is_also_reader, r->fields[8]);
 			if (changed) {
 				//info->need_converge=true;
 			}
 		} else {
-			info=new Group_Replication_Info(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, (bool)writer_is_also_reader, r->fields[8]);
+			info=new Group_Replication_Info(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, writer_is_also_reader, r->fields[8]);
 			//info->need_converge=true;
 			Group_Replication_Info_Map.insert(Group_Replication_Info_Map.begin(), std::pair<int, Group_Replication_Info *>(writer_hostgroup,info));
 		}
@@ -1842,12 +1842,12 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 		if (it2!=Galera_Info_Map.end()) {
 			info=it2->second;
 			bool changed=false;
-			changed=info->update(backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, (bool)writer_is_also_reader, r->fields[8]);
+			changed=info->update(backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, writer_is_also_reader, r->fields[8]);
 			if (changed) {
 				//info->need_converge=true;
 			}
 		} else {
-			info=new Galera_Info(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, (bool)writer_is_also_reader, r->fields[8]);
+			info=new Galera_Info(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup, max_writers, max_transactions_behind,  (bool)active, writer_is_also_reader, r->fields[8]);
 			//info->need_converge=true;
 			Galera_Info_Map.insert(Galera_Info_Map.begin(), std::pair<int, Galera_Info *>(writer_hostgroup,info));
 		}
@@ -3095,7 +3095,7 @@ unsigned long long MySQL_HostGroups_Manager::Get_Memory_Stats() {
 	return intsize;
 }
 
-Group_Replication_Info::Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c) {
+Group_Replication_Info::Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	comment=NULL;
 	if (c) {
 		comment=strdup(c);
@@ -3123,7 +3123,7 @@ Group_Replication_Info::~Group_Replication_Info() {
 	}
 }
 
-bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c) {
+bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	bool ret=false;
 	__active=true;
 	if (backup_writer_hostgroup!=b) {
@@ -3342,7 +3342,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	}
 	free(query);
 
-	bool writer_is_also_reader=false;
+	int writer_is_also_reader=0;
 	bool found_writer=false;
 	bool found_reader=false;
 	int read_HG=-1;
@@ -3378,7 +3378,11 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 		}
 		if (need_converge==false) {
 			if (found_writer) { // maybe no-op
-				if (writer_is_also_reader==found_reader) { // either both true or both false
+				if (
+					(writer_is_also_reader==0 && found_reader==false)
+					||
+					(writer_is_also_reader > 0 && found_reader==true)
+				) { // either both true or both false
 					delete resultset;
 					resultset=NULL;
 				}
@@ -3542,13 +3546,51 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 			delete resultset;
 			resultset=NULL;
 		}
+		if (info->writer_is_also_reader==2) {
+			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+			query=(char *)malloc(strlen(q)+256);
+			sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+			free(query);
+			if (resultset) {
+				if (resultset->rows_count) {
+					int num_writers=0;
+					int num_backup_writers=0;
+					for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int hostgroup=atoi(r->fields[0]);
+						if (hostgroup==info->writer_hostgroup) {
+							num_writers++;
+						} else {
+							if (hostgroup==info->backup_writer_hostgroup) {
+								num_backup_writers++;
+							}
+						}
+					}
+					if (num_backup_writers) { // there are backup writers, only these will be used as readers
+						q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostgroup_id=%d";
+						query=(char *)malloc(strlen(q) + 128);
+						sprintf(query,q, info->reader_hostgroup);
+						mydb->execute(query);
+						free(query);
+						q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d";
+						query=(char *)malloc(strlen(q) + 128);
+						sprintf(query,q, info->reader_hostgroup, info->backup_writer_hostgroup);
+						mydb->execute(query);
+						free(query);
+					}
+				}
+				delete resultset;
+				resultset=NULL;
+			}
+		}
 	} else {
 		// we couldn't find the cluster, exits
 	}
 	pthread_mutex_unlock(&Group_Replication_Info_mutex);
 }
 
-Galera_Info::Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c) {
+Galera_Info::Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	comment=NULL;
 	if (c) {
 		comment=strdup(c);
@@ -3576,7 +3618,7 @@ Galera_Info::~Galera_Info() {
 	}
 }
 
-bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c) {
+bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
 	bool ret=false;
 	__active=true;
 	if (backup_writer_hostgroup!=b) {
@@ -3853,7 +3895,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	}
 	free(query);
 
-	bool writer_is_also_reader=false;
+	int writer_is_also_reader=0;
 	bool found_writer=false;
 	bool found_reader=false;
 	int read_HG=-1;
@@ -3914,7 +3956,11 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 
 		if (need_converge==false) {
 			if (found_writer) { // maybe no-op
-				if (writer_is_also_reader==found_reader) { // either both true or both false
+				if (
+					(writer_is_also_reader==0 && found_reader==false)
+					||
+					(writer_is_also_reader > 0 && found_reader==true)
+				) { // either both true or both false
 					delete resultset;
 					resultset=NULL;
 				}
@@ -4178,7 +4224,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 														sprintf(query,q,info->writer_hostgroup, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup, host.c_str(), port_n);
 														mydb->execute(query);
 														free(query);
-														bool writer_is_also_reader = info->writer_is_also_reader;
+														int writer_is_also_reader = info->writer_is_also_reader;
 														if (writer_is_also_reader) {
 															int read_HG = info->reader_hostgroup;
 															q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
@@ -4204,6 +4250,44 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 		if (resultset) {
 			delete resultset;
 			resultset=NULL;
+		}
+		if (info->writer_is_also_reader==2) {
+			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+			query=(char *)malloc(strlen(q)+256);
+			sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+			free(query);
+			if (resultset) {
+				if (resultset->rows_count) {
+					int num_writers=0;
+					int num_backup_writers=0;
+					for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int hostgroup=atoi(r->fields[0]);
+						if (hostgroup==info->writer_hostgroup) {
+							num_writers++;
+						} else {
+							if (hostgroup==info->backup_writer_hostgroup) {
+								num_backup_writers++;
+							}
+						}
+					}
+					if (num_backup_writers) { // there are backup writers, only these will be used as readers
+						q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostgroup_id=%d";
+						query=(char *)malloc(strlen(q) + 128);
+						sprintf(query,q, info->reader_hostgroup);
+						mydb->execute(query);
+						free(query);
+						q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d";
+						query=(char *)malloc(strlen(q) + 128);
+						sprintf(query,q, info->reader_hostgroup, info->backup_writer_hostgroup);
+						mydb->execute(query);
+						free(query);
+					}
+				}
+				delete resultset;
+				resultset=NULL;
+			}
 		}
 	} else {
 		// we couldn't find the cluster, exits

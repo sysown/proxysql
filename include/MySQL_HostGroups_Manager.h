@@ -393,15 +393,15 @@ class Group_Replication_Info {
 	int max_transactions_behind;
 	char *comment;
 	bool active;
-	bool writer_is_also_reader;
+	int writer_is_also_reader;
 	bool __active;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
 	int current_num_readers;
 	int current_num_offline;
-	Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
-	bool update(int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
+	Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
+	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Group_Replication_Info();
 };
 
@@ -415,15 +415,15 @@ class Galera_Info {
 	int max_transactions_behind;
 	char *comment;
 	bool active;
-	bool writer_is_also_reader;
+	int writer_is_also_reader;
 	bool __active;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
 	int current_num_readers;
 	int current_num_offline;
-	Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
-	bool update(int b, int r, int o, int mw, int mtb, bool _a, bool _w, char *c);
+	Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
+	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Galera_Info();
 };
 
