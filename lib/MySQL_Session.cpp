@@ -3650,7 +3650,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		// FIXME: this should become close connection
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		char *client_addr=NULL;
-		if (client_myds->client_addr) {
+		if (client_myds->client_addr && client_myds->myconn->userinfo->username) {
 			char buf[512];
 			switch (client_myds->client_addr->sa_family) {
 				case AF_INET: {
@@ -3676,14 +3676,14 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		} else {
 			client_addr = strdup((char *)"");
 		}
-		//if (client_myds->encrypted == false) {
-		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
+		if (client_myds->myconn->userinfo->username) {
+			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
+			sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
+			free(_s);
+		}
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
-		free(_s);
 		client_myds->DSS=STATE_SLEEP;
-		//}
 	}
 }
 
