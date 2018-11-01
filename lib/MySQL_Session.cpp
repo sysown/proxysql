@@ -1030,7 +1030,10 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 			pthread_attr_setstacksize (&attr, 256*1024);
 			pthread_t pt;
-			pthread_create(&pt, &attr, &kill_query_thread, ka);
+			if (pthread_create(&pt, &attr, &kill_query_thread, ka) != 0) {
+				proxy_error("Thread creation\n");
+				assert(0);
+			}
 		}
 	}
 }
