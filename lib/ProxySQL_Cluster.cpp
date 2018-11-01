@@ -1147,7 +1147,10 @@ void ProxySQL_Cluster_Nodes::load_servers_list(SQLite3_result *resultset, bool _
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-			pthread_create(&a->thrid, &attr, ProxySQL_Cluster_Monitor_thread, (void *)a);
+			if (pthread_create(&a->thrid, &attr, ProxySQL_Cluster_Monitor_thread, (void *)a) != 0) {
+				proxy_error("Thread creation\n");
+				assert(0);
+			}
 			//pthread_create(&a->thrid, NULL, ProxySQL_Cluster_Monitor_thread, (void *)a);
 			//pthread_detach(a->thrid);
 		} else {

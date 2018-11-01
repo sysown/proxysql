@@ -2306,10 +2306,16 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 
 proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
 	if (idles==false) {
-		pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]);
+		if (pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]) != 0 ) {
+			proxy_error("Thread creation\n");
+			assert(0);
+		}
 #ifdef IDLE_THREADS
 	} else {
-		pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]);
+		if (pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]) != 0) {
+			proxy_error("Thread creation\n");
+			assert(0);
+		}
 #endif // IDLE_THREADS
 	}
 	return NULL;

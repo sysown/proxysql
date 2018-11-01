@@ -3287,8 +3287,10 @@ static void * admin_main_loop(void *arg)
 				pthread_mutex_lock (&sock_mutex);
 				client=(int *)malloc(sizeof(int));
 				*client= client_t;
-				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
-					perror("Thread creation");
+				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
+					proxy_error("Thread creation\n");
+					assert(0);
+				}
 			}
 			fds[i].revents=0;
 		}
