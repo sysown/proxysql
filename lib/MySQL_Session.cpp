@@ -589,7 +589,31 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	size_t sal=strlen("set autocommit");
 	if ( pkt->size >= 7+sal) {
+		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,strlen((char *)"SET @@session.autocommit"))==0) {
+			memmove(pkt->ptr+9, pkt->ptr+19, pkt->size - 19);
+			memset(pkt->ptr+pkt->size-10,' ',10);
+		}
 		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
+			void *p = NULL;
+			for (int i=5+sal; i<pkt->size; i++) {
+				*((char *)pkt->ptr+i) = tolower(*((char *)pkt->ptr+i));
+			}
+			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"false", 5);
+			if (p) {
+				memcpy(p,(void *)"0    ",5);
+			}
+			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"true", 4);
+			if (p) {
+				memcpy(p,(void *)"1   ",4);
+			}
+			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"off", 3);
+			if (p) {
+				memcpy(p,(void *)"0  ",3);
+			}
+			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"on", 2);
+			if (p) {
+				memcpy(p,(void *)"1 ",2);
+			}
 			__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
 			unsigned int i;
 			bool eq=false;
