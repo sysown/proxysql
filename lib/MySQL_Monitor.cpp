@@ -1953,15 +1953,30 @@ __monitor_run:
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize (&attr, 64*1024);
 	pthread_t monitor_connect_thread;
-	pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL);
+	if (pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL) != 0) {
+		proxy_error("Thread creation\n");
+		assert(0);
+	}
 	pthread_t monitor_ping_thread;
-	pthread_create(&monitor_ping_thread, &attr, &monitor_ping_pthread,NULL);
+	if (pthread_create(&monitor_ping_thread, &attr, &monitor_ping_pthread,NULL) != 0) {
+		proxy_error("Thread creation\n");
+		assert(0);
+	}
 	pthread_t monitor_read_only_thread;
-	pthread_create(&monitor_read_only_thread, &attr, &monitor_read_only_pthread,NULL);
+	if (pthread_create(&monitor_read_only_thread, &attr, &monitor_read_only_pthread,NULL) != 0) {
+		proxy_error("Thread creation\n");
+		assert(0);
+	}
 	pthread_t monitor_group_replication_thread;
-	pthread_create(&monitor_group_replication_thread, &attr, &monitor_group_replication_pthread,NULL);
+	if (pthread_create(&monitor_group_replication_thread, &attr, &monitor_group_replication_pthread,NULL) != 0) {
+		proxy_error("Thread creation\n");
+		assert(0);
+	}
 	pthread_t monitor_replication_lag_thread;
-	pthread_create(&monitor_replication_lag_thread, &attr, &monitor_replication_lag_pthread,NULL);
+	if (pthread_create(&monitor_replication_lag_thread, &attr, &monitor_replication_lag_pthread,NULL) != 0) {
+		proxy_error("Thread creation\n");
+		assert(0);
+	}
 	while (shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
 		if (GloMTH) {
