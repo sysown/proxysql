@@ -15,7 +15,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_PROCESSOR_VERSION "0.4.0926" DEB
+#define QUERY_PROCESSOR_VERSION "0.4.1031" DEB
 
 #define QP_RE_MOD_CASELESS 1
 #define QP_RE_MOD_GLOBAL 2
@@ -42,7 +42,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=34; // this count the number of fields
+		num_fields=35; // this count the number of fields
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -81,22 +81,23 @@ class QP_rule_text {
 		itostr(pta[15], (long long)QPr->destination_hostgroup);
 		itostr(pta[16], (long long)QPr->cache_ttl);
 		itostr(pta[17], (long long)QPr->cache_empty_result);
-		itostr(pta[18], (long long)QPr->reconnect);
-		itostr(pta[19], (long long)QPr->timeout);
-		itostr(pta[20], (long long)QPr->retries);
-		itostr(pta[21], (long long)QPr->delay);
-		itostr(pta[22], (long long)QPr->next_query_flagIN);
-		itostr(pta[23], (long long)QPr->mirror_flagOUT);
-		itostr(pta[24], (long long)QPr->mirror_hostgroup);
-		pta[25]=strdup_null(QPr->error_msg);
-		pta[26]=strdup_null(QPr->OK_msg);
-		itostr(pta[27], (long long)QPr->sticky_conn);
-		itostr(pta[28], (long long)QPr->multiplex);
-		itostr(pta[29], (long long)QPr->gtid_from_hostgroup);
-		itostr(pta[30], (long long)QPr->log);
-		itostr(pta[31], (long long)QPr->apply);
-		pta[32]=strdup_null(QPr->comment); // issue #643
-		itostr(pta[33], (long long)QPr->hits);
+		itostr(pta[18], (long long)QPr->cache_timeout);
+		itostr(pta[19], (long long)QPr->reconnect);
+		itostr(pta[20], (long long)QPr->timeout);
+		itostr(pta[21], (long long)QPr->retries);
+		itostr(pta[22], (long long)QPr->delay);
+		itostr(pta[23], (long long)QPr->next_query_flagIN);
+		itostr(pta[24], (long long)QPr->mirror_flagOUT);
+		itostr(pta[25], (long long)QPr->mirror_hostgroup);
+		pta[26]=strdup_null(QPr->error_msg);
+		pta[27]=strdup_null(QPr->OK_msg);
+		itostr(pta[28], (long long)QPr->sticky_conn);
+		itostr(pta[29], (long long)QPr->multiplex);
+		itostr(pta[30], (long long)QPr->gtid_from_hostgroup);
+		itostr(pta[31], (long long)QPr->log);
+		itostr(pta[32], (long long)QPr->apply);
+		pta[33]=strdup_null(QPr->comment); // issue #643
+		itostr(pta[34], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -449,7 +450,7 @@ void Query_Processor::wrunlock() {
 #endif
 };
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -479,6 +480,7 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->destination_hostgroup=destination_hostgroup;
 	newQR->cache_ttl=cache_ttl;
 	newQR->cache_empty_result=cache_empty_result;
+	newQR->cache_timeout=cache_timeout;
 	newQR->reconnect=reconnect;
 	newQR->timeout=timeout;
 	newQR->retries=retries;
@@ -684,6 +686,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"destination_hostgroup");
 	result->add_column_definition(SQLITE_TEXT,"cache_ttl");
 	result->add_column_definition(SQLITE_TEXT,"cache_empty_result");
+	result->add_column_definition(SQLITE_TEXT,"cache_timeout");
 	result->add_column_definition(SQLITE_TEXT,"reconnect");
 	result->add_column_definition(SQLITE_TEXT,"timeout");
 	result->add_column_definition(SQLITE_TEXT,"retries");
@@ -903,7 +906,8 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					( qr1->digest ? buf : NULL ) ,
 					qr1->match_digest, qr1->match_pattern, qr1->negate_match_pattern, (char *)re_mod.c_str(),
 					qr1->flagOUT, qr1->replace_pattern, qr1->destination_hostgroup,
-					qr1->cache_ttl, qr1->cache_empty_result, qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay,
+					qr1->cache_ttl, qr1->cache_empty_result, qr1->cache_timeout,
+					qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay,
 					qr1->next_query_flagIN, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
 					qr1->error_msg, qr1->OK_msg, qr1->sticky_conn, qr1->multiplex,
 					qr1->gtid_from_hostgroup,
@@ -1128,6 +1132,11 @@ __internal_loop:
 			// Note: negative value means this rule doesn't change
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
       ret->cache_empty_result=qr->cache_empty_result;
+    }
+    if (qr->cache_timeout >= 0) {
+			// Note: negative value means this rule doesn't change
+      proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_timeout: %dms. Query will wait up resulset to be avaiable in query cache before running on backend\n", qr->rule_id, qr->cache_timeout);
+      ret->cache_timeout=qr->cache_timeout;
     }
     if (qr->sticky_conn >= 0) {
 			// Note: negative sticky_conn means this rule doesn't change
