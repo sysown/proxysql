@@ -8019,14 +8019,17 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                         int reader_hostgroup;
                         int offline_hostgroup;
                         int active=1; // default
-                        int max_writers=1; // default
-                        int writer_is_also_reader=0;
-                        int max_transactions_behind=0;
+                        int max_writers;
+                        int writer_is_also_reader;
+                        int max_transactions_behind;
                         std::string comment="";
                         if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
                         if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) continue;
                         if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
                         if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) continue;
+			if (line.lookupValue("max_writers", max_writers)==false) max_writers=1;
+                        if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
+		        if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
                         line.lookupValue("comment", comment);
                         char *o1=strdup(comment.c_str());
                         char *o=escape_string_single_quotes(o1, false);
