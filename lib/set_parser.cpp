@@ -18,6 +18,7 @@ SetParser::SetParser(std::string nq) {
 
 std::map<std::string,std::vector<string>> SetParser::parse() {
 
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
   re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
   opt2->set_case_sensitive(false);
   opt2->set_longest_match(false);
@@ -43,7 +44,9 @@ std::map<std::string,std::vector<string>> SetParser::parse() {
   re2::StringPiece input(query);
   while (re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4, &value5)) {
     std::vector<std::string> op;
-
+#ifdef DEBUG
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
+#endif // DEBUG
     string key;
     if (value1 != "") {
       // NAMES

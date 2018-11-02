@@ -53,7 +53,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 #endif
 		unsigned long long curtime=debug_monotonic_time();
 		//fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
-		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, verbosity, debugbuff);
+		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, debugbuff);
 		pretime=curtime;
 	}
 #ifdef __GLIBC__
