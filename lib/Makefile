@@ -11,7 +11,7 @@ MARIADB_IDIR=$(MARIADB_PATH)/include
 JEMALLOC_PATH=$(DEPS_PATH)/jemalloc/jemalloc
 JEMALLOC_IDIR=$(JEMALLOC_PATH)/include/jemalloc
 
-LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig-1.4.9
+LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig
 LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
 
 #INJECTION_PATH=$(DEPS_PATH)/libinjection

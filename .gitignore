@@ -95,6 +95,7 @@ deps/memcached/memcached-1.4.20/
 
 #libconfig
 deps/libconfig/libconfig-1.4.9/
+deps/libconfig/libconfig-1.7.2/
 
 #libmicrohttpd
 deps/libmicrohttpd/libmicrohttpd-0.9.55/

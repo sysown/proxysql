@@ -121,8 +121,8 @@ sqlite3/sqlite3/sqlite3.o:
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
 libconfig/libconfig/lib/.libs/libconfig++.a:
-	cd libconfig && rm -rf libconfig-1.4.9
-	cd libconfig && tar -zxf libconfig-1.4.9.tar.gz
+	cd libconfig && rm -rf libconfig-1.7.2
+	cd libconfig && tar -zxf libconfig-1.7.2.tar.gz
 	cd libconfig/libconfig && ./configure --disable-examples
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 
