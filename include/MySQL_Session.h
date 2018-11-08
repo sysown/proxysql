@@ -218,6 +218,7 @@ class MySQL_Session
 	void writeout();
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
+	bool handle_command_query_kill(PtrSize_t *);
 };
 
 #define KILL_QUERY       1
