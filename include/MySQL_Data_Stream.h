@@ -119,6 +119,8 @@ class MySQL_Data_Stream
 
 	short revents;
 
+	char kill_type;
+
 	bool encrypted;
 	bool net_failure;
 
