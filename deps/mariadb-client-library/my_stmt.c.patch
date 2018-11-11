@@ -1,0 +1,52 @@
+@@ -125,7 +125,7 @@
+ 
+   DBUG_ENTER("stmt_unbuffered_fetch");
+ 
+-  pkt_len= net_safe_read(stmt->mysql);
++  pkt_len= net_safe_read(stmt->mysql,0);
+   DBUG_PRINT("info",("packet_length= %ld",pkt_len));
+ 
+   if (pkt_len == packet_error)
+@@ -172,10 +172,14 @@
+ 
+   pprevious= &result->data;
+ 
+-  while ((packet_len = net_safe_read(stmt->mysql)) != packet_error)
++  ulong total_read = 0;
++
++  while ((packet_len = net_safe_read(stmt->mysql, total_read)) != packet_error)
+   {
++    if (total_read >= 1024*1024)
++		total_read=0;
+     p= stmt->mysql->net.read_pos;
+-    if (packet_len > 7 || p[0] != 254)
++    if ((packet_len > 7 || p[0] != 254))
+     {
+       /* allocate space for rows */
+       if (!(current= (MYSQL_ROWS *)alloc_root(&result->alloc, sizeof(MYSQL_ROWS) + packet_len)))
+@@ -249,6 +253,7 @@
+       stmt->result_cursor= result->data; 
+       DBUG_RETURN(0);
+     }
++	total_read += packet_len;
+   }
+   stmt->result_cursor= 0;
+   SET_CLIENT_STMT_ERROR(stmt, stmt->mysql->net.last_errno, stmt->mysql->net.sqlstate,
+@@ -300,7 +305,7 @@
+ void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
+ {
+   ulong packet_len;
+-  while ((packet_len = net_safe_read(stmt->mysql)) != packet_error)
++  while ((packet_len = net_safe_read(stmt->mysql, 0)) != packet_error)
+     if (packet_len < 8 && stmt->mysql->net.read_pos[0] == 254)
+       return;
+ }
+@@ -1166,7 +1171,7 @@
+ 
+   DBUG_ENTER("read_prepare_response");
+ 
+-  if ((packet_length= net_safe_read(stmt->mysql)) == packet_error)
++  if ((packet_length= net_safe_read(stmt->mysql, 0)) == packet_error)
+     DBUG_RETURN(1);
+ 
+   DBUG_PRINT("info",("packet_length= %ld",packet_length));

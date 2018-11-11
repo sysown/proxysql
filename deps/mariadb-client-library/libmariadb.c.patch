@@ -1,3 +1,75 @@
+@@ -396,7 +396,7 @@
+ *****************************************************************************/
+ 
+ ulong
+-net_safe_read(MYSQL *mysql)
++net_safe_read(MYSQL *mysql, size_t tot_size)
+ {
+   NET *net= &mysql->net;
+   ulong len=0;
+@@ -406,7 +406,7 @@
+   /* Don't give sigpipe errors if the client doesn't want them */
+   set_sigpipe(mysql);
+   if (net->vio != 0)
+-    len=my_net_read(net);
++    len=my_net_read(net, tot_size);
+   reset_sigpipe(mysql);
+ 
+   if (len == packet_error || len == 0)
+@@ -630,7 +630,7 @@
+   }
+   result=0;
+   if (!skipp_check) {
+-    result= ((mysql->packet_length=net_safe_read(mysql)) == packet_error ?
++    result= ((mysql->packet_length=net_safe_read(mysql, 0)) == packet_error ?
+ 	     1 : 0);
+     DBUG_PRINT("info", ("packet_length=%llu", mysql->packet_length));
+   }
+@@ -820,7 +820,7 @@
+   DBUG_ENTER("madb_skip_result");
+ 
+   do {
+-    pkt_len= net_safe_read(mysql);
++    pkt_len= net_safe_read(mysql, 0);
+     if (pkt_len == packet_error)
+       break;
+   } while (pkt_len > 8 || mysql->net.read_pos[0] != 254);
+@@ -1226,7 +1226,7 @@
+   NET *net = &mysql->net;
+   DBUG_ENTER("madb_read_rows");
+ 
+-  if ((pkt_len= net_safe_read(mysql)) == packet_error)
++  if ((pkt_len= net_safe_read(mysql, 0)) == packet_error)
+     DBUG_RETURN(0);
+   if (!(result=(MYSQL_DATA*) my_malloc(sizeof(MYSQL_DATA),
+ 				       MYF(MY_WME | MY_ZEROFILL))))
+@@ -1283,7 +1283,7 @@
+       }
+     }
+     cur->data[field]=to;			/* End of last field */
+-    if ((pkt_len=net_safe_read(mysql)) == packet_error)
++    if ((pkt_len=net_safe_read(mysql, 0)) == packet_error)
+     {
+       free_rows(result);
+       DBUG_RETURN(0);
+@@ -1315,7 +1315,7 @@
+   ulong pkt_len,len;
+   uchar *pos,*prev_pos, *end_pos;
+ 
+-  if ((pkt_len=(uint) net_safe_read(mysql)) == packet_error)
++  if ((pkt_len=(uint) net_safe_read(mysql, 0)) == packet_error)
+     return -1;
+   
+   if (pkt_len <= 8 && mysql->net.read_pos[0] == 254)
+@@ -1881,7 +1881,7 @@
+                  errno);
+     goto error;
+   }
+-  if ((pkt_length=net_safe_read(mysql)) == packet_error)
++  if ((pkt_length=net_safe_read(mysql, 0)) == packet_error)
+   {
+     if (mysql->net.last_errno == CR_SERVER_LOST)
+       my_set_error(mysql, CR_SERVER_LOST, SQLSTATE_UNKNOWN,
 @@ -2039,10 +2039,16 @@
  
    mysql->client_flag= client_flag;
@@ -106,6 +178,24 @@
        my_free(mysql);
    }
    DBUG_VOID_RETURN;
+@@ -2433,7 +2472,7 @@
+   ulong length;
+   DBUG_ENTER("mthd_my_read_query_result");
+ 
+-  if (!mysql || (length = net_safe_read(mysql)) == packet_error)
++  if (!mysql || (length = net_safe_read(mysql, 0)) == packet_error)
+     DBUG_RETURN(1);
+   free_old_query(mysql);			/* Free old result */
+ get_info:
+@@ -2464,7 +2503,7 @@
+     }
+     error=mysql_handle_local_infile(mysql, (char *)pos);
+ 
+-    if ((length=net_safe_read(mysql)) == packet_error || error)
++    if ((length=net_safe_read(mysql, 0)) == packet_error || error)
+       DBUG_RETURN(-1);
+     goto get_info;				/* Get info packet */
+   }
 @@ -3510,19 +3549,27 @@
    DBUG_VOID_RETURN;
  }

@@ -79,6 +79,13 @@ mariadb-client-library/mariadb_client/include/my_config.h:
 	cd mariadb-client-library/mariadb_client && patch libmariadb/password.c < ../password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
+	cd mariadb-client-library/mariadb_client && patch include/mysql_com.h < ../mysql_com.h.patch
+	cd mariadb-client-library/mariadb_client && patch include/violite.h < ../violite.h.patch
+	cd mariadb-client-library/mariadb_client && patch include/my_stmt.h < ../my_stmt.h.patch
+	cd mariadb-client-library/mariadb_client && patch include/mysql_async.h < ../mysql_async.h.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/my_auth.c < ../my_auth.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/my_stmt.c < ../my_stmt.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/violite.c < ../violite.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/my_alloc.c < ../my_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/my_charset.c < ../my_charset.c.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE}

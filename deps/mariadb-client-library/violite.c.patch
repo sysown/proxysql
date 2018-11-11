@@ -1,0 +1,49 @@
+@@ -275,7 +275,7 @@
+ }
+ 
+ 
+-size_t vio_real_read(Vio *vio, gptr buf, size_t size)
++size_t vio_real_read(Vio *vio, gptr buf, size_t size, size_t tot_size)
+ {
+   size_t r;
+ 
+@@ -299,7 +299,7 @@
+     if (vio->async_context && vio->async_context->active)
+       r= my_recv_async(vio->async_context,
+                        vio->sd,
+-                       buf, size, vio->read_timeout);
++                       buf, size, vio->read_timeout, tot_size);
+     else
+     {
+       if (vio->async_context)
+@@ -349,14 +349,14 @@
+ }
+ 
+ 
+-size_t vio_read(Vio * vio, gptr buf, size_t size)
++size_t vio_read(Vio * vio, gptr buf, size_t size, size_t tot_size)
+ {
+   size_t r;
+   DBUG_ENTER("vio_read");
+   DBUG_PRINT("enter", ("sd=%d  size=%d", vio->sd, size));
+ 
+   if (!vio->cache)
+-    DBUG_RETURN(vio_real_read(vio, buf, size));
++    DBUG_RETURN(vio_real_read(vio, buf, size, tot_size));
+ 
+   if (vio->cache + vio->cache_size > vio->cache_pos)
+   {
+@@ -366,11 +366,11 @@
+   }
+   else if (size >= VIO_CACHE_MIN_SIZE)
+   {
+-    r= vio_real_read(vio, buf, size); 
++    r= vio_real_read(vio, buf, size, tot_size); 
+   }
+   else
+   {
+-    r= vio_real_read(vio, vio->cache, VIO_CACHE_SIZE);
++    r= vio_real_read(vio, vio->cache, VIO_CACHE_SIZE, tot_size);
+     if (r > 0)
+     {
+       if (size < r)

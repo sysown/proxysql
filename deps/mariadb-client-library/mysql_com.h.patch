@@ -1,0 +1,9 @@
+@@ -332,7 +332,7 @@
+ int	net_write_command(NET *net,unsigned char command,const char *packet,
+ 			  size_t len);
+ int	net_real_write(NET *net,const char *packet, size_t len);
+-unsigned long	my_net_read(NET *net);
++unsigned long	my_net_read(NET *net, size_t tot_size);
+ 
+ struct rand_struct {
+   unsigned long seed1,seed2,max_value;

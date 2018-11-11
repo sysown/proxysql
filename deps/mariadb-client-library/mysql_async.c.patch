@@ -1,4 +1,26 @@
-@@ -570,19 +570,20 @@
+@@ -137,15 +137,17 @@
+ 
+ ssize_t
+ my_recv_async(struct mysql_async_context *b, int fd,
+-              unsigned char *buf, size_t size, int timeout)
++              unsigned char *buf, size_t size, int timeout, size_t tot_size)
+ {
+   ssize_t res;
+ 
+   for (;;)
+   {
+-    res= recv(fd, buf, size, IF_WIN(0, MSG_DONTWAIT));
+-    if (res >= 0 || IS_BLOCKING_ERROR())
+-      return res;
++	if (tot_size < 1024*1024) {
++   	  res= recv(fd, buf, size, IF_WIN(0, MSG_DONTWAIT));
++      if (res >= 0 || IS_BLOCKING_ERROR())
++        return res;
++	}
+     b->events_to_wait_for= MYSQL_WAIT_READ;
+     if (timeout >= 0)
+     {
+@@ -570,19 +572,20 @@
  struct mysql_set_character_set_params {
    MYSQL *mysql;
    const char *csname;
@@ -21,7 +43,7 @@
  {
  MK_ASYNC_START_BODY(
    mysql_set_character_set,
-@@ -591,6 +592,7 @@
+@@ -591,6 +594,7 @@
      WIN_SET_NONBLOCKING(mysql)
      parms.mysql= mysql;
      parms.csname= csname;

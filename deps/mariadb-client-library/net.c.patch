@@ -1,4 +1,4 @@
-@@ -224,16 +224,16 @@
+@@ -228,16 +228,16 @@
    /* see conc-71: we need to check the socket status first:
       if the socket is dead we set net->error, so net_flush
       will report an error */
@@ -19,3 +19,57 @@
    net->compress_pkt_nr= net->pkt_nr=0;				/* Ready for new command */
    net->write_pos=net->buff;
    DBUG_VOID_RETURN;
+@@ -550,7 +550,7 @@
+ 
+ 
+ static ulong
+-my_real_read(NET *net, size_t *complen)
++my_real_read(NET *net, size_t *complen, size_t tot_size)
+ {
+   uchar *pos;
+   size_t length;
+@@ -578,7 +578,7 @@
+       while (remain > 0)
+       {
+ 	/* First read is done with non blocking mode */
+-        if ((long) (length=vio_read(net->vio,(char*) pos,remain)) <= 0L)
++        if ((long) (length=vio_read(net->vio,(char*) pos,remain, tot_size)) <= 0L)
+         {
+           my_bool interrupted = vio_should_retry(net->vio);
+ 
+@@ -712,7 +712,7 @@
+   return(len);
+ }
+ 
+-ulong my_net_read(NET *net)
++ulong my_net_read(NET *net, size_t tot_size)
+ {
+   size_t len,complen;
+ 
+@@ -720,7 +720,7 @@
+   if (!net->compress)
+   {
+ #endif
+-    len = my_real_read (net,(size_t *)&complen);
++    len = my_real_read (net,(size_t *)&complen, tot_size);
+     if (len == MAX_PACKET_LENGTH)
+     {
+       /* multi packet read */
+@@ -731,7 +731,7 @@
+       {
+         length+= len;
+         net->where_b+= (unsigned long)len;
+-        len= my_real_read(net, &complen);
++        len= my_real_read(net, &complen, tot_size);
+       } while (len == MAX_PACKET_LENGTH);
+       net->where_b= last_pos;
+       if (len != packet_error)
+@@ -841,7 +841,7 @@
+ 
+       net->where_b=buffer_length;
+ 
+-      if ((packet_length = my_real_read(net,(size_t *)&complen)) == packet_error)
++      if ((packet_length = my_real_read(net,(size_t *)&complen, tot_size)) == packet_error)
+         return packet_error;
+       if (my_uncompress((unsigned char*) net->buff + net->where_b, &packet_length, &complen))
+       {

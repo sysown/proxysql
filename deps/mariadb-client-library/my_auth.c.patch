@@ -1,0 +1,27 @@
+@@ -466,7 +466,7 @@
+   }
+ 
+   /* otherwise read the data */
+-  pkt_len= net_safe_read(mysql);
++  pkt_len= net_safe_read(mysql,0);
+   mpvio->last_read_packet_len= pkt_len;
+   *buf= mysql->net.read_pos;
+ 
+@@ -662,7 +662,7 @@
+ 
+   /* read the OK packet (or use the cached value in mysql->net.read_pos */
+   if (res == CR_OK)
+-    pkt_length= net_safe_read(mysql);
++    pkt_length= net_safe_read(mysql,0);
+   else /* res == CR_OK_HANDSHAKE_COMPLETE */
+     pkt_length= mpvio.last_read_packet_len;
+ 
+@@ -716,7 +716,7 @@
+     if (res != CR_OK_HANDSHAKE_COMPLETE)
+     {
+       /* Read what server thinks about out new auth message report */
+-      if (net_safe_read(mysql) == packet_error)
++      if (net_safe_read(mysql,0) == packet_error)
+       {
+         if (mysql->net.last_errno == CR_SERVER_LOST)
+           my_set_error(mysql, CR_SERVER_LOST, SQLSTATE_UNKNOWN,
