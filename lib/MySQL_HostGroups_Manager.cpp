@@ -913,7 +913,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	assert(rc==SQLITE_OK);
 
-	if (GloMTH->variables.hostgroup_manager_verbose) {
+	if (mysql_thread___hostgroup_manager_verbose) {
 		if (_onlyhg==NULL) {
 			proxy_info("Dumping current MySQL Servers structures for hostgroup ALL\n");
 		} else {
@@ -933,7 +933,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
-			if (GloMTH->variables.hostgroup_manager_verbose) {
+			if (mysql_thread___hostgroup_manager_verbose) {
 				char *st;
 				switch (mysrvc->status) {
 					case 0:
@@ -1001,7 +1001,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	}
 	sqlite3_finalize(statement1);
 	sqlite3_finalize(statement32);
-	if (GloMTH->variables.hostgroup_manager_verbose) {
+	if (mysql_thread___hostgroup_manager_verbose) {
 		char *error=NULL;
 		int cols=0;
 		int affected_rows=0;
@@ -1022,7 +1022,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 	if (incoming_replication_hostgroups==NULL)
 		return;
-	if (GloMTH->variables.hostgroup_manager_verbose) {
+	if (mysql_thread___hostgroup_manager_verbose) {
 		proxy_info("New mysql_replication_hostgroups table\n");
 	}
 	for (std::vector<SQLite3_row *>::iterator it = incoming_replication_hostgroups->rows.begin() ; it != incoming_replication_hostgroups->rows.end(); ++it) {
@@ -1043,7 +1043,7 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 			sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
 		}
 		mydb->execute(query);
-		if (GloMTH->variables.hostgroup_manager_verbose) {
+		if (mysql_thread___hostgroup_manager_verbose) {
 			fprintf(stderr,"writer_hostgroup: %s , reader_hostgroup: %s, %s\n", r->fields[0],r->fields[1], r->fields[2]);
 		}
 		free(query);
