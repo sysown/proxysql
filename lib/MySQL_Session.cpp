@@ -1250,6 +1250,24 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 			}
 			NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 		}
+	} else {
+		if (autocommit == false) { // also IsAutoCommit==false
+			if (mysql_thread___enforce_autocommit_on_reads == false) {
+				if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
+					if (CurrentQuery.is_select_NOT_for_update()==true) {
+						// client wants autocommit=0
+						// enforce_autocommit_on_reads=false
+						// there is no transaction
+						// this seems to be the first query, and a SELECT not FOR UPDATE
+						// we will switch back to autcommit=1
+						if (status == PROCESSING_QUERY) {
+							previous_status.push(PROCESSING_QUERY);
+							NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
+						}
+					}
+				}
+			}
+		}
 	}
 	return false;
 }
@@ -1892,7 +1910,22 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
-	int rc=myconn->async_set_autocommit(myds->revents, autocommit);
+	bool ac = autocommit;
+	if (autocommit == false) { // also IsAutoCommit==false
+		if (mysql_thread___enforce_autocommit_on_reads == false) {
+			if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
+				if (CurrentQuery.is_select_NOT_for_update()==true) {
+					// client wants autocommit=0
+					// enforce_autocommit_on_reads=false
+					// there is no transaction
+					// this seems to be the first query, and a SELECT not FOR UPDATE
+					// we will switch back to autcommit=1
+					ac = true;
+				}
+			}
+		}
+	}
+	int rc=myconn->async_set_autocommit(myds->revents, ac);
 	if (rc==0) {
 		st=previous_status.top();
 		previous_status.pop();
