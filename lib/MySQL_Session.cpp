@@ -2050,6 +2050,10 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 						// we will switch back to autcommit=1
 						ac = true;
 					}
+				} else {
+					st=previous_status.top();
+					previous_status.pop();
+					NEXT_IMMEDIATE_NEW(st);
 				}
 			}
 		}
