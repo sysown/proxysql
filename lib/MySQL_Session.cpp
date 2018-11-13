@@ -2040,14 +2040,16 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	bool ac = autocommit;
 	if (autocommit == false) { // also IsAutoCommit==false
 		if (mysql_thread___enforce_autocommit_on_reads == false) {
-			if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
-				if (CurrentQuery.is_select_NOT_for_update()==true) {
-					// client wants autocommit=0
-					// enforce_autocommit_on_reads=false
-					// there is no transaction
-					// this seems to be the first query, and a SELECT not FOR UPDATE
-					// we will switch back to autcommit=1
-					ac = true;
+			if (mybe->server_myds->myconn->IsAutoCommit() == false) {
+				if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
+					if (CurrentQuery.is_select_NOT_for_update()==true) {
+						// client wants autocommit=0
+						// enforce_autocommit_on_reads=false
+						// there is no transaction
+						// this seems to be the first query, and a SELECT not FOR UPDATE
+						// we will switch back to autcommit=1
+						ac = true;
+					}
 				}
 			}
 		}
