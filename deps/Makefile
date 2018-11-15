@@ -170,5 +170,6 @@ cleanall:
 	cd google-coredumper && rm -rf google-coredumper || true
 	cd libev && rm -rf libev-4.24 || true
 	cd libssl && rm -rf openssl-1.1.0h || true
+	cd libconfig && rm -rf libconfig-1.7.2 || true
 .PHONY: cleanall
 
