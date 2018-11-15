@@ -302,6 +302,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"commands_stats",
 	(char *)"query_digests",
 	(char *)"query_digests_lowercase",
+	(char *)"query_digests_track_hostname",
 	(char *)"servers_stats",
 	(char *)"default_reconnect",
 #ifdef DEBUG
@@ -430,6 +431,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.verbose_query_error = false;
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
+	variables.query_digests_track_hostname=false;
 	variables.connpoll_reset_queue_length = 50;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
@@ -691,6 +693,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 		if (!strcasecmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
 		if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 		if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+		if (!strcasecmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	}
 	if (!strncasecmp(name,"p",1)) {
 		if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
@@ -730,6 +733,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+	if (!strcasecmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	if (!strcasecmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
 	if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 	if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
@@ -1139,6 +1143,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_digests_lowercase")) {
 		return strdup((variables.query_digests_lowercase ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"query_digests_track_hostname")) {
+		return strdup((variables.query_digests_track_hostname ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"stats_time_backend_query")) {
 		return strdup((variables.stats_time_backend_query ? "true" : "false"));
@@ -2162,6 +2169,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_digests_lowercase=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"query_digests_track_hostname")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.query_digests_track_hostname=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.query_digests_track_hostname=false;
 			return true;
 		}
 		return false;
@@ -3605,6 +3623,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
+	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
 	variables.query_cache_stores_empty_result=(bool)GloMTH->get_variable_int((char *)"query_cache_stores_empty_result");

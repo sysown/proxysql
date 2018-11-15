@@ -113,6 +113,7 @@ class QP_query_digest_stats {
 	char *digest_text;
 	char *username;
 	char *schemaname;
+	char *client_address;
 	time_t first_seen;
 	time_t last_seen;
 	unsigned int count_star;
@@ -120,11 +121,12 @@ class QP_query_digest_stats {
 	unsigned long long min_time;
 	unsigned long long max_time;
 	int hid;
-	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h) {
+	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
 		digest=d;
 		digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
 		username=strdup(u);
 		schemaname=strdup(s);
+		client_address=strdup(ca);
 		count_star=0;
 		first_seen=0;
 		last_seen=0;
@@ -160,22 +162,29 @@ class QP_query_digest_stats {
 			free(schemaname);
 			schemaname=NULL;
 		}
+		if (client_address) {
+			free(client_address);
+			client_address=NULL;
+		}
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*11);
+		char **pta=(char **)malloc(sizeof(char *)*12);
 		assert(schemaname);
 		pta[0]=strdup(schemaname);
 		assert(username);
 		pta[1]=strdup(username);
 
+		assert(client_address);
+		pta[2]=strdup(client_address);
+
 		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
-		pta[2]=strdup(buf);
+		pta[3]=strdup(buf);
 
 		assert(digest_text);
-		pta[3]=strdup(digest_text);
+		pta[4]=strdup(digest_text);
 		sprintf(buf,"%u",count_star);
-		pta[4]=strdup(buf);
+		pta[5]=strdup(buf);
 
 		time_t __now;
     time(&__now);
@@ -186,25 +195,25 @@ class QP_query_digest_stats {
 
 		seen_time= __now - curtime/1000000 + first_seen/1000000;
 		sprintf(buf,"%ld", seen_time);
-		pta[5]=strdup(buf);
+		pta[6]=strdup(buf);
 
 		seen_time= __now - curtime/1000000 + last_seen/1000000;
 		sprintf(buf,"%ld", seen_time);
-		pta[6]=strdup(buf);
+		pta[7]=strdup(buf);
 
 		sprintf(buf,"%llu",sum_time);
-		pta[7]=strdup(buf);
-		sprintf(buf,"%llu",min_time);
 		pta[8]=strdup(buf);
-		sprintf(buf,"%llu",max_time);
+		sprintf(buf,"%llu",min_time);
 		pta[9]=strdup(buf);
-		sprintf(buf,"%d",hid);
+		sprintf(buf,"%llu",max_time);
 		pta[10]=strdup(buf);
+		sprintf(buf,"%d",hid);
+		pta[11]=strdup(buf);
 		return pta;
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<11;i++) {
+		for (i=0;i<12;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -767,6 +776,8 @@ unsigned long Query_Processor::get_query_digests_total_size() {
 			ret += strlen(qds->username) + 1;
 		if (qds->schemaname)
 			ret += strlen(qds->schemaname) + 1;
+		if (qds->client_address)
+			ret += strlen(qds->client_address) + 1;
 		if (qds->digest_text)
 			ret += strlen(qds->digest_text) + 1;
 	}
@@ -786,7 +797,7 @@ unsigned long Query_Processor::get_query_digests_total_size() {
 
 SQLite3_result * Query_Processor::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
-	SQLite3_result *result=new SQLite3_result(11);
+	SQLite3_result *result=new SQLite3_result(12);
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
 #else
@@ -794,7 +805,8 @@ SQLite3_result * Query_Processor::get_query_digests() {
 #endif
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
-	result->add_column_definition(SQLITE_TEXT,"usernname");
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"client_address");
 	result->add_column_definition(SQLITE_TEXT,"digest");
 	result->add_column_definition(SQLITE_TEXT,"digest_text");
 	result->add_column_definition(SQLITE_TEXT,"count_star");
@@ -818,7 +830,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 }
 
 SQLite3_result * Query_Processor::get_query_digests_reset() {
-	SQLite3_result *result=new SQLite3_result(11);
+	SQLite3_result *result=new SQLite3_result(12);
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&digest_rwlock);
 #else
@@ -826,7 +838,8 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 #endif
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
-	result->add_column_definition(SQLITE_TEXT,"usernname");
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"client_address");
 	result->add_column_definition(SQLITE_TEXT,"digest");
 	result->add_column_definition(SQLITE_TEXT,"digest_text");
 	result->add_column_definition(SQLITE_TEXT,"count_star");
@@ -1319,6 +1332,14 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
+	char *ca = (char *)"";
+	if (mysql_thread___query_digests_track_hostname) {
+		if (sess->client_myds) {
+			if (sess->client_myds->addr.addr) {
+				ca = sess->client_myds->addr.addr;
+			}
+		}
+	}
 
 	if (sess->CurrentQuery.stmt_info==NULL && qp->digest_text) {
 		// this code is executed only if digest_text is not NULL , that means mysql_thread___query_digests was true when the query started
@@ -1336,8 +1357,9 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		myhash.Update(&qp->digest,sizeof(qp->digest));
 		myhash.Update(ui->schemaname,strlen(ui->schemaname));
 		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
+		myhash.Update(ca,strlen(ca));
 		myhash.Final(&qp->digest_total,&hash2);
-		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, NULL);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, NULL, sess);
 	}
 	if (sess->CurrentQuery.stmt_info && sess->CurrentQuery.stmt_info->digest_text) {
 		uint64_t hash2;
@@ -1355,14 +1377,15 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		myhash.Update(&stmt_info->digest,sizeof(qp->digest));
 		myhash.Update(ui->schemaname,strlen(ui->schemaname));
 		myhash.Update(&sess->current_hostgroup,sizeof(sess->default_hostgroup));
+		myhash.Update(ca,strlen(ca));
 		myhash.Final(&qp->digest_total,&hash2);
 		//delete myhash;
-		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, stmt_info);
+		update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, stmt_info, sess);
 	}
 	return ret;
 }
 
-void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info) {
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, MySQL_Session *sess) {
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&digest_rwlock);
 #else
@@ -1377,10 +1400,18 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 		qds=(QP_query_digest_stats *)it->second;
 		qds->add_time(t,n);
 	} else {
+		char *ca = (char *)"";
+		if (mysql_thread___query_digests_track_hostname) {
+			if (sess->client_myds) {
+				if (sess->client_myds->addr.addr) {
+					ca = sess->client_myds->addr.addr;
+				}
+			}
+		}
 		if (_stmt_info==NULL) {
-			qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid);
+			qds=new QP_query_digest_stats(ui->username, ui->schemaname, qp->digest, qp->digest_text, hid, ca);
 		} else {
-			qds=new QP_query_digest_stats(ui->username, ui->schemaname, _stmt_info->digest, _stmt_info->digest_text, hid);
+			qds=new QP_query_digest_stats(ui->username, ui->schemaname, _stmt_info->digest, _stmt_info->digest_text, hid, ca);
 		}
 		qds->add_time(t,n);
 		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
