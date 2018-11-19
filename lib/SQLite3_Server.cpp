@@ -750,12 +750,13 @@ bool SQLite3_Server::set_variable(char *name, char *value) {  // this is the pub
 		if (vallen) {
 			bool update_creds=false;
 			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
-			if (variables.mysql_ifaces)
+			if (variables.mysql_ifaces) {
 				free(variables.mysql_ifaces);
 				variables.mysql_ifaces=strdup(value);
 				if (update_creds && variables.mysql_ifaces) {
 					S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
 				}
+			}
 			return true;
 		} else {
 			return false;
