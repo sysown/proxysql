@@ -506,6 +506,9 @@ class MySQL_HostGroups_Manager {
 		unsigned long long frontend_init_db;
 		unsigned long long frontend_set_names;
 		unsigned long long frontend_use_db;
+		unsigned long long access_denied_wrong_password;
+		unsigned long long access_denied_max_connections;
+		unsigned long long access_denied_max_user_connections;
 	} status;
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();

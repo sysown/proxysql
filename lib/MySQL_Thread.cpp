@@ -4086,6 +4086,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Access_Denied_Wrong_Password
+		pta[0]=(char *)"Access_Denied_Wrong_Password";
+		sprintf(buf,"%llu",MyHGM->status.access_denied_wrong_password);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Access_Denied_Max_Connections
+		pta[0]=(char *)"Access_Denied_Max_Connections";
+		sprintf(buf,"%llu",MyHGM->status.access_denied_max_connections);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Access_Denied_Max_User_Connections
+		pta[0]=(char *)"Access_Denied_Max_User_Connections";
+		sprintf(buf,"%llu",MyHGM->status.access_denied_max_user_connections);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	if (GloMyMon) {
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers";
