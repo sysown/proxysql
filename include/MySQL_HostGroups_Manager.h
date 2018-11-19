@@ -564,8 +564,8 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
 
-	void add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *schemaname, int err_no, char *last_error);
-
+	void add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error);
+	SQLite3_result *get_mysql_errors(bool);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

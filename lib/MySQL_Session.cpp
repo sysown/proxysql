@@ -3105,6 +3105,7 @@ handler_again:
 							} else {
 								proxy_warning("Error during query on (%d,%s,%d): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
 							}
+							MyHGM->add_mysql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, (char *)( errmsg ? errmsg : mysql_error(myconn->mysql)));
 							bool retry_conn=false;
 							switch (myerr) {
 								case 1317:  // Query execution was interrupted

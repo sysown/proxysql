@@ -40,6 +40,7 @@ class MySrvC;
 class MySrvList;
 class MyHGC;
 
+/*
 class HGM_query_errors_stats {
 	public:
 	int hid;
@@ -139,6 +140,7 @@ class HGM_query_errors_stats {
 	}
 };
 
+*/
 
 //static struct ev_async * gtid_ev_async;
 
@@ -4451,13 +4453,14 @@ class MySQL_Errors_stats {
 	char *hostname;
 	int port;
 	char *username;
+	char *client_address;
 	char *schemaname;
 	int err_no;
 	char *last_error;
 	time_t first_seen;
 	time_t last_seen;
 	unsigned long long count_star;
-	MySQL_Errors_stats(int hostgroup_, char *hostname_, int port_, char *username_, char *schemaname_, int err_no_, char *last_error_, time_t tn) {
+	MySQL_Errors_stats(int hostgroup_, char *hostname_, int port_, char *username_, char *address_, char *schemaname_, int err_no_, char *last_error_, time_t tn) {
 		hostgroup = hostgroup_;
 		if (hostname_) {
 			hostname = strdup(hostname_);
@@ -4469,6 +4472,11 @@ class MySQL_Errors_stats {
 			username = strdup(username_);
 		} else {
 			username = strdup((char *)"");
+		}
+		if (address_) {
+			client_address = strdup(address_);
+		} else {
+			client_address = strdup((char *)"");
 		}
 		if (schemaname_) {
 			schemaname = strdup(schemaname_);
@@ -4485,9 +4493,88 @@ class MySQL_Errors_stats {
 		first_seen = tn;
 		count_star = 1;
 	}
+	~MySQL_Errors_stats() {
+		if (hostname) {
+			free(hostname);
+			hostname=NULL;
+		}
+		if (username) {
+			free(username);
+			username=NULL;
+		}
+		if (client_address) {
+			free(client_address);
+			client_address=NULL;
+		}
+		if (schemaname) {
+			free(schemaname);
+			schemaname=NULL;
+		}
+		if (last_error) {
+			free(last_error);
+			last_error=NULL;
+		}
+	}
+	char **get_row() {
+		char buf[128];
+		char **pta=(char **)malloc(sizeof(char *)*11);
+		sprintf(buf,"%d",hostgroup);
+		pta[0]=strdup(buf);
+		assert(hostname);
+		pta[1]=strdup(hostname);
+		sprintf(buf,"%d",port);
+		pta[2]=strdup(buf);
+		assert(username);
+		pta[3]=strdup(username);
+		assert(client_address);
+		pta[4]=strdup(client_address);
+		assert(schemaname);
+		pta[5]=strdup(schemaname);
+		sprintf(buf,"%d",err_no);
+		pta[6]=strdup(buf);
+
+		sprintf(buf,"%u",count_star);
+		pta[7]=strdup(buf);
+
+		time_t __now;
+		time(&__now);
+		unsigned long long curtime=monotonic_time();
+		time_t seen_time;
+
+		seen_time= __now - curtime/1000000 + first_seen/1000000;
+		sprintf(buf,"%ld", seen_time);
+		pta[8]=strdup(buf);
+
+		seen_time= __now - curtime/1000000 + last_seen/1000000;
+		sprintf(buf,"%ld", seen_time);
+		pta[9]=strdup(buf);
+
+		assert(last_error);
+		pta[10]=strdup(last_error);
+		return pta;
+	}
+	void add_time(unsigned long long n, char *le) {
+		count_star++;
+		if (first_seen==0) {
+			first_seen=n;
+		}
+		last_seen=n;
+		if (strcmp(last_error,le)){
+			free(last_error);
+			last_error=strdup(le);
+		}
+	}
+	void free_row(char **pta) {
+		int i;
+		for (i=0;i<11;i++) {
+			assert(pta[i]);
+			free(pta[i]);
+		}
+		free(pta);
+	}
 };
 
-void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *schemaname, int err_no, char *last_error) {
+void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error) {
 	SpookyHash myhash;
 	uint64_t hash1;
 	uint64_t hash2;
@@ -4506,6 +4593,10 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 		myhash.Update(username,strlen(username));
 	}
 	myhash.Update(rand_del,rand_del_len);
+	if (address) {
+		myhash.Update(address,strlen(address));
+	}
+	myhash.Update(rand_del,rand_del_len);
 	if (schemaname) {
 		myhash.Update(schemaname,strlen(schemaname));
 	}
@@ -4522,15 +4613,48 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 	if (it != mysql_errors_umap.end()) {
 		// found
 		mes=(MySQL_Errors_stats *)it->second;
+		mes->add_time(tn, last_error);
+/*
 		mes->last_seen = tn;
 		if (strcmp(mes->last_error,last_error)) {
 			free(mes->last_error);
 			mes->last_error = strdup(last_error);
 			mes->count_star++;
 		}
+*/
 	} else {
-		mes = new MySQL_Errors_stats(hostgroup, hostname, port, username, schemaname, err_no, last_error, tn);
+		mes = new MySQL_Errors_stats(hostgroup, hostname, port, username, address, schemaname, err_no, last_error, tn);
 		mysql_errors_umap.insert(std::make_pair(hash1,(void *)mes));
 	}
 	pthread_mutex_unlock(&mysql_errors_mutex);
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
+	SQLite3_result *result=new SQLite3_result(11);
+	pthread_mutex_lock(&mysql_errors_mutex);
+	result->add_column_definition(SQLITE_TEXT,"hid");
+	result->add_column_definition(SQLITE_TEXT,"hostname");
+	result->add_column_definition(SQLITE_TEXT,"port");
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"client_address");
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"err_no");
+	result->add_column_definition(SQLITE_TEXT,"count_star");
+	result->add_column_definition(SQLITE_TEXT,"first_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_error");
+	for (std::unordered_map<uint64_t, void *>::iterator it=mysql_errors_umap.begin(); it!=mysql_errors_umap.end(); ++it) {
+		MySQL_Errors_stats *mes=(MySQL_Errors_stats *)it->second;
+		char **pta=mes->get_row();
+		result->add_row(pta);
+		mes->free_row(pta);
+		if (reset) {
+			delete mes;
+		}
+	}
+	if (reset) {
+		mysql_errors_umap.erase(mysql_errors_umap.begin(),mysql_errors_umap.end());
+	}
+	pthread_mutex_unlock(&mysql_errors_mutex);
+	return result;
 }
