@@ -4533,7 +4533,7 @@ class MySQL_Errors_stats {
 		sprintf(buf,"%d",err_no);
 		pta[6]=strdup(buf);
 
-		sprintf(buf,"%u",count_star);
+		sprintf(buf,"%llu",count_star);
 		pta[7]=strdup(buf);
 
 		time_t __now;
