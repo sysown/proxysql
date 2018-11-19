@@ -3446,9 +3446,12 @@ void MySQL_Thread::process_all_sessions() {
 			if (idle_maintenance_thread==false)
 #endif // IDLE_THREADS
 			{
+				sess->active_transactions=sess->NumActiveTransactions();
+				total_active_transactions_ += sess->active_transactions;
 				sess->to_process=1;
 				if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
-					numTrx = sess->NumActiveTransactions();
+					//numTrx = sess->NumActiveTransactions();
+					numTrx = sess->active_transactions;
 					if (numTrx) {
 						// the session has idle transactions, kill it
 						if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
@@ -3473,6 +3476,8 @@ void MySQL_Thread::process_all_sessions() {
 				}
 			}
 #endif // IDLE_THREADS
+		} else {
+			sess->active_transactions = -1;
 		}
 		if (sess->healthy==0) {
 			unregister_session(n);
@@ -3482,7 +3487,7 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
-					total_active_transactions_+=sess->active_transactions;
+					//total_active_transactions_+=sess->active_transactions;
 					if (rc==-1 || sess->killed==true) {
 						unregister_session(n);
 						n--;
@@ -3500,9 +3505,11 @@ void MySQL_Thread::process_all_sessions() {
 			}
 		}
 	}
-	unsigned int total_active_transactions_tmp;
-	total_active_transactions_tmp=__sync_add_and_fetch(&status_variables.active_transactions,0);
-	__sync_bool_compare_and_swap(&status_variables.active_transactions,total_active_transactions_tmp,total_active_transactions_);
+	if (maintenance_loop) {
+		unsigned int total_active_transactions_tmp;
+		total_active_transactions_tmp=__sync_add_and_fetch(&status_variables.active_transactions,0);
+		__sync_bool_compare_and_swap(&status_variables.active_transactions,total_active_transactions_tmp,total_active_transactions_);
+	}
 }
 
 void MySQL_Thread::refresh_variables() {
