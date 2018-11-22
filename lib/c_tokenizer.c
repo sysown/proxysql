@@ -477,3 +477,111 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	// process query stats
 	return r;
 }
+
+char *mysql_query_strip_comments(char *s, int _len) {
+	int i = 0;
+	int len = _len;
+	char *r = (char *) malloc(len + SIZECHAR);
+	char *p_r = r;
+	char *p_r_t = r;
+ 	char prev_char = 0;
+	char qutr_char = 0;
+ 	char flag = 0;
+ 	char fns=0;
+ 	bool lowercase=0;
+	lowercase=mysql_thread___query_digests_lowercase;
+ 	while(i < len)
+	{
+		// =================================================
+		// START - read token char and set flag what's going on.
+		// =================================================
+		if(flag == 0)
+		{
+			// store current position
+			p_r_t = p_r;
+ 			// comment type 1 - start with '/*'
+			if(prev_char == '/' && *s == '*')
+			{
+				flag = 1;
+			}
+ 			// comment type 2 - start with '#'
+			else if(*s == '#')
+			{
+				flag = 2;
+			}
+ 			// comment type 3 - start with '--'
+			else if(prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
+			{
+				flag = 3;
+			}
+			// not above case - remove duplicated space char
+			else
+			{
+				flag = 0;
+				if (fns==0 && is_space_char(*s)) {
+					s++;
+					i++;
+					continue;
+				}
+				if (fns==0) fns=1;
+				if(is_space_char(prev_char) && is_space_char(*s)){
+					prev_char = ' ';
+					*p_r = ' ';
+					s++;
+					i++;
+					continue;
+				}
+			}
+		}
+ 		// =================================================
+		// PROCESS and FINISH - do something on each case
+		// =================================================
+		else
+		{
+			// --------
+			// comment
+			// --------
+			if(
+				// comment type 1 - /* .. */
+				(flag == 1 && prev_char == '*' && *s == '/') ||
+ 				// comment type 2 - # ... \n
+				(flag == 2 && (*s == '\n' || *s == '\r' || (i == len - 1) ))
+				||
+				// comment type 3 - -- ... \n
+				(flag == 3 && (*s == '\n' || *s == '\r' || (i == len -1) ))
+			)
+			{
+				p_r = p_r_t;
+				if (flag == 1 || (i == len -1)) {
+					p_r -= SIZECHAR;
+				}
+				prev_char = ' ';
+				flag = 0;
+				s++;
+				i++;
+				continue;
+			}
+		}
+ 		// =================================================
+		// COPY CHAR
+		// =================================================
+		// convert every space char to ' '
+		if (lowercase==0) {
+			*p_r++ = !is_space_char(*s) ? *s : ' ';
+		} else {
+			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+		}
+		prev_char = *s++;
+ 		i++;
+	}
+ 	// remove a trailing space
+	if (p_r>r) {
+		char *e=p_r;
+		e--;
+		if (*e==' ') {
+			*e=0;
+		}
+	}
+ 	*p_r = 0;
+ 	return r;
+}

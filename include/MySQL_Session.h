@@ -213,6 +213,7 @@ class MySQL_Session
 	void reset_all_backends();
 	void writeout();
 	void Memory_Stats();
+	bool handle_command_query_kill(PtrSize_t *);
 };
 
 #define KILL_QUERY       1

@@ -2398,6 +2398,7 @@ bool MySQL_Thread::init() {
 	assert(idle_mysql_sessions);
 	assert(resume_mysql_sessions);
 #endif // IDLE_THREADS
+	pthread_mutex_init(&kq.m,NULL);
 
 	shutdown=0;
 	my_idle_conns=(MySQL_Connection **)malloc(sizeof(MySQL_Connection *)*SESSIONS_FOR_CONNECTIONS_HANDLER);
@@ -2816,6 +2817,13 @@ __run_skip_1a:
 		} else {
 			maintenance_loop=false;
 		}
+
+		pthread_mutex_lock(&kq.m);
+		if (kq.conn_ids.size() + kq.query_ids.size()) {
+			Scan_Sessions_to_Kill_All();
+			maintenance_loop=true;
+		}
+		pthread_mutex_unlock(&kq.m);
 
 		// update polls statistics
 		mypolls.loops++;
@@ -4268,6 +4276,41 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 #endif // IDLE_THREADS
 }
 
+void MySQL_Threads_Handler::kill_connection_or_query(uint32_t _thread_session_id, bool query, char *username) {
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		thr_id_usr *tu = (thr_id_usr *)malloc(sizeof(thr_id_usr));
+		tu->id = _thread_session_id;
+		tu->username = strdup(username);
+		pthread_mutex_lock(&thr->kq.m);
+		if (query) {
+			thr->kq.query_ids.push_back(tu);
+		} else {
+			thr->kq.conn_ids.push_back(tu);
+		}
+		pthread_mutex_unlock(&thr->kq.m);
+ 	}
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		for (i=0;i<num_threads;i++) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+			thr_id_usr *tu = (thr_id_usr *)malloc(sizeof(thr_id_usr));
+			tu->id = _thread_session_id;
+			tu->username = strdup(username);
+			pthread_mutex_lock(&thr->kq.m);
+			if (query) {
+				thr->kq.query_ids.push_back(tu);
+			} else {
+				thr->kq.conn_ids.push_back(tu);
+			}
+			pthread_mutex_unlock(&thr->kq.m);
+		}
+	}
+#endif
+	signal_all_threads(0);
+}
+
 bool MySQL_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 	bool ret=false;
 	unsigned int i;
@@ -4747,4 +4790,83 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_failure() {
 		}
 	}
 	return q;
+}
+
+void MySQL_Thread::Scan_Sessions_to_Kill_All() {
+	if (kq.conn_ids.size() + kq.query_ids.size()) {
+		Scan_Sessions_to_Kill(mysql_sessions);
+	}
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		if (kq.conn_ids.size() + kq.query_ids.size()) {
+			Scan_Sessions_to_Kill(idle_mysql_sessions);
+		}
+		if (kq.conn_ids.size() + kq.query_ids.size()) {
+			Scan_Sessions_to_Kill(resume_mysql_sessions);
+		}
+		if (kq.conn_ids.size() + kq.query_ids.size()) {
+			pthread_mutex_lock(&myexchange.mutex_idles);
+			Scan_Sessions_to_Kill(myexchange.idle_mysql_sessions);
+			pthread_mutex_unlock(&myexchange.mutex_idles);
+		}
+		if (kq.conn_ids.size() + kq.query_ids.size()) {
+			pthread_mutex_lock(&myexchange.mutex_resumes);
+			Scan_Sessions_to_Kill(myexchange.resume_mysql_sessions);
+			pthread_mutex_unlock(&myexchange.mutex_resumes);
+		}
+	}
+#endif
+	for (std::vector<thr_id_usr *>::iterator it=kq.conn_ids.begin(); it!=kq.conn_ids.end(); ++it) {
+		thr_id_usr *t = *it;
+		free(t->username);
+		free(t);
+	}
+	for (std::vector<thr_id_usr *>::iterator it=kq.query_ids.begin(); it!=kq.query_ids.end(); ++it) {
+		thr_id_usr *t = *it;
+		free(t->username);
+		free(t);
+	}
+	kq.conn_ids.clear();
+	kq.query_ids.clear();
+}
+
+void MySQL_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
+	for (unsigned int n=0; n<mysess->len && ( kq.conn_ids.size() + kq.query_ids.size() ) ; n++) {
+		MySQL_Session *_sess=(MySQL_Session *)mysess->index(n);
+		bool cont=true;
+		for (std::vector<thr_id_usr *>::iterator it=kq.conn_ids.begin(); cont && it!=kq.conn_ids.end(); ++it) {
+			thr_id_usr *t = *it;
+			if (t->id == _sess->thread_session_id) {
+				if (_sess->client_myds) {
+				       if (strcmp(t->username,_sess->client_myds->myconn->userinfo->username)==0) {
+						_sess->killed=true;
+					}
+				}
+				cont=false;
+				free(t->username);
+				free(t);
+				kq.conn_ids.erase(it);
+			}
+		}
+		for (std::vector<thr_id_usr *>::iterator it=kq.query_ids.begin(); cont && it!=kq.query_ids.end(); ++it) {
+			thr_id_usr *t = *it;
+			if (t->id == _sess->thread_session_id) {
+				proxy_info("Killing query %d\n", t->id);
+				if (_sess->client_myds) {
+				       if (strcmp(t->username,_sess->client_myds->myconn->userinfo->username)==0) {
+						if (_sess->mybe) {
+							if (_sess->mybe->server_myds) {
+								_sess->mybe->server_myds->wait_until=curtime;
+								_sess->mybe->server_myds->kill_type=1;
+							}
+						}
+					}
+				}
+				cont=false;
+				free(t->username);
+				free(t);
+				kq.query_ids.erase(it);
+			}
+		}
+	}
 }
