@@ -35,6 +35,17 @@ typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) _conn_exchange_t {
 } conn_exchange_t;
 #endif // IDLE_THREADS
 
+typedef struct _thr_id_username_t {
+	uint32_t id;
+	char *username;
+} thr_id_usr;
+
+typedef struct _kill_queue_t {
+	pthread_mutex_t m;
+	std::vector<thr_id_usr *> conn_ids;
+	std::vector<thr_id_usr *> query_ids;
+} kill_queue_t;
+
 class ProxySQL_Poll {
 
   private:
@@ -198,6 +209,7 @@ class MySQL_Thread
 
 	int pipefd[2];
 	int shutdown;
+	kill_queue_t kq;
 
 	bool epoll_thread;
 	bool poll_timeout_bool;
@@ -265,6 +277,8 @@ class MySQL_Thread
 	MySQL_Connection * get_MyConn_local(unsigned int, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid);
 	void push_MyConn_local(MySQL_Connection *);
 	void return_local_connections();
+	void Scan_Sessions_to_Kill(PtrArray *mysess);
+	void Scan_Sessions_to_Kill_All();
 };
 
 
@@ -501,6 +515,7 @@ class MySQL_Threads_Handler
 		return MLM->find_iface_from_fd(fd);
 	}
 	void Get_Memory_Stats();
+	void kill_connection_or_query(uint32_t _thread_session_id, bool query, char *username);
 };
 
 

@@ -2289,6 +2289,7 @@ __get_pkts_from_client:
 
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 									mybe->server_myds->killed_at=0;
+									mybe->server_myds->kill_type=0;
 									mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
@@ -2418,6 +2419,7 @@ __get_pkts_from_client:
 										mybe->server_myds->wait_until=0;
 										pause_until=0;
 										mybe->server_myds->killed_at=0;
+										mybe->server_myds->kill_type=0;
 										mybe->server_myds->mysql_real_query.init(&pkt); // fix memory leak for PREPARE in prepared statements #796
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 									}
@@ -2497,6 +2499,7 @@ __get_pkts_from_client:
 									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
 									mybe->server_myds->wait_until=0;
 									mybe->server_myds->killed_at=0;
+									mybe->server_myds->kill_type=0;
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								}
 								break;
@@ -4211,6 +4214,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 	}
 
+	// handle command KILL #860
+	if (prepared == false) {
+		if (handle_command_query_kill(pkt)) {
+			return true;
+		}
+	}
 	if (qpo->cache_ttl>0) {
 		uint32_t resbuf=0;
 		unsigned char *aa=GloQC->get(
@@ -4493,7 +4502,11 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			char sqlstate[10];
 			sprintf(sqlstate,"%s",mysql_sqlstate(mysql));
 			if (_myds && _myds->killed_at) { // see case #750
-				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1907,sqlstate,(char *)"Query execution was interrupted, query_timeout exceeded");
+				if (_myds->kill_type == 0) {
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1907,sqlstate,(char *)"Query execution was interrupted, query_timeout exceeded");
+				} else {
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1317,sqlstate,(char *)"Query execution was interrupted");
+				}
 			} else {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(mysql),sqlstate,mysql_error(mysql));
 			}
@@ -4740,4 +4753,60 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 		thread->unregister_session(sess_idx);
 		delete new_sess;
 	}
+}
+
+bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
+	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
+	if (CurrentQuery.QueryParserArgs.digest_text) {
+		if (command_type == _MYSQL_COM_QUERY) {
+			if (client_myds && client_myds->myconn) {
+				MySQL_Connection *mc = client_myds->myconn;
+				if (mc->userinfo && mc->userinfo->username) {
+					if (CurrentQuery.MyComQueryCmd == MYSQL_COM_QUERY_KILL) {
+						char *qu = mysql_query_strip_comments((char *)pkt->ptr+1+sizeof(mysql_hdr), pkt->size-1-sizeof(mysql_hdr));
+						string nq=string(qu,strlen(qu));
+						re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+						opt2->set_case_sensitive(false);
+						char *pattern=(char *)"^KILL\\s+(CONNECTION |QUERY |)\\s*(\\d+)\\s*$";
+						re2::RE2 *re=new RE2(pattern, *opt2);
+						int id=0;
+						string tk;
+						int rc;
+						rc=RE2::FullMatch(nq, *re, &tk, &id);
+						delete re;
+						delete opt2;
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "filtered query= \"%s\"\n", qu);
+						free(qu);
+						if (id) {
+							int tki = -1;
+							if (tk.c_str()) {
+								if ((strlen(tk.c_str())==0) || (strcasecmp(tk.c_str(),"CONNECTION ")==0)) {
+									tki = 0;
+								} else {
+									if (strcasecmp(tk.c_str(),"QUERY ")==0) {
+										tki = 1;
+									}
+								}
+							}
+							if (tki >= 0) {
+								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "Killing %s %d\n", (tki == 0 ? "CONNECTION" : "QUERY") , id);
+								GloMTH->kill_connection_or_query( id, (tki == 0 ? false : true ),  mc->userinfo->username);
+								client_myds->DSS=STATE_QUERY_SENT_NET;
+								unsigned int nTrx=NumActiveTransactions();
+								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+								if (autocommit) setStatus= SERVER_STATUS_AUTOCOMMIT;
+								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+								client_myds->DSS=STATE_SLEEP;
+								status=WAITING_CLIENT_DATA;
+								l_free(pkt->size,pkt->ptr);
+								RequestEnd(NULL);
+								return true;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return false;
 }
