@@ -91,11 +91,14 @@ deps/glib/glib-2.40.0/
 #libevent
 deps/libevent/libevent-2.0.22-stable/
 
+deps/libev/libev-4.24/
+
 #memcached
 deps/memcached/memcached-1.4.20/
 
 #libconfig
 deps/libconfig/libconfig-1.4.9/
+deps/libconfig/libconfig-1.7.2/
 
 #libmicrohttpd
 deps/libmicrohttpd/libmicrohttpd-0.9.55/
@@ -110,6 +113,7 @@ deps/lz4/lz4/
 deps/re2/re2/
 deps/pcre/pcre-8.39/
 deps/pcre/pcre/
+deps/re2/re2-2018-07-01/
 
 # curl
 deps/curl/curl/
