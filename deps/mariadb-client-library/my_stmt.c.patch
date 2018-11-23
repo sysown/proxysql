@@ -1,0 +1,32 @@
+@@ -98,6 +98,7 @@
+   case MYSQL_TYPE_NULL:
+   case MYSQL_TYPE_SHORT:
+   case MYSQL_TYPE_STRING:
++  case MYSQL_TYPE_JSON:
+   case MYSQL_TYPE_TIME:
+   case MYSQL_TYPE_TIMESTAMP:
+   case MYSQL_TYPE_TINY:
+@@ -523,6 +524,7 @@
+   case MYSQL_TYPE_VARCHAR:
+   case MYSQL_TYPE_VAR_STRING:
+   case MYSQL_TYPE_STRING:
++  case MYSQL_TYPE_JSON:
+   case MYSQL_TYPE_DECIMAL:
+   case MYSQL_TYPE_NEWDECIMAL:
+   {
+@@ -652,6 +654,7 @@
+           case MYSQL_TYPE_VARCHAR:
+           case MYSQL_TYPE_VAR_STRING:
+           case MYSQL_TYPE_STRING:
++          case MYSQL_TYPE_JSON:
+           case MYSQL_TYPE_DECIMAL:
+           case MYSQL_TYPE_NEWDECIMAL:
+           case MYSQL_TYPE_GEOMETRY:
+@@ -839,6 +842,7 @@
+       case MYSQL_TYPE_TINY_BLOB:
+       case MYSQL_TYPE_MEDIUM_BLOB:
+       case MYSQL_TYPE_LONG_BLOB:
++      case MYSQL_TYPE_JSON:
+       case MYSQL_TYPE_DECIMAL:
+       case MYSQL_TYPE_NEWDECIMAL:
+         break;
