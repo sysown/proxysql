@@ -70,23 +70,23 @@ double proxy_my_rnd(struct rand_struct *rand_st) {
 	return (((double) rand_st->seed1) / rand_st->max_value_dbl);
 }
 
-void proxy_create_random_string(char *to, uint length, struct rand_struct *rand_st) {
+void proxy_create_random_string(char *_to, uint length, struct rand_struct *rand_st) {
+	unsigned char * to = (unsigned char *)_to;
 	int rc = 0;
 	uint i;
 	rc = RAND_bytes((unsigned char *)to,length);
 	if (rc!=1) {
 		for (i=0; i<length ; i++) {
-			*to= (char) (proxy_my_rnd(rand_st) * 94 + 33);
+			*to= (proxy_my_rnd(rand_st) * 94 + 33);
 			to++;
 		}
 	} else {
 		for (i=0; i<length ; i++) {
-			if (*to < 0) {
-				*to += 128;
-			} else {
-				if (*to == 0) {
-					*to = 'a';
-				}
+			if (*to > 127) {
+				*to -= 128;
+			}
+			if (*to == 0) {
+				*to = 'a';
 			}
 			to++;
 		}
@@ -193,6 +193,8 @@ bool proxy_scramble_sha1(char *pass_reply,  const char *message, const char *sha
 	if (memcmp(hash_stage2,hash_stage3,SHA_DIGEST_LENGTH)==0) {
 		memcpy(sha1_pass,hash_stage1,SHA_DIGEST_LENGTH);
 		ret=true;
+	} else {
+		PROXY_TRACE(); // for debugging purpose
 	}
 	return ret;
 }
