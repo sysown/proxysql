@@ -2792,7 +2792,7 @@ handler_again:
 				}
 				int rc;
 				timespec begint;
-				if (thread->variables.stats_time_backend_query) {
+				if (unlikely(thread->variables.stats_time_backend_query)) {
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 				}
 				switch (status) {
@@ -2813,7 +2813,7 @@ handler_again:
 						break;
 				}
 				timespec endt;
-				if (thread->variables.stats_time_backend_query) {
+				if (unlikely(thread->variables.stats_time_backend_query)) {
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 					thread->status_variables.backend_query_time=thread->status_variables.backend_query_time +
 						(endt.tv_sec*1000000000+endt.tv_nsec) -

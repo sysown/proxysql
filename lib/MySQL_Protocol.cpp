@@ -101,14 +101,30 @@ static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t l
 	}
 	*p=prefix;
 	p++;
-	memcpy(p,&val,len-1);
+	unsigned char *s = (unsigned char *)&val;
+	for (uint8_t i=0; i < len-1 ; i++) {
+		*p=*s;
+		s++;
+		p++;
+	}
 	return len;
 }
 
 static inline int write_encoded_length_and_string(unsigned char *p, uint64_t val, uint8_t len, char prefix, char *string) {
 	int l=write_encoded_length(p,val,len,prefix);
-	if (val) {
-		memcpy(p+l,string,val);
+	if (likely(val)) {
+		if (val < 16) {
+			unsigned char *_p = p;
+			_p+=l;
+			unsigned char *_s = (unsigned char *)string;
+			for (uint64_t i=0; i < val ; i++) {
+				*_p=*_s;
+				_p++;
+				_s++;
+			}
+		} else {
+			memcpy(p+l,string,val);
+		}
 	}
 	return l+val;
 }
@@ -230,7 +246,15 @@ static uint8_t mysql_encode_length(uint64_t len, char *hd) {
 	if (len < 65536) { if (hd) { *hd=0xfc; }; return 3; }
 	if (len < 16777216) { if (hd) { *hd=0xfd; }; return 4; }
 	if (hd) { *hd=0xfe; }
-	return 9;	
+	return 9;
+}
+
+
+static uint8_t mysql_encode_length_n(uint64_t len) {
+	if (len < 251) return 1;
+	if (len < 65536) return 3;
+	if (len < 16777216) return 4;
+	return 9;
 }
 
 
@@ -903,15 +927,102 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 }
 
 uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
-	if ((*myds)->sess->mirror==true) {
+	if (unlikely((*myds)->sess->mirror==true)) {
 		return true;
 	}
 	int col=0;
 	unsigned int rowlen=0;
+	int bbfp=0; // bytes before first pointer
+	bool fpf=false; // first pointer found
+	unsigned char *_p = NULL; // pointer to MYSQL_ROW if present
+	unsigned char *_q = NULL;
 	uint8_t pkt_sid=sequence_id;
+/*
 	for (col=0; col<colnums; col++) {
 		rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
 	}
+	goto __skip_row3_optimization; // then we skip the new optimization
+
+	for (col=0; col<colnums; col++) {
+		rowlen += fieldslen[col];
+	}
+	rowlen += colnums;
+	// at this point we have a rought estimate of row length
+	// if too large, we skip the new optimization
+	if (rowlen > 0) {
+		rowlen = 0;
+		// we first re-calculate rowlen with precision
+		for (col=0; col<colnums; col++) {
+			if (fieldstxt[col]) {
+				uint8_t enc_len = mysql_encode_length_n(fieldslen[col]);
+				rowlen+=fieldslen[col];
+				rowlen+=enc_len;
+			} else {
+				rowlen++;
+			}
+		}
+		goto __skip_row3_optimization; // then we skip the new optimization
+	}
+	rowlen = 0;
+*/
+	for (col=0; col<colnums; col++) {
+		if (fieldstxt[col]) {
+			uint8_t enc_len = mysql_encode_length_n(fieldslen[col]);
+			rowlen+=fieldslen[col];
+			rowlen+=enc_len;
+			if (fpf==false) {
+				bbfp+=enc_len;
+				fpf=true;
+				_p = (unsigned char *)fieldstxt[col];
+				_p -= bbfp;
+
+				_q = _p;
+				for (int col1=0; col1 < col; col1++) { // backfill all the NULLs
+					*_q=0xfb;
+					_q++;
+				}
+
+			}
+
+			char length_prefix;
+			uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
+			write_encoded_length(_q,fieldslen[col],length_len, length_prefix);
+			_q+=length_len;
+			_q+=fieldslen[col];
+
+		} else {
+			rowlen++;
+			if (fpf==false) {
+				bbfp++;
+
+			} else {
+				*_q=0xfb;
+				_q++;
+
+			}
+		}
+	}
+/*
+	if (_p) {
+		unsigned char *_q = _p;
+		for (col=0; col<colnums; col++) {
+			if (fieldstxt[col]) {
+				char length_prefix;
+				uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
+				write_encoded_length(_q,fieldslen[col],length_len, length_prefix);
+				_q+=length_len;
+				_q+=fieldslen[col];
+			} else {
+				*_q=0xfb;
+				_q++;
+			}
+		}
+	}
+*/
+//__skip_row3_optimization:
+/* EXPERIMENTAL CODE NOT ENABLED
+	bool buffer_realloc=false;
+*/
 	PtrSize_t pkt;
 	pkt.size=rowlen+sizeof(mysql_hdr);
 	if ( pkt.size<=(RESULTSET_BUFLEN-myrs->buffer_used) ) {
@@ -919,6 +1030,14 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 		pkt.ptr = myrs->buffer + myrs->buffer_used;
 		myrs->buffer_used += pkt.size;
 	} else {
+/* EXPERIMENTAL CODE NOT ENABLED
+		if (myrs->buffer_used < 8192 && pkt.size < 512*1024) {
+			myrs->buffer = (unsigned char *)realloc(myrs->buffer,(myrs->buffer_used+pkt.size));
+			pkt.ptr = myrs->buffer + myrs->buffer_used;
+			myrs->buffer_used += pkt.size;
+			buffer_realloc=true;
+		} else {
+*/
 		// there is no space in the buffer, we flush the buffer and recreate it
 		myrs->buffer_to_PSarrayOut();
 		// now we can check again if there is space in the buffer
@@ -930,8 +1049,14 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 			// a new buffer is not enough to store the new row
 			pkt.ptr=l_alloc(pkt.size);
 		}
+/* EXPERIMENTAL CODE NOT ENABLED
+		}
+*/
 	}
 	int l=sizeof(mysql_hdr);
+	if (_p) {
+		memcpy(pkt.ptr+l,_p,rowlen);
+	} else {
 	for (col=0; col<colnums; col++) {
 		if (fieldstxt[col]) {
 			char length_prefix;
@@ -943,13 +1068,21 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 			l++;
 		}
 	}
+	}
 	if (pkt.size < (0xFFFFFF+sizeof(mysql_hdr))) {
 		mysql_hdr myhdr;
 		myhdr.pkt_id=pkt_sid;
 		myhdr.pkt_length=rowlen;
 		memcpy(pkt.ptr, &myhdr, sizeof(mysql_hdr));
 		if (pkt.ptr >= myrs->buffer && pkt.ptr < myrs->buffer+RESULTSET_BUFLEN) {
-			// we are writing within the buffer, do not add to PSarrayOUT
+		// we are writing within the buffer, do not add to PSarrayOUT
+/* EXPERIMENTAL CODE NOT ENABLED
+			if (buffer_realloc) { // we extended the buffer. Flush it!
+				myrs->buffer_to_PSarrayOut();
+			} else {
+				// we are writing within the buffer, do not add to PSarrayOUT
+			}
+*/
 		} else {
 			// we are writing outside the buffer, add to PSarrayOUT
 			myrs->PSarrayOUT.add(pkt.ptr,pkt.size);

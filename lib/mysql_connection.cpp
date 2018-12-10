@@ -617,6 +617,7 @@ MDB_ASYNC_ST MySQL_Connection::handler(short event) {
 			}
 		}
 	}
+
 handler_again:
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"async_state_machine=%d\n", async_state_machine);
 	switch (async_state_machine) {
@@ -1006,8 +1007,6 @@ handler_again:
 				async_fetch_row_start=false;
 				if (mysql_row) {
 					unsigned int br=MyRS->add_row(mysql_row);
-					__sync_fetch_and_add(&parent->bytes_recv,br);
-					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
 					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
 					if (
 						(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
@@ -1030,6 +1029,8 @@ handler_again:
 					}
 					// we reach here if there was no error
 					MyRS->add_eof();
+					__sync_fetch_and_add(&parent->bytes_recv,MyRS->resultset_size);
+					myds->sess->thread->status_variables.queries_backends_bytes_recv += MyRS->resultset_size;
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
 			}

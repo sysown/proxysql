@@ -203,6 +203,10 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl_write_len = 0;
 	ssl_write_buf = NULL;
 	net_failure=false;
+/* EXPERIMENTAL CODE NOT ENABLED
+	using_direct_send=false;
+	original_queueOUT_buffer = NULL;
+*/
 	CompPktIN.pkt.ptr=NULL;
 	CompPktIN.pkt.size=0;
 	CompPktIN.partial=0;
@@ -298,6 +302,12 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		CompPktOUT.pkt.ptr=NULL;
 		CompPktOUT.pkt.size=0;
 	}
+/* EXPERIMENTAL CODE NOT ENABLED
+	if (original_queueOUT_buffer) {
+		free(original_queueOUT_buffer);
+		original_queueOUT_buffer = NULL;
+	}
+*/
 }
 
 // this function initializes a MySQL_Data_Stream 
@@ -604,6 +614,19 @@ int MySQL_Data_Stream::write_to_net() {
 		}
 	} else {
 		queue_r(queueOUT, bytes_io);
+		proxy_debug(PROXY_DEBUG_NET, 5,"Written %d bytes\n", bytes_io);
+		//fprintf(stderr,"Written %d bytes\n", bytes_io);
+/* EXPERIMENTAL CODE NOT ENABLED
+		if (using_direct_send) {
+			if (queue_data(queueOUT)==0) {
+				using_direct_send = false;
+				proxy_debug(PROXY_DEBUG_NET, 5,"Reverting using_direct_send . qOUT.h=%u qOUT.t=%u qOUT.s=%u\n", queueOUT.head, queueOUT.tail, queueOUT.size);
+				queueOUT.size = original_queueOUT_size;
+				queueOUT.buffer	= original_queueOUT_buffer;
+				original_queueOUT_buffer = NULL;
+			}
+		}
+*/
 		if (mypolls) mypolls->last_sent[poll_fds_idx]=sess->thread->curtime;
 		bytes_info.bytes_sent+=bytes_io;
 	}
@@ -743,6 +766,11 @@ int MySQL_Data_Stream::write_to_net_poll() {
 			}
 		}
 	}
+/* EXPERIMENTAL CODE NOT ENABLED
+	if (using_direct_send) {
+		call_write_to_net = true;
+	}
+*/
 	if (call_write_to_net) {
 		if (sess->session_type == PROXYSQL_SESSION_MYSQL) {
 			if (poll_fds_idx>-1) { // NOTE: attempt to force writes
@@ -1072,7 +1100,13 @@ int MySQL_Data_Stream::array2buffer() {
 			goto __exit_array2buffer;
 		}
 	}
+
 	while (cont) {
+/* EXPERIMENTAL CODE NOT ENABLED
+		if (using_direct_send == true) {
+			goto __exit_array2buffer;
+		}
+*/
 		VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT)==0) {
 			goto __exit_array2buffer;
@@ -1090,7 +1124,28 @@ int MySQL_Data_Stream::array2buffer() {
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
 		VALGRIND_DISABLE_ERROR_REPORTING;
+/* EXPERIMENTAL CODE NOT ENABLED
+					// we peek into the next packet
+					if (using_direct_send == false) {
+						if (myds_type == MYDS_FRONTEND && myconn->options.compression_min_length == 0 && encrypted == false) {
+							if (sess && sess->session_type == PROXYSQL_SESSION_MYSQL) {
+								if (queue_data(queueOUT)) {
+									PtrSize_t tmp_ptr;
+									memcpy(&tmp_ptr,PSarrayOUT->index(idx), sizeof(PtrSize_t));
+									if (tmp_ptr.size > 8192) {
+										// the next packet is pretty large
+										// we avoid copying it
+										// and pretend it wasn't there
+										goto __exit_array2buffer;
+									}
+								}
+							}
+						}
+					}
+*/
 					memcpy(&queueOUT.pkt,PSarrayOUT->index(idx), sizeof(PtrSize_t));
+					proxy_debug(PROXY_DEBUG_NET, 5,"Getting new packet of %u bytes.\n", queueOUT.pkt.size);
+					//fprintf(stderr,"Getting new packet of %u bytes.\n", queueOUT.pkt.size);
 					idx++;
 		VALGRIND_ENABLE_ERROR_REPORTING;
 					// this is a special case, needed because compression is enabled *after* the first OK
@@ -1115,6 +1170,30 @@ int MySQL_Data_Stream::array2buffer() {
 				cont=false;
 				continue;
 			}
+/* EXPERIMENTAL CODE NOT ENABLED
+			if (using_direct_send == false) {
+				if (myds_type == MYDS_FRONTEND && myconn->options.compression_min_length == 0 && encrypted == false) {
+					if (sess && sess->session_type == PROXYSQL_SESSION_MYSQL) {
+						if (queueOUT.pkt.size >= 8192) {
+							if (queue_data(queueOUT)==0) {
+								//proxy_debug(PROXY_DEBUG_NET, 5,"Switching to using_direct_send for buffer of %u bytes. qOUT.h=%u qOUT.t=%u qOUT.s=%u\n", queueOUT.pkt.size, queueOUT.head, queueOUT.tail, queueOUT.size);
+								fprintf(stderr,"Switching to using_direct_send for buffer of %u bytes. qOUT.h=%u qOUT.t=%u qOUT.s=%u\n", queueOUT.pkt.size, queueOUT.head, queueOUT.tail, queueOUT.size);
+								using_direct_send = true;
+								original_queueOUT_size = queueOUT.size;
+								original_queueOUT_buffer = queueOUT.buffer;
+								queueOUT.buffer = queueOUT.pkt.ptr;
+								queueOUT.size = queueOUT.pkt.size;
+								queue_w(queueOUT,queueOUT.size);
+								ret=queueOUT.size;
+								goto __exit_array2buffer;
+							} else {
+								//goto __exit_array2buffer;
+							}
+						}
+					}
+				}
+			}
+*/
 		}
 		int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
 		VALGRIND_DISABLE_ERROR_REPORTING;

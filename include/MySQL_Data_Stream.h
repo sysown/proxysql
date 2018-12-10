@@ -5,7 +5,7 @@
 #include "cpp.h"
 
 
-#define QUEUE_T_DEFAULT_SIZE	32768
+#define QUEUE_T_DEFAULT_SIZE	32768*2
 #define MY_SSL_BUFFER	8192
 
 typedef struct _queue_t {
@@ -132,7 +132,11 @@ class MySQL_Data_Stream
 
 	bool encrypted;
 	bool net_failure;
-
+/*  EXPERIMENTAL CODE NOT ENABLED
+	bool using_direct_send;
+	void *original_queueOUT_buffer;
+	unsigned int original_queueOUT_size;
+*/
 	uint8_t pkt_sid;
 
 	MySQL_Data_Stream();
