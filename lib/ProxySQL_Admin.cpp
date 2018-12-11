@@ -364,6 +364,7 @@ typedef struct _main_args {
 	struct pollfd *fds;
 	int *callback_func;
 	volatile int *shutdown;
+	ProxySQL_Admin *p_admin=NULL;
 } main_args;
 
 typedef struct _ifaces_desc_t {
@@ -3145,6 +3146,7 @@ static void * admin_main_loop(void *arg)
 	int nfds=((struct _main_args *)arg)->nfds;
 	int *callback_func=((struct _main_args *)arg)->callback_func;
 	volatile int *shutdown=((struct _main_args *)arg)->shutdown;
+	ProxySQL_Admin *padmin=((struct _main_args *)arg)->p_admin;
 	char *socket_names[MAX_ADMIN_LISTENERS];
 	for (i=0;i<MAX_ADMIN_LISTENERS;i++) { socket_names[i]=NULL; }
 	pthread_attr_t attr;
@@ -3199,6 +3201,7 @@ static void * admin_main_loop(void *arg)
 		}
 __end_while_pool:
 		{
+		    if (strcmp(padmin->get_variable((char *)"web_enabled"), (char *)"true") == 0){
 			if (GloProxyStats->MySQL_Threads_Handler_timetoget(curtime)) {
 				if (GloMTH) {
 					SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus(false);
@@ -3225,6 +3228,7 @@ __end_while_pool:
 				GloProxyStats->system_memory_sets();
 			}
 #endif
+		  }
 		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
@@ -3663,6 +3667,7 @@ bool ProxySQL_Admin::init() {
 	arg->nfds=main_poll_nfds;
 	arg->fds=main_poll_fds;
 	arg->shutdown=&main_shutdown;
+	arg->p_admin=this;
 	arg->callback_func=main_callback_func;
 	if (pthread_create(&admin_thr, &attr, admin_main_loop, (void *)arg) !=0 ) {
 		perror("Thread creation");
