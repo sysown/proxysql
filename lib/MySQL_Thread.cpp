@@ -4225,33 +4225,7 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 #endif // IDLE_THREADS
 		}
 		pthread_mutex_lock(&thr->thread_mutex);
-/*
-	}
-	for (i=0;i<j;i++) {
-		if (i<num_threads) {
-			thr=(MySQL_Thread *)mysql_threads[i].worker;
-#ifdef IDLE_THREADS
-		} else {
-			if (GloVars.global.idle_threads) {
-				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-			}
-#endif // IDLE_THREADS
-		}
-*/
 		thr->Get_Memory_Stats();
-/*
-	}
-	for (i=0;i<j;i++) {
-		if (i<num_threads) {
-			thr=(MySQL_Thread *)mysql_threads[i].worker;
-#ifdef IDLE_THREADS
-		} else {
-			if (GloVars.global.idle_threads) {
-				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-			}
-#endif // IDLE_THREADS
-		}
-*/
 		pthread_mutex_unlock(&thr->thread_mutex);
 	}
 }
@@ -4260,7 +4234,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	const int colnum=14;
         char port[NI_MAXSERV];
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
-  SQLite3_result *result=new SQLite3_result(colnum);
+	SQLite3_result *result=new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"ThreadID");
 	result->add_column_definition(SQLITE_TEXT,"SessionID");
 	result->add_column_definition(SQLITE_TEXT,"user");
@@ -4298,21 +4272,6 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 			}
 #endif // IDLE_THREADS
 		}
-/*
-	}
-#ifdef IDLE_THREADS
-	for (i=0;i < ( (mysql_thread___session_idle_show_processlist && GloVars.global.idle_threads ) ? num_threads*2 : num_threads); i++) {
-#else
-	for (i=0;i < num_threads; i++) {
-#endif // IDLE_THREADS
-		if (i<num_threads) {
-			thr=(MySQL_Thread *)mysql_threads[i].worker;
-#ifdef IDLE_THREADS
-		} else {
-			thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-#endif // IDLE_THREADS
-		}
-*/
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
@@ -4526,25 +4485,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				free(pta);
 			}
 		}
-/*
-	}
-#ifdef IDLE_THREADS
-	for (i=0;i < ( (mysql_thread___session_idle_show_processlist && GloVars.global.idle_threads ) ? num_threads*2 : num_threads); i++) {
-#else
-	for (i=0;i < num_threads; i++) {
-#endif // IDLE_THREADS
-*/
-		if (i<num_threads) {
-			thr=(MySQL_Thread *)mysql_threads[i].worker;
-			pthread_mutex_unlock(&thr->thread_mutex);
-#ifdef IDLE_THREADS
-		} else {
-			if (mysql_thread___session_idle_show_processlist) {
-				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-				pthread_mutex_unlock(&thr->thread_mutex);
-			}
-#endif // IDLE_THREADS
-		}
+		pthread_mutex_unlock(&thr->thread_mutex);
 	}
 	return result;
 }
