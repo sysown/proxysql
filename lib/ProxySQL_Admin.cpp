@@ -2783,7 +2783,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'version'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'version'"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT 'version' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-version'";
-		query_length=strlen(q)+20;
+		query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
 		query=(char *)l_alloc(query_length);
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
