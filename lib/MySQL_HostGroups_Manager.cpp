@@ -1284,6 +1284,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 	unsigned int sum=0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
+	unsigned int valid_servers = 0;
+	unsigned int total_latency_us = 0;
+	unsigned int avg_latency_us = 0;
+	bool use_latency_algorithm = false;
 	if (l) {
 		//int j=0;
 		for (j=0; j<l; j++) {
@@ -1293,6 +1297,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						sum+=mysrvc->weight;
 						TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+						if (mysrvc->current_latency_us) {
+							valid_servers++;
+							total_latency_us+=mysrvc->current_latency_us;
+						}
 					}
 				}
 			} else {
@@ -1325,6 +1333,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+									if (mysrvc->current_latency_us) {
+										valid_servers++;
+										total_latency_us+=mysrvc->current_latency_us;
+									}
 								}
 							}
 						}
@@ -1354,6 +1366,10 @@ MySrvC *MyHGC::get_random_MySrvC() {
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 							sum+=mysrvc->weight;
 							TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+							if (mysrvc->current_latency_us) {
+								valid_servers++;
+								total_latency_us+=mysrvc->current_latency_us;
+							}
 						}
 					}
 				}
@@ -1362,6 +1378,13 @@ MySrvC *MyHGC::get_random_MySrvC() {
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 			return NULL; // if we reach here, we couldn't find any target
+		}
+
+		if (valid_servers > 5) {
+			if (total_latency_us) {
+				use_latency_algorithm = true;
+				avg_latency_us = total_latency_us/valid_servers;
+			}
 		}
 
 		unsigned int New_sum=0;
@@ -1374,9 +1397,16 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-							New_sum+=mysrvc->weight;
-							New_TotalUsedConn+=len;
+						if (use_latency_algorithm) {
+							if (mysrvc->current_latency_us && mysrvc->current_latency_us <= avg_latency_us) {
+								New_sum+=mysrvc->weight;
+								New_TotalUsedConn+=len;
+							}
+						} else {
+							if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+								New_sum+=mysrvc->weight;
+								New_TotalUsedConn+=len;
+							}
 						}
 					}
 				}
@@ -1403,11 +1433,21 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-							New_sum+=mysrvc->weight;
-							if (k<=New_sum) {
-								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-								return mysrvc;
+						if (use_latency_algorithm) {
+							if (mysrvc->current_latency_us && mysrvc->current_latency_us <= avg_latency_us) {
+								New_sum+=mysrvc->weight;
+								if (k<=New_sum) {
+									proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+									return mysrvc;
+								}
+							}
+						} else {
+							if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+								New_sum+=mysrvc->weight;
+								if (k<=New_sum) {
+									proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+									return mysrvc;
+								}
 							}
 						}
 					}
