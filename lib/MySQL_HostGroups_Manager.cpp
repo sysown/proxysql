@@ -638,9 +638,11 @@ MySQL_Connection * MySrvConnList::remove(int _k) {
 	return (MySQL_Connection *)conns->remove_index_fast(_k);
 }
 
+/*
 unsigned int MySrvConnList::conns_length() {
 	return conns->len;
 }
+*/
 
 MySrvConnList::MySrvConnList(MySrvC *_mysrvc) {
 	mysrvc=_mysrvc;
@@ -2211,11 +2213,11 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 	return NULL; // if we reach here, we couldn't find any target
 }
 
-unsigned int MySrvList::cnt() {
-	return servers->len;
-}
+//unsigned int MySrvList::cnt() {
+//	return servers->len;
+//}
 
-MySrvC * MySrvList::idx(unsigned int i) { return (MySrvC *)servers->index(i); }
+//MySrvC * MySrvList::idx(unsigned int i) { return (MySrvC *)servers->index(i); }
 
 MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
 	MySQL_Connection * conn=NULL;
