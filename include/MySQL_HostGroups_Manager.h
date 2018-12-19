@@ -69,7 +69,7 @@ class MySrvConnList {
 	}
 	MySQL_Connection *remove(int);
 	MySQL_Connection * get_random_MyConn(MySQL_Session *sess, bool ff);
-	unsigned int conns_length();
+	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
 	MySQL_Connection *index(unsigned int);
 };
@@ -113,12 +113,12 @@ class MySrvList {	// MySQL Server List
 	int find_idx(MySrvC *);
 	public:
 	PtrArray *servers;
-	unsigned int cnt();
+	unsigned int cnt() { return servers->len; }
 	MySrvList(MyHGC *);
 	~MySrvList();
 	void add(MySrvC *);
 	void remove(MySrvC *);
-	MySrvC * idx(unsigned int);
+	MySrvC * idx(unsigned int i) {return (MySrvC *)servers->index(i); }
 };
 
 class MyHGC {	// MySQL Host Group Container
