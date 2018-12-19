@@ -414,6 +414,7 @@ class MySQL_Threads_Handler
 		int query_processor_iterations;
 		int query_processor_regex;
 		int reset_connection_algorithm;
+		int auto_increment_delay_multiplex;
 		int long_query_time;
 		int hostgroup_manager_verbose;
 		int binlog_reader_connect_retry_msec;

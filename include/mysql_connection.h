@@ -65,6 +65,7 @@ class MySQL_Connection {
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
+	int auto_increment_delay_token;
 	int fd;
 	MySQL_STMTs_local_v14 *local_stmts;	// local view of prepared statements
 	MYSQL *mysql;
@@ -180,5 +181,6 @@ class MySQL_Connection {
 	void reset();
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */
