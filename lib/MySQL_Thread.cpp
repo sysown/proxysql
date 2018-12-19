@@ -277,6 +277,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_query_timeout",
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_regex",
+	(char *)"auto_increment_delay_multiplex",
 	(char *)"long_query_time",
 	(char *)"query_cache_size_MB",
 	(char *)"ping_interval_server_msec",
@@ -386,6 +387,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
+	variables.auto_increment_delay_multiplex=5;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
@@ -639,6 +641,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
 	if (!strcasecmp(name,"query_processor_iterations")) return (int)variables.query_processor_iterations;
 	if (!strcasecmp(name,"query_processor_regex")) return (int)variables.query_processor_regex;
+	if (!strcasecmp(name,"auto_increment_delay_multiplex")) return (int)variables.auto_increment_delay_multiplex;
 	if (!strcasecmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
 	if (!strcasecmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
@@ -962,6 +965,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_processor_regex")) {
 		sprintf(intbuf,"%d",variables.query_processor_regex);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"auto_increment_delay_multiplex")) {
+		sprintf(intbuf,"%d",variables.auto_increment_delay_multiplex);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"default_max_latency_ms")) {
@@ -1491,6 +1498,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1 && intv <= 2) {
 			variables.query_processor_regex=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"auto_increment_delay_multiplex")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000000) {
+			variables.auto_increment_delay_multiplex=intv;
 			return true;
 		} else {
 			return false;
@@ -3301,6 +3317,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
 	mysql_thread___query_processor_iterations=GloMTH->get_variable_int((char *)"query_processor_iterations");
 	mysql_thread___query_processor_regex=GloMTH->get_variable_int((char *)"query_processor_regex");
+	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
 	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");

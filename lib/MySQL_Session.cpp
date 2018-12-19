@@ -2699,6 +2699,9 @@ handler_again:
 						if (myconn->mysql->affected_rows) {
 							if (myconn->mysql->affected_rows != ULLONG_MAX) {
 								last_HG_affected_rows = current_hostgroup;
+								if (mysql_thread___auto_increment_delay_multiplex) {
+									myconn->auto_increment_delay_token = mysql_thread___auto_increment_delay_multiplex + 1;
+								}
 							}
 						}
 					}
@@ -2776,6 +2779,7 @@ handler_again:
 					}
 
 					RequestEnd(myds);
+					myds->myconn->reduce_auto_increment_delay_token();
 					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
 							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
@@ -3024,6 +3028,7 @@ handler_again:
 							}
 							RequestEnd(myds);
 							if (myds->myconn) {
+								myds->myconn->reduce_auto_increment_delay_token();
 								if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 									myds->DSS=STATE_NOT_INITIALIZED;
 									if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
