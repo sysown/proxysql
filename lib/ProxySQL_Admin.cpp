@@ -786,8 +786,10 @@ bool is_valid_global_variable(const char *var_name) {
 bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	if (!strstr(query_no_space,(char *)"password")) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
-		if (strcmp(query_no_space,(char *)"set autocommit=0")) {
-			proxy_info("Received command %s\n", query_no_space);
+		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
+			if (strncasecmp(query_no_space,(char *)"SET @@session.autocommit",strlen((char *)"SET @@session.autocommit"))) {
+				proxy_info("Received command %s\n", query_no_space);
+			}
 		}
 	}
 	// Get a pointer to the beginnig of var=value entry and split to get var name and value
