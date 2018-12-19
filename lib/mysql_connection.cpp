@@ -26,7 +26,11 @@ mysql_status(short event, short cont) {
 // Defining list of session variables for comparison with query digest to disable multiplexing for "SET <variable_name>" commands
 static char * session_vars[]= {
 	// For issue #555 , multiplexing is disabled if --safe-updates is used
-	(char *)"SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?",
+	//(char *)"SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?",
+	// for issue #1832 , we are splitting the above into 3 variables
+	(char *)"SQL_SAFE_UPDATES",
+	(char *)"SQL_SELECT_LIMIT",
+	(char *)"MAX_JOIN_SIZE",
 	(char *)"FOREIGN_KEY_CHECKS",
 	(char *)"UNIQUE_CHECKS",
 	(char *)"AUTO_INCREMENT_INCREMENT",
