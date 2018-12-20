@@ -134,9 +134,9 @@
 +  {
 +    char buff[128];
 +    if (csname) { // default behavior
-+      my_snprintf(buff, 63, "SET NAMES %s", cs->csname);
++      my_snprintf(buff, 127, "SET NAMES %s", cs->csname);
 +    } else {
-+      my_snprintf(buff, 63, "SET NAMES %s COLLATE %s", cs->csname, cs->name);
++      my_snprintf(buff, 127, "SET NAMES %s COLLATE '%s'", cs->csname, cs->name);
 +    }
      if (!mysql_real_query(mysql, buff, (uint)strlen(buff)))
      {
