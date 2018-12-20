@@ -108,9 +108,9 @@
 +  {
 +    char buff[128];
 +    if (csname) { // default behavior
-+      snprintf(buff, 63, "SET NAMES %s", cs->csname);
++      snprintf(buff, 127, "SET NAMES %s", cs->csname);
 +    } else {
-+      snprintf(buff, 63, "SET NAMES %s COLLATE %s", cs->csname, cs->name);
++      snprintf(buff, 127, "SET NAMES %s COLLATE '%s'", cs->csname, cs->name);
 +    }
  
 -    snprintf(buff, 63, "SET NAMES %s", cs->csname);
