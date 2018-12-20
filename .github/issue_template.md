@@ -8,7 +8,7 @@ If you are submitting a reproducible bug report, please provide:
 [ ] The version of OS and ProxySQL
 [ ] Every step to reproduce the issue
 [ ] The error log 
-[ ] If it is a crashing bug, a core dump will be extremely useful.
+[ ] If it is a crashing bug, please check here: https://github.com/sysown/proxysql/wiki/How-to-report-a-crash-bug
 
 Please use markdown to format code or SQL: https://guides.github.com/features/mastering-markdown/
 
