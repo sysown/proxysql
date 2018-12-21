@@ -4256,6 +4256,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			) {
 				char buf[32];
 				sprintf(buf,"%llu",last_insert_id);
+				char buf2[32];
+				int l0=strlen("LAST_INSERT_ID()");
+				memcpy(buf2,pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+				buf2[l0]=0;
 				unsigned int nTrx=NumActiveTransactions();
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 				if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
@@ -4264,7 +4268,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				myds->DSS=STATE_QUERY_SENT_DS;
 				int sid=1;
 				myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
-				myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
+				myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
 				myds->DSS=STATE_COLUMN_DEFINITION;
 				myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
 				char **p=(char **)malloc(sizeof(char*)*1);
