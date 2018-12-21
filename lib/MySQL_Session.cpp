@@ -9,6 +9,8 @@
 #define SELECT_VERSION_COMMENT_LEN 32
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
 #define PROXYSQL_VERSION_COMMENT_LEN 81
+#define SELECT_CONNECTION_ID "SELECT CONNECTION_ID()"
+#define SELECT_CONNECTION_ID_LEN 22
 #define SELECT_LAST_INSERT_ID "SELECT LAST_INSERT_ID()"
 #define SELECT_LAST_INSERT_ID_LEN 23
 #define SELECT_LAST_INSERT_ID_LIMIT1 "SELECT LAST_INSERT_ID() LIMIT 1"
@@ -4186,6 +4188,40 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (mirror==true) { // for mirror session we exit here
 		current_hostgroup=qpo->destination_hostgroup;
 		return false;
+	}
+
+	// handle case #1797
+	if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+		char buf[32];
+		char buf2[32];
+		sprintf(buf,"%u",thread_session_id);
+		int l0=strlen("CONNECTION_ID()");
+		memcpy(buf2,pkt->ptr+5+SELECT_CONNECTION_ID_LEN-l0,l0);
+		buf2[l0]=0;
+		unsigned int nTrx=NumActiveTransactions();
+		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+		MySQL_Data_Stream *myds=client_myds;
+		MySQL_Protocol *myprot=&client_myds->myprot;
+		myds->DSS=STATE_QUERY_SENT_DS;
+		int sid=1;
+		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
+		myds->DSS=STATE_COLUMN_DEFINITION;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		char **p=(char **)malloc(sizeof(char*)*1);
+		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+		l[0]=strlen(buf);
+		p[0]=buf;
+		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+		myds->DSS=STATE_ROW;
+		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		myds->DSS=STATE_SLEEP;
+		l_free(pkt->size,pkt->ptr);
+		free(p);
+		free(l);
+		RequestEnd(NULL);
+		return true;
 	}
 
 	// handle case #1421 , about LAST_INSERT_ID
