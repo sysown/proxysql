@@ -807,7 +807,7 @@ int MySQL_Data_Stream::buffer2array() {
 					PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
 				} else {
 					// we append the packet at the end of the previous packet
-					memcpy(last_pkt->ptr+last_pkt->size, queue_r_ptr(queueIN) , queueIN.pkt.size);
+					memcpy((char *)last_pkt->ptr+last_pkt->size, queue_r_ptr(queueIN) , queueIN.pkt.size);
 					last_pkt->size += queueIN.pkt.size;
 					queue_r(queueIN, queueIN.pkt.size);
 

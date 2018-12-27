@@ -596,29 +596,30 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 // FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	size_t sal=strlen("set autocommit");
+	char * _ptr = (char *)pkt->ptr;
 	if ( pkt->size >= 7+sal) {
 		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,strlen((char *)"SET @@session.autocommit"))==0) {
-			memmove(pkt->ptr+9, pkt->ptr+19, pkt->size - 19);
-			memset(pkt->ptr+pkt->size-10,' ',10);
+			memmove(_ptr+9, _ptr+19, pkt->size - 19);
+			memset(_ptr+pkt->size-10,' ',10);
 		}
 		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
 			void *p = NULL;
 			for (int i=5+sal; i<pkt->size; i++) {
 				*((char *)pkt->ptr+i) = tolower(*((char *)pkt->ptr+i));
 			}
-			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"false", 5);
+			p = memmem(_ptr+5+sal, pkt->size-5-sal, (void *)"false", 5);
 			if (p) {
 				memcpy(p,(void *)"0    ",5);
 			}
-			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"true", 4);
+			p = memmem(_ptr+5+sal, pkt->size-5-sal, (void *)"true", 4);
 			if (p) {
 				memcpy(p,(void *)"1   ",4);
 			}
-			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"off", 3);
+			p = memmem(_ptr+5+sal, pkt->size-5-sal, (void *)"off", 3);
 			if (p) {
 				memcpy(p,(void *)"0  ",3);
 			}
-			p = memmem(pkt->ptr+5+sal, pkt->size-5-sal, (void *)"on", 2);
+			p = memmem(_ptr+5+sal, pkt->size-5-sal, (void *)"on", 2);
 			if (p) {
 				memcpy(p,(void *)"1 ",2);
 			}
@@ -4211,7 +4212,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		char buf2[32];
 		sprintf(buf,"%u",thread_session_id);
 		int l0=strlen("CONNECTION_ID()");
-		memcpy(buf2,pkt->ptr+5+SELECT_CONNECTION_ID_LEN-l0,l0);
+		memcpy(buf2,(char *)pkt->ptr+5+SELECT_CONNECTION_ID_LEN-l0,l0);
 		buf2[l0]=0;
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -4273,7 +4274,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				sprintf(buf,"%llu",last_insert_id);
 				char buf2[32];
 				int l0=strlen("LAST_INSERT_ID()");
-				memcpy(buf2,pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+				memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
 				buf2[l0]=0;
 				unsigned int nTrx=NumActiveTransactions();
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );

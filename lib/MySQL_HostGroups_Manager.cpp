@@ -135,7 +135,7 @@ void connect_cb(EV_P_ ev_io *w, int revents) {
 		if ((getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen) == -1) ||
 			(optval != 0)) {
 			/* Connection failed; try the next address in the list. */
-			int errnum = optval ? optval : errno;
+			//int errnum = optval ? optval : errno;
 			ev_io_stop(MyHGM->gtid_ev_loop, w);
 			close(w->fd);
 			MyHGM->gtid_missing_nodes = true;
@@ -170,7 +170,7 @@ void connect_cb(EV_P_ ev_io *w, int revents) {
 }
 
 struct ev_io * new_connector(char *address, uint16_t gtid_port, uint16_t mysql_port) {
-	struct sockaddr_in a;
+	//struct sockaddr_in a;
 	int s;
 
 	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
@@ -4321,7 +4321,7 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 			//sprintf(buf,"%d", mysrvc->port);
 			string s1 = gtid_executed_to_string(gtid_si->gtid_executed);
 			pta[2]=strdup(s1.c_str());
-			sprintf(buf,"%llu", (int)gtid_si->events_read);
+			sprintf(buf,"%llu", gtid_si->events_read);
 			pta[3]=strdup(buf);
 		} else {
 			std::string s = it->first;

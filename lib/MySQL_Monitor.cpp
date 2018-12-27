@@ -62,7 +62,9 @@ class ConsumerThread : public Thread {
 		// Remove 1 item at a time and process it. Blocks if no items are 
 		// available to process.
 		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
+VALGRIND_DISABLE_ERROR_REPORTING;
 			WorkItem* item = (WorkItem*)m_queue.remove();
+VALGRIND_ENABLE_ERROR_REPORTING;
 			if (item==NULL) {
 				if (thrn) {
 					// we took a NULL item that wasn't meant to reach here! Add it again

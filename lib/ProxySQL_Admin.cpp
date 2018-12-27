@@ -2428,7 +2428,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
 	char *error=NULL;
 	int cols;
-	int affected_rows;
+	int affected_rows = 0;
 	bool run_query=true;
 	SQLite3_result *resultset=NULL;
 	char *strA=NULL;
@@ -2460,7 +2460,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
 	if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS))) {
-		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			resultset=MyHGM->dump_table_mysql_servers();
 			if (resultset) {
@@ -2472,7 +2472,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 	if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
-		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			resultset=MyHGM->dump_table_mysql_replication_hostgroups();
 			if (resultset) {
@@ -2570,7 +2570,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		if ((query_no_space_length == strlen("SELECT GLOBAL_CHECKSUM()")) && (!strncasecmp("SELECT GLOBAL_CHECKSUM()", query_no_space, strlen("SELECT GLOBAL_CHECKSUM()")))) {
 			char buf[32];
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			sprintf(buf,"%llu",GloVars.checksums_values.global_checksum);
+			sprintf(buf,"%lu",GloVars.checksums_values.global_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			uint16_t setStatus = 0;
 			MySQL_Data_Stream *myds=sess->client_myds;
@@ -4545,9 +4545,7 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 
 void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing LDAP variables. Replace:%d\n", replace);
-	if (
-		( GloMyLdapAuth == NULL )
-	) {
+	if (GloMyLdapAuth == NULL) {
 		return;
 	}
 	char *error=NULL;
@@ -5062,10 +5060,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
 			if (variables.mysql_ifaces)
 				free(variables.mysql_ifaces);
-				variables.mysql_ifaces=strdup(value);
-				if (update_creds && variables.mysql_ifaces) {
-					S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
-				}
+			variables.mysql_ifaces=strdup(value);
+			if (update_creds && variables.mysql_ifaces) {
+				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
+			}
 			return true;
 		} else {
 			return false;
@@ -5234,56 +5232,60 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 	}
 	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
+		bool rt = false;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.cluster_mysql_query_rules_save_to_disk=true;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk, true);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk, true);
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.cluster_mysql_query_rules_save_to_disk=false;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk, false);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_save_to_disk, false);
 			return true;
 		}
-		return false;
+		return rt;
 	}
 	if (!strcasecmp(name,"cluster_mysql_servers_save_to_disk")) {
+		bool rt = false;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.cluster_mysql_servers_save_to_disk=true;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_save_to_disk, true);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_save_to_disk, true);
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.cluster_mysql_servers_save_to_disk=false;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_save_to_disk, false);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_save_to_disk, false);
 			return true;
 		}
-		return false;
+		return rt;
 	}
 	if (!strcasecmp(name,"cluster_mysql_users_save_to_disk")) {
+		bool rt = false;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.cluster_mysql_users_save_to_disk=true;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_save_to_disk, true);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_save_to_disk, true);
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.cluster_mysql_users_save_to_disk=false;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_save_to_disk, false);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_save_to_disk, false);
 			return true;
 		}
-		return false;
+		return rt;
 	}
 	if (!strcasecmp(name,"cluster_proxysql_servers_save_to_disk")) {
+		bool rt = false;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.cluster_proxysql_servers_save_to_disk=true;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_save_to_disk, true);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_save_to_disk, true);
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.cluster_proxysql_servers_save_to_disk=false;
-			__sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_save_to_disk, false);
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_save_to_disk, false);
 			return true;
 		}
-		return false;
+		return rt;
 	}
 	if (!strcasecmp(name,"checksum_mysql_query_rules")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -7280,7 +7282,6 @@ void ProxySQL_Admin::stats___mysql_users() {
 }
 
 void ProxySQL_Admin::stats___mysql_gtid_executed() {
-	int i;
 	statsdb->execute("DELETE FROM stats_mysql_gtid_executed");
 	SQLite3_result *resultset=NULL;
 	resultset = MyHGM->get_stats_mysql_gtid_executed();

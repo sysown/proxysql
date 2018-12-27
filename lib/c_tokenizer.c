@@ -487,7 +487,6 @@ char *mysql_query_strip_comments(char *s, int _len) {
 	char *p_r_t = r;
 
 	char prev_char = 0;
-	char qutr_char = 0;
 
 	char flag = 0;
 

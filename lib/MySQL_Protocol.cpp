@@ -1273,7 +1273,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	int default_hostgroup=-1;
-	bool transaction_persistent;
+	bool transaction_persistent = true;
 	bool _ret_use_ssl=false;
 	cur++;
 	user=pkt+cur;

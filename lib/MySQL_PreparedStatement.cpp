@@ -729,7 +729,7 @@ bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 		uint64_t global_stmt_id = s->second;
 		client_stmt_to_global_ids.erase(s);
 		GloMyStmt->ref_count_client(global_stmt_id, -1);
-		auto s2 = global_stmt_to_client_ids.find(global_stmt_id);
+		//auto s2 = global_stmt_to_client_ids.find(global_stmt_id);
 		std::pair<std::multimap<uint64_t,uint32_t>::iterator, std::multimap<uint64_t,uint32_t>::iterator> ret;
 		ret = global_stmt_to_client_ids.equal_range(global_stmt_id);
 		for (std::multimap<uint64_t,uint32_t>::iterator it=ret.first; it!=ret.second; ++it) {
@@ -816,12 +816,14 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 void MySQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
                              uint64_t *stmt_max_stmt_id, uint64_t *cached,
                              uint64_t *s_unique, uint64_t *s_total) {
+#ifdef DEBUG
 	uint64_t c_u = 0;
 	uint64_t c_t = 0;
 	uint64_t m = 0;
 	uint64_t c = 0;
 	uint64_t s_u = 0;
 	uint64_t s_t = 0;
+#endif
 	pthread_rwlock_wrlock(&rwlock_);
 	statuses.cached = map_stmt_id_to_info.size();
 	statuses.c_unique = statuses.cached - num_stmt_with_ref_client_count_zero;
@@ -897,7 +899,7 @@ class PS_global_stats {
 	char **get_row() {
 		char buf[128];
 		char **pta=(char **)malloc(sizeof(char *)*8);
-		sprintf(buf,"%llu",statement_id);
+		sprintf(buf,"%lu",statement_id);
 		pta[0]=strdup(buf);
 		sprintf(buf,"%u",hid);
 		pta[1]=strdup(buf);
