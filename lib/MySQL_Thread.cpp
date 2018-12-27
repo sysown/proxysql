@@ -602,7 +602,8 @@ uint8_t MySQL_Threads_Handler::get_variable_uint8(char *name) {
 	return 0;
 }
 
-int MySQL_Threads_Handler::get_variable_int(char *name) {
+int MySQL_Threads_Handler::get_variable_int(const char *name) {
+VALGRIND_DISABLE_ERROR_REPORTING;
 #ifdef DEBUG
 	if (!strcasecmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
@@ -747,9 +748,11 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"client_multi_statements")) return (int)variables.client_multi_statements;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
 char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
+VALGRIND_DISABLE_ERROR_REPORTING;
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
 	if (!strcasecmp(name,"init_connect")) {
@@ -1167,6 +1170,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		return strdup((variables.default_reconnect ? "true" : "false"));
 	}
 	return NULL;
+VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
 

@@ -24,7 +24,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define MYSQL_MONITOR_VERSION "1.2.0723" DEB
+#define MYSQL_MONITOR_VERSION "2.0.1226" DEB
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
@@ -232,6 +232,10 @@ void * monitor_connect_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	GloMyMon->monitor_connect();
 	return NULL;
 }
@@ -241,6 +245,10 @@ void * monitor_ping_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	GloMyMon->monitor_ping();
 	return NULL;
 }
@@ -250,6 +258,10 @@ void * monitor_read_only_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	GloMyMon->monitor_read_only();
 	return NULL;
 }
@@ -259,6 +271,10 @@ void * monitor_group_replication_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	GloMyMon->monitor_group_replication();
 	return NULL;
 }
@@ -268,6 +284,10 @@ void * monitor_galera_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	GloMyMon->monitor_galera();
 	return NULL;
 }
@@ -277,6 +297,10 @@ void * monitor_replication_lag_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	GloMyMon->monitor_replication_lag();
 	return NULL;
 }
@@ -751,10 +775,12 @@ __exit_monitor_read_only_thread:
 			if (j>-1) {
 				MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 				if (row) {
+VALGRIND_DISABLE_ERROR_REPORTING;
 					if (row[j]) {
 						if (!strcmp(row[j],"0") || !strcasecmp(row[j],"OFF"))
 							read_only=0;
 					}
+VALGRIND_ENABLE_ERROR_REPORTING;
 				}
 			}
 //					if (repl_lag>=0) {
@@ -2386,13 +2412,17 @@ __sleep_monitor_replication_lag:
 
 
 void * MySQL_Monitor::run() {
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	//if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 __monitor_run:
 	while (queue.size()) { // this is a clean up in case Monitor was restarted
 		WorkItem* item = (WorkItem*)queue.remove();

@@ -579,7 +579,7 @@ ClickHouse_Authentication *GloClickHouseAuth;
 #endif /* PROXYSQLCLICKHOUSE */
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
-MySQL_Threads_Handler *GloMTH;
+MySQL_Threads_Handler *GloMTH = NULL;
 
 MySQL_STMT_Manager_v14 *GloMyStmt;
 
@@ -808,7 +808,9 @@ void ProxySQL_Main_init_main_modules() {
 
 	MyHGM=new MySQL_HostGroups_Manager();
 	MyHGM->init();
-	GloMTH=new MySQL_Threads_Handler();
+	MySQL_Threads_Handler * _tmp_GloMTH = NULL;
+	_tmp_GloMTH=new MySQL_Threads_Handler();
+	GloMTH = _tmp_GloMTH;
 	GloMyLogger = new MySQL_Logger();
 	GloMyStmt=new MySQL_STMT_Manager_v14();
 }
@@ -872,8 +874,10 @@ void ProxySQL_Main_init_Query_Cache_module() {
 void ProxySQL_Main_init_MySQL_Monitor_module() {
 	// start MySQL_Monitor
 //	GloMyMon = new MySQL_Monitor();
-	MyMon_thread = new std::thread(&MySQL_Monitor::run,GloMyMon);
-	GloMyMon->print_version();
+	if (MyMon_thread == NULL) { // only if not created yet
+		MyMon_thread = new std::thread(&MySQL_Monitor::run,GloMyMon);
+		GloMyMon->print_version();
+	}
 }
 
 

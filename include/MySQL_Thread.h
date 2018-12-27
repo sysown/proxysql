@@ -463,7 +463,7 @@ class MySQL_Threads_Handler
 	char *get_variable_string(char *name);
 	uint8_t get_variable_uint8(char *name);
 	uint16_t get_variable_uint16(char *name);
-	int get_variable_int(char *name);
+	int get_variable_int(const char *name);
 	void print_version();
 	void init(unsigned int num=0, size_t stack=0);
 	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *), bool);
