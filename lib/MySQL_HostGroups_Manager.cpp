@@ -3697,8 +3697,8 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 		} else { // the server is already offline, but we check if needs to be taken back online
 			SQLite3_result *numw_result = NULL;
 			q=(char *)"SELECT 1 FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
-			sprintf(query,q,_hostname,_port);
+			query=(char *)malloc(strlen(q) + (sizeof(_writer_hostgroup) * 8 + 1));
+			sprintf(query,q,_writer_hostgroup);
 			mydb->execute_statement(query, &error , &cols , &affected_rows , &numw_result);
 			free(query);
 			if (numw_result) {
