@@ -22,6 +22,7 @@ extern const MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * cons
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
 
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
@@ -334,6 +335,7 @@ MySQL_Session::MySQL_Session() {
 	last_insert_id=0; // #1093
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
+	ldap_ctx = NULL;
 }
 
 void MySQL_Session::init() {
@@ -409,6 +411,10 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+	}
+	if (ldap_ctx) {
+		GloMyLdapAuth->ldap_ctx_free(ldap_ctx);
+		ldap_ctx = NULL;
 	}
 }
 
@@ -2332,6 +2338,11 @@ __get_pkts_from_client:
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Received query to be processed with MariaDB Client library\n");
 									mybe->server_myds->killed_at=0;
 									mybe->server_myds->kill_type=0;
+									if (GloMyLdapAuth) {
+										if (session_type==PROXYSQL_SESSION_MYSQL) {
+											add_ldap_comment_to_pkt(&pkt);
+										}
+									}
 									mybe->server_myds->mysql_real_query.init(&pkt);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
@@ -3593,7 +3604,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				switch (session_type) {
 					case PROXYSQL_SESSION_MYSQL:
 					case PROXYSQL_SESSION_SQLITE:
-						free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						if (ldap_ctx==NULL) {
+							free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						} else {
+							free_users=GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						}
 						break;
 #ifdef PROXYSQLCLICKHOUSE
 					case PROXYSQL_SESSION_CLICKHOUSE:
@@ -4353,7 +4368,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		reset();
 		init();
 		if (client_authenticated) {
-			GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+			if (ldap_ctx==NULL) {
+				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+			} else {
+				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+			}
 		}
 		client_authenticated=false;
 		if (client_myds->myprot.process_pkt_COM_CHANGE_USER((unsigned char *)pkt->ptr, pkt->size)==true) {
@@ -4889,4 +4908,34 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 		}
 	}
 	return false;
+}
+
+void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
+	if (GloMyLdapAuth==NULL)
+		return;
+	if (ldap_ctx==NULL)
+		return;
+	if (client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
+		return;
+	if (client_myds->myconn->userinfo->fe_username==NULL)
+		return;
+	char *fe=client_myds->myconn->userinfo->fe_username;
+	char *a = (char *)" /* proxysql-ldap-user=%s */";
+	char *b = (char *)malloc(strlen(a)+strlen(fe));
+	sprintf(b,a,fe);
+	PtrSize_t _new_pkt;
+	_new_pkt.ptr = malloc(strlen(b) + _pkt->size);
+	memcpy(_new_pkt.ptr , _pkt->ptr, 5);
+	unsigned char *_c=(unsigned char *)_new_pkt.ptr;
+	_c+=5;
+	// prefix comment
+	//memcpy(_c,b,strlen(b));
+	//_c+=strlen(b);
+	memcpy(_c, (char *)_pkt->ptr+5, _pkt->size-5);
+	// suffix comment
+	_c+=_pkt->size-5;
+	memcpy(_c,b,strlen(b));
+	l_free(_pkt->size,_pkt->ptr);
+	_pkt->size = _pkt->size + strlen(b);
+	_pkt->ptr = _new_pkt.ptr;
 }

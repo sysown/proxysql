@@ -85,6 +85,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && tar -jxf jemalloc-4.3.1.tar.bz2
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.patch
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
+#	cd jemalloc/jemalloc && sed -i -e 's/-O3 /-O3 -fPIC /' Makefile
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
