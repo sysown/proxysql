@@ -3615,13 +3615,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
 		char *schemaname=strndup((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
-		char *schemanameptr=schemaname;
+		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
+/*
 		//remove leading spaces
 		while(isspace((unsigned char)*schemanameptr)) schemanameptr++;
 		// remove trailing semicolon , issue #915
 		if (schemanameptr[strlen(schemanameptr)-1]==';') {
 			schemanameptr[strlen(schemanameptr)-1]='\0';
 		}
+*/
 		// handle cases like "USE `schemaname`
 		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
 			schemanameptr[strlen(schemanameptr)-1]='\0';
