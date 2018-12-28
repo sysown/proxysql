@@ -2000,6 +2000,9 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			if (myerr >= 2000) {
+				if (myerr == 2019) {
+					client_myds->myconn->options.charset = mysql_thread___default_charset;
+				}
 				bool retry_conn=false;
 				// client error, serious
 				proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
