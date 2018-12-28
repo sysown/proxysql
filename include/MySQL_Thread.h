@@ -423,7 +423,7 @@ class MySQL_Threads_Handler
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
-		uint16_t server_capabilities;
+		uint32_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
 		int connpoll_reset_queue_length;

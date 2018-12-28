@@ -415,7 +415,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
-	variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
+	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
+	// major upgrade in 2.0.0
+	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;

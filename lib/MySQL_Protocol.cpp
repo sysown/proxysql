@@ -1038,7 +1038,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
     //+ sizeof(glovars.server_capabilities)
     //+ sizeof(glovars.server_language)
     //+ sizeof(glovars.server_status)
-    + sizeof(mysql_thread___server_capabilities)
+    + sizeof(mysql_thread___server_capabilities)/2
     + sizeof(mysql_thread___default_charset)
     + sizeof(server_status)
     + 3 // unknown stuff
@@ -1096,8 +1096,9 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 		mysql_thread___server_capabilities &= ~CLIENT_SSL;
 	}
 	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
+	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
-  memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
+  memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
   memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
   memcpy(_ptr+l,"\x0f\x80\x15",3); l+=3;
