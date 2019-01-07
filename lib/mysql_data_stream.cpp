@@ -197,6 +197,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	myconn=NULL;	// 20141011
 	DSS=STATE_NOT_CONNECTED;
 	encrypted=false;
+	switching_auth_stage = 0;
+	switching_auth_type = 0;
 	ssl=NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;

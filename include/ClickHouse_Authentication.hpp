@@ -67,6 +67,7 @@ class ClickHouse_Authentication {
 	         bool set_lock = true);
 	bool reset();
 	void print_version();
+	bool exists(char *username);
 	char *lookup(char *username, enum cred_username_type usertype,
 	             bool *use_ssl, int *default_hostgroup, char **default_schema,
 	             bool *schema_locked, bool *transaction_persistent,

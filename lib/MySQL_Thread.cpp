@@ -314,6 +314,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stacksize",
 	(char *)"threads",
 	(char *)"init_connect",
+	(char *)"add_ldap_user_comment",
 	(char *)"default_sql_mode",
 	(char *)"default_time_zone",
 	(char *)"connpoll_reset_queue_length",
@@ -405,6 +406,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
+	variables.add_ldap_user_comment=NULL;
 	variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
 	variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
 	variables.ping_interval_server_msec=10000;
@@ -570,6 +572,13 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			return NULL;
 		} else {
 			return strdup(variables.init_connect);
+		}
+	}
+	if (!strcasecmp(name,"add_ldap_user_comment")) {
+		if (variables.add_ldap_user_comment==NULL || strlen(variables.add_ldap_user_comment)==0) {
+			return NULL;
+		} else {
+			return strdup(variables.add_ldap_user_comment);
 		}
 	}
 	if (!strcasecmp(name,"default_sql_mode")) {
@@ -762,6 +771,13 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 			return NULL;
 		} else {
 			return strdup(variables.init_connect);
+		}
+	}
+	if (!strcasecmp(name,"add_ldap_user_comment")) {
+		if (variables.add_ldap_user_comment==NULL || strlen(variables.add_ldap_user_comment)==0) {
+			return NULL;
+		} else {
+			return strdup(variables.add_ldap_user_comment);
 		}
 	}
 	if (!strcasecmp(name,"default_sql_mode")) {
@@ -1861,6 +1877,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		return true;
 	}
+	if (!strcasecmp(name,"add_ldap_user_comment")) {
+		if (variables.init_connect) free(variables.add_ldap_user_comment);
+		variables.add_ldap_user_comment=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.add_ldap_user_comment=strdup(value);
+		}
+		return true;
+	}
 
 	if (!strcasecmp(name,"default_sql_mode")) {
 		if (variables.default_sql_mode) free(variables.default_sql_mode);
@@ -2397,6 +2422,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
 	if (variables.init_connect) free(variables.init_connect);
+	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
 	if (variables.default_sql_mode) free(variables.default_sql_mode);
 	if (variables.default_time_zone) free(variables.default_time_zone);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
@@ -2511,6 +2537,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
+	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
 	if (mysql_thread___default_sql_mode) { free(mysql_thread___default_sql_mode); mysql_thread___default_sql_mode=NULL; }
 	if (mysql_thread___default_time_zone) { free(mysql_thread___default_time_zone); mysql_thread___default_time_zone=NULL; }
 	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
@@ -3593,6 +3620,8 @@ void MySQL_Thread::refresh_variables() {
 
 	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
 	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");
+	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
+	mysql_thread___add_ldap_user_comment=GloMTH->get_variable_string((char *)"add_ldap_user_comment");
 	if (mysql_thread___default_sql_mode) free(mysql_thread___default_sql_mode);
 	mysql_thread___default_sql_mode=GloMTH->get_variable_string((char *)"default_sql_mode");
 	if (mysql_thread___default_time_zone) free(mysql_thread___default_time_zone);
@@ -3659,6 +3688,7 @@ MySQL_Thread::MySQL_Thread() {
 	__thread_MySQL_Thread_Variables_version=0;
 	mysql_thread___server_version=NULL;
 	mysql_thread___init_connect=NULL;
+	mysql_thread___add_ldap_user_comment=NULL;
 	mysql_thread___eventslog_filename=NULL;
 
 	// SSL proxy to server

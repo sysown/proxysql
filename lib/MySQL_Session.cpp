@@ -2344,7 +2344,9 @@ __get_pkts_from_client:
 									mybe->server_myds->kill_type=0;
 									if (GloMyLdapAuth) {
 										if (session_type==PROXYSQL_SESSION_MYSQL) {
-											add_ldap_comment_to_pkt(&pkt);
+											if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
+												add_ldap_comment_to_pkt(&pkt);
+											}
 										}
 									}
 									mybe->server_myds->mysql_real_query.init(&pkt);
@@ -3512,6 +3514,12 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
+
+	if (
+		(handshake_response_return == false) && (client_myds->switching_auth_stage == 1)
+	) {
+		return;
+	}
 	
 	if (
 		(is_encrypted == false) && // the connection was encrypted
@@ -3630,9 +3638,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=false;
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
+				uint8_t _pid = 2;
+				if (client_myds->switching_auth_stage) _pid+=2;
 				if (max_connections_reached==true) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Too many connections\n");
-					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"08004", (char *)"Too many connections", true);
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,_pid,1040,(char *)"08004", (char *)"Too many connections", true);
 				} else { // see issue #794
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", client_myds->myconn->userinfo->username, used_users);
 					char *a=(char *)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
@@ -3683,6 +3693,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					} else {
 						client_addr = strdup((char *)"");
 					}
+					uint8_t _pid = 2;
+					if (client_myds->switching_auth_stage) _pid+=2;
+					if (is_encrypted) _pid++;
 					if (
 						(strcmp(client_addr,(char *)"127.0.0.1")==0)
 						||
@@ -3691,30 +3704,37 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						(strcmp(client_addr,(char *)"::1")==0)
 					) {
 						// we are good!
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
+						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
 					} else {
 						char *a=(char *)"User '%s' can only connect locally";
 						char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username));
 						sprintf(b,a,client_myds->myconn->userinfo->username);
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1040,(char *)"42000", b, true);
+						//client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1040,(char *)"42000", b, true);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1040,(char *)"42000", b, true);
 						free(b);
 					}
 					free(addr);
 					free(client_addr);
 				} else {
+					uint8_t _pid = 2;
+					if (client_myds->switching_auth_stage) _pid+=2;
+					if (is_encrypted) _pid++;
 					if (use_ssl == true && is_encrypted == false) {
 						*wrong_pass=true;
 						char *_a=(char *)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
 						char *_s=(char *)malloc(strlen(_a)+strlen(client_myds->myconn->userinfo->username)+32);
 						sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
+						//client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1045,(char *)"28000", _s, true);
 						__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 						free(_s);
 					} else {
 						// we are good!
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
+						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
 					}
@@ -3768,8 +3788,12 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		if (client_myds->myconn->userinfo->username) {
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
+			uint8_t _pid = 2;
+			if (client_myds->switching_auth_stage) _pid+=2;
+			if (is_encrypted) _pid++;
 			sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
+			//client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, (is_encrypted ? 3 : 2), 1045,(char *)"28000", _s, true);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1045,(char *)"28000", _s, true);
 			free(_s);
 		}
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
@@ -4924,9 +4948,9 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (client_myds->myconn->userinfo->fe_username==NULL)
 		return;
 	char *fe=client_myds->myconn->userinfo->fe_username;
-	char *a = (char *)" /* proxysql-ldap-user=%s */";
-	char *b = (char *)malloc(strlen(a)+strlen(fe));
-	sprintf(b,a,fe);
+	char *a = (char *)" /* %s=%s */";
+	char *b = (char *)malloc(strlen(a)+strlen(fe)+strlen(mysql_thread___add_ldap_user_comment));
+	sprintf(b,a,mysql_thread___add_ldap_user_comment,fe);
 	PtrSize_t _new_pkt;
 	_new_pkt.ptr = malloc(strlen(b) + _pkt->size);
 	memcpy(_new_pkt.ptr , _pkt->ptr, 5);

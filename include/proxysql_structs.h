@@ -693,6 +693,8 @@ __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 
+__thread char * mysql_thread___add_ldap_user_comment;
+
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
@@ -808,6 +810,8 @@ extern __thread int mysql_thread___monitor_threads_queue_maxsize;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
+
+extern __thread char * mysql_thread___add_ldap_user_comment;
 
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;
