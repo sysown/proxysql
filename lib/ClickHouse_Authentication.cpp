@@ -361,9 +361,9 @@ bool ClickHouse_Authentication::exists(char * username) {
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg = creds_frontends ;
+	ch_creds_group_t &cg = creds_frontends ;
 	pthread_rwlock_rdlock(&cg.lock);
-	std::map<uint64_t, account_details_t *>::iterator lookup;
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
 	lookup = cg.bt_map.find(hash1);
 	if (lookup != cg.bt_map.end()) {
 		ret = true;
