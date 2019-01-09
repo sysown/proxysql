@@ -6,6 +6,7 @@
 #define PROXYSQL_QPRO_PTHREAD_MUTEX
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
+typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
 
 struct _Query_Processor_rule_t {
 	int rule_id;
@@ -181,6 +182,7 @@ class Query_Processor {
 	private:
 	char rand_del[16];
 	umap_query_digest digest_umap;
+	umap_query_digest_text digest_text_umap;
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_t digest_rwlock;
 #else
