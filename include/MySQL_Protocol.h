@@ -30,6 +30,7 @@ class MySQL_ResultSet {
 	void add_eof();
 	void add_err(MySQL_Data_Stream *_myds);
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
+	//bool generate_COM_FIELD_LIST_response(PtrSizeArray *PSarrayFinal);
 	unsigned char *buffer;
 	unsigned int buffer_used;
 	void buffer_to_PSarrayOut(bool _last=false);
@@ -50,10 +51,10 @@ class MySQL_Prepared_Stmt_info {
 
 class MySQL_Protocol {
 	private:
-	MySQL_Data_Stream **myds;
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Session *sess;
 	public:
+	MySQL_Data_Stream **myds;
 #ifdef DEBUG
 	bool dump_pkt;
 #endif
@@ -108,5 +109,7 @@ class MySQL_Protocol {
 	void generate_STMT_PREPARE_RESPONSE_OK(uint8_t sequence_id, uint32_t stmt_id);
 
 	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta);
+
+	bool generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */
