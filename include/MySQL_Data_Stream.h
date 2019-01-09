@@ -128,6 +128,9 @@ class MySQL_Data_Stream
 
 	uint8_t pkt_sid;
 
+	bool com_field_list;
+	char *com_field_wild;
+
 	MySQL_Data_Stream();
 	~MySQL_Data_Stream();
 

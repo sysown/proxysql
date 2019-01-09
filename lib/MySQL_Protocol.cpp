@@ -1764,12 +1764,60 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 	return ret;
 }
 
+bool MySQL_Protocol::generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt) {
+	PtrSize_t n_pkt;
+	unsigned int o_pkt_size = pkt->size;
+	char *pkt_ptr = (char *)pkt->ptr;
+
+	pkt_ptr+=5;
+	// some sanity check
+	void *a = NULL;
+	a = memchr((void *)pkt_ptr, 0, o_pkt_size-5);
+	if (a==NULL) return false; // we failed to parse
+	char *tablename = strdup(pkt_ptr);
+	unsigned int wild_len = o_pkt_size - 5 - strlen(tablename) - 1;
+	char *wild = NULL;
+	if (wild_len > 0) {
+		pkt_ptr+=strlen(tablename);
+		pkt_ptr++;
+		wild=strndup(pkt_ptr,wild_len);
+	}
+	char *q = NULL;
+	if ((*myds)->com_field_wild) {
+		free((*myds)->com_field_wild);
+		(*myds)->com_field_wild=NULL;
+	}
+	if (wild) {
+		(*myds)->com_field_wild=strdup(wild);
+	}
+
+	char *qt = (char *)"SELECT * FROM %s WHERE 1=0";
+	q = (char *)malloc(strlen(qt)+strlen(tablename));
+	sprintf(q,qt,tablename);
+	l_free(pkt->size, pkt->ptr);
+	pkt->size = strlen(q)+5;
+	mysql_hdr Hdr;
+	Hdr.pkt_id=1;
+	Hdr.pkt_length = pkt->size - 4;
+	pkt->ptr=malloc(pkt->size);
+	memcpy(pkt->ptr,&Hdr,sizeof(mysql_hdr));
+    memset((char *)pkt->ptr+4,3,1); // COM_QUERY
+    memcpy((char *)pkt->ptr+5,q,pkt->size-5);
+
+	if (wild) free(wild);
+	free(tablename);
+	free(q);
+	return true;
+}
+
+
 MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	transfer_started=false;
 	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
 	buffer=NULL;
+	MySQL_Data_Stream * c_myds = *(myprot->myds);
 	//if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
 	// removing the previous assumption. We allocate this buffer also for prepared statements
 		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
@@ -1793,17 +1841,25 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 	if (myprot==NULL) {
 		return; // this is a mirror
 	}
-	myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields,this);
-	sid++;
-	//PSarrayOUT->add(pkt.ptr,pkt.size);
-	resultset_size+=pkt.size;
+	if (c_myds->com_field_list==false) {
+		myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields,this);
+		sid++;
+		resultset_size+=pkt.size;
+	}
 	// columns description
 	for (unsigned int i=0; i<num_fields; i++) {
 		MYSQL_FIELD *field=mysql_fetch_field(result);
-		myprot->generate_pkt_field(false,&pkt.ptr,&pkt.size,sid,field->db,field->table,field->org_table,field->name,field->org_name,field->charsetnr,field->length,field->type,field->flags,field->decimals,false,0,NULL,this);
-		//PSarrayOUT->add(pkt.ptr,pkt.size);
-		resultset_size+=pkt.size;
-		sid++;
+		if (c_myds->com_field_list==false) {
+			myprot->generate_pkt_field(false,&pkt.ptr,&pkt.size,sid,field->db,field->table,field->org_table,field->name,field->org_name,field->charsetnr,field->length,field->type,field->flags,field->decimals,false,0,NULL,this);
+			resultset_size+=pkt.size;
+			sid++;
+		} else {
+			if (c_myds->com_field_wild==NULL || mywildcmp(c_myds->com_field_wild,field->name)) {
+				myprot->generate_pkt_field(false,&pkt.ptr,&pkt.size,sid,field->db,field->table,field->org_table,field->name,field->org_name,field->charsetnr,field->length,field->type,field->flags,field->decimals,true,4,(char *)"null",this);
+				resultset_size+=pkt.size;
+				sid++;
+			}
+		}
 	}
 	// first EOF
 	unsigned int nTrx=myds->sess->NumActiveTransactions();
@@ -1820,9 +1876,11 @@ MySQL_ResultSet::MySQL_ResultSet(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
+	if (myds->com_field_list==false) {
 		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
 		sid++;
 		resultset_size += 9;
+	}
 	//}
 	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
 		buffer_to_PSarrayOut();
@@ -1991,6 +2049,15 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 	}
 	resultset_completed=true;
 }
+
+/*
+bool MySQL_ResultSet::get_COM_FIELD_LIST_response(PtrSizeArray *PSarrayFinal) {
+	transfer_started=true;
+	if (myprot) {
+	}
+	return resultset_completed;
+}
+*/
 
 bool MySQL_ResultSet::get_resultset(PtrSizeArray *PSarrayFinal) {
 	transfer_started=true;

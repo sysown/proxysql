@@ -2125,6 +2125,20 @@ __get_pkts_from_client:
 								c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 							}
 						}
+						client_myds->com_field_list=false; // default
+						if (c == _MYSQL_COM_FIELD_LIST) {
+							if (session_type == PROXYSQL_SESSION_MYSQL) {
+								MySQL_Protocol *myprot=&client_myds->myprot;
+								bool rcp = myprot->generate_COM_QUERY_from_COM_FIELD_LIST(&pkt);
+								if (rcp) {
+									// all went well
+									c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+									client_myds->com_field_list=true;
+								} else {
+									// parsing failed, proxysql will return not suppported command
+								}
+							}
+						}
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
 								__sync_add_and_fetch(&thread->status_variables.queries,1);
@@ -4296,10 +4310,18 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 	if (MyRS) {
 		assert(MyRS->result);
 		bool transfer_started=MyRS->transfer_started;
-		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
+		bool resultset_completed;
+		bool com_field_list=client_myds->com_field_list;
+		if (com_field_list==false) {
+			resultset_completed = MyRS->get_resultset(client_myds->PSarrayOUT);
+		} else {
+			// we seem to be able to use the same function also for com_field_list
+			resultset_completed = MyRS->get_resultset(client_myds->PSarrayOUT);
+			//resultset_completed = MyRS->generate_COM_FIELD_LIST_response(client_myds->PSarrayOUT);
+		}
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
-			if (qpo && qpo->cache_ttl>0) { // the resultset should be cached
+			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
 				if (mysql_errno(mysql)==0) { // no errors
 					client_myds->resultset->copy_add(client_myds->PSarrayOUT,0,client_myds->PSarrayOUT->len);
 					client_myds->resultset_length=MyRS->resultset_size;
