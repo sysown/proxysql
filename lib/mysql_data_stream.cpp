@@ -71,6 +71,10 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 #define queue_destroy(_q) { \
 	if (_q.buffer) free(_q.buffer); \
 	_q.buffer=NULL; \
+	if (_q.pkt.ptr) { \
+		l_free(_q.pkt.size,_q.pkt.ptr); \
+		queueOUT.pkt.ptr=NULL; \
+	} \
 }
 
 #define queue_zero(_q) { \
