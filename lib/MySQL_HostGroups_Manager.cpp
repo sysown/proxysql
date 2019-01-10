@@ -748,10 +748,16 @@ void MySrvC::connect_error(int err_num) {
 			break;
 	}
 	time_t t=time(NULL);
-	if (t!=time_last_detected_error) {
+	if (t > time_last_detected_error) {
 		time_last_detected_error=t;
 		connect_ERR_at_time_last_detected_error=1;
 	} else {
+		if (t < time_last_detected_error) {
+			// time_last_detected_error is in the future
+			// this means that monitor has a ping interval too big and tuned that in the future
+			return;
+		}
+		// same time
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
 			bool _shu=false;
@@ -2076,7 +2082,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 						if (max_wait_sec < 1) { // min wait time should be at least 1 second
 							max_wait_sec = 1;
 						}
-						if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
+						if (t > mysrvc->time_last_detected_error && (t - mysrvc->time_last_detected_error) > max_wait_sec) {
 							if (
 								(mysrvc->shunned_and_kill_all_connections==false) // it is safe to bring it back online
 								||
@@ -2988,6 +2994,18 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 						default:
 							break;
 					}
+					// if Monitor is enabled and mysql-monitor_ping_interval is
+					// set too high, ProxySQL will unshun hosts that are not
+					// available. For this reason time_last_detected_error will
+					// be tuned in the future
+					if (mysql_thread___monitor_enabled) {
+						int a = mysql_thread___shun_recovery_time_sec;
+						int b = mysql_thread___monitor_ping_interval;
+						b = b/1000;
+						if (b > a) {
+							t = t + (b - a);
+						}
+					}
 					mysrvc->time_last_detected_error = t;
 				}
 			}
@@ -3697,8 +3715,8 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 		} else { // the server is already offline, but we check if needs to be taken back online
 			SQLite3_result *numw_result = NULL;
 			q=(char *)"SELECT 1 FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
-			query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
-			sprintf(query,q,_hostname,_port);
+			query=(char *)malloc(strlen(q) + (sizeof(_writer_hostgroup) * 8 + 1));
+			sprintf(query,q,_writer_hostgroup);
 			mydb->execute_statement(query, &error , &cols , &affected_rows , &numw_result);
 			free(query);
 			if (numw_result) {

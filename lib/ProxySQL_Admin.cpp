@@ -2010,7 +2010,7 @@ void ProxySQL_Admin::flush_configdb() { // see #923
 	__attach_db(admindb, configdb, (char *)"disk");
 	// Fully synchronous is not required. See to #1055
 	// https://sqlite.org/pragma.html#pragma_synchronous
-	configdb->execute("PRAGMA disk.synchronous=0");
+	configdb->execute("PRAGMA synchronous=0");
 	wrunlock();
 }
 

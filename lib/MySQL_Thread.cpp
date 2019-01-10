@@ -285,6 +285,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_regex",
 	(char *)"reset_connection_algorithm",
+	(char *)"auto_increment_delay_multiplex",
 	(char *)"long_query_time",
 	(char *)"query_cache_size_MB",
 	(char *)"ping_interval_server_msec",
@@ -357,7 +358,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_history=600000;
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=600;
-	variables.monitor_ping_interval=60000;
+	variables.monitor_ping_interval=8000;
 	variables.monitor_ping_max_failures=3;
 	variables.monitor_ping_timeout=1000;
 	variables.monitor_read_only_interval=1000;
@@ -403,6 +404,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
 	variables.reset_connection_algorithm=2;
+	variables.auto_increment_delay_multiplex=5;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
@@ -728,6 +730,19 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
 	if (!strcasecmp(name,"wait_timeout")) return (int)variables.wait_timeout;
 	if (!strcasecmp(name,"reset_connection_algorithm")) return (int)variables.reset_connection_algorithm;
+	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) return (int)variables.throttle_max_bytes_per_second_to_client;
+	if (!strcasecmp(name,"throttle_ratio_server_to_client")) return (int)variables.throttle_ratio_server_to_client;
+	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
+	if (!strcasecmp(name,"max_stmts_per_connection")) return (int)variables.max_stmts_per_connection;
+	if (!strcasecmp(name,"max_stmts_cache")) return (int)variables.max_stmts_cache;
+	if (!strcasecmp(name,"mirror_max_concurrency")) return (int)variables.mirror_max_concurrency;
+	if (!strcasecmp(name,"mirror_max_queue_length")) return (int)variables.mirror_max_queue_length;
+	if (!strcasecmp(name,"default_query_delay")) return (int)variables.default_query_delay;
+	if (!strcasecmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
+	if (!strcasecmp(name,"query_processor_iterations")) return (int)variables.query_processor_iterations;
+	if (!strcasecmp(name,"query_processor_regex")) return (int)variables.query_processor_regex;
+	if (!strcasecmp(name,"auto_increment_delay_multiplex")) return (int)variables.auto_increment_delay_multiplex;
+	if (!strcasecmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	if (!strcasecmp(name,"long_query_time")) return (int)variables.long_query_time;
 	if (!strcasecmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
 	if (!strcasecmp(name,"have_compress")) return (int)variables.have_compress;
@@ -1082,6 +1097,10 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 	}
 	if (!strcasecmp(name,"reset_connection_algorithm")) {
 		sprintf(intbuf,"%d",variables.reset_connection_algorithm);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"auto_increment_delay_multiplex")) {
+		sprintf(intbuf,"%d",variables.auto_increment_delay_multiplex);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"default_max_latency_ms")) {
@@ -1681,6 +1700,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1 && intv <= 2) {
 			variables.reset_connection_algorithm=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"auto_increment_delay_multiplex")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000000) {
+			variables.auto_increment_delay_multiplex=intv;
 			return true;
 		} else {
 			return false;
@@ -3556,6 +3584,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_processor_iterations=GloMTH->get_variable_int((char *)"query_processor_iterations");
 	mysql_thread___query_processor_regex=GloMTH->get_variable_int((char *)"query_processor_regex");
 	mysql_thread___reset_connection_algorithm=GloMTH->get_variable_int((char *)"reset_connection_algorithm");
+	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
 	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");

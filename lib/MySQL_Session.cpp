@@ -2429,7 +2429,7 @@ __get_pkts_from_client:
 								if (session_type != PROXYSQL_SESSION_MYSQL) { // only MySQL module supports prepared statement!!
 									l_free(pkt.size,pkt.ptr);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
-									client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+									client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported");
 									client_myds->DSS=STATE_SLEEP;
 									status=WAITING_CLIENT_DATA;
 									break;
@@ -2490,7 +2490,7 @@ __get_pkts_from_client:
 								if (session_type != PROXYSQL_SESSION_MYSQL) { // only MySQL module supports prepared statement!!
 									l_free(pkt.size,pkt.ptr);
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
-									client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+									client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported");
 									client_myds->DSS=STATE_SLEEP;
 									status=WAITING_CLIENT_DATA;
 									break;
@@ -2516,7 +2516,7 @@ __get_pkts_from_client:
 										// we couldn't find it
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
-										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Prepared statement doesn't exist", true);
+										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Prepared statement doesn't exist", true);
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
 										break;
@@ -2534,7 +2534,7 @@ __get_pkts_from_client:
 									if (stmt_meta==NULL) {
 										l_free(pkt.size,pkt.ptr);
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
-										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Error in prepared statement execution", true);
+										client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Error in prepared statement execution", true);
 										client_myds->DSS=STATE_SLEEP;
 										status=WAITING_CLIENT_DATA;
 										//__sync_fetch_and_sub(&stmt_info->ref_count,1); // decrease reference count
@@ -2893,6 +2893,9 @@ handler_again:
 						if (myconn->mysql->affected_rows) {
 							if (myconn->mysql->affected_rows != ULLONG_MAX) {
 								last_HG_affected_rows = current_hostgroup;
+								if (mysql_thread___auto_increment_delay_multiplex) {
+									myconn->auto_increment_delay_token = mysql_thread___auto_increment_delay_multiplex + 1;
+								}
 							}
 						}
 					}
@@ -2970,6 +2973,7 @@ handler_again:
 					}
 
 					RequestEnd(myds);
+					myds->myconn->reduce_auto_increment_delay_token();
 					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
 							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
@@ -3239,6 +3243,7 @@ handler_again:
 							}
 							RequestEnd(myds);
 							if (myds->myconn) {
+								myds->myconn->reduce_auto_increment_delay_token();
 								if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 									myds->DSS=STATE_NOT_INITIALIZED;
 									if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
@@ -3856,12 +3861,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		/* FIXME: temporary */
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported", true);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported", true);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported", true);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported", true);
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -3876,7 +3881,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	} else {
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported");
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -3890,7 +3895,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	} else {
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"#28000",(char *)"Command not supported");
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported");
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -3898,7 +3903,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9003,(char *)"#28000",(char *)"Command not supported");
+	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9003,(char *)"28000",(char *)"Command not supported");
 	client_myds->DSS=STATE_SLEEP;
 }
 
@@ -3932,13 +3937,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
 		char *schemaname=strndup((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
-		char *schemanameptr=schemaname;
+		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
+/*
 		//remove leading spaces
 		while(isspace((unsigned char)*schemanameptr)) schemanameptr++;
 		// remove trailing semicolon , issue #915
 		if (schemanameptr[strlen(schemanameptr)-1]==';') {
 			schemanameptr[strlen(schemanameptr)-1]='\0';
 		}
+*/
 		// handle cases like "USE `schemaname`
 		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
 			schemanameptr[strlen(schemanameptr)-1]='\0';
@@ -4677,7 +4684,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 	} else { // no result set
 		if (error) {
 			// there was an error
-			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"#28000",error);
+			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"28000",error);
 		} else {
 			// no error, DML succeeded
 			unsigned int nTrx=NumActiveTransactions();
