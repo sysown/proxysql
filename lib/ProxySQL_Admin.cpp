@@ -379,6 +379,7 @@ static char * admin_variables_names[]= {
 	(char *)"refresh_interval",
 	(char *)"read_only",
 	(char *)"hash_passwords",
+	(char *)"vacuum_stats",
 	(char *)"version",
 	(char *)"cluster_username",
 	(char *)"cluster_password",
@@ -2014,7 +2015,8 @@ void ProxySQL_Admin::flush_configdb() { // see #923
 	wrunlock();
 }
 
-void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin) {
+bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin) {
+	bool ret=false;
 	bool refresh=false;
 	bool stats_mysql_processlist=false;
 	bool stats_mysql_connection_pool=false;
@@ -2261,6 +2263,17 @@ void ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		pthread_mutex_unlock(&admin_mutex);
 	}
+	if (
+		stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_connection_pool_reset ||
+		stats_mysql_query_digest || stats_mysql_query_digest_reset || stats_mysql_errors ||
+		stats_mysql_errors_reset || stats_mysql_global || stats_memory_metrics || 
+		stats_mysql_commands_counters || stats_mysql_query_rules || stats_mysql_users ||
+		stats_mysql_gtid_executed
+	) {
+		ret = true;
+	}
+	
+	return ret;
 }
 
 
@@ -2426,6 +2439,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
+	bool needs_vacuum = false;
 	char *error=NULL;
 	int cols;
 	int affected_rows = 0;
@@ -2485,7 +2499,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	}
 	{
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->GenericRefreshStatistics(query_no_space,query_no_space_length, ( sess->session_type == PROXYSQL_SESSION_ADMIN ? true : false )  );
+		needs_vacuum = SPA->GenericRefreshStatistics(query_no_space,query_no_space_length, ( sess->session_type == PROXYSQL_SESSION_ADMIN ? true : false )  );
 	}
 
 
@@ -3231,10 +3245,16 @@ __run_query:
 			} else {
 				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			}
+			if (needs_vacuum) {
+				SPA->vacuum_stats(true);
+			}
 		} else {
 			SPA->statsdb->execute("PRAGMA query_only = ON");
 			SPA->statsdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			SPA->statsdb->execute("PRAGMA query_only = OFF");
+			if (needs_vacuum) {
+				SPA->vacuum_stats(false);
+			}
 		}
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
@@ -3242,6 +3262,41 @@ __run_query:
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
 	pthread_mutex_unlock(&pa->sql_query_global_mutex);
+}
+
+void ProxySQL_Admin::vacuum_stats(bool is_admin) {
+	if (variables.vacuum_stats==false) {
+		return;
+	}
+	if (is_admin) {
+		admindb->execute("DELETE FROM stats.stats_mysql_commands_counters");
+		admindb->execute("DELETE FROM stats.stats_mysql_connection_pool");
+		admindb->execute("DELETE FROM stats.stats_mysql_connection_pool_reset");
+		admindb->execute("DELETE FROM stats.stats_mysql_prepared_statements_info");
+		admindb->execute("DELETE FROM stats.stats_mysql_processlist");
+		admindb->execute("DELETE FROM stats.stats_mysql_query_digest");
+		admindb->execute("DELETE FROM stats.stats_mysql_query_digest_reset");
+		admindb->execute("DELETE FROM stats.stats_mysql_query_rules");
+		admindb->execute("DELETE FROM stats.stats_mysql_users");
+		admindb->execute("DELETE FROM stats.stats_proxysql_servers_checksums");
+		admindb->execute("DELETE FROM stats.stats_proxysql_servers_metrics");
+		admindb->execute("DELETE FROM stats.stats_proxysql_servers_status");
+		admindb->execute("VACUUM stats");
+	} else {
+		statsdb->execute("DELETE stats_mysql_commands_counters");
+		statsdb->execute("DELETE stats_mysql_connection_pool");
+		statsdb->execute("DELETE stats_mysql_connection_pool_reset");
+		statsdb->execute("DELETE stats_mysql_prepared_statements_info");
+		statsdb->execute("DELETE stats_mysql_processlist");
+		statsdb->execute("DELETE stats_mysql_query_digest");
+		statsdb->execute("DELETE stats_mysql_query_digest_reset");
+		statsdb->execute("DELETE stats_mysql_query_rules");
+		statsdb->execute("DELETE stats_mysql_users");
+		statsdb->execute("DELETE stats_proxysql_servers_checksums");
+		statsdb->execute("DELETE stats_proxysql_servers_metrics");
+		statsdb->execute("DELETE stats_proxysql_servers_status");
+		statsdb->execute("VACUUM");
+	}
 }
 
 
@@ -3576,6 +3631,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;
 	variables.hash_passwords=true;	// issue #676
+	variables.vacuum_stats=true;	// issue #1011
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 	variables.admin_version=(char *)PROXYSQL_VERSION;
 	variables.cluster_username=strdup((char *)"");
@@ -4761,6 +4817,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"hash_passwords")) {
 		return strdup((variables.hash_passwords ? "true" : "false"));
 	}
+	if (!strcasecmp(name,"vacuum_stats")) {
+		return strdup((variables.vacuum_stats ? "true" : "false"));
+	}
 	if (!strcasecmp(name,"checksum_mysql_query_rules")) {
 		return strdup((checksum_variables.checksum_mysql_query_rules ? "true" : "false"));
 	}
@@ -5207,6 +5266,17 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.hash_passwords=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"vacuum_stats")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.vacuum_stats=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.vacuum_stats=false;
 			return true;
 		}
 		return false;
