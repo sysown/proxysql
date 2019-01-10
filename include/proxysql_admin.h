@@ -83,6 +83,7 @@ class ProxySQL_Admin {
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
 		bool hash_passwords;
+		bool vacuum_stats;
 		char * admin_version;
 		char * cluster_username;
 		char * cluster_password;
@@ -255,7 +256,7 @@ class ProxySQL_Admin {
 	int Read_ProxySQL_Servers_from_configfile();
 
 	void flush_error_log();
-	void GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
+	bool GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
 	SQLite3_result * generate_show_table_status(const char *, char **err);
 	SQLite3_result * generate_show_fields_from(const char *tablename, char **err);
 
@@ -294,5 +295,6 @@ class ProxySQL_Admin {
 	void save_clickhouse_users_runtime_to_database(bool _runtime);
 #endif /* PROXYSQLCLICKHOUSE */
 
+	void vacuum_stats(bool);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
