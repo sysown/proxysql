@@ -3158,7 +3158,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		admindb->execute("DELETE FROM stats.stats_proxysql_servers_checksums");
 		admindb->execute("DELETE FROM stats.stats_proxysql_servers_metrics");
 		admindb->execute("DELETE FROM stats.stats_proxysql_servers_status");
-		statsdb->execute("VACUUM stats");
+		admindb->execute("VACUUM stats");
 	} else {
 		statsdb->execute("DELETE stats_mysql_commands_counters");
 		statsdb->execute("DELETE stats_mysql_connection_pool");
