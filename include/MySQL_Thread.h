@@ -383,6 +383,7 @@ class MySQL_Threads_Handler
 		bool query_digests;
 		bool query_digests_lowercase;
 		bool query_digests_normalize_digest_text;
+		bool query_digests_track_hostname;
 		bool default_reconnect;
 		bool have_compress;
 		bool have_ssl;
