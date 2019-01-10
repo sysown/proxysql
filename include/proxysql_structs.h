@@ -119,6 +119,7 @@ enum MySQL_DS_type {
 enum session_status {
 	CONNECTING_CLIENT,
 	CONNECTING_SERVER,
+	LDAP_AUTH_CLIENT,
 	PINGING_SERVER,
 	WAITING_CLIENT_DATA,
 	WAITING_SERVER_DATA,
@@ -475,7 +476,7 @@ struct _global_variables_t {
 
 	unsigned char protocol_version;
 	char *mysql_server_version;
-	uint16_t server_capabilities;
+	uint32_t server_capabilities;
 	uint8_t server_language;
 	uint16_t server_status;
 
@@ -624,8 +625,8 @@ __thread int mysql_thread___connect_timeout_server_max;
 __thread int mysql_thread___query_processor_iterations;
 __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___reset_connection_algorithm;
+__thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
-__thread uint16_t mysql_thread___server_capabilities;
 __thread uint8_t mysql_thread___default_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
@@ -693,6 +694,8 @@ __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 
+__thread char * mysql_thread___add_ldap_user_comment;
+
 #ifdef DEBUG
 __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
@@ -741,8 +744,8 @@ extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread int mysql_thread___query_processor_iterations;
 extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___reset_connection_algorithm;
+extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
-extern __thread uint16_t mysql_thread___server_capabilities;
 extern __thread uint8_t mysql_thread___default_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
@@ -809,6 +812,8 @@ extern __thread int mysql_thread___monitor_threads_queue_maxsize;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
+
+extern __thread char * mysql_thread___add_ldap_user_comment;
 
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;

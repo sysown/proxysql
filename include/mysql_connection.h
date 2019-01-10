@@ -24,6 +24,7 @@ class MySQL_Connection_userinfo {
 	char *password;
 	char *schemaname;
 	char *sha1_pass;
+	char *fe_username;
 	MySQL_Connection_userinfo();
 	~MySQL_Connection_userinfo();
 	void set(char *, char *, char *, char *);

@@ -10,6 +10,7 @@
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Protocol.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
 #ifdef PROXYSQLCLICKHOUSE
 #include "ClickHouse_Authentication.hpp"
 #endif /* PROXYSQLCLICKHOUSE */

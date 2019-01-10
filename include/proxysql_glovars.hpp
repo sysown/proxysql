@@ -56,6 +56,7 @@ class ProxySQL_GlobalVariables {
 	char *pid;
 	int restart_on_missing_heartbeats;
 	char * execute_on_exit_failure;
+	char * ldap_auth_plugin;
 	struct  {
 		unsigned long long start_time;
 		bool gdbg;

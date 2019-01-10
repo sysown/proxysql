@@ -419,12 +419,13 @@ class MySQL_Threads_Handler
 		int hostgroup_manager_verbose;
 		int binlog_reader_connect_retry_msec;
 		char *init_connect;
+		char *add_ldap_user_comment;
 		char *default_sql_mode;
 		char *default_time_zone;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
-		uint16_t server_capabilities;
+		uint32_t server_capabilities;
 		int poll_timeout;
 		int poll_timeout_on_failure;
 		int connpoll_reset_queue_length;
@@ -464,7 +465,7 @@ class MySQL_Threads_Handler
 	char *get_variable_string(char *name);
 	uint8_t get_variable_uint8(char *name);
 	uint16_t get_variable_uint16(char *name);
-	int get_variable_int(char *name);
+	int get_variable_int(const char *name);
 	void print_version();
 	void init(unsigned int num=0, size_t stack=0);
 	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *), bool);

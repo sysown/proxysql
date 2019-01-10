@@ -65,6 +65,7 @@ class MySQL_Authentication {
 	bool del(char *username, enum cred_username_type usertype, bool set_lock=true);
 	bool reset();
 	void print_version();
+	bool exists(char *username);
 	char * lookup(char *username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass);
 	int dump_all_users(account_details_t ***, bool _complete=true);
 	int increase_frontend_user_connections(char *username, int *mc=NULL);

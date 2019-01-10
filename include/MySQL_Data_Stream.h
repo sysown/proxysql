@@ -128,6 +128,10 @@ class MySQL_Data_Stream
 	int active; // data stream is active. If not, shutdown+close needs to be called
 	int status; // status . FIXME: make it a ORable variable
 
+	int switching_auth_stage;
+	int switching_auth_type;
+	uint8_t tmp_charset;
+
 	short revents;
 
 	char kill_type;

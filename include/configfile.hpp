@@ -8,7 +8,7 @@ using namespace libconfig;
 
 class ProxySQL_ConfigFile {
   private:
-  struct stat statbuf;
+  //struct stat statbuf;
   char *filename;
   public:
   Config *cfg;

@@ -353,6 +353,25 @@ bool ClickHouse_Authentication::set_SHA1(char * username, enum cred_username_typ
 	return ret;
 };
 
+bool ClickHouse_Authentication::exists(char * username) {
+	bool ret = false;
+	uint64_t hash1, hash2;
+	SpookyHash myhash;
+	myhash.Init(1,2);
+	myhash.Update(username,strlen(username));
+	myhash.Final(&hash1,&hash2);
+
+	ch_creds_group_t &cg = creds_frontends ;
+	pthread_rwlock_rdlock(&cg.lock);
+	std::map<uint64_t, ch_account_details_t *>::iterator lookup;
+	lookup = cg.bt_map.find(hash1);
+	if (lookup != cg.bt_map.end()) {
+		ret = true;
+	}
+	pthread_rwlock_unlock(&cg.lock);
+	return ret;
+}
+
 char * ClickHouse_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass) {
 	char *ret=NULL;
 	uint64_t hash1, hash2;
