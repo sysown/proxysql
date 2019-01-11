@@ -8,6 +8,9 @@ Its development is driven by the lack of open source proxies that provide high p
 
 <a><img src="https://proxysql.com/assets/images/sm-share-default.png" alt="ProxySQL"></a>
 
+Useful links
+===============
+
 - [Official website](http://www.proxysql.com/)
 - [Documentation](https://github.com/sysown/proxysql/wiki)
 - [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)
