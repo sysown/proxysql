@@ -1,5 +1,3 @@
-<a><img src="https://proxysql.com/assets/images/sm-share-default.png" alt="ProxySQL"></a>
-
 Introduction
 ============
 
@@ -8,11 +6,14 @@ All the while getting the unlimited freedom that comes with a GPL license.
 
 Its development is driven by the lack of open source proxies that provide high performance.  
 
+<a><img src="https://proxysql.com/assets/images/sm-share-default.png" alt="ProxySQL"></a>
+
 - [Official website](http://www.proxysql.com/)
 - [Documentation](https://github.com/sysown/proxysql/wiki)
 - [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)
 - [Forum](https://groups.google.com/forum/#!forum/proxysql/)
 - [Linkedin group](https://www.linkedin.com/groups/13581070/)
+
 
 Getting started
 ===============
