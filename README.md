@@ -1,3 +1,5 @@
+<a><img src="https://proxysql.com/assets/images/sm-share-default.png" alt="ProxySQL"></a>
+
 Introduction
 ============
 
