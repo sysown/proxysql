@@ -2066,6 +2066,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 
 MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
+	reset_pid = true;
 }
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	transfer_started=false;
@@ -2080,13 +2081,18 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	}
 	buffer_used=0;
 	myds=NULL;
+	if (myprot) { // if myprot = NULL , this is a mirror
+		myds=myprot->get_myds();
+	}
+	if (reset_pid==true) {
 	sid=0;
 	//PSarrayOUT = NULL;
 	if (myprot) { // if myprot = NULL , this is a mirror
-		myds=myprot->get_myds();
 		sid=myds->pkt_sid+1;
 		//PSarrayOUT = new PtrSizeArray(8);
 	}
+	}
+	reset_pid=true;
 	result=_res;
 	resultset_size=0;
 	num_rows=0;
@@ -2186,7 +2192,7 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 		free(buffer);
 		buffer=NULL;
 	}
-	if (myds) myds->pkt_sid=sid-1;
+	//if (myds) myds->pkt_sid=sid-1;
 }
 
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
