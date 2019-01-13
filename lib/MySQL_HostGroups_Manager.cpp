@@ -2596,7 +2596,7 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 			for (k=0; k<(int)mscl->conns_length(); k++) {
 				MySQL_Connection *mc=mscl->index(k);
 				// If the connection is idle ...
-				if (mc->last_time_used < _max_last_time_used) {
+				if (mc->last_time_used && mc->last_time_used < _max_last_time_used) {
 					//mc=(MySQL_Connection *)pa->remove_index_fast(k);
 					mc=mscl->remove(k);
 					mysrvc->ConnectionsUsed->add(mc);
