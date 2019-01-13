@@ -304,6 +304,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests",
 	(char *)"query_digests_lowercase",
 	(char *)"query_digests_normalize_digest_text",
+	(char *)"query_digests_track_hostname",
 	(char *)"servers_stats",
 	(char *)"default_reconnect",
 #ifdef DEBUG
@@ -438,6 +439,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
 	variables.query_digests_normalize_digest_text=false;
+	variables.query_digests_track_hostname=false;
 	variables.connpoll_reset_queue_length = 50;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
@@ -708,6 +710,7 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 		if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 		if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
 		if (!strcasecmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
+		if (!strcasecmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	}
 	if (!strncasecmp(name,"p",1)) {
 		if (!strcasecmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
@@ -761,6 +764,7 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcasecmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcasecmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
 	if (!strcasecmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
+	if (!strcasecmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	if (!strcasecmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
 	if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 	if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
@@ -1186,6 +1190,9 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 	}
 	if (!strcasecmp(name,"query_digests_normalize_digest_text")) {
 		return strdup((variables.query_digests_normalize_digest_text ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"query_digests_track_hostname")) {
+		return strdup((variables.query_digests_track_hostname ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"stats_time_backend_query")) {
 		return strdup((variables.stats_time_backend_query ? "true" : "false"));
@@ -2239,6 +2246,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_digests_normalize_digest_text=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"query_digests_track_hostname")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.query_digests_track_hostname=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.query_digests_track_hostname=false;
 			return true;
 		}
 		return false;
@@ -3517,9 +3535,12 @@ void MySQL_Thread::process_all_sessions() {
 			if (idle_maintenance_thread==false)
 #endif // IDLE_THREADS
 			{
+				sess->active_transactions=sess->NumActiveTransactions();
+				total_active_transactions_ += sess->active_transactions;
 				sess->to_process=1;
 				if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
-					numTrx = sess->NumActiveTransactions();
+					//numTrx = sess->NumActiveTransactions();
+					numTrx = sess->active_transactions;
 					if (numTrx) {
 						// the session has idle transactions, kill it
 						if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
@@ -3544,6 +3565,8 @@ void MySQL_Thread::process_all_sessions() {
 				}
 			}
 #endif // IDLE_THREADS
+		} else {
+			sess->active_transactions = -1;
 		}
 		if (sess->healthy==0) {
 			unregister_session(n);
@@ -3553,7 +3576,7 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
-					total_active_transactions_+=sess->active_transactions;
+					//total_active_transactions_+=sess->active_transactions;
 					if (rc==-1 || sess->killed==true) {
 						unregister_session(n);
 						n--;
@@ -3571,9 +3594,11 @@ void MySQL_Thread::process_all_sessions() {
 			}
 		}
 	}
-	unsigned int total_active_transactions_tmp;
-	total_active_transactions_tmp=__sync_add_and_fetch(&status_variables.active_transactions,0);
-	__sync_bool_compare_and_swap(&status_variables.active_transactions,total_active_transactions_tmp,total_active_transactions_);
+	if (maintenance_loop) {
+		unsigned int total_active_transactions_tmp;
+		total_active_transactions_tmp=__sync_add_and_fetch(&status_variables.active_transactions,0);
+		__sync_bool_compare_and_swap(&status_variables.active_transactions,total_active_transactions_tmp,total_active_transactions_);
+	}
 }
 
 void MySQL_Thread::refresh_variables() {
@@ -3698,6 +3723,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
+	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
 	variables.query_cache_stores_empty_result=(bool)GloMTH->get_variable_int((char *)"query_cache_stores_empty_result");
@@ -4158,6 +4184,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// MySQL Threads workers
 		pta[0]=(char *)"MySQL_Thread_Workers";
 		sprintf(buf,"%d",num_threads);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Access_Denied_Wrong_Password
+		pta[0]=(char *)"Access_Denied_Wrong_Password";
+		sprintf(buf,"%llu",MyHGM->status.access_denied_wrong_password);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Access_Denied_Max_Connections
+		pta[0]=(char *)"Access_Denied_Max_Connections";
+		sprintf(buf,"%llu",MyHGM->status.access_denied_max_connections);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Access_Denied_Max_User_Connections
+		pta[0]=(char *)"Access_Denied_Max_User_Connections";
+		sprintf(buf,"%llu",MyHGM->status.access_denied_max_user_connections);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

@@ -506,6 +506,9 @@ class MySQL_HostGroups_Manager {
 		unsigned long long frontend_init_db;
 		unsigned long long frontend_set_names;
 		unsigned long long frontend_use_db;
+		unsigned long long access_denied_wrong_password;
+		unsigned long long access_denied_max_connections;
+		unsigned long long access_denied_max_user_connections;
 	} status;
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();
@@ -564,8 +567,8 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
 
-	void add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *schemaname, int err_no, char *last_error);
-
+	void add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error);
+	SQLite3_result *get_mysql_errors(bool);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
