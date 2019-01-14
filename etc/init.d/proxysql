@@ -20,6 +20,7 @@ OLDDATADIR="/var/run/proxysql"
 DATADIR="/var/lib/proxysql"
 OPTS="-c /etc/proxysql.cnf -D $DATADIR"
 PIDFILE="$DATADIR/proxysql.pid"
+USER="proxysql"
 
 ulimit -n 102400
 ulimit -c 1073741824
@@ -79,9 +80,10 @@ start() {
 			if [ ! -f $DATADIR/proxysql.db ]
 			then
 				mv -iv $OLDDATADIR/proxysql.db $DATADIR/proxysql.db
+                                chown proxysql $DATADIR/proxysql.db
 			fi
 		fi
-	 	proxysql $OPTS
+	 	su - $USER -s /bin/bash -c "proxysql $OPTS"
 		if [ "$?" = "0" ]; then
 			echo "DONE!"
 			return 0

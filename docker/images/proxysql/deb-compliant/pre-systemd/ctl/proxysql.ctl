@@ -10,10 +10,10 @@ Architecture: amd64
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/
- etc/proxysql.cnf /etc/
- systemd/system/proxysql.service /lib/systemd/system/
- tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
- tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/
+ etc/proxysql.cnf /
+ etc/init.d/proxysql /
+ tools/proxysql_galera_checker.sh /usr/share/proxysql/
+ tools/proxysql_galera_writer.pl /usr/share/proxysql/
 Description: High performance MySQL proxy
  ProxySQL is a fast, reliable MySQL proxy with advanced runtime configuration management (virtually no configuration change requires a restart). 
  .
@@ -24,5 +24,5 @@ File: postinst
  if ! id -u proxysql > /dev/null 2>&1; then useradd -r -U -s /bin/false  -d /var/lib/proxysql -c "ProxySQL Server"  proxysql; fi
  chown -R proxysql: /var/lib/proxysql
  chown root:proxysql /etc/proxysql.cnf
+ update-rc.d proxysql defaults
  chmod 640 /etc/proxysql.cnf
- systemctl enable proxysql.service

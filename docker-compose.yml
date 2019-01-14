@@ -211,7 +211,7 @@ services:
   debian7_build:
     image: proxysql/packaging:build-debian7
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -224,7 +224,7 @@ services:
   debian7_dbg_build:
     image: proxysql/packaging:build-debian7
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -237,7 +237,7 @@ services:
   debian8_build:
     image: proxysql/packaging:build-debian8
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -250,7 +250,7 @@ services:
   debian8_dbg_build:
     image: proxysql/packaging:build-debian8
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -341,7 +341,7 @@ services:
   ubuntu12_build:
     image: proxysql/packaging:build-ubuntu12
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -354,7 +354,7 @@ services:
   ubuntu12_dbg_build:
     image: proxysql/packaging:build-ubuntu12
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -367,7 +367,7 @@ services:
   ubuntu14_build:
     image: proxysql/packaging:build-ubuntu14
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -380,7 +380,7 @@ services:
   ubuntu14_dbg_build:
     image: proxysql/packaging:build-ubuntu14
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -393,7 +393,7 @@ services:
   ubuntu16_build:
     image: proxysql/packaging:build-ubuntu16
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -406,7 +406,7 @@ services:
   ubuntu16_dbg_build:
     image: proxysql/packaging:build-ubuntu16
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/dbg-entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -419,7 +419,7 @@ services:
   ubuntu16_ch_build:
     image: proxysql/packaging:build-ubuntu16
     volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/ch-entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
