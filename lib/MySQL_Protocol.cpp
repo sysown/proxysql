@@ -215,6 +215,12 @@ unsigned int CPY3(unsigned char *ptr) {
 	return buf.i;
 }
 
+uint64_t CPY8(unsigned char *ptr) {
+	uint64_t buf;
+	memcpy(&buf,ptr,sizeof(uint64_t));
+	return buf;
+}
+
 // see http://dev.mysql.com/doc/internals/en/integer.html#packet-Protocol::LengthEncodedInteger
 /* arguments to pass:
  * pointer to the field
