@@ -2341,13 +2341,14 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			i=fastrand()%l;
 		}
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
-			// try to match schemaname
+			// try to match schemaname AND username
 			char *schema = sess->client_myds->myconn->userinfo->schemaname;
+			char *username = sess->client_myds->myconn->userinfo->username;
 			bool conn_found = false;
 			unsigned int k;
 			for (k = i; conn_found == false && k < l; k++) {
 				conn = (MySQL_Connection *)conns->index(k);
-				if (strcmp(conn->userinfo->schemaname,schema)==0) {
+				if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
 					conn_found = true;
 					i = k;
 				}
@@ -2355,7 +2356,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			if (conn_found == false ) {
 				for (k = 0; conn_found == false && k < i; k++) {
 					conn = (MySQL_Connection *)conns->index(k);
-					if (strcmp(conn->userinfo->schemaname,schema)==0) {
+					if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
 						conn_found = true;
 						i = k;
 					}
