@@ -1,0 +1,16 @@
+@@ -124,6 +124,7 @@
+   case MYSQL_TYPE_TIMESTAMP:
+   case MYSQL_TYPE_TINY:
+   case MYSQL_TYPE_TINY_BLOB:
++  case MYSQL_TYPE_VARCHAR:
+   case MYSQL_TYPE_VAR_STRING:
+   case MYSQL_TYPE_YEAR:
+     return 1;
+@@ -1143,6 +1144,7 @@
+         break;
+       case MYSQL_TYPE_STRING:
+       case MYSQL_TYPE_JSON:
++      case MYSQL_TYPE_VARCHAR:
+       case MYSQL_TYPE_VAR_STRING:
+       case MYSQL_TYPE_BLOB:
+       case MYSQL_TYPE_TINY_BLOB:
