@@ -50,6 +50,9 @@ binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
 
+proxysql-2.0.0/
+docker/images/proxysql/rhel-compliant/rpmmacros
+
 #core
 core
 

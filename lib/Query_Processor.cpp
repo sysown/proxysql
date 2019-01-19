@@ -245,6 +245,39 @@ typedef struct __RE2_objects_t re2_t;
 
 static bool rules_sort_comp_function (QP_rule_t * a, QP_rule_t * b) { return (a->rule_id < b->rule_id); }
 
+
+static unsigned long long mem_used_rule(QP_rule_t *qr) {
+	unsigned long long s = sizeof(QP_rule_t);
+	if (qr->username)
+		s+=strlen(qr->username);
+	if (qr->schemaname)
+		s+=strlen(qr->schemaname);
+	if (qr->client_addr)
+		s+=strlen(qr->client_addr);
+	if (qr->proxy_addr)
+		s+=strlen(qr->proxy_addr);
+	if (qr->match_digest)
+		s+=strlen(qr->match_digest)*10; // not sure how much is used for regex
+	if (qr->match_pattern)
+		s+=strlen(qr->match_pattern)*10; // not sure how much is used for regex
+	if (qr->replace_pattern)
+		s+=strlen(qr->replace_pattern)*10; // not sure how much is used for regex
+	if (qr->error_msg)
+		s+=strlen(qr->error_msg);
+	if (qr->OK_msg)
+		s+=strlen(qr->OK_msg);
+	if (qr->comment)
+		s+=strlen(qr->comment);
+	if (qr->match_digest || qr->match_pattern || qr->replace_pattern) {
+		s+= sizeof(__RE2_objects_t *)+sizeof(__RE2_objects_t);
+		s+= sizeof(pcrecpp::RE_Options *) + sizeof(pcrecpp::RE_Options);
+		s+= sizeof(pcrecpp::RE *) + sizeof(pcrecpp::RE);
+		s+= sizeof(re2::RE2::Options *) + sizeof(re2::RE2::Options);
+		s+= sizeof(RE2 *) + sizeof(RE2);
+	}
+	return s;
+}
+
 static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
@@ -346,6 +379,7 @@ Query_Processor::Query_Processor() {
 	spinlock_rwlock_init(&digest_rwlock);
 #endif
 	version=0;
+	rules_mem_used=0;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) commands_counters[i]=new Command_Counter(i);
 
 	commands_counters_desc[MYSQL_COM_QUERY_ALTER_TABLE]=(char *)"ALTER_TABLE";
@@ -475,6 +509,14 @@ void Query_Processor::wrunlock() {
 #endif
 };
 
+unsigned long long Query_Processor::get_rules_mem_used() {
+	unsigned long long s = 0;
+	wrlock();
+	s = rules_mem_used;
+	wrunlock();
+	return s;
+}
+
 QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
@@ -577,6 +619,7 @@ void Query_Processor::reset_all(bool lock) {
 #else
 		spin_wrunlock(&rwlock);
 #endif
+	rules_mem_used=0;
 };
 
 bool Query_Processor::insert(QP_rule_t *qr, bool lock) {
@@ -588,6 +631,7 @@ bool Query_Processor::insert(QP_rule_t *qr, bool lock) {
 		spin_wrlock(&rwlock);
 #endif
 	rules.push_back(qr);
+	rules_mem_used += mem_used_rule(qr);
 	if (lock)
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
@@ -1935,7 +1979,21 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 		s.append(r->fields[2]);
 		int destination_hostgroup = atoi(r->fields[3]);
 		rules_fast_routing[s] = destination_hostgroup;
+		rules_mem_used += s.length() + sizeof(int);
+	}
+	{
+		size_t count = 0;
+		for (unsigned i = 0; i < rules_fast_routing.bucket_count(); ++i) {
+			size_t bucket_size = rules_fast_routing.bucket_size(i);
+			if (bucket_size == 0) {
+				count++;
+			} else {
+				count += bucket_size;
+			}
+		}
+		rules_mem_used += count;
 	}
 	delete fast_routing_resultset;
 	fast_routing_resultset = resultset; // save it
+	rules_mem_used += fast_routing_resultset->get_size();
 };

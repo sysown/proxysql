@@ -5520,6 +5520,18 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			statsdb->execute(query);
 			free(query);
 		}
+		if (GloQPro) {
+			unsigned long long mu = GloQPro->get_rules_mem_used();
+			if (GloMTH) {
+				mu += mu * GloMTH->num_threads;
+			}
+			vn=(char *)"mysql_query_rules_memory";
+			sprintf(bu,"%llu",mu);
+			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+		}
 	}
 	{
 		unsigned long mu;

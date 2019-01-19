@@ -7,6 +7,7 @@
 class SQLite3_row {
 	public:
 	int cnt;
+	int ds;
 	int *sizes;
 	char **fields;
 	char *data;
@@ -16,6 +17,14 @@ class SQLite3_row {
 		memset(fields,0,sizeof(char *)*c);
 		cnt=c;
 		data=NULL;
+		ds=0;
+	};
+	unsigned long long get_size() {
+		unsigned long long s = sizeof(SQLite3_row);
+		s += cnt * sizeof(int);
+		s += cnt * sizeof(char *);
+		s += ds;
+		return s;
 	};
 	~SQLite3_row() {
 		free(fields);
@@ -57,6 +66,7 @@ class SQLite3_row {
 				data_ptr++; // leading 0
 			}
 		}
+		ds=data_size;
 	};
 	void add_fields(char **_fields) {
 		int i;
@@ -85,6 +95,7 @@ class SQLite3_row {
 				fields[i]=NULL;
 			}
 		}
+		ds=data_size;
 	};
 };
 
@@ -116,6 +127,20 @@ class SQLite3_result {
 	std::vector<SQLite3_row *> rows;
 	SQLite3_result() {
 		columns=0;
+	};
+	unsigned long long get_size() {
+		unsigned long long s = sizeof(SQLite3_result);
+		s += column_definition.size() * sizeof(SQLite3_column *);
+		s += rows.size() * sizeof(SQLite3_row *);
+		for (std::vector<SQLite3_column *>::iterator it = column_definition.begin() ; it != column_definition.end(); ++it) {
+			SQLite3_column *r=*it;
+			s+= sizeof(SQLite3_column) + strlen(r->name);
+		}
+		for (std::vector<SQLite3_row *>::iterator it = rows.begin() ; it != rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			s += r->get_size();
+		}
+		return s;
 	};
 	void add_column_definition(int a, const char *b) {
 		SQLite3_column *cf=new SQLite3_column(a,b);

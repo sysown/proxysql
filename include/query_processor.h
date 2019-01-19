@@ -200,6 +200,7 @@ class Query_Processor {
 	std::unordered_map<std::string,int> rules_fast_routing;
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 	volatile unsigned int version;
+	unsigned long long rules_mem_used;
 	public:
 	Query_Processor();
 	~Query_Processor();
@@ -239,6 +240,7 @@ class Query_Processor {
 	SQLite3_result * get_query_digests_reset();
 
 	unsigned long get_query_digests_total_size();
+	unsigned long long get_rules_mem_used();
 
 
 	// fast routing
