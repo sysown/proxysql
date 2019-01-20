@@ -3,16 +3,16 @@ Description=High Performance Advanced Proxy for MySQL
 After=network.target
 
 [Service]
-Type=simple
+Type=forking
 RuntimeDirectory=proxysql
 #PermissionsStartOnly=true
-#ExecStartPre=/usr/bin/mkdir -p /var/run/proxysql
+#ExecStartPre=/usr/bin/mkdir -p /var/run/proxysql /var/run/proxysql
 #ExecStartPre=/usr/bin/chown -R proxysql: /var/run/proxysql/
-ExecStart=/usr/bin/proxysql -f  -c /etc/proxysql.cnf
-PIDFile=/var/run/proxysql/proxysql.pid
+ExecStart=/usr/bin/proxysql -c /etc/proxysql.cnf
+PIDFile=/var/lib/proxysql/proxysql.pid
 #StandardError=null  # all output is in stderr
 SyslogIdentifier=proxysql
-Restart=always
+Restart=never
 User=proxysql
 Group=proxysql
 PermissionsStartOnly=true

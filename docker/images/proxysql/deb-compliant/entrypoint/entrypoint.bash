@@ -6,7 +6,7 @@ rm -f /opt/proxysql/proxysql.ctl || true && \
 # Clean and build dependancies and source
 cd /opt/proxysql && \
 # Patch for Ubuntu 12
-if [ `grep Ubuntu /etc/issue | awk '{print $2}' | cut -d. -f1` == "12" ]; then
+if [ "`grep Ubuntu /etc/issue | awk '{print $2}' | cut -d. -f1`" == "12" ]; then
 	sed -i -e 's/c++11/c++0x/' lib/Makefile
 	sed -i -e 's/c++11/c++0x/' src/Makefile
         cd /opt/proxysql/deps/re2/
@@ -24,7 +24,7 @@ equivs-build proxysql.ctl && \
 mv /opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_amd64.deb && \
 # Cleanup current build
 # Unpatch Ubuntu 12
-if [ `grep Ubuntu /etc/issue | awk '{print $2}' | cut -d. -f1` == "12" ]; then
+if [ "`grep Ubuntu /etc/issue | awk '{print $2}' | cut -d. -f1`" == "12" ]; then
         sed -i -e 's/c++0x/c++11/' lib/Makefile
         sed -i -e 's/c++0x/c++11/' src/Makefile
         mv /tmp/re2.tar.gz /opt/proxysql/deps/re2/

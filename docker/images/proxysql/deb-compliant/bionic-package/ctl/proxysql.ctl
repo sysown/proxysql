@@ -10,10 +10,10 @@ Architecture: amd64
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/
- etc/proxysql.cnf /
- systemd/system/proxysql.service /lib/
- tools/proxysql_galera_checker.sh /usr/share/proxysql/
- tools/proxysql_galera_writer.pl /usr/share/proxysql/
+ etc/proxysql.cnf /etc/
+ systemd/system/proxysql.service /lib/systemd/system/
+ tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
+ tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/
 Description: High performance MySQL proxy
  ProxySQL is a fast, reliable MySQL proxy with advanced runtime configuration management (virtually no configuration change requires a restart). 
  .
