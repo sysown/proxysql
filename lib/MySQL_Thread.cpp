@@ -5097,7 +5097,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 						//npc++;
 						if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 							char *schema = sess->client_myds->myconn->userinfo->schemaname;
-							if (strcmp(c->userinfo->schemaname,schema)==0) {
+							char *username = sess->client_myds->myconn->userinfo->username;
+							if (strcmp(c->userinfo->schemaname,schema)==0 && strcmp(c->userinfo->username,username)==0) {
 								c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 								return c;
 							}
@@ -5125,7 +5126,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 				npc++;
 				if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 					char *schema = sess->client_myds->myconn->userinfo->schemaname;
-					if (strcmp(c->userinfo->schemaname,schema)==0) {
+					char *username = sess->client_myds->myconn->userinfo->username;
+					if (strcmp(c->userinfo->schemaname,schema)==0 && strcmp(c->userinfo->username,username)==0) {
 						c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 						return c;
 					}
