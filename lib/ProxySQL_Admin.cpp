@@ -167,6 +167,8 @@ extern ClickHouse_Server *GloClickHouseServer;
 
 extern SQLite3_Server *GloSQLite3Server;
 
+extern char * binary_sha1;
+
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 int rc, arg_on=1, arg_off=0;
@@ -8649,6 +8651,9 @@ void ProxySQL_Admin::flush_error_log() {
 		rc=uname(&unameData);
 		if (rc==0) {
 			proxy_info("Detected OS: %s %s %s %s %s\n", unameData.sysname, unameData.nodename, unameData.release, unameData.version, unameData.machine);
+		}
+		if (binary_sha1) {
+			proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
 		}
 	}
 }

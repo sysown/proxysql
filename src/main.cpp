@@ -17,6 +17,8 @@
 #include <libdaemon/dexec.h>
 #include "ev.h"
 
+#include <sys/mman.h>
+
 /*
 extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 	return NULL;
@@ -26,6 +28,8 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
 void * __mysql_ldap_auth;
 
+
+char *binary_sha1 = NULL;
 
 // MariaDB client library redefines dlerror(), see https://mariadb.atlassian.net/browse/CONC-101
 #ifdef dlerror
@@ -827,6 +831,9 @@ void ProxySQL_Main_init_Admin_module() {
 	GloAdmin = new ProxySQL_Admin();
 	GloAdmin->init();
 	GloAdmin->print_version();
+	if (binary_sha1) {
+		proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
+	}
 }
 
 void ProxySQL_Main_init_Auth_module() {
@@ -1288,7 +1295,6 @@ bool ProxySQL_daemonize_phase2() {
 	//daemon_log(LOG_INFO, "Sucessfully started");
 	proxy_info("Starting ProxySQL\n");
 	proxy_info("Sucessfully started\n");
-
 	return true;
 }
 
@@ -1363,6 +1369,10 @@ bool ProxySQL_daemonize_phase3() {
 		//daemon_log(LOG_INFO, "ProxySQL crashed. Restarting!\n");
 		parent_open_error_log();
 		proxy_error("ProxySQL crashed. Restarting!\n");
+		proxy_info("ProxySQL version %s\n", PROXYSQL_VERSION);
+		if (binary_sha1) {
+			proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
+		}
 		call_execute_on_exit_failure();
 		parent_close_error_log();
 		return false;
@@ -1373,6 +1383,21 @@ bool ProxySQL_daemonize_phase3() {
 
 int main(int argc, const char * argv[]) {
 
+	{
+//		cpu_timer t;
+		ProxySQL_Main_init();
+#ifdef DEBUG
+//		std::cerr << "Main init phase0 completed in ";
+#endif
+	}
+	{
+		cpu_timer t;
+		ProxySQL_Main_process_global_variables(argc, argv);
+		GloVars.global.start_time=monotonic_time(); // always initialize it
+#ifdef DEBUG
+		std::cerr << "Main init global variables completed in ";
+#endif
+	}
 
 	struct rlimit nlimit;
 	{
@@ -1402,27 +1427,43 @@ int main(int argc, const char * argv[]) {
 
 	{
 		cpu_timer t;
-		ProxySQL_Main_init();
-#ifdef DEBUG
-		std::cerr << "Main init phase0 completed in ";
-#endif
-	}
-	{
-		cpu_timer t;
-		ProxySQL_Main_process_global_variables(argc, argv);
-		GloVars.global.start_time=monotonic_time(); // always initialize it
-#ifdef DEBUG
-		std::cerr << "Main init global variables completed in ";
-#endif
-	}
-	{
-		cpu_timer t;
 		ProxySQL_Main_init_SSL_module();
 #ifdef DEBUG
 		std::cerr << "Main SSL init variables completed in ";
 #endif
 	}
 
+	{
+		cpu_timer t;
+		int fd = open(argv[0], O_RDONLY);
+		if(fd >= 0) {
+			struct stat statbuf;
+			if(fstat(fd, &statbuf) == 0) {
+				unsigned char *fb = (unsigned char *)mmap(0, statbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
+				if (fb != MAP_FAILED) {
+					unsigned char temp[SHA_DIGEST_LENGTH];
+					SHA1(fb, statbuf.st_size, temp);
+					binary_sha1 = (char *)malloc(SHA_DIGEST_LENGTH*2+1);
+					memset(binary_sha1, 0, SHA_DIGEST_LENGTH*2+1);
+					char buf[SHA_DIGEST_LENGTH*2];
+					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
+						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+					}
+					memcpy(binary_sha1, buf, SHA_DIGEST_LENGTH*2);
+					munmap(fb,statbuf.st_size);
+				} else {
+					proxy_error("Unable to mmap %s: %s\n", argv[0], strerror(errno));
+				}
+			} else {
+				proxy_error("Unable to fstat %s: %s\n", argv[0], strerror(errno));
+			}
+		} else {
+			proxy_error("Unable to open %s: %s\n", argv[0], strerror(errno));
+		}
+#ifdef DEBUG
+		std::cerr << "SHA1 generated in ";
+#endif
+	}
 	if (GloVars.global.foreground==false) {
 		{
 			cpu_timer t;

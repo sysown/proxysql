@@ -1,6 +1,6 @@
 
 
-
+GIT_VERSION := $(shell git describe --long --tags)
 
 DEPS_PATH=../deps
 
@@ -76,7 +76,7 @@ else
 PSQLCH=
 endif
 
-MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH)
+MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\"
 
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
