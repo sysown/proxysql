@@ -80,7 +80,7 @@ class MySrvC {	// MySQL Server Container
 	char *address;
 	uint16_t port;
 	uint16_t flags;
-	unsigned int weight;
+	uint64_t weight;
 	enum MySerStatus status;
 	unsigned int compression;
 	unsigned int max_connections;
