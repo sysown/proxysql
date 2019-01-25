@@ -10,6 +10,7 @@ ${MAKE} ${MAKEOPT} build_deps_clickhouse && \
 ${MAKE} clickhouse ${MAKEOPT} && \
 # Prepare package files and build RPM
 cp /root/ctl/proxysql.ctl /opt/proxysql/proxysql.ctl && \
+sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl && \
 cp /opt/proxysql/src/proxysql /opt/proxysql/ && \
 equivs-build proxysql.ctl && \
 mv /opt/proxysql/proxysql_${CURVER}_amd64.deb ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_amd64.deb && \
