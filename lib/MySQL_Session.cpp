@@ -2708,7 +2708,7 @@ handler_again:
 
 					switch (status) {
 						case PROCESSING_QUERY:
-							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+							MySQL_Result_to_MySQL_wire(myconn);
 							break;
 						case PROCESSING_STMT_PREPARE:
 							{
@@ -2957,6 +2957,7 @@ handler_again:
 										}
 									}
 									myds->destroy_MySQL_Connection_From_Pool(true);
+									myconn = nullptr;
 									myds->fd=0;
 									if (retry_conn) {
 										myds->DSS=STATE_NOT_INITIALIZED;
@@ -2990,7 +2991,7 @@ handler_again:
 
 							switch (status) {
 								case PROCESSING_QUERY:
-									MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
+									MySQL_Result_to_MySQL_wire(myconn, myds);
 									break;
 								case PROCESSING_STMT_PREPARE:
 									{
@@ -3054,7 +3055,7 @@ handler_again:
 								break;
 							// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
 							case 2:
-								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+								MySQL_Result_to_MySQL_wire(myconn);
 								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
 										delete myconn->MyRS;
 										myconn->MyRS=NULL;
@@ -4287,12 +4288,15 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	}
 }
 
-void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
-        if (mysql == NULL) {
-                // error
-                client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
-                return;
-        }
+void MySQL_Session::MySQL_Result_to_MySQL_wire(MySQL_Connection *conn, MySQL_Data_Stream *_myds) {
+	if (conn == nullptr || conn->mysql == nullptr) {
+			// error
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+			return;
+	}
+
+	MySQL_ResultSet* MyRS = conn->MyRS;
+	MYSQL* mysql = conn->mysql;
 	if (MyRS) {
 		assert(MyRS->result);
 		bool transfer_started=MyRS->transfer_started;

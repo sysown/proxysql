@@ -1289,8 +1289,8 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca) 
 MySrvC *MyHGC::get_random_MySrvC() {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
-	unsigned int sum=0;
-	unsigned int TotalUsedConn=0;
+	uint64_t sum=0;
+	uint64_t TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
 	if (l) {
 		//int j=0;
@@ -1372,14 +1372,14 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		unsigned int New_sum=0;
+		uint64_t New_sum=0;
 		unsigned int New_TotalUsedConn=0;
 
 		// we will now scan again to ignore overloaded server
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
+				uint64_t len=mysrvc->ConnectionsUsed->conns_length();
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
@@ -1396,13 +1396,13 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		unsigned int k;
+		uint64_t k;
 		if (New_sum > 32768) {
 			k=rand()%New_sum;
 		} else {
 			k=fastrand()%New_sum;
 		}
-  	k++;
+		k++;
 		New_sum=0;
 
 		for (j=0; j<l; j++) {
