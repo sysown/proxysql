@@ -1435,7 +1435,18 @@ int main(int argc, const char * argv[]) {
 
 	{
 		cpu_timer t;
-		int fd = open(argv[0], O_RDONLY);
+		int fd = -1;
+		char buff[PATH_MAX+1];
+		ssize_t len = -1;
+#if defined(__FreeBSD__)
+		len = readlink("/proc/curproc/file", buff, sizeof(buff)-1);
+#else
+		len = readlink("/proc/self/exe", buff, sizeof(buff)-1);
+#endif
+		if (len != -1) {
+			buff[len] = '\0';
+			fd = open(buff, O_RDONLY);
+		}
 		if(fd >= 0) {
 			struct stat statbuf;
 			if(fstat(fd, &statbuf) == 0) {
@@ -1452,10 +1463,10 @@ int main(int argc, const char * argv[]) {
 					memcpy(binary_sha1, buf, SHA_DIGEST_LENGTH*2);
 					munmap(fb,statbuf.st_size);
 				} else {
-					proxy_error("Unable to mmap %s: %s\n", argv[0], strerror(errno));
+					proxy_error("Unable to mmap %s: %s\n", buff, strerror(errno));
 				}
 			} else {
-				proxy_error("Unable to fstat %s: %s\n", argv[0], strerror(errno));
+				proxy_error("Unable to fstat %s: %s\n", buff, strerror(errno));
 			}
 		} else {
 			proxy_error("Unable to open %s: %s\n", argv[0], strerror(errno));
