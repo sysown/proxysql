@@ -3285,18 +3285,18 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		admindb->execute("DELETE FROM stats.stats_proxysql_servers_status");
 		admindb->execute("VACUUM stats");
 	} else {
-		statsdb->execute("DELETE stats_mysql_commands_counters");
-		statsdb->execute("DELETE stats_mysql_connection_pool");
-		statsdb->execute("DELETE stats_mysql_connection_pool_reset");
-		statsdb->execute("DELETE stats_mysql_prepared_statements_info");
-		statsdb->execute("DELETE stats_mysql_processlist");
-		statsdb->execute("DELETE stats_mysql_query_digest");
-		statsdb->execute("DELETE stats_mysql_query_digest_reset");
-		statsdb->execute("DELETE stats_mysql_query_rules");
-		statsdb->execute("DELETE stats_mysql_users");
-		statsdb->execute("DELETE stats_proxysql_servers_checksums");
-		statsdb->execute("DELETE stats_proxysql_servers_metrics");
-		statsdb->execute("DELETE stats_proxysql_servers_status");
+		statsdb->execute("DELETE FROM stats_mysql_commands_counters");
+		statsdb->execute("DELETE FROM stats_mysql_connection_pool");
+		statsdb->execute("DELETE FROM stats_mysql_connection_pool_reset");
+		statsdb->execute("DELETE FROM stats_mysql_prepared_statements_info");
+		statsdb->execute("DELETE FROM stats_mysql_processlist");
+		statsdb->execute("DELETE FROM stats_mysql_query_digest");
+		statsdb->execute("DELETE FROM stats_mysql_query_digest_reset");
+		statsdb->execute("DELETE FROM stats_mysql_query_rules");
+		statsdb->execute("DELETE FROM stats_mysql_users");
+		statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
+		statsdb->execute("DELETE FROM stats_proxysql_servers_metrics");
+		statsdb->execute("DELETE FROM stats_proxysql_servers_status");
 		statsdb->execute("VACUUM");
 	}
 }
