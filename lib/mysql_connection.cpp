@@ -715,7 +715,6 @@ handler_again:
 			break;
 		case ASYNC_CHANGE_USER_END:
 			if (ret_bool) {
-				fprintf(stderr,"Failed to mysql_change_user()");
 				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_FAILED);
 			} else {
 				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_SUCCESSFUL);
