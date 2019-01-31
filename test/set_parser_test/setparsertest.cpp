@@ -80,6 +80,7 @@ static Test sql_mode[] = {
   { "SET sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SQL_MODE   ='TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SQL_MODE  = \"TRADITIONAL\"", { Expected("sql_mode",  {"TRADITIONAL"}) } },
+  { "SET SQL_MODE  = TRADITIONAL", { Expected("sql_mode",  {"TRADITIONAL"}) } },
 };
 
 void TestParse(const Test* tests, int ntests, const string& title) {
@@ -107,6 +108,9 @@ TEST(TestParse, SET_SQL_MODE) {
 
 static Test time_zone[] = {
   { "SET @@time_zone = 'Europe/Paris'", { Expected("time_zone",  {"Europe/Paris"}) } },
+  { "SET @@time_zone = '+00:00'", { Expected("time_zone",  {"+00:00"}) } },
+  { "SET @@time_zone = \"Europe/Paris\"", { Expected("time_zone",  {"Europe/Paris"}) } },
+  { "SET @@time_zone = \"+00:00\"", { Expected("time_zone",  {"+00:00"}) } },
 };
 
 TEST(TestParse, SET_TIME_ZONE) {
