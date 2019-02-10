@@ -2699,7 +2699,7 @@ handler_again:
 						if (myconn->mysql->affected_rows) {
 							if (myconn->mysql->affected_rows != ULLONG_MAX) {
 								last_HG_affected_rows = current_hostgroup;
-								if (mysql_thread___auto_increment_delay_multiplex) {
+								if (mysql_thread___auto_increment_delay_multiplex && myconn->mysql->insert_id) {
 									myconn->auto_increment_delay_token = mysql_thread___auto_increment_delay_multiplex + 1;
 								}
 							}
