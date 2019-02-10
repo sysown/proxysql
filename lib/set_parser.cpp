@@ -29,7 +29,7 @@ std::map<std::string,std::vector<string>> SetParser::parse() {
   std::map<std::string,std::vector<string>> result;
 
 #define NAMES "(NAMES)"
-#define QUOTES "(?:'||\")"
+#define QUOTES "(?:'|\")?"
 #define NAME_VALUE "((?:\\w|\\d)+)"
 #define SESSION "(?:|SESSION +|@@|@@session.)"
 #define VAR "(\\w+)"

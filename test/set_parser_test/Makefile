@@ -39,7 +39,7 @@ LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 
 MYCPPFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) -ggdb
 LDFLAGS+=
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -levent -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lproxysql -ldaemon -ljemalloc -lre2 -lmariadbclient -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
 
 ifeq ($(UNAME_S),Darwin)
 	MYLIBS=-lre2 -lpthread -lm -lz -liconv
