@@ -2063,6 +2063,19 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_galera_hostgroups() 
 	return resultset;
 }
 
+SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroups() {
+	wrlock();
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,max_lag_ms,check_interval_ms,check_timeout_ms,comment FROM mysql_aws_aurora_hostgroups";
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	wrunlock();
+	return resultset;
+}
+
 MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 	MyHGC *myhgc=new MyHGC(_hid);
 	return myhgc;
@@ -2634,6 +2647,14 @@ void MySQL_HostGroups_Manager::set_incoming_galera_hostgroups(SQLite3_result *s)
 		incoming_galera_hostgroups = NULL;
 	}
 	incoming_galera_hostgroups=s;
+}
+
+void MySQL_HostGroups_Manager::set_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
+	if (incoming_aws_aurora_hostgroups) {
+		delete incoming_aws_aurora_hostgroups;
+		incoming_aws_aurora_hostgroups = NULL;
+	}
+	incoming_aws_aurora_hostgroups=s;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
@@ -4681,4 +4702,159 @@ SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
 	}
 	pthread_mutex_unlock(&mysql_errors_mutex);
 	return result;
+}
+
+AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int ml, int ci, int ct, bool _a, char *c) {
+	comment=NULL;
+	if (c) {
+		comment=strdup(c);
+	}
+	writer_hostgroup=w;
+	reader_hostgroup=r;
+	max_lag_ms=ml;
+	check_interval_ms=ci;
+	check_timeout_ms=ct;
+	active=_a;
+	__active=true;
+	need_converge=true;
+}
+
+AWS_Aurora_Info::~AWS_Aurora_Info() {
+	if (comment) {
+		free(comment);
+		comment=NULL;
+	}
+}
+
+bool AWS_Aurora_Info::update(int r, int ml, int ci, int ct, bool _a, char *c) {
+	bool ret=false;
+	__active=true;
+	if (reader_hostgroup!=r) {
+		reader_hostgroup=r;
+		ret=true;
+	}
+	if (max_lag_ms!=ml) {
+		max_lag_ms=ml;
+		ret=true;
+	}
+	if (check_interval_ms!=ci) {
+		check_interval_ms=ci;
+		ret=true;
+	}
+	if (check_timeout_ms!=ct) {
+		check_timeout_ms=ct;
+		ret=true;
+	}
+	if (active!=_a) {
+		active=_a;
+		ret=true;
+	}
+	// for comment we don't change return value
+	if (comment) {
+		if (c) {
+			if (strcmp(comment,c)) {
+				free(comment);
+				comment=strdup(c);
+			}
+		} else {
+			free(comment);
+			comment=NULL;
+		}
+	} else {
+		if (c) {
+			comment=strdup(c);
+		}
+	}
+	return ret;
+}
+
+void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
+	if (incoming_aws_aurora_hostgroups==NULL) {
+		return;
+	}
+	int rc;
+	sqlite3_stmt *statement=NULL;
+	sqlite3 *mydb3=mydb->get_db();
+	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,max_lag_ms,check_interval_ms,check_timeout_ms,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	assert(rc==SQLITE_OK);
+	proxy_info("New mysql_aws_aurora_hostgroups table\n");
+	pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+	for (std::map<int , AWS_Aurora_Info *>::iterator it1 = AWS_Aurora_Info_Map.begin() ; it1 != AWS_Aurora_Info_Map.end(); ++it1) {
+		AWS_Aurora_Info *info=NULL;
+		info=it1->second;
+		info->__active=false;
+	}
+	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_aurora_hostgroups->rows.begin() ; it != incoming_aws_aurora_hostgroups->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int writer_hostgroup=atoi(r->fields[0]);
+		int reader_hostgroup=atoi(r->fields[1]);
+		int active=atoi(r->fields[2]);
+		int max_lag_ms = atoi(r->fields[3]);
+		int check_interval_ms = atoi(r->fields[4]);
+		int check_timeout_ms = atoi(r->fields[5]);
+		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,(active ? "on" : "off"),max_lag_ms,check_interval_ms,check_timeout_ms,r->fields[8]);
+		rc=sqlite3_bind_int64(statement, 1, writer_hostgroup); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 2, reader_hostgroup); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 3, active); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 4, max_lag_ms); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 5, check_interval_ms); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 6, check_timeout_ms); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement, 7, r->fields[6], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		std::map<int , AWS_Aurora_Info *>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(writer_hostgroup);
+		AWS_Aurora_Info *info=NULL;
+		if (it2!=AWS_Aurora_Info_Map.end()) {
+			info=it2->second;
+			bool changed=false;
+			changed=info->update(reader_hostgroup, max_lag_ms, check_interval_ms, check_timeout_ms,  (bool)active, r->fields[6]);
+			if (changed) {
+				//info->need_converge=true;
+			}
+		} else {
+			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, max_lag_ms, check_interval_ms, check_timeout_ms,  (bool)active, r->fields[6]);
+			//info->need_converge=true;
+			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, AWS_Aurora_Info *>(writer_hostgroup,info));
+		}
+	}
+	sqlite3_finalize(statement);
+	delete incoming_aws_aurora_hostgroups;
+	incoming_aws_aurora_hostgroups=NULL;
+
+	// remove missing ones
+	for (auto it3 = AWS_Aurora_Info_Map.begin(); it3 != AWS_Aurora_Info_Map.end(); ) {
+		AWS_Aurora_Info *info=it3->second;
+		if (info->__active==false) {
+			delete info;
+			it3 = AWS_Aurora_Info_Map.erase(it3);
+		} else {
+			it3++;
+		}
+	}
+	// TODO: it is now time to compute all the changes
+
+
+	// it is now time to build a new structure in Monitor
+	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	{
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_lag_ms , check_interval_ms , check_timeout_ms FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port";
+		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (resultset) {
+			if (GloMyMon->AWS_Aurora_Hosts_resultset) {
+				delete GloMyMon->AWS_Aurora_Hosts_resultset;
+			}
+			GloMyMon->AWS_Aurora_Hosts_resultset=resultset;
+		}
+	}
+	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+
+	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 }

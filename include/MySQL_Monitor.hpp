@@ -23,6 +23,10 @@
 //#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GALERA_LOG "CREATE TABLE mysql_server_galera_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , viable_candidate VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , transactions_behind INT DEFAULT 0 , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_GALERA_LOG "CREATE TABLE mysql_server_galera_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , primary_partition VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , wsrep_local_recv_queue INT DEFAULT 0 , wsrep_local_state INT DEFAULT 0 , wsrep_desync VARCHAR NOT NULL DEFAULT 'NO' , wsrep_reject_queries VARCHAR NOT NULL DEFAULT 'NO' , wsrep_sst_donor_rejects_queries VARCHAR NOT NULL DEFAULT 'NO' , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
 
+#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_LOG "CREATE TABLE mysql_server_aws_aurora_log (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_start_us INT NOT NULL DEFAULT 0 , success_time_us INT DEFAULT 0 , error VARCHAR , SERVER_ID VARCHAR NOT NULL DEFAULT '' , SESSION_ID VARCHAR NOT NULL DEFAULT '' , LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL DEFAULT '' , replica_lag_in_microseconds INT NOT NULL DEFAULT 0 , CPU INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port, time_start_us, SERVER_ID))"
+
+//primary_partition VARCHAR NOT NULL DEFAULT 'NO' , read_only VARCHAR NOT NULL DEFAULT 'YES' , wsrep_local_recv_queue INT DEFAULT 0 , wsrep_local_state INT DEFAULT 0 , wsrep_desync VARCHAR NOT NULL DEFAULT 'NO' , wsrep_reject_queries VARCHAR NOT NULL DEFAULT 'NO' , wsrep_sst_donor_rejects_queries VARCHAR NOT NULL DEFAULT 'NO' , error VARCHAR , PRIMARY KEY (hostname, port, time_start_us))"
+
 /*
 struct cmp_str {
   bool operator()(char const *a, char const *b) const
@@ -34,6 +38,60 @@ struct cmp_str {
 
 #define MyGR_Nentries	100
 #define Galera_Nentries	100
+#define AWS_Aurora_Nentries	100
+
+/*
+
+Implementation of monitoring in AWS Aurora will be different than previous modules
+
+AWS_Aurora_replica_host_status_entry represents a single row returned from AWS_Aurora_replica_host_status_entry
+
+AWS_Aurora_status_entry represents a single check executed against a single Aurora node.
+AWS_Aurora_status_entry can contain several AWS_Aurora_replica_host_status_entry
+
+AWS_Aurora_monitor_node represents a single Aurora node where checks are executed.
+A single AWS_Aurora_monitor_node will have a AWS_Aurora_status_entry per check.
+
+*/
+
+class AWS_Aurora_replica_host_status_entry {
+	public:
+	char * server_id;
+	char * session_id;
+	uint32_t last_update_timestamp;
+	float replica_lag_ms; // originally a double
+	float cpu;
+	AWS_Aurora_replica_host_status_entry(char *serid, char *sessid, uint32_t lut, float rlm, float _c);
+	~AWS_Aurora_replica_host_status_entry();
+};
+
+class AWS_Aurora_status_entry {
+	public:
+	unsigned long long start_time;
+	unsigned long long check_time;
+	char *error;
+	std::vector<AWS_Aurora_replica_host_status_entry *> * host_statuses;
+	AWS_Aurora_status_entry(unsigned long long st, unsigned long long ct, char *e);
+	void add_host_status(AWS_Aurora_replica_host_status_entry *hs);
+	~AWS_Aurora_status_entry();
+};
+
+class AWS_Aurora_monitor_node {
+	private:
+	int idx_last_entry;
+	public:
+	char *addr;
+	int port;
+	unsigned int writer_hostgroup;
+	AWS_Aurora_status_entry last_entries[AWS_Aurora_Nentries];
+	AWS_Aurora_monitor_node(char *_a, int _p, int _whg);
+	~AWS_Aurora_monitor_node();
+	bool add_entry(AWS_Aurora_status_entry *ase); // return true if status changed
+	AWS_Aurora_status_entry *last_entry() {
+		if (idx_last_entry == -1) return NULL;
+		return (&last_entries[idx_last_entry]);
+	}
+};
 
 typedef struct _Galera_status_entry_t {
 	unsigned long long start_time;
@@ -115,6 +173,8 @@ class MySQL_Monitor_State_Data {
 	int writer_hostgroup; // used only by group replication
 	bool writer_is_also_reader; // used only by group replication
 	int  max_transactions_behind; // used only by group replication
+	int aws_aurora_max_lag_ms;
+	int aws_aurora_check_timeout_ms;
   bool use_ssl;
   MYSQL *mysql;
   MYSQL_RES *result;
@@ -153,11 +213,14 @@ class MySQL_Monitor {
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
+	pthread_mutex_t aws_aurora_mutex; // for simplicity, a mutex instead of a rwlock
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
 	std::map<std::string, MyGR_monitor_node *> Group_Replication_Hosts_Map;
 	SQLite3_result *Group_Replication_Hosts_resultset;
 	std::map<std::string, Galera_monitor_node *> Galera_Hosts_Map;
 	SQLite3_result *Galera_Hosts_resultset;
+	std::map<std::string, AWS_Aurora_monitor_node *> AWS_Aurora_Hosts_Map;
+	SQLite3_result *AWS_Aurora_Hosts_resultset;
 	unsigned int num_threads;
 	unsigned int aux_threads;
 	unsigned int started_threads;
@@ -183,13 +246,16 @@ class MySQL_Monitor {
 	void * monitor_read_only();
 	void * monitor_group_replication();
 	void * monitor_galera();
+	void * monitor_aws_aurora();
 	void * monitor_replication_lag();
 	void * run();
 	void populate_monitor_mysql_server_group_replication_log();
 	void populate_monitor_mysql_server_galera_log();
+	void populate_monitor_mysql_server_aws_aurora_log();
 	char * galera_find_last_node(int);
 	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);
+	// FIXME : add AWS Aurora actions
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */
