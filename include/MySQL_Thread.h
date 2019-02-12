@@ -421,6 +421,7 @@ class MySQL_Threads_Handler
 		int hostgroup_manager_verbose;
 		int binlog_reader_connect_retry_msec;
 		char *init_connect;
+		char *ldap_user_variable;
 		char *add_ldap_user_comment;
 		char *default_sql_mode;
 		char *default_time_zone;
