@@ -25,4 +25,7 @@ File: postinst
  chown -R proxysql: /var/lib/proxysql
  chown root:proxysql /etc/proxysql.cnf
  chmod 640 /etc/proxysql.cnf
- systemctl enable proxysql.service
+ if [ -d /run/systemd/system ]; then
+     systemctl enable proxysql.service > /dev/null || true
+     systemctl --system daemon-reload > /dev/null || true
+ fi
