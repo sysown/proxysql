@@ -1311,6 +1311,9 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 	if (mybe->server_myds->myconn->options.ldap_user_variable_sent==false) {
 		ret = true;
 	}
+	if (mybe->server_myds->myconn->options.ldap_user_variable_value == NULL) {
+		ret = true;
+	}
 	if (ret==false) {
 		if (mybe->server_myds->myconn->options.ldap_user_variable_sent) {
 			if (client_myds && client_myds->myconn) {
@@ -1480,7 +1483,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	int rc=myconn->async_send_simple_command(myds->revents,myconn->options.init_connect,strlen(myconn->options.init_connect));
 	if (rc==0) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
-		myds->free_mysql_real_query();
+		//myds->free_mysql_real_query();
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -1539,7 +1542,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 		(client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
 	) { // nothing to do
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
-		myds->free_mysql_real_query();
+		//myds->free_mysql_real_query();
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -1561,14 +1564,14 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 		myconn->options.ldap_user_variable_value = strdup(fe);
 		char *buf = (char *)malloc(strlen(fe)+strlen(a)+strlen(myconn->options.ldap_user_variable));
 		sprintf(buf,a,myconn->options.ldap_user_variable,fe);
-		myconn->async_send_simple_command(myds->revents,buf,strlen(buf));
+		rc = myconn->async_send_simple_command(myds->revents,buf,strlen(buf));
 		free(buf);
 	} else { // if async_state_machine is not ASYNC_IDLE , arguments are ignored
-		myconn->async_send_simple_command(myds->revents,(char *)"", 0);
+		rc = myconn->async_send_simple_command(myds->revents,(char *)"", 0);
 	}
 	if (rc==0) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
-		myds->free_mysql_real_query();
+		//myds->free_mysql_real_query();
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
