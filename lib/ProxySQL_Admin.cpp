@@ -3480,6 +3480,7 @@ static void * admin_main_loop(void *arg)
 				client=(int *)malloc(sizeof(int));
 				*client= client_t;
 				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
+					perror("pthread_create");
 					proxy_error("Thread creation\n");
 					assert(0);
 				}
