@@ -783,6 +783,7 @@ int MySQL_Data_Stream::buffer2array() {
 	}
 
 	if (fast_mode) {
+		if (pkts_recv==0) { pkts_recv=1; }
 		queueIN.pkt.size=queue_data(queueIN);
 		ret=queueIN.pkt.size;
 		if (ret >= RESULTSET_BUFLEN_DS_16K) {

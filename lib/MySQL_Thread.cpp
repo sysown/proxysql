@@ -3420,6 +3420,7 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 									int _rc = poll(&_fds, _nfds, 0);
 									if ((_rc > 0) && _fds.revents == POLLIN) {
 										// there is more data
+										myds->revents = _fds.revents;
 									} else {
 										rb = 0; // exit loop
 									}
