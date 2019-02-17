@@ -1843,6 +1843,8 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					// we have a successful connection and session_fast_forward enabled
 					// set DSS=STATE_SLEEP or it will believe it have to use MARIADB client library
 					myds->DSS=STATE_SLEEP;
+					myds->myconn->send_quit = false;
+					myds->myconn->reusable = false;
 				}
 				NEXT_IMMEDIATE_NEW(st);
 				break;
