@@ -49,6 +49,9 @@ class MySQL_Connection {
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
+		char *ldap_user_variable;
+		char *ldap_user_variable_value;
+		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
 		uint8_t charset;
 		uint8_t sql_log_bin;

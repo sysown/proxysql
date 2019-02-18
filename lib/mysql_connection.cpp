@@ -204,6 +204,9 @@ MySQL_Connection::MySQL_Connection() {
 	options.autocommit=true;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.ldap_user_variable=NULL;
+	options.ldap_user_variable_value=NULL;
+	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
 	options.sql_mode=NULL;	// #509
 	options.sql_mode_int=0;	// #509
@@ -232,6 +235,8 @@ MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
+	if (options.ldap_user_variable) free(options.ldap_user_variable);
+	if (options.ldap_user_variable_value) free(options.ldap_user_variable_value);
 	if (userinfo) {
 		delete userinfo;
 		userinfo=NULL;
@@ -1818,6 +1823,19 @@ void MySQL_Connection::reset() {
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
+	if (options.init_connect) {
+		free(options.init_connect);
+		options.init_connect = NULL;
+		options.init_connect_sent = false;
+	}
+	if (options.ldap_user_variable) {
+		if (options.ldap_user_variable_value) {
+			free(options.ldap_user_variable_value);
+			options.ldap_user_variable_value = NULL;
+		}
+		options.ldap_user_variable = NULL;
+		options.ldap_user_variable_sent = false;
+	}
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {

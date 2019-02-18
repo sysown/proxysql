@@ -131,6 +131,7 @@ enum session_status {
 	CHANGING_USER_SERVER,
 	RESETTING_CONNECTION,
 	SETTING_INIT_CONNECT,
+	SETTING_LDAP_USER_VARIABLE,
 	SETTING_SQL_LOG_BIN,
 	SETTING_SQL_MODE,
 	SETTING_TIME_ZONE,
@@ -590,6 +591,7 @@ MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___init_connect;
+__thread char *mysql_thread___ldap_user_variable;
 __thread char *mysql_thread___default_sql_mode;
 __thread char *mysql_thread___default_time_zone;
 __thread int mysql_thread___max_allowed_packet;
@@ -711,6 +713,7 @@ extern MySQL_HostGroups_Manager *MyHGM;
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___init_connect;
+extern __thread char *mysql_thread___ldap_user_variable;
 extern __thread char *mysql_thread___default_sql_mode;
 extern __thread char *mysql_thread___default_time_zone;
 extern __thread int mysql_thread___max_allowed_packet;

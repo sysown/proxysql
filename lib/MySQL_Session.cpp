@@ -1306,6 +1306,58 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 	return false;
 }
 
+bool MySQL_Session::handler_again___verify_ldap_user_variable() {
+	bool ret = false;
+	if (mybe->server_myds->myconn->options.ldap_user_variable_sent==false) {
+		ret = true;
+	}
+	if (mybe->server_myds->myconn->options.ldap_user_variable_value == NULL) {
+		ret = true;
+	}
+	if (ret==false) {
+		if (mybe->server_myds->myconn->options.ldap_user_variable_sent) {
+			if (client_myds && client_myds->myconn) {
+				if (client_myds->myconn->userinfo) {
+					if (client_myds->myconn->userinfo->fe_username) {
+		 				if (strcmp(mybe->server_myds->myconn->options.ldap_user_variable_value,client_myds->myconn->userinfo->fe_username)) {
+							ret = true;
+							free(mybe->server_myds->myconn->options.ldap_user_variable);
+							mybe->server_myds->myconn->options.ldap_user_variable = NULL;
+							free(mybe->server_myds->myconn->options.ldap_user_variable_value);
+							mybe->server_myds->myconn->options.ldap_user_variable_value = NULL;
+							mybe->server_myds->myconn->options.ldap_user_variable_sent = false;
+						}
+					}
+				}
+			}
+		}
+	}
+	if (ret) {
+		// we needs to set it to true
+		mybe->server_myds->myconn->options.ldap_user_variable_sent=true;
+		if (mysql_thread___ldap_user_variable) {
+			// we send ldap user variable  query only if set
+			mybe->server_myds->myconn->options.ldap_user_variable=strdup(mysql_thread___ldap_user_variable);
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_LDAP_USER_VARIABLE);
+		}
+	}
+	return false;
+}
+
 bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	if (mysql_thread___forward_autocommit == true) {
 		return false;
@@ -1431,7 +1483,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	int rc=myconn->async_send_simple_command(myds->revents,myconn->options.init_connect,strlen(myconn->options.init_connect));
 	if (rc==0) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
-		myds->free_mysql_real_query();
+		//myds->free_mysql_real_query();
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -1466,6 +1518,92 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 					myds->destroy_MySQL_Connection_From_Pool(true);
 					myds->fd=0;
+				status=WAITING_CLIENT_DATA;
+				client_myds->DSS=STATE_SLEEP;
+			}
+		} else {
+			// rc==1 , nothing to do for now
+		}
+	}
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	myds->DSS=STATE_MARIADB_QUERY;
+	enum session_status st=status;
+
+	if (
+		(GloMyLdapAuth==NULL) || (ldap_ctx==NULL)
+		||
+		(client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
+	) { // nothing to do
+		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+		//myds->free_mysql_real_query();
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	}
+
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	int rc;
+	if (myconn->async_state_machine == ASYNC_IDLE) {
+		char *fe=client_myds->myconn->userinfo->fe_username;
+		char *a = (char *)"SET @%s:='%s'";
+		if (fe == NULL) {
+			fe = (char *)"unknown";
+		}
+		if (myconn->options.ldap_user_variable_value) {
+			free(myconn->options.ldap_user_variable_value);
+		}
+		myconn->options.ldap_user_variable_value = strdup(fe);
+		char *buf = (char *)malloc(strlen(fe)+strlen(a)+strlen(myconn->options.ldap_user_variable));
+		sprintf(buf,a,myconn->options.ldap_user_variable,fe);
+		rc = myconn->async_send_simple_command(myds->revents,buf,strlen(buf));
+		free(buf);
+	} else { // if async_state_machine is not ASYNC_IDLE , arguments are ignored
+		rc = myconn->async_send_simple_command(myds->revents,(char *)"", 0);
+	}
+	if (rc==0) {
+		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+		//myds->free_mysql_real_query();
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		if (rc==-1) {
+			// the command failed
+			int myerr=mysql_errno(myconn->mysql);
+			if (myerr >= 2000) {
+				bool retry_conn=false;
+				// client error, serious
+				proxy_error("Detected a broken connection while setting LDAP USER VARIABLE on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+								retry_conn=true;
+				}
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				if (retry_conn) {
+					myds->DSS=STATE_NOT_INITIALIZED;
+					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+				}
+				*_rc=-1;	// an error happened, we should destroy the Session
+				return ret;
+			} else {
+				proxy_warning("Error while setting LDAP USER VARIABLE: %d, %s\n", myerr, mysql_error(myconn->mysql));
+				// we won't go back to PROCESSING_QUERY
+				st=previous_status.top();
+				previous_status.pop();
+				char sqlstate[10];
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->fd=0;
 				status=WAITING_CLIENT_DATA;
 				client_myds->DSS=STATE_SLEEP;
 			}
@@ -2803,6 +2941,11 @@ handler_again:
 						if (handler_again___verify_init_connect()) {
 							goto handler_again;
 						}
+						if (ldap_ctx) {
+							if (handler_again___verify_ldap_user_variable()) {
+								goto handler_again;
+							}
+						}
 						if (handler_again___verify_backend_charset()) {
 							goto handler_again;
 						}
@@ -3382,6 +3525,18 @@ handler_again:
 			{
 				int rc=0;
 				if (handler_again___status_SETTING_INIT_CONNECT(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_LDAP_USER_VARIABLE:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_LDAP_USER_VARIABLE(&rc))
 					goto handler_again;	// we changed status
 				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
