@@ -620,7 +620,7 @@ uint8_t MySQL_Threads_Handler::get_variable_uint8(char *name) {
 }
 
 int MySQL_Threads_Handler::get_variable_int(const char *name) {
-VALGRIND_DISABLE_ERROR_REPORTING;
+//VALGRIND_DISABLE_ERROR_REPORTING;
 #ifdef DEBUG
 	if (!strcasecmp(name,"session_debug")) return (int)variables.session_debug;
 #endif /* DEBUG */
@@ -782,11 +782,11 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcasecmp(name,"client_multi_statements")) return (int)variables.client_multi_statements;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
-VALGRIND_ENABLE_ERROR_REPORTING;
+//VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
 char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
-VALGRIND_DISABLE_ERROR_REPORTING;
+//VALGRIND_DISABLE_ERROR_REPORTING;
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
 	if (!strcasecmp(name,"init_connect")) {
@@ -1221,7 +1221,7 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 		return strdup((variables.default_reconnect ? "true" : "false"));
 	}
 	return NULL;
-VALGRIND_ENABLE_ERROR_REPORTING;
+//VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
 
@@ -3317,9 +3317,9 @@ __run_skip_2:
 					}
 				}
 			} else {
-				VALGRIND_DISABLE_ERROR_REPORTING;
+				//VALGRIND_DISABLE_ERROR_REPORTING;
 				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
-				VALGRIND_ENABLE_ERROR_REPORTING;
+				//VALGRIND_ENABLE_ERROR_REPORTING;
 				if (shutdown==0 && thr->shutdown==0 && thr->myexchange.resume_mysql_sessions->len) {
 					unsigned char c=0;
 					int fd=thr->pipefd[1];
@@ -3327,9 +3327,9 @@ __run_skip_2:
 						//proxy_error("Error while signaling maintenance thread\n");
 					}
 				}
-				VALGRIND_DISABLE_ERROR_REPORTING;
+				//VALGRIND_DISABLE_ERROR_REPORTING;
 				pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
-				VALGRIND_ENABLE_ERROR_REPORTING;
+				//VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else {
 #endif // IDLE_THREADS
@@ -3420,6 +3420,7 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 									int _rc = poll(&_fds, _nfds, 0);
 									if ((_rc > 0) && _fds.revents == POLLIN) {
 										// there is more data
+										myds->revents = _fds.revents;
 									} else {
 										rb = 0; // exit loop
 									}
