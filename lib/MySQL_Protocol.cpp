@@ -1507,8 +1507,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	} else {
 		db = NULL;
 	}
-	if (pass[pass_len-1] == 0) {
-		pass_len--; // remove the extra 0 if present
+	if (pass_len) {
+		if (pass[pass_len-1] == 0) {
+			pass_len--; // remove the extra 0 if present
+		}
 	}
 	if (_ptr+len > pkt) {
 		if (capabilities & CLIENT_PLUGIN_AUTH) {
