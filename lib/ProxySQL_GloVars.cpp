@@ -107,7 +107,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	opt->add((const char *)"",0,0,0,(const char *)"Use SO_REUSEPORT",(const char *)"-r",(const char *)"--reuseport");
 #endif /* SO_REUSEPORT */
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
-	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuraton file",(const char *)"-c",(const char *)"--config");
+	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuration file",(const char *)"-c",(const char *)"--config");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
