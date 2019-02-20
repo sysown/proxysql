@@ -654,7 +654,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 				}
 			}
 			if (fd >= 0) { // we can set autocommit
-				// we immeditately process the number of transactions
+				// we immediately process the number of transactions
 				unsigned int nTrx=NumActiveTransactions();
 				if (fd==1 && autocommit==true) {
 					// nothing to do, return OK
@@ -2965,7 +2965,7 @@ handler_again:
 						CurrentQuery.mysql_stmt=myconn->local_stmts->find_backend_stmt_by_global_id(CurrentQuery.stmt_global_id);
 						if (CurrentQuery.mysql_stmt==NULL) {
 							MySQL_STMT_Global_info *stmt_info=NULL;
-							// the conection we too doesn't have the prepared statements prepared
+							// the connection we too doesn't have the prepared statements prepared
 							// we try to create it now
 							stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
 							CurrentQuery.QueryLength=stmt_info->query_length;

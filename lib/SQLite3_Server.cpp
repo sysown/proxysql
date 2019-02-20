@@ -652,7 +652,7 @@ SQLite3_Server::SQLite3_Server() {
 #else
 		if (glovars.has_debug==true) {
 #endif /* DEBUG */
-			perror("Incompatible debagging version");
+			perror("Incompatible debugging version");
 			exit(EXIT_FAILURE);
 		}
 
