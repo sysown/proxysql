@@ -1626,7 +1626,11 @@ __do_auth:
 		if (
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
 		|| 
-			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS) 
+			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
+#ifdef TEST_AURORA
+		|| 
+			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
+#endif // TEST_AURORA 
 		) {
 			if (strcmp((const char *)user,mysql_thread___monitor_username)==0) {
 				proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
@@ -1707,7 +1711,7 @@ __do_auth:
 				}
 			} else {
 				if (auth_plugin_id == 1) {
-					if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || PROXYSQL_SESSION_ADMIN || PROXYSQL_SESSION_STATS) {
+					if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 						ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 						if (ret) {
 							if (sha1_pass==NULL) {
@@ -1720,7 +1724,7 @@ __do_auth:
 						}
 					}
 				} else { // mysql_clear_password
-					if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || PROXYSQL_SESSION_ADMIN || PROXYSQL_SESSION_STATS) {
+					if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 /*
 						char sha1_2[SHA_DIGEST_LENGTH+1];
 						sha1_2[SHA_DIGEST_LENGTH]='\0';

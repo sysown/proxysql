@@ -1661,7 +1661,9 @@ finish:
 
 #ifdef RUNNING_ON_VALGRIND
 	if (RUNNING_ON_VALGRIND==0) {
-		dlclose(__mysql_ldap_auth);
+		if (__mysql_ldap_auth) {
+			dlclose(__mysql_ldap_auth);
+		}
 	}
 #endif
 	return 0;

@@ -118,8 +118,8 @@ typedef struct _ifaces_desc_t {
 		char **mysql_ifaces;
 } ifaces_desc_t;
 
-#define MAX_IFACES	8
-#define MAX_SQLITE3SERVER_LISTENERS 16
+#define MAX_IFACES	32
+#define MAX_SQLITE3SERVER_LISTENERS 32
 
 class ifaces_desc {
 	public:
@@ -246,6 +246,38 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
 	query[query_length-1]=0;
 
+#ifdef TEST_AURORA
+	if (sess->client_myds->proxy_addr.addr == NULL) {
+		struct sockaddr addr;
+		socklen_t addr_len=sizeof(struct sockaddr);
+		memset(&addr,0,addr_len);
+		int rc;
+		rc=getsockname(sess->client_myds->fd, &addr, &addr_len);
+		if (rc==0) {
+			char buf[512];
+			switch (addr.sa_family) {
+				case AF_INET: {
+						struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
+						inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+						sess->client_myds->proxy_addr.addr = strdup(buf);
+					}
+					break;
+				case AF_INET6: {
+						struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
+						inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+						sess->client_myds->proxy_addr.addr = strdup(buf);
+					}
+					break;
+				default:
+					sess->client_myds->proxy_addr.addr = strdup("unknown");
+					break;
+			}
+		} else {
+			sess->client_myds->proxy_addr.addr = strdup("unknown");
+		}
+	}
+#endif // TEST_AURORA
+
 	char *query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
 
@@ -260,7 +292,13 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			query=l_strdup("SELECT '(ProxySQL Admin Module)'");
+#ifdef TEST_AURORA
+			char *a = (char *)"SELECT '(ProxySQL Aurora Test Server) - %s'";
+			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
+			sprintf(query,a,sess->client_myds->proxy_addr.addr);
+#else
+			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
+#endif // TEST_AURORA
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
@@ -436,8 +474,27 @@ __end_show_commands:
 
 __run_query:
 	if (run_query) {
+#ifdef TEST_AURORA
+		if (strncasecmp("SELECT",query_no_space,6)==0) {
+			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
+				pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
+				GloSQLite3Server->populate_aws_aurora_table(sess);
+			}
+		}
+#endif // TEST_AURORA
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+#ifdef TEST_AURORA
+		if (strncasecmp("SELECT",query_no_space,6)==0) {
+			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
+				pthread_mutex_unlock(&GloSQLite3Server->aurora_mutex);
+				if (rand() % 100 == 0) {
+					// randomly add some latency on 1% of the traffic
+					sleep(2);
+				}
+			}
+		}
+#endif // TEST_AURORA
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 	}
@@ -639,11 +696,16 @@ __end_while_pool:
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_SQLITE3_SERVER_VERSION "0.7.0625" DEB
+#define PROXYSQL_SQLITE3_SERVER_VERSION "1.9.0218" DEB
 
 SQLite3_Server::~SQLite3_Server() {
 	delete sessdb;
 	sessdb = NULL;
+
+#ifdef TEST_AURORA
+	drop_tables_defs(tables_defs_aurora);
+	delete tables_defs_aurora;
+#endif // TEST_AURORA
 };
 
 SQLite3_Server::SQLite3_Server() {
@@ -664,9 +726,117 @@ SQLite3_Server::SQLite3_Server() {
 	sessdb = new SQLite3DB();
     sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
 
-	variables.mysql_ifaces=strdup("127.0.0.1:6030");
 	variables.read_only=false;
+
+#ifdef TEST_AURORA
+	pthread_mutex_init(&aurora_mutex,NULL);
+	unsigned int nas = time(NULL);
+	nas = nas % 3; // range
+	nas += 5; // min
+	max_num_aurora_servers = 10; // hypothetical maximum number of nodes
+	string s = "";
+	for (unsigned int j=1; j<4; j++) {
+		cur_aurora_writer[j-1] = 0;
+		num_aurora_servers[j-1] = nas;
+		for (unsigned int i=11; i<max_num_aurora_servers+11 ; i++) {
+			s += "127.0." + std::to_string(j) + "." + std::to_string(i) + ":3306";
+			if ( j!=3 || (j==3 && i<max_num_aurora_servers+11-1) ) {
+				s += ";";
+			}
+		}
+	}
+	variables.mysql_ifaces=strdup(s.c_str());
+#else
+	variables.mysql_ifaces=strdup("127.0.0.1:6030");
+#endif // TEST_AURORA
 };
+
+#ifdef TEST_AURORA
+
+void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
+	// this function needs to be called with lock on mutex aurora_mutex already acquired
+	sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
+	sqlite3_stmt *statement=NULL;
+    sqlite3 *mydb3=sessdb->get_db();
+	int rc;
+    char *query=(char *)"INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5)";
+    rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+    assert(rc==SQLITE_OK);
+	time_t __timer;
+	char lut[30];
+	struct tm __tm_info;
+	time(&__timer);
+	localtime_r(&__timer, &__tm_info);
+	strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+	string myip = string(sess->client_myds->proxy_addr.addr);
+	string clu_id_s = myip.substr(6,1);
+	unsigned int cluster_id = atoi(clu_id_s.c_str());
+	cluster_id--;
+	if (rand() % 200 == 0) {
+		// simulate a failover
+		cur_aurora_writer[cluster_id] = rand() % num_aurora_servers[cluster_id];
+		proxy_info("Simulating a failover for AWS Aurora cluster %d , HGs (%d:%d)\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2);
+	}
+	for (unsigned int i=0; i<num_aurora_servers[cluster_id]; i++) {
+		
+		string serverid = "127.0." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
+		string sessionid= "";
+		float lag_ms = 0;
+		if (i==cur_aurora_writer[cluster_id]) {
+			sessionid = "MASTER_SESSION_ID";
+		} else {
+			sessionid = "b80ef4b4-" + serverid + "-aa01";
+			int lag_ms_i = rand();
+			lag_ms_i %= 2000;
+			lag_ms = lag_ms_i;
+			lag_ms /= 100;
+			lag_ms += 10;
+		}
+		int cpu_i = rand() % 10000;
+		float cpu = cpu_i;
+		cpu /= 100;
+		rc=sqlite3_bind_text(statement, 1, serverid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement, 2, sessionid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_double(statement, 3, cpu); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement, 4, lut, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_double(statement, 5, lag_ms); assert(rc==SQLITE_OK);
+		SAFE_SQLITE3_STEP2(statement);
+		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+	}
+	sqlite3_finalize(statement);
+}
+
+void SQLite3_Server::insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def) {
+	table_def_t *td = new table_def_t;
+	td->table_name=strdup(table_name);
+	td->table_def=strdup(table_def);
+	tables_defs->push_back(td);
+};
+
+void SQLite3_Server::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
+	table_def_t *td;
+	db->execute("PRAGMA foreign_keys = OFF");
+	for (std::vector<table_def_t *>::iterator it=tables_defs->begin(); it!=tables_defs->end(); ++it) {
+		td=*it;
+		db->check_and_build_table(td->table_name, td->table_def);
+	}
+	db->execute("PRAGMA foreign_keys = ON");
+};
+
+void SQLite3_Server::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
+	table_def_t *td;
+	while (!tables_defs->empty()) {
+		td=tables_defs->back();
+		free(td->table_name);
+		td->table_name=NULL;
+		free(td->table_def);
+		td->table_def=NULL;
+		tables_defs->pop_back();
+		delete td;
+	}
+};
+#endif // TEST_AURORA
 
 void SQLite3_Server::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
@@ -684,6 +854,14 @@ void SQLite3_Server::print_version() {
 bool SQLite3_Server::init() {
 	cpu_timer cpt;
 
+#ifdef TEST_AURORA
+	tables_defs_aurora = new std::vector<table_def_t *>;
+	insert_into_tables_defs(tables_defs_aurora,
+		(const char *)"REPLICA_HOST_STATUS",
+		(const char *)"CREATE TABLE REPLICA_HOST_STATUS (SERVER_ID VARCHAR NOT NULL, SESSION_ID VARCHAR NOT NULL, CPU REAL NOT NULL, LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL, REPLICA_LAG_IN_MILLISECONDS REAL NOT NULL)");
+	check_and_build_standard_tables(sessdb, tables_defs_aurora);
+	GloAdmin->enable_aurora_testing();
+#endif // TEST_AURORA
 	child_func[0]=child_mysql;
 	main_shutdown=0;
 	main_poll_nfds=0;

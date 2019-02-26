@@ -307,5 +307,11 @@ class ProxySQL_Admin {
 #endif /* PROXYSQLCLICKHOUSE */
 
 	void vacuum_stats(bool);
+
+
+#ifdef TEST_AURORA
+	void enable_aurora_testing();
+#endif // TEST_AURORA
+
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

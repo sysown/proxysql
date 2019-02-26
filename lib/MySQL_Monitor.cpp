@@ -294,6 +294,19 @@ void * monitor_galera_pthread(void *arg) {
 	return NULL;
 }
 
+void * monitor_aws_aurora_pthread(void *arg) {
+//#ifndef NOJEM
+//	bool cache=false;
+//	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
+//#endif
+	while (GloMTH==NULL) {
+		usleep(50000);
+	}
+	usleep(100000);
+	GloMyMon->monitor_aws_aurora();
+	return NULL;
+}
+
 void * monitor_replication_lag_pthread(void *arg) {
 #ifndef NOJEM
 	bool cache=false;
@@ -321,7 +334,7 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	pthread_mutex_init(&aws_aurora_mutex,NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
-
+	AWS_Aurora_Hosts_resultset_checksum = 0;
 	shutdown=false;
 	monitor_enabled=true;	// default
 	// create new SQLite datatabase
@@ -342,6 +355,8 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_group_replication_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_GROUP_REPLICATION_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_galera_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_GALERA_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_LOG);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_check_status", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_CHECK_STATUS);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_failovers", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_FAILOVERS);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start_us)");
@@ -397,6 +412,13 @@ MySQL_Monitor::~MySQL_Monitor() {
 		delete AWS_Aurora_Hosts_resultset;
 		AWS_Aurora_Hosts_resultset=NULL;
 	}
+	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
+	AWS_Aurora_monitor_node *node=NULL;
+	for (it2 = AWS_Aurora_Hosts_Map.begin(); it2 != AWS_Aurora_Hosts_Map.end(); ++it2) {
+		node = it2->second;
+		delete node;
+	}
+	AWS_Aurora_Hosts_Map.clear();
 };
 
 
@@ -546,6 +568,9 @@ __exit_monitor_ping_thread:
 		sqlite3_stmt *statement=NULL;
 		sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
+#ifdef TEST_AURORA
+//		if ((rand() % 10) ==0) {
+#endif // TEST_AURORA
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
 		rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
@@ -564,6 +589,9 @@ __exit_monitor_ping_thread:
 		if (mmsd->mysql_error_msg == NULL) {
 			ping_success = true;
 		}
+#ifdef TEST_AURORA
+//		}
+#endif // TEST_AURORA
 	}
 __fast_exit_monitor_ping_thread:
 	if (mmsd->mysql) {
@@ -599,6 +627,9 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 	if (mysql_thread___monitor_wait_timeout==false) {
 		return true;
 	}
+#ifdef TEST_AURORA
+	return true;
+#endif // TEST_AURORA
 	bool ret=false;
 	char *query=NULL;
 	char *qt=(char *)"SET wait_timeout=%d";
@@ -1172,7 +1203,7 @@ void * monitor_galera_thread(void *arg) {
 			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
-			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
 			goto __exit_monitor_galera_thread;
 		}
 	}
@@ -2478,6 +2509,11 @@ __monitor_run:
 		proxy_error("Thread creation\n");
 		assert(0);
 	}
+	pthread_t monitor_aws_aurora_thread;
+	if (pthread_create(&monitor_aws_aurora_thread, &attr, &monitor_aws_aurora_pthread,NULL) != 0) {
+		proxy_error("Thread creation\n");
+		assert(0);
+	}
 	pthread_t monitor_replication_lag_thread;
 	if (pthread_create(&monitor_replication_lag_thread, &attr, &monitor_replication_lag_pthread,NULL) != 0) {
 		proxy_error("Thread creation\n");
@@ -2570,6 +2606,7 @@ __monitor_run:
 	pthread_join(monitor_read_only_thread,NULL);
 	pthread_join(monitor_group_replication_thread,NULL);
 	pthread_join(monitor_galera_thread,NULL);
+	pthread_join(monitor_aws_aurora_thread,NULL);
 	pthread_join(monitor_replication_lag_thread,NULL);
 	while (shutdown==false) {
 		unsigned int glover;
@@ -2657,17 +2694,26 @@ bool MyGR_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct
 }
 
 
-AWS_Aurora_replica_host_status_entry::AWS_Aurora_replica_host_status_entry(char *serid, char *sessid, uint32_t lut, float rlm, float _c) {
+AWS_Aurora_replica_host_status_entry::AWS_Aurora_replica_host_status_entry(char *serid, char *sessid, char *lut, float rlm, float _c) {
 	server_id = strdup(serid);
 	session_id = strdup(sessid);
-	last_update_timestamp = lut;
+	last_update_timestamp = strdup(lut);
 	replica_lag_ms = rlm;
 	cpu = _c;
+}
+
+AWS_Aurora_replica_host_status_entry::AWS_Aurora_replica_host_status_entry(char *serid, char *sessid, char *lut, char *rlm, char *_c) {
+	server_id = strdup(serid);
+	session_id = strdup(sessid);
+	last_update_timestamp = strdup(lut);
+	replica_lag_ms = strtof(rlm, NULL);
+	cpu = strtof(_c, NULL);
 }
 
 AWS_Aurora_replica_host_status_entry::~AWS_Aurora_replica_host_status_entry() {
 	free(server_id);
 	free(session_id);
+	free(last_update_timestamp);
 }
 
 AWS_Aurora_status_entry::AWS_Aurora_status_entry(unsigned long long st, unsigned long long ct, char *e) {
@@ -2799,6 +2845,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 			}
 		}
 	}
+	sqlite3_finalize(statement1);
 	pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 }
 
@@ -2842,6 +2889,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 			}
 		}
 	}
+	sqlite3_finalize(statement1);
 	pthread_mutex_unlock(&GloMyMon->galera_mutex);
 }
 
@@ -2941,11 +2989,16 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
-	query1=(char *)"INSERT INTO populate_monitor_mysql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 	sqlite3_stmt *statement1=NULL;
-	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	char *query2=NULL;
+	query2=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log (hostname, port, time_start_us, success_time_us, error) VALUES (?1, ?2, ?3, ?4, ?5)";
+	sqlite3_stmt *statement2=NULL;
 	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
 	assert(rc==SQLITE_OK);
+	rc=sqlite3_prepare_v2(mondb, query2, -1, &statement2, 0);
+	assert(rc==SQLITE_OK);
+	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
 	monitordb->execute((char *)"DELETE FROM mysql_server_aws_aurora_log");
 	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
 	AWS_Aurora_monitor_node *node=NULL;
@@ -2957,31 +3010,151 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 		std::string port=s.substr(found+1);
 		int i;
 		for (i=0; i<AWS_Aurora_Nentries; i++) {
-			AWS_Aurora_status_entry * aase = &node->last_entries[i];
-			if (aase->start_time) {
-				for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
-					AWS_Aurora_replica_host_status_entry *hse = *it3;
-					if (hse) {
-						rc=sqlite3_bind_text(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_int64(statement1, 2, atoi(port.c_str())); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_int64(statement1, 3, aase->start_time ); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_int64(statement1, 4, aase->check_time ); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_text(statement1, 5, aase->error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_text(statement1, 6, hse->server_id , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_text(statement1, 7, hse->session_id , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_int64(statement1, 8, hse->last_update_timestamp ); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_double(statement1, 9, hse->replica_lag_ms ); assert(rc==SQLITE_OK);
-						rc=sqlite3_bind_double(statement1, 10, hse->cpu ); assert(rc==SQLITE_OK);
-						SAFE_SQLITE3_STEP2(statement1);
-						rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-						rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			AWS_Aurora_status_entry * aase = node->last_entries[i];
+			if (aase && aase->start_time) {
+				if ( aase->host_statuses->size() ) {
+					for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
+						AWS_Aurora_replica_host_status_entry *hse = *it3;
+						if (hse) {
+							rc=sqlite3_bind_text(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_int64(statement1, 2, atoi(port.c_str())); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_int64(statement1, 3, aase->start_time ); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_int64(statement1, 4, aase->check_time ); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_text(statement1, 5, aase->error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_text(statement1, 6, hse->server_id , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_text(statement1, 7, hse->session_id , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_text(statement1, 8, hse->last_update_timestamp , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_double(statement1, 9, hse->replica_lag_ms ); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_double(statement1, 10, hse->cpu ); assert(rc==SQLITE_OK);
+							SAFE_SQLITE3_STEP2(statement1);
+							rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+							rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+						}
+					}
+				} else {
+					rc=sqlite3_bind_text(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 2, atoi(port.c_str())); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 3, aase->start_time ); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 4, aase->check_time ); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_text(statement2, 5, aase->error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+					SAFE_SQLITE3_STEP2(statement2);
+					rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
+					rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
+				}
+			}
+		}
+	}
+	sqlite3_finalize(statement1);
+	sqlite3_finalize(statement2);
+	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+}
+
+void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_check_status() {
+	sqlite3 *mondb=monitordb->get_db();
+	int rc;
+	//char *query=NULL;
+	char *query1=NULL;
+	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_check_status VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+	sqlite3_stmt *statement1=NULL;
+	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	assert(rc==SQLITE_OK);
+	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	monitordb->execute((char *)"DELETE FROM mysql_server_aws_aurora_check_status");
+	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
+	AWS_Aurora_monitor_node *node=NULL;
+	for (it2=GloMyMon->AWS_Aurora_Hosts_Map.begin(); it2!=GloMyMon->AWS_Aurora_Hosts_Map.end(); ++it2) {
+		std::string s=it2->first;
+		node=it2->second;
+		std::size_t found=s.find_last_of(":");
+		std::string host=s.substr(0,found);
+		std::string port=s.substr(found+1);
+		AWS_Aurora_status_entry * aase = node->last_entry();
+		char *error_msg = NULL;
+		if (aase && aase->start_time) {
+			if (aase->error) {
+				error_msg = aase->error;
+			}
+		}
+		char lut[30];
+		struct tm __tm_info;
+		localtime_r(&node->last_checked_at, &__tm_info);
+		strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+
+/*
+		int i;
+		for (i=0; i<AWS_Aurora_Nentries; i++) {
+			AWS_Aurora_status_entry * aase = node->last_entries[i];
+			if (aase && aase->start_time) {
+				if ( aase->host_statuses->size() ) {
+					for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
+						AWS_Aurora_replica_host_status_entry *hse = *it3;
+						if (hse) {
+*/
+							rc=sqlite3_bind_int64(statement1, 1, node->writer_hostgroup); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_text(statement1, 2, host.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_int64(statement1, 3, atoi(port.c_str())); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_text(statement1, 4, lut, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_int64(statement1, 5, node->num_checks_tot ); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_int64(statement1, 6, node->num_checks_ok ); assert(rc==SQLITE_OK);
+							rc=sqlite3_bind_text(statement1, 7, error_msg , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+							SAFE_SQLITE3_STEP2(statement1);
+							rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+							rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+/*
+						}
+					}
+				} else {
+					rc=sqlite3_bind_text(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 2, atoi(port.c_str())); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 3, aase->start_time ); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_int64(statement2, 4, aase->check_time ); assert(rc==SQLITE_OK);
+					rc=sqlite3_bind_text(statement2, 5, aase->error , -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+					SAFE_SQLITE3_STEP2(statement2);
+					rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
+					rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
+				}
+			}
+		}
+*/
+	}
+	sqlite3_finalize(statement1);
+	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+}
+
+/*
+void MySQL_Monitor::gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname) {
+	fprintf(stderr,"gdb_dump___monitor_mysql_server_aws_aurora_log\n");
+	std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
+	AWS_Aurora_monitor_node *node=NULL;
+	for (it2=GloMyMon->AWS_Aurora_Hosts_Map.begin(); it2!=GloMyMon->AWS_Aurora_Hosts_Map.end(); ++it2) {
+		std::string s=it2->first;
+		node=it2->second;
+		std::size_t found=s.find_last_of(":");
+		std::string host=s.substr(0,found);
+		std::string port=s.substr(found+1);
+		int i;
+		for (i=0; i<AWS_Aurora_Nentries; i++) {
+			AWS_Aurora_status_entry * aase = node->last_entries[i];
+			if (aase && aase->start_time) {
+				if ( aase->host_statuses->size() ) {
+					for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
+						AWS_Aurora_replica_host_status_entry *hse = *it3;
+						if (hse) {
+							if (hostname == NULL || (hostname && ( (strcmp(hostname,host.c_str())==0) || (strcmp(hostname,hse->server_id)==0)) )) {
+								fprintf(stderr,"%s:%d %llu %llu %s %s %s %s %f %f\n", host.c_str(), atoi(port.c_str()), aase->start_time, aase->check_time, aase->error, hse->server_id,hse->session_id, hse->last_update_timestamp, hse->replica_lag_ms , hse->cpu);
+							}
+						}
+					}
+				} else {
+					if (hostname == NULL || (hostname && strcmp(hostname,host.c_str())==0) ) {
+						fprintf(stderr,"%s:%d %llu %llu %s\n", host.c_str(), atoi(port.c_str()), aase->start_time, aase->check_time, aase->error);
 					}
 				}
 			}
 		}
 	}
-	pthread_mutex_unlock(&GloMyMon->galera_mutex);
 }
+*/
 
 AWS_Aurora_monitor_node::AWS_Aurora_monitor_node(char *_a, int _p, int _whg) {
 	addr=NULL;
@@ -2993,9 +3166,13 @@ AWS_Aurora_monitor_node::AWS_Aurora_monitor_node(char *_a, int _p, int _whg) {
 	writer_hostgroup=_whg;
 	int i;
 	for (i=0;i<AWS_Aurora_Nentries;i++) {
-		last_entries[i].error=NULL;
-		last_entries[i].start_time=0;
+		last_entries[i] = NULL;
+		//last_entries[i]->start_time=0;
+		//last_entries[i]->check_time=0;
 	}
+	num_checks_tot = 0;
+	num_checks_ok = 0;
+	last_checked_at = 0;
 }
 
 AWS_Aurora_monitor_node::~AWS_Aurora_monitor_node() {
@@ -3003,6 +3180,447 @@ AWS_Aurora_monitor_node::~AWS_Aurora_monitor_node() {
 		free(addr);
 	}
 }
+
+bool AWS_Aurora_monitor_node::add_entry(AWS_Aurora_status_entry *ase) {
+	bool ret=false;
+	if (idx_last_entry==-1) ret=true;
+	int prev_last_entry=idx_last_entry;
+	idx_last_entry++;
+	if (idx_last_entry>=AWS_Aurora_Nentries) {
+		idx_last_entry=0;
+	}
+	if (last_entries[idx_last_entry]) {
+		AWS_Aurora_status_entry *old = last_entries[idx_last_entry];
+		delete old;
+	}
+	last_entries[idx_last_entry] = ase;
+	num_checks_tot++;
+	if (ase->error == NULL) {
+		num_checks_ok++;
+	}
+	last_checked_at = time(NULL);
+	return ret; // for now ignored
+}
+
+void * monitor_AWS_Aurora_thread(void *arg);
+
+
+typedef struct _host_def_t {
+	char *host;
+	int port;
+	int use_ssl;
+} host_def_t;
+
+static void shuffle_hosts(host_def_t *array, size_t n) {
+	char tmp[sizeof(host_def_t)];
+	char *arr = (char *)array;
+	size_t stride = sizeof(host_def_t) * sizeof(char);
+
+	if (n > 1) {
+		size_t i;
+		for (i = 0; i < n - 1 ; ++i) {
+			size_t rnd = (size_t) fastrand();
+			size_t j = i + rnd / (0x7FFF / (n - i) + 1);
+			memcpy(tmp, arr + j * stride, sizeof(host_def_t));
+			memcpy(arr + j * stride, arr + i * stride, sizeof(host_def_t));
+			memcpy(arr + i * stride, tmp, sizeof(host_def_t));
+		}
+	}
+}
+
+void * monitor_AWS_Aurora_thread_HG(void *arg) {
+	unsigned int wHG = *(unsigned int *)arg;
+	unsigned int rHG = 0;
+	unsigned int num_hosts = 0;
+	unsigned int cur_host_idx = 0;
+	unsigned int max_lag_ms = 0;
+	unsigned int check_interval_ms = 0;
+	unsigned int check_timeout_ms = 0;
+	//unsigned int i = 0;
+	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
+
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	mysql_thr->curtime=monotonic_time();
+	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	mysql_thr->refresh_variables();
+	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+
+	uint64_t initial_raw_checksum = 0;
+
+	// this is a static array of the latest reads
+	unsigned int ase_idx = 0;
+	AWS_Aurora_status_entry *lasts_ase[N_L_ASE];
+	for (unsigned int i=0; i<N_L_ASE; i++) {
+		lasts_ase[i] = NULL;
+	}
+
+	// initial data load
+	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	initial_raw_checksum = GloMyMon->AWS_Aurora_Hosts_resultset_checksum;
+	// count the number of hosts
+	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_Aurora_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		if (atoi(r->fields[0]) == wHG) {
+			num_hosts++;
+			if (max_lag_ms == 0) {
+				max_lag_ms = atoi(r->fields[5]);
+			}
+			if (check_interval_ms == 0) {
+				check_interval_ms = atoi(r->fields[5]);
+			}
+			if (check_timeout_ms == 0) {
+				check_timeout_ms = atoi(r->fields[7]);
+			}
+			if (rHG == 0) {
+				rHG = atoi(r->fields[1]);
+			}
+		}
+	}
+	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*num_hosts);
+	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_Aurora_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		if (atoi(r->fields[0]) == wHG) {
+			hpa[cur_host_idx].host = strdup(r->fields[2]);
+			hpa[cur_host_idx].port = atoi(r->fields[3]);
+			hpa[cur_host_idx].use_ssl = atoi(r->fields[4]);
+			cur_host_idx++;
+		}
+	}
+	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+
+	bool exit_now = false;
+	unsigned long long t1 = 0;
+	//unsigned long long t2 = 0;
+	unsigned long long next_loop_at = 0;
+
+	bool crc = false;
+
+	uint64_t current_raw_checksum = 0;
+	size_t rnd;
+	bool found_pingable_host = false;
+	bool rc_ping = false;
+	MySQL_Monitor_State_Data *mmsd = NULL;
+
+	t1 = monotonic_time();
+	unsigned long long start_time=t1;
+
+	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
+
+		unsigned int glover;
+		t1=monotonic_time();
+		
+		//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
+
+		if (!GloMTH) {
+			//proxy_info("Stopping Monitor thread for AWS Aurora writer HG %u\n", wHG);
+			goto __exit_monitor_AWS_Aurora_thread_HG_now;
+			return NULL;	// quick exit during shutdown/restart
+		}
+
+		// if variables has changed, triggers new checks
+		glover=GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+			mysql_thr->refresh_variables();
+			next_loop_at=0;
+		}
+
+		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+		current_raw_checksum = GloMyMon->AWS_Aurora_Hosts_resultset_checksum;
+		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+
+		if (current_raw_checksum != initial_raw_checksum) {
+			// the content of AWS_Aurora_Hosts_resultset has changed. Exit
+			exit_now=true;
+			break;
+		}
+		//fprintf(stderr,"%u : %llu %llu\n", wHG, t1, next_loop_at);
+		if (t1 < next_loop_at) {
+			unsigned long long st=0;
+			st=next_loop_at-t1;
+			if (st > 50000) {
+				st = 50000;
+			}
+			usleep(st);
+			//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
+			continue;
+		}
+		//proxy_info("Running check AWS Aurora writer HG %u\n", wHG);
+		found_pingable_host = false;
+
+		rc_ping = false;
+		// pick a random host
+		rnd = (size_t) rand();
+		rnd %= num_hosts;
+		rc_ping = GloMyMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port);
+		//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
+#ifdef TEST_AURORA
+		if (rand() % 100 < 30) {
+			// we randomly fail 30% of the requests
+			rc_ping = false;
+		}
+#endif // TEST_AURORA
+		if (rc_ping) {
+			found_pingable_host = true;
+			cur_host_idx = rnd;
+		} else {
+			// the randomly picked host didn't work work
+			shuffle_hosts(hpa,num_hosts);
+			for (unsigned int i=0; (found_pingable_host == false && i<num_hosts ) ; i++) {
+				rc_ping = GloMyMon->server_responds_to_ping(hpa[i].host, hpa[i].port);
+				if (rc_ping) {
+					found_pingable_host = true;
+					cur_host_idx = i;
+				}
+			}
+		}
+			
+#ifdef TEST_AURORA
+		if (rand() % 200 == 0) {
+			// we randomly fail 0.5% of the requests
+			found_pingable_host = false;
+		}
+#endif // TEST_AURORA
+
+		if (found_pingable_host == false) {
+			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
+			next_loop_at = t1 + check_interval_ms * 1000;
+			continue;
+		}
+		if (rand() % 1000 == 0) { // suppress 99.9% of the output, too verbose
+			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG , hpa[cur_host_idx].host, hpa[cur_host_idx].port);
+		}
+		mmsd = NULL;
+		mmsd = new MySQL_Monitor_State_Data(hpa[cur_host_idx].host, hpa[cur_host_idx].port, NULL, hpa[cur_host_idx].use_ssl);
+		mmsd->writer_hostgroup = wHG;
+		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
+		mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
+		//unsigned long long start_time=mysql_thr->curtime;
+		start_time=t1;
+
+
+		mmsd->t1=start_time;
+
+		crc=false;
+		if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
+			bool rc;
+			rc=mmsd->create_new_connection();
+			crc=true;
+			if (rc==false) {
+				unsigned long long now=monotonic_time();
+				char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
+				sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+				free(mmsd->mysql_error_msg);
+				mmsd->mysql_error_msg = new_error;
+				proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+				goto __exit_monitor_aws_aurora_HG_thread;
+			}
+		}
+
+	mmsd->t1=monotonic_time();
+	mmsd->interr=0; // reset the value
+#ifdef TEST_AURORA
+	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID");
+#else
+	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS ORDER BY SERVER_ID");
+#endif // TEST_AURORA
+	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
+		unsigned long long now=monotonic_time();
+		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			goto __exit_monitor_aws_aurora_HG_thread;
+		}
+		if (GloMyMon->shutdown==true) {
+			goto __fast_exit_monitor_aws_aurora_HG_thread;	// exit immediately
+		}
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
+		}
+	}
+	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
+	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
+		unsigned long long now=monotonic_time();
+		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			goto __exit_monitor_aws_aurora_HG_thread;
+		}
+		if (GloMyMon->shutdown==true) {
+			goto __fast_exit_monitor_aws_aurora_HG_thread;	// exit immediately
+		}
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
+		}
+	}
+	if (mmsd->interr) { // check failed
+		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+	}
+
+__exit_monitor_aws_aurora_HG_thread:
+		mmsd->t2=monotonic_time();
+		next_loop_at = t1 + (check_interval_ms * 1000);
+		if (mmsd->t2 > t1) {
+			next_loop_at -= (mmsd->t2 - t1);
+		}
+		{
+			// TODO : complete this
+			char buf[128];
+			char *s=NULL;
+			int l=strlen(mmsd->hostname);
+			if (l<110) {
+				s=buf;
+			}	else {
+				s=(char *)malloc(l+16);
+			}
+			sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+			AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
+			AWS_Aurora_status_entry *ase_l = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
+			if (mmsd->interr == 0 && mmsd->result) {
+				int num_fields=0;
+				int num_rows=0;
+				num_fields = mysql_num_fields(mmsd->result);
+				if (num_fields!=5) {
+					proxy_error("Incorrect number of fields, please report a bug\n");
+				} else {
+					MYSQL_ROW row;
+					while ((row = mysql_fetch_row(mmsd->result))) {
+						AWS_Aurora_replica_host_status_entry *arhse = new AWS_Aurora_replica_host_status_entry(row[0], row[1], row[2], row[3], row[4]);
+						ase->add_host_status(arhse);
+						AWS_Aurora_replica_host_status_entry *arhse_l = new AWS_Aurora_replica_host_status_entry(row[0], row[1], row[2], row[3], row[4]);
+						ase_l->add_host_status(arhse_l);
+					}
+				}
+				mysql_free_result(mmsd->result);
+				mmsd->result=NULL;
+			}
+//__end_process_aws_aurora_result:
+			if (mmsd->mysql_error_msg) {
+			}
+			unsigned long long time_now=realtime_time();
+			time_now=time_now-(mmsd->t2 - start_time);
+			pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+			//auto it = 
+			// TODO : complete this
+			std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
+			it2 = GloMyMon->AWS_Aurora_Hosts_Map.find(s);
+			AWS_Aurora_monitor_node *node=NULL;
+			if (it2!=GloMyMon->AWS_Aurora_Hosts_Map.end()) {
+				node=it2->second;
+				node->add_entry(ase);
+			} else {
+				node = new AWS_Aurora_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
+				node->add_entry(ase);
+				GloMyMon->AWS_Aurora_Hosts_Map.insert(std::make_pair(s,node));
+			}
+			// clean up
+			if (l<110) {
+			} else {
+				free(s);
+			}
+			pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+			if (lasts_ase[ase_idx]) {
+				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
+				delete l_ase;
+			}
+			lasts_ase[ase_idx] = ase_l;
+			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms);
+			// remember that we call evaluate_aws_aurora_results()
+			// *before* shifting ase_idx
+			ase_idx++;
+			if (ase_idx == N_L_ASE) {
+				ase_idx = 0;
+			}
+		}
+		if (mmsd->interr || mmsd->async_exit_status) { // check failed
+		} else {
+			if (crc==false) {
+				if (mmsd->mysql) {
+					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+					mmsd->mysql=NULL;
+				}
+			}
+		}
+__fast_exit_monitor_aws_aurora_HG_thread:
+	if (mmsd->mysql) {
+		// if we reached here we didn't put the connection back
+		if (mmsd->mysql_error_msg || mmsd->async_exit_status) {
+			mysql_close(mmsd->mysql); // if we reached here we should destroy it
+			mmsd->mysql=NULL;
+		} else {
+			if (crc) {
+				bool rc=mmsd->set_wait_timeout();
+				if (rc) {
+					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+				} else {
+					mysql_close(mmsd->mysql); // set_wait_timeout failed
+				}
+				mmsd->mysql=NULL;
+			} else { // really not sure how we reached here, drop it
+				mysql_close(mmsd->mysql);
+				mmsd->mysql=NULL;
+			}
+		}
+	}
+__exit_monitor_AWS_Aurora_thread_HG_now:
+	if (mmsd) {
+		delete (mmsd);
+		mmsd = NULL;
+	for (unsigned int i=0; i<N_L_ASE; i++) {
+		if (lasts_ase[i]) {
+			delete lasts_ase[i];
+			lasts_ase[i] = NULL;
+		}
+	}
+	}
+/*
+		mmsd->writer_hostgroup=atoi(r->fields[0]);
+		mmsd->writer_is_also_reader=atoi(r->fields[4]);
+					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->mondb=monitordb;
+					WorkItem* item;
+					item=new WorkItem(mmsd,monitor_AWS_Aurora_thread);
+					GloMyMon->queue.add(item);
+					usleep(us);
+*/
+//				}
+		
+/*
+		for
+		for (std::vector<SQLite3_row *>::iterator it = Galera_Hosts_resultset->rows.begin() ; it != Galera_Hosts_resultset->rows.end(); ++it) {
+
+		}
+				SQLite3_row *r=*it;
+				bool rc_ping = true;
+				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
+				if (rc_ping) { // only if server is responding to pings
+					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
+					mmsd->writer_hostgroup=atoi(r->fields[0]);
+					mmsd->writer_is_also_reader=atoi(r->fields[4]);
+					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->mondb=monitordb;
+		
+*/
+	}
+
+	free(hpa);
+	if (mysql_thr) {
+		delete mysql_thr;
+		mysql_thr=NULL;
+	}
+	for (unsigned int i=0; i<N_L_ASE; i++) {
+		if (lasts_ase[i]) {
+			AWS_Aurora_status_entry * ase = lasts_ase[i];
+			delete ase;
+		}
+	}
+	proxy_info("Stopping Monitor thread for AWS Aurora writer HG %u\n", wHG);
+	return NULL;
+} 
+
 
 void * MySQL_Monitor::monitor_aws_aurora() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3018,12 +3636,24 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 
+	uint64_t last_raw_checksum = 0;
+
+	// ADD here an unordered map , Writer HG => next time at
+	// when empty, a new map is populated
+	// when next_loop_at = 0 , the tables is emptied so to be populated again
+
+	unsigned int *hgs_array = NULL;
+	pthread_t *pthreads_array = NULL;
+	unsigned int hgs_num = 0;
+
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		unsigned int glover;
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+
+		// if variables has changed, triggers new checks
 		glover=GloMTH->get_global_version();
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
@@ -3031,20 +3661,81 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 			next_loop_at=0;
 		}
 
+		// if list of servers or HG or options has changed, triggers new checks
+		pthread_mutex_lock(&aws_aurora_mutex);
+		uint64_t new_raw_checksum = AWS_Aurora_Hosts_resultset->raw_checksum();
+		pthread_mutex_unlock(&aws_aurora_mutex);
+		if (new_raw_checksum != last_raw_checksum) {
+			proxy_info("Detected new/changed definition for AWS Aurora monitoring\n");
+			next_loop_at = 0;
+			last_raw_checksum = new_raw_checksum;
+			if (pthreads_array) {
+				// wait all threads to terminate
+				for (unsigned int i=0; i < hgs_num; i++) {
+					pthread_join(pthreads_array[i], NULL);
+					proxy_info("Stopped Monitor thread for AWS Aurora writer HG %u\n", hgs_array[i]);
+				}
+				free(pthreads_array);
+				free(hgs_array);
+			}
+			hgs_num = 0;
+			pthread_mutex_lock(&aws_aurora_mutex);
+			// scan all the writer HGs
+			unsigned int num_rows = AWS_Aurora_Hosts_resultset->rows_count;
+			if (num_rows) {
+				unsigned int *tmp_hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*num_rows);
+				for (std::vector<SQLite3_row *>::iterator it = AWS_Aurora_Hosts_resultset->rows.begin() ; it != AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
+					SQLite3_row *r=*it;
+					int wHG = atoi(r->fields[0]);
+					bool found = false;
+					// very simple search. Far from optimal, but assuming very few HGs it is fast enough
+					for (unsigned int i=0; i < hgs_num; i++) {
+						if (tmp_hgs_array[i] == wHG) {
+							found = true;
+						}
+					}
+					if (found == false) {
+						// new wHG found
+						tmp_hgs_array[hgs_num]=wHG;
+						hgs_num++;
+					}
+				}
+				proxy_info("Activating Monitoring of %u AWS Aurora clusters\n", hgs_num);
+				hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*hgs_num);
+				pthreads_array = (pthread_t *)malloc(sizeof(pthread_t)*hgs_num);
+				for (unsigned int i=0; i < hgs_num; i++) {
+					hgs_array[i] = tmp_hgs_array[i];
+					proxy_info("Starting Monitor thread for AWS Aurora writer HG %u\n", hgs_array[i]);
+					if (pthread_create(&pthreads_array[i], NULL, monitor_AWS_Aurora_thread_HG, &hgs_array[i]) != 0) {
+						proxy_error("Thread creation\n");
+						assert(0);
+					}
+				}
+				free(tmp_hgs_array);
+			}
+			pthread_mutex_unlock(&aws_aurora_mutex);
+		}
 
+/*
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_aws_aurora;
 		}
+
+		if (next_loop_at == 0) {
+			// free the queue
+			
+		}
+
 		next_loop_at=t1+1000*mysql_thread___monitor_galera_healthcheck_interval;
 		pthread_mutex_lock(&aws_aurora_mutex);
-		if (Galera_Hosts_resultset==NULL) {
+		if (AWS_Aurora_Hosts_resultset==NULL) {
 				goto __end_monitor_aws_aurora_loop;
 		} else {
-			if (Galera_Hosts_resultset->rows_count==0) {
+			if (AWS_Aurora_Hosts_resultset->rows_count==0) {
 				goto __end_monitor_aws_aurora_loop;
 			}
 			int us=100;
-			if (Galera_Hosts_resultset->rows_count) {
+			if (AWS_Aurora_Hosts_resultset->rows_count) {
 				us=mysql_thread___monitor_read_only_interval/2/Galera_Hosts_resultset->rows_count;
 			}
 			for (std::vector<SQLite3_row *>::iterator it = Galera_Hosts_resultset->rows.begin() ; it != Galera_Hosts_resultset->rows.end(); ++it) {
@@ -3058,7 +3749,7 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 					mmsd->max_transactions_behind=atoi(r->fields[5]);
 					mmsd->mondb=monitordb;
 					WorkItem* item;
-					item=new WorkItem(mmsd,monitor_aws_aurora_thread);
+					item=new WorkItem(mmsd,monitor_AWS_Aurora_thread);
 					GloMyMon->queue.add(item);
 					usleep(us);
 				}
@@ -3074,17 +3765,18 @@ __end_monitor_aws_aurora_loop:
 		if (mysql_thread___monitor_enabled==true) {
 		}
 
-
 __sleep_monitor_aws_aurora:
 		t2=monotonic_time();
 		if (t2<next_loop_at) {
 			unsigned long long st=0;
 			st=next_loop_at-t2;
-			if (st > 500000) {
-				st = 500000;
+			if (st > 200000) {
+				st = 200000;
 			}
 			usleep(st);
 		}
+*/
+		usleep(10000);
 	}
 	if (mysql_thr) {
 		delete mysql_thr;
@@ -3098,7 +3790,6 @@ __sleep_monitor_aws_aurora:
 }
 
 void * monitor_AWS_Aurora_thread(void *arg) {
-// FIXME: still referring to GALERA and not AURORA
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -3122,29 +3813,24 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
-			proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
 			goto __exit_monitor_aws_aurora_thread;
 		}
 	}
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
-	{
-		char *sv = mmsd->mysql->server_version;
-		if (strncmp(sv,(char *)"5.7",3)==0 || strncmp(sv,(char *)"8",1)==0) {
-			// the backend is either MySQL 5.7 or MySQL 8 : INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , @@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status");
-		} else {
-			// any other version
-			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , @@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status");
-		}
-	}
+#ifdef TEST_AURORA
+	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID");
+#else
+	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS ORDER BY SERVER_ID");
+#endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
-		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
+		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_cluster_status	 is NOT Primary\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_aws_aurora_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -3158,9 +3844,9 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
-		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
+		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_local_state is NOT 4 and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_aws_aurora_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -3170,7 +3856,7 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
 	}
-	if (mmsd->interr) { // ping failed
+	if (mmsd->interr) { // check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 	}
 
@@ -3187,62 +3873,24 @@ __exit_monitor_aws_aurora_thread:
 			s=(char *)malloc(l+16);
 		}
 		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
-		bool primary_partition = false;
-		bool read_only=true;
-		bool wsrep_desync = true;
-		int wsrep_local_state = 0;
-		bool wsrep_reject_queries = true;
-		bool wsrep_sst_donor_rejects_queries = true;
-		long long wsrep_local_recv_queue=0;
+		AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
 		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int num_rows=0;
 			num_fields = mysql_num_fields(mmsd->result);
-			if (num_fields!=7) {
+			if (num_fields!=5) {
 				proxy_error("Incorrect number of fields, please report a bug\n");
-				goto __end_process_aws_aurora_result;
-			}
-			num_rows = mysql_num_rows(mmsd->result);
-			if (num_rows!=1) {
-				proxy_error("Incorrect number of rows, please report a bug\n");
-				goto __end_process_aws_aurora_result;
-			}
-			MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-			if (row[0]) {
-				wsrep_local_state = atoi(row[0]);
-			}
-			if (row[1]) {
-				if (!strcasecmp(row[1],"NO") || !strcasecmp(row[1],"OFF") || !strcasecmp(row[1],"0")) {
-					read_only=false;
-				}
-			}
-			if (row[2]) {
-				wsrep_local_recv_queue = atoll(row[2]);
-			}
-			if (row[3]) {
-				if (!strcasecmp(row[3],"NO") || !strcasecmp(row[3],"OFF") || !strcasecmp(row[3],"0")) {
-					wsrep_desync = false;
-				}
-			}
-			if (row[4]) {
-				if (!strcasecmp(row[4],"NONE")) {
-					wsrep_reject_queries = false;
-				}
-			}
-			if (row[5]) {
-				if (!strcasecmp(row[5],"NO") || !strcasecmp(row[5],"OFF") || !strcasecmp(row[5],"0")) {
-					wsrep_sst_donor_rejects_queries = false;
-				}
-			}
-			if (row[6]) {
-				if (!strcasecmp(row[6],"Primary")) {
-					primary_partition = true;
+			} else {
+				MYSQL_ROW row;
+				while ((row = mysql_fetch_row(mmsd->result))) {
+					AWS_Aurora_replica_host_status_entry *arhse = new AWS_Aurora_replica_host_status_entry(row[0], row[1], row[2], row[3], row[4]);
+					ase->add_host_status(arhse);
 				}
 			}
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
-__end_process_aws_aurora_result:
+//__end_process_aws_aurora_result:
 		if (mmsd->mysql_error_msg) {
 		}
 		unsigned long long time_now=realtime_time();
@@ -3255,14 +3903,14 @@ __end_process_aws_aurora_result:
 		AWS_Aurora_monitor_node *node=NULL;
 		if (it2!=GloMyMon->AWS_Aurora_Hosts_Map.end()) {
 			node=it2->second;
-			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
+			node->add_entry(ase);
 		} else {
 			node = new AWS_Aurora_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
-			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
+			node->add_entry(ase);
 			GloMyMon->AWS_Aurora_Hosts_Map.insert(std::make_pair(s,node));
 		}
 		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-
+/*
 		// NOTE: we update MyHGM outside the mutex aws_aurora_mutex
 		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 			MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
@@ -3302,7 +3950,7 @@ __end_process_aws_aurora_result:
 				}
 			}
 		}
-
+*/
 		// clean up
 		if (l<110) {
 		} else {
@@ -3341,4 +3989,123 @@ __fast_exit_monitor_aws_aurora_thread:
 	}
 	delete mysql_thr;
 	return NULL;
+}
+
+void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms) {
+	unsigned int i = 0;
+#ifdef TEST_AURORA
+	bool verbose = false;
+	unsigned int action_yes = 0;
+	unsigned int action_no = 0;
+	unsigned int enabling = 0;
+	unsigned int disabling = 0;
+	if (rand() % 500 == 0) {
+		verbose = true;
+		bool ev = false;
+		if (rand() % 1000 == 0) {
+			ev = true;
+		}
+		for (i=0; i < N_L_ASE; i++) {
+			AWS_Aurora_status_entry *aase = lasts_ase[i];
+			if (ev == true || i == ase_idx) {
+				if (aase && aase->start_time) {
+					if ( aase->host_statuses->size() ) {
+						for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
+							AWS_Aurora_replica_host_status_entry *hse = *it3;
+							if (hse) {
+								fprintf(stderr,"%s %s %s %f %f\n", hse->server_id, hse->session_id, hse->last_update_timestamp, hse->replica_lag_ms , hse->cpu);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+#endif // TEST_AURORA
+	unsigned int prev_ase_idx = ase_idx;
+	if (prev_ase_idx == 0) prev_ase_idx = N_L_ASE;
+	prev_ase_idx--;
+	AWS_Aurora_status_entry *aase = lasts_ase[ase_idx];
+	AWS_Aurora_status_entry *prev_aase = lasts_ase[prev_ase_idx];
+	if (aase && aase->start_time) {
+		if ( aase->host_statuses->size() ) {
+			for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
+				AWS_Aurora_replica_host_status_entry *hse = *it3;
+				bool run_action = true;
+				bool enable = true;
+				bool is_writer = false;
+				bool rla_rc = true;
+				if (hse->replica_lag_ms > max_latency_ms) {
+					enable = false;
+				}
+				if (strcmp(hse->session_id,"MASTER_SESSION_ID")==0) {
+					is_writer = true;
+				}
+				// we also try to determine if a change needs to be made
+				if (prev_aase && prev_aase->start_time) {
+					if ( prev_aase->host_statuses->size() ) {
+						for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it4 = prev_aase->host_statuses->begin(); it4!=prev_aase->host_statuses->end(); ++it4) {
+							AWS_Aurora_replica_host_status_entry *prev_hse = *it4;
+							if (strcmp(prev_hse->server_id,hse->server_id)==0) {
+								bool prev_enabled = true;
+								if (prev_hse->replica_lag_ms > max_latency_ms) {
+									prev_enabled = false;
+								}
+								if (prev_enabled == enable) {
+									// the previous status should be the same
+									// do not run any action
+									run_action = false;
+								}
+							}
+						}
+					}
+				}
+				if (run_action) {
+#ifdef TEST_AURORA
+					action_yes++;
+					(enable ? enabling++ : disabling++);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, 3306, hse->replica_lag_ms, enable, is_writer, verbose);
+#else
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, 3306, hse->replica_lag_ms, enable, is_writer);
+#endif // TEST_AURORA
+#ifdef TEST_AURORA
+				} else {
+					action_no++;
+#endif // TEST_AURORA
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, 3306, hse->replica_lag_ms, enable, is_writer);
+				}
+				//if (is_writer == true && rla_rc == false) {
+				if (rla_rc == false) {
+				if (is_writer == true) {
+					// the server is not configured as a writer
+#ifdef TEST_AURORA
+					proxy_info("Calling update_aws_aurora_set_writer for %s\n", hse->server_id);
+#endif // TEST_AURORA
+					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id, 3306);
+					time_t __timer;
+					char lut[30];
+					struct tm __tm_info;
+					time(&__timer);
+					localtime_r(&__timer, &__tm_info);
+					strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+					char *q1 = (char *)"INSERT INTO mysql_server_aws_aurora_failovers VALUES (%d, '%s', '%s')";
+					char *q2 = (char *)malloc(strlen(q1)+strlen(lut)+strlen(hse->server_id));
+					sprintf(q2, q1, wHG, hse->server_id, lut);
+					monitordb->execute(q2);
+					free(q2);
+				} else {
+#ifdef TEST_AURORA
+					proxy_info("Calling update_aws_aurora_set_reader for %s\n", hse->server_id);
+#endif // TEST_AURORA
+					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id, 3306);
+				}
+				}
+			}
+		}
+	}
+#ifdef TEST_AURORA
+	if (verbose) {
+		proxy_info("replication_lag_actions: YES=%u , NO=%u , enabling=%u , disabling=%u\n", action_yes, action_no, enabling, disabling);
+	}
+#endif // TEST_AURORA
 }

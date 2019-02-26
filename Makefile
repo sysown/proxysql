@@ -26,6 +26,9 @@ default: build_deps build_lib build_src
 .PHONY: debug
 debug: build_deps_debug build_lib_debug build_src_debug
 
+.PHONY: testaurora
+testaurora: build_deps_debug build_lib_testaurora build_src_testaurora
+
 .PHONY: clickhouse
 clickhouse: build_deps_clickhouse build_lib_clickhouse build_src_clickhouse
 
@@ -52,6 +55,14 @@ build_deps_debug:
 .PHONY: build_lib_debug
 build_lib_debug: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_testaurora
+build_src_testaurora: build_deps build_lib_testaurora
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_testaurora
+build_lib_testaurora: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug
 build_src_debug: build_deps build_lib_debug

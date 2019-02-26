@@ -37,7 +37,20 @@ class SQLite3_Server {
 		bool debug;
 #endif // DEBUG
 	} variables;
+#ifdef TEST_AURORA
+	std::vector<table_def_t *> *tables_defs_aurora;
+	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
+	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
+	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
+#endif // TEST_AURORA
 	public:
+#ifdef TEST_AURORA
+	unsigned int cur_aurora_writer[3];
+	unsigned int num_aurora_servers[3];
+	unsigned int max_num_aurora_servers;
+	pthread_mutex_t aurora_mutex;
+	void populate_aws_aurora_table(MySQL_Session *sess);
+#endif // TEST_AURORA
 	SQLite3_Server();
 	~SQLite3_Server();
 	char **get_variables_list();
