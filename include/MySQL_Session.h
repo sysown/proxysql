@@ -216,6 +216,7 @@ class MySQL_Session
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions();
 	bool HasOfflineBackends();
+	bool SetEventInOfflineBackends();
 	int FindOneActiveTransaction();
 	unsigned long long IdleTime();
 
