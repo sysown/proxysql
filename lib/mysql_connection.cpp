@@ -1626,7 +1626,12 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
     }
     
     std::vector<char*>keep_multiplexing_variables_v;
-    char* keep_multiplexing_variables_tok=strtok(mysql_thread___keep_multiplexing_variables, " ,");
+    char* keep_multiplexing_variables_tmp;
+    unsigned long keep_multiplexing_variables_len=strlen(mysql_thread___keep_multiplexing_variables);
+    keep_multiplexing_variables_tmp=(char*)malloc(keep_multiplexing_variables_len+1);
+    memcpy(keep_multiplexing_variables_tmp, mysql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
+    keep_multiplexing_variables_tmp[keep_multiplexing_variables_len]='\0';
+    char* keep_multiplexing_variables_tok=strtok(keep_multiplexing_variables_tmp, " ,");
     while (keep_multiplexing_variables_tok){
         keep_multiplexing_variables_v.push_back(keep_multiplexing_variables_tok);
         keep_multiplexing_variables_tok=strtok(NULL, " ,");
@@ -1635,7 +1640,7 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
     for (std::vector<char*>::iterator it=query_digest_text_filter_select_v.begin();it!=query_digest_text_filter_select_v.end();it++){
         bool is_match=false;
         for (std::vector<char*>::iterator it1=keep_multiplexing_variables_v.begin();it1!=keep_multiplexing_variables_v.end();it1++){
-            //printf("%s,%s\n",*it,*it1);
+            printf("%s,%s\n",*it,*it1);
             if (strncasecmp(*it,*it1,strlen(*it1))==0){
                 is_match=true;
                 break;
@@ -1646,10 +1651,12 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
             continue;
         }else{
             free(query_digest_text_filter_select);
+            free(keep_multiplexing_variables_tmp);
             return false;
         }
     }
     free(query_digest_text_filter_select);
+    free(keep_multiplexing_variables_tmp);
     return true;
 }
 
