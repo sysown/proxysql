@@ -6646,8 +6646,6 @@ void ProxySQL_Admin::__refresh_users() {
 	GloMyAuth->remove_inactives(USERNAME_BACKEND);
 	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
 	uint64_t hash1 = 0;
-	if (calculate_checksum) {
-	}
 	set_variable((char *)"admin_credentials",(char *)"");
 	if (calculate_checksum) {
 		hash1 = GloMyAuth->get_runtime_checksum();
