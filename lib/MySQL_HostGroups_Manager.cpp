@@ -3345,7 +3345,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
 			if (resultset2) {
 				if (resultset2->rows_count) {
@@ -3356,7 +3356,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 						int reader_hostgroup=atoi(r->fields[2]);
 						int offline_hostgroup=atoi(r->fields[3]);
 						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-						sprintf(query,q,_port,_writer_hostgroup);
+						sprintf(query,q,_writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
 						mydb->execute(query);
 						generate_mysql_servers_table(&writer_hostgroup);
 						generate_mysql_servers_table(&backup_writer_hostgroup);
@@ -3895,7 +3895,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				SQLite3_result *resultset2=NULL;
 				q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
 				//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-				sprintf(query,q,_port,_writer_hostgroup);
+				sprintf(query,q,_writer_hostgroup);
 				mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
 				if (resultset2) {
 					if (resultset2->rows_count) {
@@ -3906,7 +3906,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 							int reader_hostgroup=atoi(r->fields[2]);
 							int offline_hostgroup=atoi(r->fields[3]);
 							q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-							sprintf(query,q,_port,_writer_hostgroup);
+							sprintf(query,q,_writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
 							mydb->execute(query);
 							generate_mysql_servers_table(&writer_hostgroup);
 							generate_mysql_servers_table(&backup_writer_hostgroup);
