@@ -2921,7 +2921,6 @@ __mysql_thread_exit_add_mirror:
 										}
 									}
 									unsigned long long idle_since = curtime - myds->sess->IdleTime();
-									bool exit_cond=false;
 									if (conns==0) {
 										mypolls.remove_index_fast(n);
 										myds->mypolls=NULL;
@@ -2931,14 +2930,12 @@ __mysql_thread_exit_add_mirror:
 											if (mysess==myds->sess) {
 												mysess->thread=NULL;
 												unregister_session(i);
-												exit_cond=true;
 												mysess->idle_since = idle_since;
 												idle_mysql_sessions->add(mysess);
 												break;
 											}
 										}
-									}
-									if (exit_cond) {
+										n--;  // compensate mypolls.remove_index_fast(n) and n++ of loop
 										continue;
 									}
 								}
