@@ -3008,14 +3008,13 @@ __mysql_thread_exit_add_mirror:
 				int r=rand()%(GloMTH->num_threads);
 				MySQL_Thread *thr=GloMTH->mysql_threads_idles[r].worker;
 				if (shutdown==0 && thr->shutdown==0 && idle_mysql_sessions->len) {
-					unsigned int ims=0;
 					pthread_mutex_lock(&thr->myexchange.mutex_idles);
 					bool empty_queue=true;
 					if (thr->myexchange.idle_mysql_sessions->len) {
 						// there are already sessions in the queues. We assume someone already notified worker 0
 						empty_queue=false;
 					}
-					for (ims=0; ims<idle_mysql_sessions->len; ims++) {
+					while (idle_mysql_sessions->len) {
 						MySQL_Session *mysess=(MySQL_Session *)idle_mysql_sessions->remove_index_fast(0);
 						thr->myexchange.idle_mysql_sessions->add(mysess);
 					}
@@ -3328,9 +3327,8 @@ __run_skip_2:
 			MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
 				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
-				unsigned int ims;
 				if (shutdown==0 && thr->shutdown==0)
-				for (ims=0; ims<resume_mysql_sessions->len; ims++) {
+				while (resume_mysql_sessions->len) {
 					MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
 					thr->myexchange.resume_mysql_sessions->add(mysess);
 				}
