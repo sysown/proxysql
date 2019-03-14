@@ -1433,14 +1433,18 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pkt     += sizeof(mysql_hdr);
 
 	if ((*myds)->myconn->userinfo->username) {
-		pass_len=strlen((char *)pkt);
+		auth_plugin_id = (*myds)->switching_auth_type;
+		if (auth_plugin_id==1) {
+			pass_len = len - sizeof(mysql_hdr);
+		} else {
+			pass_len=strlen((char *)pkt);
+		}
 		pass = (unsigned char *)malloc(pass_len+1);
 		memcpy(pass, pkt, pass_len);
 		pass[pass_len] = 0;
 		user = (unsigned char *)(*myds)->myconn->userinfo->username;
 		db = (*myds)->myconn->userinfo->schemaname;
 		(*myds)->switching_auth_stage=2;
-		auth_plugin_id = (*myds)->switching_auth_type;
 		charset=(*myds)->tmp_charset;
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
 		goto __do_auth;
