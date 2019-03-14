@@ -2910,7 +2910,9 @@ __mysql_thread_exit_add_mirror:
 						if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
 							unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
 							if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
-								if (myds->sess->client_myds == myds && myds->PSarrayOUT->len==0 && (myds->queueOUT.head - myds->queueOUT.tail)==0 ) { // extra check
+								// make sure data stream has no pending data out and session is not throttled (#1939)
+								// because epoll thread does not handle data stream with data out
+								if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
 									unsigned int j;
 									int conns=0;
 									for (j=0;j<myds->sess->mybes->len;j++) {
