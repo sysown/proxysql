@@ -394,7 +394,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_max_digest_length=2*1024;
 	variables.query_digests_max_query_length=65000; // legacy default
 	variables.wait_timeout=8*3600*1000;
-	variables.throttle_max_bytes_per_second_to_client=2147483647;
+	variables.throttle_max_bytes_per_second_to_client=0;
 	variables.throttle_ratio_server_to_client=0;
 	variables.max_connections=10*1000;
 	variables.max_stmts_per_connection=20;
@@ -1629,7 +1629,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 #endif // IDLE_THREADS
 	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) {
 		int intv=atoi(value);
-		if (intv >= 1024 && intv <= 2147483647) {
+		if (intv >= 0 && intv <= 2147483647) {
 			variables.throttle_max_bytes_per_second_to_client=intv;
 			return true;
 		} else {

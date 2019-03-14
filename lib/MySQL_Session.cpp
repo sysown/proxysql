@@ -467,6 +467,7 @@ void MySQL_Session::writeout() {
 	int tps = 10; // throttling per second , by default every 100ms
 	int total_written = 0;
 	unsigned long long last_sent_=0;
+	bool disable_throttle = mysql_thread___throttle_max_bytes_per_second_to_client == 0;
 	int mwpl = mysql_thread___throttle_max_bytes_per_second_to_client; // max writes per call
 	mwpl = mwpl/tps;
 	if (client_myds) client_myds->array2buffer_full();
@@ -492,7 +493,7 @@ void MySQL_Session::writeout() {
 			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
 				runloop=true;
 			}
-			while (runloop && total_written < mwpl) {
+			while (runloop && (disable_throttle || total_written < mwpl)) {
 				runloop=false; // the default
 				client_myds->array2buffer_full();
 				struct pollfd fds;
@@ -514,7 +515,7 @@ void MySQL_Session::writeout() {
 	}
 
 	// flow control
-	if (total_written > 0) {
+	if (!disable_throttle && total_written > 0) {
 	   if (total_written > mwpl) {
 			unsigned long long add_ = 1000000/tps + 1000000/tps*((unsigned long long)total_written - (unsigned long long)mwpl)/mwpl;
 			pause_until = thread->curtime + add_;
