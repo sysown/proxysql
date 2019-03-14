@@ -2848,12 +2848,15 @@ __run_skip_1:
 				MySQL_Session *mysess=(MySQL_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
 				register_session(mysess, false);
 				MySQL_Data_Stream *myds=mysess->client_myds;
-				mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
+				mypolls.add(0, myds->fd, myds, monotonic_time()); // add a dummy entry first, set events later
+				myds->set_pollout(); // may have to listen to POLLOUT in some cases
+				struct pollfd *_pollfd;
+				_pollfd=&mypolls.fds[myds->poll_fds_idx];
 				// add in epoll()
 				struct epoll_event event;
 				memset(&event,0,sizeof(event)); // let's make valgrind happy
 				event.data.u32=mysess->thread_session_id;
-				event.events = EPOLLIN;
+				event.events = _pollfd->events; // epoll events are compatible with poll events
 				epoll_ctl (efd, EPOLL_CTL_ADD, myds->fd, &event);
 				// we map thread_id -> position in mysql_session (end of the list)
 				sessmap[mysess->thread_session_id]=mysql_sessions->len-1;
