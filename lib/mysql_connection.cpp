@@ -1024,7 +1024,7 @@ handler_again:
 					if (
 						(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
 							||
-						( mysql_thread___throttle_ratio_server_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
+						( mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
 					) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 					} else {
