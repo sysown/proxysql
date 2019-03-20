@@ -6,8 +6,8 @@ rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/p
 # Clean and build dependancies and source
 cd /opt/proxysql && \
 ${MAKE} cleanbuild && \
-${MAKE} ${MAKEOPT} build_deps && \
-${MAKE} ${MAKEOPT} && \
+${MAKE} ${MAKEOPT} build_deps_debug && \
+${MAKE} ${MAKEOPT} debug && \
 # Prepare package files and build RPM
 mkdir -p proxysql/usr/bin proxysql/etc && \
 cp src/proxysql proxysql/usr/bin/ && \
