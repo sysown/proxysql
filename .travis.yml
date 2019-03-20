@@ -1,0 +1,13 @@
+services:
+  - docker
+
+env:
+  - BUILD_TARGET=centos7
+  - BUILD_TARGET=centos7-dbg
+  - BUILD_TARGET=centos7-clickhouse
+  - BUILD_TARGET=debian9.4
+  - BUILD_TARGET=debian9.4-dbg
+  - BUILD_TARGET=debian9.4-clickhouse
+
+script:
+  - make $BUILD_TARGET
