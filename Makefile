@@ -13,11 +13,7 @@ DEBUG=${ALL_DEBUG}
 export MAKE
 export CURVER?=2.0.3
 export MAKEOPT=-j 4
-ifneq (,$(wildcard /etc/os-release))
-	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
-else
-	DISTRO := unknown
-endif
+DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
 else
@@ -377,10 +373,6 @@ ifeq ($(DISTRO),"Ubuntu")
 else
 ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql defaults
-else
-ifeq ($(DISTRO),"Unknown")
-		$(warning Not sure how to install proxysql service on this OS)
-endif
 endif
 endif
 endif
@@ -413,10 +405,6 @@ else
 ifeq ($(DISTRO),"Debian GNU/Linux")
 		if [ -f /etc/init.d/proxysql ]; then rm /etc/init.d/proxysql ; fi
 		update-rc.d proxysql remove
-else
-ifeq ($(DISTRO),"Unknown")
-		$(warning Not sure how to uninstall proxysql service on this OS)
-endif
 endif
 endif
 endif
