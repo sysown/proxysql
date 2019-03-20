@@ -5,7 +5,7 @@ set -eu
 # Delete package if exists
 rm -f "/opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_amd64.deb" || true
 # Cleanup relic directories from a previously failed build
-rm -f /opt/proxysql/proxysql.ctl || true
+rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql || true
 # Clean and build dependancies and source
 cd /opt/proxysql
 # Patch for Ubuntu 12
