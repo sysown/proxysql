@@ -54,8 +54,7 @@ rm -rf /var/run/%{name}
 
 %files
 %defattr(-,root,root,-)
-%config(noreplace) %{_sysconfdir}/%{name}.cnf
-%attr(640,root,%{name}) %{_sysconfdir}/%{name}.cnf
+%config(noreplace) %attr(640,root,%{name}) %{_sysconfdir}/%{name}.cnf
 %config(noreplace) %attr(640,root,%{name}) %{_sysconfdir}/logrotate.d/%{name}
 %{_bindir}/*
 %{_sysconfdir}/init.d/%{name}
