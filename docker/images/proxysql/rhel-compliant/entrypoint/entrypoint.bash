@@ -13,7 +13,7 @@ rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/p
 # Clean and build dependancies and source
 echo "==> Building"
 cd /opt/proxysql
-if  [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
+if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
   deps_target="build_deps"
   build_target=()
 else
