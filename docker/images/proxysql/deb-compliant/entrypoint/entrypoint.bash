@@ -1,4 +1,7 @@
 #!/bin/bash
+
+set -eu
+
 # Delete package if exists
 rm -f /opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_amd64.deb || true && \
 # Cleanup relic directories from a previously failed build
@@ -14,9 +17,16 @@ if [ "`grep Ubuntu /etc/issue | awk '{print $2}' | cut -d. -f1`" == "12" ]; then
 	wget -O re2.tar.gz https://github.com/sysown/proxysql/raw/v1.3.9/deps/re2/re2-20140304.tgz 
         cd /opt/proxysql
 fi
-${MAKE} cleanbuild && \
-${MAKE} ${MAKEOPT} build_deps && \
-${MAKE} ${MAKEOPT} && \
+if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
+  deps_target="build_deps"
+  build_target=()
+else
+  deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
+  build_target=("$PROXYSQL_BUILD_TYPE")
+fi
+${MAKE} cleanbuild
+${MAKE} ${MAKEOPT} "$deps_target"
+${MAKE} ${MAKEOPT} "${build_target[@]}"
 # Prepare package files and build RPM
 cp /root/ctl/proxysql.ctl /opt/proxysql/proxysql.ctl && \
 sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl && \

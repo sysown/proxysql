@@ -1,13 +1,23 @@
 #!/bin/bash
+set -eu
+
 # Delete package if exists
 rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.x86_64.rpm || true && \
 # Cleanup relic directories from a previously failed build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} || true && \
 # Clean and build dependancies and source
-cd /opt/proxysql && \
-${MAKE} cleanbuild && \
-${MAKE} ${MAKEOPT} build_deps && \
-${MAKE} ${MAKEOPT} && \
+cd /opt/proxysql
+if  [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
+  deps_target="build_deps"
+  build_target=()
+else
+  deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
+  build_target=("$PROXYSQL_BUILD_TYPE")
+fi
+${MAKE} cleanbuild
+${MAKE} ${MAKEOPT} "$deps_target"
+${MAKE} ${MAKEOPT} "${build_target[@]}"
+
 # Prepare package files and build RPM
 mkdir -p proxysql/usr/bin proxysql/etc && \
 cp src/proxysql proxysql/usr/bin/ && \
