@@ -334,7 +334,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #else
 	if (glovars.has_debug==true) {
 #endif /* DEBUG */
-		perror("Incompatible debagging version");
+		perror("Incompatible debugging version");
 		exit(EXIT_FAILURE);
 	}
 	num_threads=0;
@@ -461,7 +461,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
-	// status varuables
+	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
 	MLM = new MySQL_Listeners_Manager();
@@ -3255,7 +3255,7 @@ __run_skip_1a:
 						proxy_error("Error during read from signal_all_threads()\n");
 					}
 					proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
-					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the scheleton for issue #253
+					//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the skeleton for issue #253
 					if (c) {
 						// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
 						pthread_mutex_unlock(&thread_mutex);
