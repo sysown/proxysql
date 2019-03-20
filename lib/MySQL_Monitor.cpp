@@ -3477,8 +3477,12 @@ __exit_monitor_aws_aurora_HG_thread:
 				s=(char *)malloc(l+16);
 			}
 			sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
-			AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
-			AWS_Aurora_status_entry *ase_l = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
+			unsigned long long time_now=realtime_time();
+			time_now=time_now-(mmsd->t2 - start_time);
+			//AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
+			//AWS_Aurora_status_entry *ase_l = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
+			AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(time_now, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
+			AWS_Aurora_status_entry *ase_l = new AWS_Aurora_status_entry(time_now, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
 			if (mmsd->interr == 0 && mmsd->result) {
 				int num_fields=0;
 				int num_rows=0;
@@ -3500,8 +3504,6 @@ __exit_monitor_aws_aurora_HG_thread:
 //__end_process_aws_aurora_result:
 			if (mmsd->mysql_error_msg) {
 			}
-			unsigned long long time_now=realtime_time();
-			time_now=time_now-(mmsd->t2 - start_time);
 			pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
 			//auto it = 
 			// TODO : complete this
@@ -4064,15 +4066,15 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					action_yes++;
 					(enable ? enabling++ : disabling++);
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, 3306, hse->replica_lag_ms, enable, is_writer, verbose);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer, verbose);
 #else
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, 3306, hse->replica_lag_ms, enable, is_writer);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer);
 #endif // TEST_AURORA
 #ifdef TEST_AURORA
 				} else {
 					action_no++;
 #endif // TEST_AURORA
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, 3306, hse->replica_lag_ms, enable, is_writer);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer);
 				}
 				//if (is_writer == true && rla_rc == false) {
 				if (rla_rc == false) {
@@ -4081,7 +4083,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_writer for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id, 3306);
+					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id);
 					time_t __timer;
 					char lut[30];
 					struct tm __tm_info;
@@ -4097,7 +4099,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_reader for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id, 3306);
+					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id);
 				}
 				}
 			}

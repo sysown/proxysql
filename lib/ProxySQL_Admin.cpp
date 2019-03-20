@@ -343,11 +343,11 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 // AWS Aurora
 
-#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_1_0a "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_1_0a "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , endpoint_address VARCHAR NOT NULL DEFAULT '' , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
 
 #define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_1_0a
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE runtime_mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE runtime_mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , endpoint_address VARCHAR NOT NULL DEFAULT '' , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
 
 
 
@@ -7770,9 +7770,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		sqlite3 *mydb3=admindb->get_db();
 		char *query=NULL;
 		if (_runtime) {
-			query=(char *)"INSERT INTO runtime_mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+			query=(char *)"INSERT INTO runtime_mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 		} else {
-			query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+			query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 		}
 		rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		assert(rc==SQLITE_OK);
@@ -7783,11 +7783,13 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 5, atoi(r->fields[4])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 9, atoi(r->fields[8])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 10, atoi(r->fields[9])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
@@ -8698,34 +8700,42 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
     if (root.exists("mysql_aws_aurora_hostgroups")==true) {
             const Setting &mysql_aws_aurora_hostgroups = root["mysql_aws_aurora_hostgroups"];
             int count = mysql_aws_aurora_hostgroups.getLength();
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (%d, %d, %d, %d, %d, %d, %d, %d, '%s')";
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, endpoint_address, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, '%s')";
             for (i=0; i< count; i++) {
                     const Setting &line = mysql_aws_aurora_hostgroups[i];
                     int writer_hostgroup;
                     int reader_hostgroup;
                     int active=1; // default
+					int aurora_port;
                     int max_lag_ms;
                     int check_interval_ms;
                     int check_timeout_ms;
                     int writer_is_also_reader;
 					int new_reader_weight;
                     std::string comment="";
+                    std::string endpoint_address="";
                     if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
                     if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
+                    if (line.lookupValue("aurora_port", aurora_port)==false) aurora_port=3306;
                     if (line.lookupValue("max_lag_ms", max_lag_ms)==false) max_lag_ms=600000;
                     if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
                     if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=1000;
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
                     if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=0;
                     line.lookupValue("comment", comment);
+                    line.lookupValue("endpoint_address", comment);
                     char *o1=strdup(comment.c_str());
                     char *o=escape_string_single_quotes(o1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, o);
+                    char *p1=strdup(endpoint_address.c_str());
+                    char *p=escape_string_single_quotes(p1, false);
+                    char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, o);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
+                    if (p!=p1) free(p);
+                    free(p1);
                     free(query);
                     rows++;
             }
@@ -9675,7 +9685,12 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	for (unsigned int j=1; j<4; j++) {
 		proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs 127%d and 127%d\n" , j*2-1 , j*2);
 		for (unsigned int i=0; i<num_aurora_servers; i++) {
-			string serverid = "127.0." + std::to_string(j) + "." + std::to_string(i+11);
+			string serverid = "";
+			if (j==1) {
+				serverid = "host." + std::to_string(j) + "." + std::to_string(i+11) + ".aws-test.com";
+			} else {
+				serverid = "127.0." + std::to_string(j) + "." + std::to_string(i+11);
+			}
 			string sessionid= "";
 			sessionid = "b80ef4b4-" + serverid + "-aa01";
 			rc=sqlite3_bind_int64(statement, 1, 1270+j*2 ); assert(rc==SQLITE_OK);
@@ -9688,7 +9703,7 @@ void ProxySQL_Admin::enable_aurora_testing() {
 		}
 	}
 	sqlite3_finalize(statement);
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1271, 1272, 1, 25, 120, 90, 1, 1, 'Automated Aurora Testing Cluster 1')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, endpoint_address, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 'Automated Aurora Testing Cluster 1')");
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1273, 1274, 1, 25, 120, 90, 0, 1, 'Automated Aurora Testing Cluster 2')");
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1275, 1276, 1, 25, 120, 90, 0, 2, 'Automated Aurora Testing Cluster 3')");
 	load_mysql_servers_to_runtime();
