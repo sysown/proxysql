@@ -32,6 +32,7 @@
 ########################################################################################
 
 datadir="/var/lib/proxysql"
+errorlog="/var/log/proxysql.log"
 
 admin_variables=
 {

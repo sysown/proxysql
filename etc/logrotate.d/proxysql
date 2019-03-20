@@ -1,0 +1,5 @@
+/var/log/proxysql.log {
+    missingok
+    notifempty
+    copytruncate
+}
