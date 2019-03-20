@@ -8006,12 +8006,13 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, comment) VALUES ('%s', '%s', %d, %d, '%s', %d, %d, %d, %d, '%s')";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s')";
 	for (i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
 		std::string password="";
 		int active=1;
+		int use_ssl=0;
 		int default_hostgroup=0;
 		std::string default_schema="";
 		int schema_locked=0;
@@ -8023,6 +8024,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		user.lookupValue("password", password);
 		user.lookupValue("default_hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
+		user.lookupValue("use_ssl", use_ssl);
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
 		user.lookupValue("default_schema", default_schema);
 		user.lookupValue("schema_locked", schema_locked);
@@ -8033,7 +8035,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		char *o1=strdup(comment.c_str());
 		char *o=escape_string_single_quotes(o1, false);
 		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, o);
+		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, o);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);
