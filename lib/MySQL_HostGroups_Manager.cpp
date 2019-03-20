@@ -2190,7 +2190,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
+MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -2209,8 +2209,15 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 							}
 						} else {
-							sum+=mysrvc->weight;
-							TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+							if (max_lag_ms >= 0) {
+								if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+									sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								}
+							} else {
+								sum+=mysrvc->weight;
+								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+							}
 						}
 					}
 				}
@@ -2248,8 +2255,15 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 										}
 									} else {
-										sum+=mysrvc->weight;
-										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+										if (max_lag_ms >= 0) {
+											if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+												sum+=mysrvc->weight;
+												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+											}
+										} else {
+											sum+=mysrvc->weight;
+											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+										}
 									}
 								}
 							}
@@ -2284,8 +2298,15 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								}
 							} else {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								if (max_lag_ms >= 0) {
+									if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+										sum+=mysrvc->weight;
+										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+									}
+								} else {
+									sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								}
 							}
 						}
 					}
@@ -2314,8 +2335,15 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 									New_TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								}
 							} else {
-								New_sum+=mysrvc->weight;
-								New_TotalUsedConn+=len;
+								if (max_lag_ms >= 0) {
+									if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+										New_sum+=mysrvc->weight;
+										New_TotalUsedConn+=len;
+									}
+								} else {
+									New_sum+=mysrvc->weight;
+									New_TotalUsedConn+=len;
+								}
 							}
 						}
 					}
@@ -2350,7 +2378,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								}
 							} else {
-								New_sum+=mysrvc->weight;
+								if (max_lag_ms >= 0) {
+									if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+										New_sum+=mysrvc->weight;
+									}
+								} else {
+									New_sum+=mysrvc->weight;
+								}
 							}
 							if (k<=New_sum) {
 								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
@@ -2447,12 +2481,12 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	return NULL; // never reach here
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
-	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid);
+	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {
@@ -4938,7 +4972,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 
 //void MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, float current_replication_lag, bool enable, bool verbose) {
 // this function returns false is the server is in the wrong HG
-bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *_server_id, unsigned int current_replication_lag_us, bool enable, bool is_writer, bool verbose) {
+bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *_server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose) {
 	bool ret = false; // return false by default
 	bool reader_found_in_whg = false;
 	if (is_writer) {
@@ -4977,19 +5011,19 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 				if (enable==false) {
 					if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 						if (verbose) {
-							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_us);
+							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
 						}
 						mysrvc->status = MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
 					}
 				} else {
 					if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 						if (verbose) {
-							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_us);
+							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
 						}
 						mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
 					}
 				}
-				mysrvc->aws_aurora_current_lag_us = current_replication_lag_us;
+				mysrvc->aws_aurora_current_lag_us = current_replication_lag_ms * 1000;
 				if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE || mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 					// we perform check only if ONLINE or lagging
 					if (ret) {

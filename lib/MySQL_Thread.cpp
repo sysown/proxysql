@@ -5071,7 +5071,7 @@ void MySQL_Thread::Get_Memory_Stats() {
 }
 
 
-MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid) {
+MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	unsigned int i;
 	unsigned int bc = 0; // best candidate
 	bool pcf = false; // possible candidate found
@@ -5125,6 +5125,11 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 			} else {
 //				c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 
+				if (max_lag_ms >= 0) {
+					if (max_lag_ms >= (c->parent->aws_aurora_current_lag_us / 1000)) {
+						continue;
+					}
+				}
 				if (pcf == false) {
 					bc = i;
 					pcf = true;

@@ -384,7 +384,7 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
-	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid);
+	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 };
 
 class Group_Replication_Info {
@@ -565,7 +565,7 @@ class MySQL_HostGroups_Manager {
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
@@ -598,7 +598,7 @@ class MySQL_HostGroups_Manager {
 	//bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, unsigned int current_replication_lag_us, bool enable, bool is_writer, bool verbose=true);
 	//void update_aws_aurora_set_writer(int _whid, int _rhid, char *address, unsigned int port, bool verbose=true);
 	//void update_aws_aurora_set_reader(int _whid, int _rhid, char *_hostname, int _port);
-	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, unsigned int current_replication_lag_us, bool enable, bool is_writer, bool verbose=true);
+	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
 	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
 	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
 

@@ -4508,16 +4508,16 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					}
 				}
 				uuid[n]='\0';
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
 			} else {
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, qpo->max_lag_ms);
 			}
 		}
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid, qpo->max_lag_ms);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, qpo->max_lag_ms);
 			}
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
