@@ -72,7 +72,7 @@ class Query_Processor_Output {
 	int sticky_conn;
 	int multiplex;
 	int gtid_from_hostgroup;
-	int max_lag_ms;
+	long long max_lag_ms;
 	int log;
 	char *comment; // #643
 	std::string *new_query;

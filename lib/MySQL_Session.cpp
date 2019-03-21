@@ -4491,6 +4491,19 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		MySQL_Backend * _gtid_from_backend = NULL;
 		char uuid[64];
 		uint64_t trxid = 0;
+		unsigned long long now_us = 0;
+		if (qpo->max_lag_ms >= 0) {
+			if (qpo->max_lag_ms > 360000) { // this is an absolute time, we convert it to relative
+				if (now_us == 0) {
+					now_us = realtime_time();
+				}
+				long long now_ms = now_us/1000;
+				qpo->max_lag_ms -= now_ms;
+				if (qpo->max_lag_ms < 0) {
+					qpo->max_lag_ms = -1; // time expired
+				}
+			}
+		}
 		if (session_fast_forward == false) {
 			if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
@@ -4514,14 +4527,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				uuid[n]='\0';
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
 			} else {
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, qpo->max_lag_ms);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms);
 			}
 		}
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid, qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid, -1);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, (int)qpo->max_lag_ms);
 			}
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
@@ -4531,6 +4544,15 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			thread->status_variables.ConnPool_get_conn_success++;
 		} else {
 			thread->status_variables.ConnPool_get_conn_failure++;
+		}
+		if (qpo->max_lag_ms >= 0) {
+			if (qpo->max_lag_ms <= 360000) { // this is a relative time , we convert it to absolute
+				if (now_us == 0) {
+					now_us = realtime_time();
+				}
+				long long now_ms = now_us/1000;
+				qpo->max_lag_ms += now_ms;
+			}
 		}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
 	if (mybe->server_myds->myconn==NULL) {
