@@ -227,6 +227,7 @@ class MySQL_Thread
 		unsigned long long queries;
 		unsigned long long queries_slow;
 		unsigned long long queries_gtid;
+		unsigned long long queries_with_max_lag_ms;
 		unsigned long long queries_backends_bytes_sent;
 		unsigned long long queries_backends_bytes_recv;
 		unsigned long long queries_frontends_bytes_sent;
@@ -244,6 +245,8 @@ class MySQL_Thread
 		unsigned long long gtid_session_collected;
 		unsigned long long generated_pkt_err;
 		unsigned long long max_connect_timeout_err;
+		unsigned long long backend_lagging_during_query;
+		unsigned long long backend_offline_during_query;
 		unsigned long long unexpected_com_quit;
 		unsigned long long unexpected_packet;
 		unsigned long long killed_connections;
@@ -519,6 +522,9 @@ class MySQL_Threads_Handler
 	unsigned long long get_unexpected_com_quit();
 	unsigned long long get_unexpected_packet();
 	unsigned long long get_aws_aurora_replicas_skipped_during_query();
+	unsigned long long get_backend_lagging_during_query();
+	unsigned long long get_backend_offline_during_query();
+	unsigned long long get_queries_with_max_lag_ms();
 	unsigned long long get_killed_connections();
 	unsigned long long get_killed_queries();
 	iface_info *MLM_find_iface_from_fd(int fd) {

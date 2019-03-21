@@ -2293,6 +2293,9 @@ __get_pkts_from_client:
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (qpo->max_lag_ms >= 0) {
+										thread->status_variables.queries_with_max_lag_ms++;
+									}
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 										thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
@@ -3045,8 +3048,10 @@ handler_again:
 							}
 							bool retry_conn=false;
 							if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+								thread->status_variables.backend_lagging_during_query++;
 								proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
 							} else {
+								thread->status_variables.backend_offline_during_query++;
 								proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
 							}
 							if (myds->query_retries_on_failure > 0) {

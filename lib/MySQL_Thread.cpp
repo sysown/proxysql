@@ -3828,6 +3828,9 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.gtid_session_collected = 0;
 	status_variables.generated_pkt_err = 0;
 	status_variables.max_connect_timeout_err = 0;
+	status_variables.backend_lagging_during_query = 0;
+	status_variables.backend_offline_during_query = 0;
+	status_variables.queries_with_max_lag_ms = 0;
 	status_variables.unexpected_com_quit = 0;
 	status_variables.unexpected_packet = 0;
 	status_variables.killed_connections = 0;
@@ -4333,6 +4336,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Max Connect Timeout
 		pta[0]=(char *)"max_connect_timeouts";
 		sprintf(buf,"%llu",get_max_connect_timeout());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// backend_lagging_during_query
+		pta[0]=(char *)"backend_lagging_during_query";
+		sprintf(buf,"%llu",get_backend_lagging_during_query());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// backend_offline_during_query
+		pta[0]=(char *)"backend_offline_during_query";
+		sprintf(buf,"%llu",get_backend_offline_during_query());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// queries_with_max_lag_ms
+		pta[0]=(char *)"queries_with_max_lag_ms";
+		sprintf(buf,"%llu",get_queries_with_max_lag_ms());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5292,6 +5313,45 @@ unsigned long long MySQL_Threads_Handler::get_generated_pkt_err() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.generated_pkt_err,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_backend_lagging_during_query() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.backend_lagging_during_query,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_backend_offline_during_query() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.backend_offline_during_query,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms,0);
 		}
 	}
 	return q;
