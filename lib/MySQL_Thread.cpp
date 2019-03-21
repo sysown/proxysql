@@ -321,6 +321,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_sql_mode",
 	(char *)"default_time_zone",
 	(char *)"connpoll_reset_queue_length",
+	(char *)"min_num_servers_lantency_awareness",
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
@@ -441,6 +442,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_normalize_digest_text=false;
 	variables.query_digests_track_hostname=false;
 	variables.connpoll_reset_queue_length = 50;
+	variables.min_num_servers_lantency_awareness = 1000;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
@@ -682,6 +684,7 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 #ifdef IDLE_THREADS
 		if (!strcasecmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
 #endif // IDLE_THREADS
+		if (!strcasecmp(name,"min_num_servers_lantency_awareness")) return variables.min_num_servers_lantency_awareness;
 		if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 		if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 		if (!strcasecmp(name,"sessions_sort")) return (int)variables.sessions_sort;
@@ -766,6 +769,7 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcasecmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
 	if (!strcasecmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	if (!strcasecmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
+	if (!strcasecmp(name,"min_num_servers_lantency_awareness")) return (int)variables.min_num_servers_lantency_awareness;
 	if (!strcasecmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 	if (!strcasecmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 	if (!strcasecmp(name,"query_cache_stores_empty_result")) return (int)variables.query_cache_stores_empty_result;
@@ -1137,6 +1141,10 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 	}
 	if (!strcasecmp(name,"poll_timeout_on_failure")) {
 		sprintf(intbuf,"%d",variables.poll_timeout_on_failure);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"min_num_servers_lantency_awareness")) {
+		sprintf(intbuf,"%d",variables.min_num_servers_lantency_awareness);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"threads")) {
@@ -2054,6 +2062,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
 			variables.connpoll_reset_queue_length=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"min_num_servers_lantency_awareness")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 10000) {
+			variables.min_num_servers_lantency_awareness=intv;
 			return true;
 		} else {
 			return false;
@@ -3730,6 +3747,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
+	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
 	variables.query_cache_stores_empty_result=(bool)GloMTH->get_variable_int((char *)"query_cache_stores_empty_result");
@@ -3805,6 +3823,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.ConnPool_get_conn_immediate=0;
 	status_variables.ConnPool_get_conn_success=0;
 	status_variables.ConnPool_get_conn_failure=0;
+	status_variables.ConnPool_get_conn_latency_awareness=0;
 	status_variables.active_transactions=0;
 	status_variables.gtid_session_collected = 0;
 	status_variables.generated_pkt_err = 0;
@@ -3817,6 +3836,7 @@ MySQL_Thread::MySQL_Thread() {
 
 	match_regexes=NULL;
 
+	variables.min_num_servers_lantency_awareness = 1000;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
@@ -4279,6 +4299,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			pta[1]=buf;
 			result->add_row(pta);
 		}
+	}
+	{	// ConnPool_get_conn_latency_awareness
+		pta[0]=(char *)"ConnPool_get_conn_latency_awareness";
+		sprintf(buf,"%llu",get_ConnPool_get_conn_latency_awareness());
+		pta[1]=buf;
+		result->add_row(pta);
 	}
 	{	// ConnPool_get_conn_immediate
 		pta[0]=(char *)"ConnPool_get_conn_immediate";
@@ -5204,6 +5230,19 @@ void MySQL_Thread::return_local_connections() {
 	while (cached_connections->len) {
 		cached_connections->remove_index_fast(0);
 	}
+}
+
+unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_latency_awareness() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_latency_awareness,0);
+		}
+	}
+	return q;
 }
 
 unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {

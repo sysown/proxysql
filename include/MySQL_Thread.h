@@ -239,6 +239,7 @@ class MySQL_Thread
 		unsigned long long ConnPool_get_conn_immediate;
 		unsigned long long ConnPool_get_conn_success;
 		unsigned long long ConnPool_get_conn_failure;
+		unsigned long long ConnPool_get_conn_latency_awareness;
 		unsigned long long gtid_binlog_collected;
 		unsigned long long gtid_session_collected;
 		unsigned long long generated_pkt_err;
@@ -252,6 +253,7 @@ class MySQL_Thread
 	} status_variables;
 
 	struct {
+		int min_num_servers_lantency_awareness;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
@@ -440,6 +442,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_key;
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
+		int min_num_servers_lantency_awareness;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
@@ -510,6 +513,7 @@ class MySQL_Threads_Handler
 	unsigned long long get_ConnPool_get_conn_immediate();
 	unsigned long long get_ConnPool_get_conn_success();
 	unsigned long long get_ConnPool_get_conn_failure();
+	unsigned long long get_ConnPool_get_conn_latency_awareness();
 	unsigned long long get_generated_pkt_err();
 	unsigned long long get_max_connect_timeout();
 	unsigned long long get_unexpected_com_quit();

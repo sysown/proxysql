@@ -2446,6 +2446,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #endif // USE_MYSRVC_ARRAY
 		}
 
+
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 #ifdef USE_MYSRVC_ARRAY
@@ -2456,6 +2457,50 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #endif // USE_MYSRVC_ARRAY
 			return NULL; // if we reach here, we couldn't find any target
 		}
+
+#ifdef USE_MYSRVC_ARRAY
+		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
+		if (sess->thread->variables.min_num_servers_lantency_awareness) {
+			if (num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+				unsigned int servers_with_latency = 0;
+				unsigned int total_latency_us = 0;
+				// scan and verify that all servers have some latency
+				for (j=0; j<num_candidates; j++) {
+					mysrvc = mysrvcCandidates[j];
+					if (mysrvc->current_latency_us) {
+						servers_with_latency++;
+						total_latency_us += mysrvc->current_latency_us;
+					}
+				}
+				if (servers_with_latency == num_candidates) {
+					// all servers have some latency.
+					// That is good. If any server have no latency, something is wrong
+					// and we will skip this algorithm
+					sess->thread->status_variables.ConnPool_get_conn_latency_awareness++;
+					unsigned int avg_latency_us = 0;
+					avg_latency_us = total_latency_us/num_candidates;
+					for (j=0; j<num_candidates; j++) {
+						mysrvc = mysrvcCandidates[j];
+						if (mysrvc->current_latency_us > avg_latency_us) {
+							// remove the candidate
+							if (j+1 < num_candidates) {
+								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+							}
+							j--;
+							num_candidates--;
+						}
+					}
+					// we scan again to adjust weight
+					New_sum = 0;
+					for (j=0; j<num_candidates; j++) {
+						mysrvc = mysrvcCandidates[j];
+						New_sum+=mysrvc->weight;
+					}
+				}
+			}
+		}
+#endif // USE_MYSRVC_ARRAY
+
 
 		unsigned int k;
 		if (New_sum > 32768) {
