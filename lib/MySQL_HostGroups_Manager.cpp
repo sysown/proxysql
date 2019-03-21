@@ -2190,7 +2190,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -2210,9 +2210,11 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 							}
 						} else {
 							if (max_lag_ms >= 0) {
-								if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+								if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								} else {
+									sess->thread->status_variables.aws_aurora_replicas_skipped_during_query++;
 								}
 							} else {
 								sum+=mysrvc->weight;
@@ -2256,7 +2258,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 										}
 									} else {
 										if (max_lag_ms >= 0) {
-											if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+											if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 												sum+=mysrvc->weight;
 												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 											}
@@ -2299,7 +2301,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								}
 							} else {
 								if (max_lag_ms >= 0) {
-									if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										sum+=mysrvc->weight;
 										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									}
@@ -2336,7 +2338,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								}
 							} else {
 								if (max_lag_ms >= 0) {
-									if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										New_sum+=mysrvc->weight;
 										New_TotalUsedConn+=len;
 									}
@@ -2379,7 +2381,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								}
 							} else {
 								if (max_lag_ms >= 0) {
-									if (max_lag_ms <= mysrvc->aws_aurora_current_lag_us/1000) {
+									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										New_sum+=mysrvc->weight;
 									}
 								} else {
@@ -2486,7 +2488,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	wrlock();
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
-	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms);
+	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {

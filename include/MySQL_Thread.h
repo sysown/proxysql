@@ -247,6 +247,7 @@ class MySQL_Thread
 		unsigned long long unexpected_packet;
 		unsigned long long killed_connections;
 		unsigned long long killed_queries;
+		unsigned long long aws_aurora_replicas_skipped_during_query;
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -513,6 +514,7 @@ class MySQL_Threads_Handler
 	unsigned long long get_max_connect_timeout();
 	unsigned long long get_unexpected_com_quit();
 	unsigned long long get_unexpected_packet();
+	unsigned long long get_aws_aurora_replicas_skipped_during_query();
 	unsigned long long get_killed_connections();
 	unsigned long long get_killed_queries();
 	iface_info *MLM_find_iface_from_fd(int fd) {

@@ -384,7 +384,7 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
-	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
+	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
 };
 
 class Group_Replication_Info {

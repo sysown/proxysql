@@ -3813,6 +3813,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.unexpected_packet = 0;
 	status_variables.killed_connections = 0;
 	status_variables.killed_queries = 0;
+	status_variables.aws_aurora_replicas_skipped_during_query = 0;
 
 	match_regexes=NULL;
 
@@ -4318,6 +4319,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Unexpected packet
 		pta[0]=(char *)"mysql_unexpected_frontend_packets";
 		sprintf(buf,"%llu",get_unexpected_packet());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// AWS Aurora replicas skipped during query
+		pta[0]=(char *)"aws_aurora_replicas_skipped_during_query";
+		sprintf(buf,"%llu",get_aws_aurora_replicas_skipped_during_query());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5126,7 +5133,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 //				c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 
 				if (max_lag_ms >= 0) {
-					if (max_lag_ms >= (c->parent->aws_aurora_current_lag_us / 1000)) {
+					if (max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
+						status_variables.aws_aurora_replicas_skipped_during_query++;
 						continue;
 					}
 				}
@@ -5284,6 +5292,19 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_packet() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.unexpected_packet,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_aws_aurora_replicas_skipped_during_query() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.aws_aurora_replicas_skipped_during_query,0);
 		}
 	}
 	return q;
