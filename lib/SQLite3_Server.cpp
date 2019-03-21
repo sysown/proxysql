@@ -772,7 +772,8 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 	string clu_id_s = myip.substr(6,1);
 	unsigned int cluster_id = atoi(clu_id_s.c_str());
 	cluster_id--;
-	if (rand() % 200 == 0) {
+	//if (rand() % 200 == 0) {
+	if (rand() % 20000 == 0) {
 		// simulate a failover
 		cur_aurora_writer[cluster_id] = rand() % num_aurora_servers[cluster_id];
 		proxy_info("Simulating a failover for AWS Aurora cluster %d , HGs (%d:%d)\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2);

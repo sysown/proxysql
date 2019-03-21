@@ -10,6 +10,14 @@
 
 #include "ev.h"
 
+
+#define USE_MYSRVC_ARRAY
+
+#ifdef USE_MYSRVC_ARRAY
+static unsigned long long array_mysrvc_total = 0;
+static unsigned long long array_mysrvc_cands = 0;
+#endif // USE_MYSRVC_ARRAY
+
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
     rc=sqlite3_step(_stmt);\
@@ -2196,6 +2204,22 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	unsigned int sum=0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
+#ifdef USE_MYSRVC_ARRAY
+#ifdef TEST_AURORA
+	unsigned long long a1 = array_mysrvc_total/10000;
+	array_mysrvc_total += l;
+	unsigned long long a2 = array_mysrvc_total/10000;
+	if (a2 > a1) {
+		fprintf(stderr, "Total: %llu, Candidates: %llu\n", array_mysrvc_total-l, array_mysrvc_cands);
+	}
+#endif // TEST_AURORA
+	MySrvC *mysrvcCandidates_static[32];
+	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
+	unsigned int num_candidates = 0;
+	if (l>32) {
+		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
+	}
+#endif // USE_MYSRVC_ARRAY
 	if (l) {
 		//int j=0;
 		for (j=0; j<l; j++) {
@@ -2207,18 +2231,30 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+								mysrvcCandidates[num_candidates]=mysrvc;
+								num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 							}
 						} else {
 							if (max_lag_ms >= 0) {
 								if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+									mysrvcCandidates[num_candidates]=mysrvc;
+									num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 								} else {
 									sess->thread->status_variables.aws_aurora_replicas_skipped_during_query++;
 								}
 							} else {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+								mysrvcCandidates[num_candidates]=mysrvc;
+								num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 							}
 						}
 					}
@@ -2255,16 +2291,28 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+											mysrvcCandidates[num_candidates]=mysrvc;
+											num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 										}
 									} else {
 										if (max_lag_ms >= 0) {
 											if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 												sum+=mysrvc->weight;
 												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+												mysrvcCandidates[num_candidates]=mysrvc;
+												num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 											}
 										} else {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+											mysrvcCandidates[num_candidates]=mysrvc;
+											num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 										}
 									}
 								}
@@ -2298,16 +2346,28 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+									mysrvcCandidates[num_candidates]=mysrvc;
+									num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 								}
 							} else {
 								if (max_lag_ms >= 0) {
 									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										sum+=mysrvc->weight;
 										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+										mysrvcCandidates[num_candidates]=mysrvc;
+										num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 									}
 								} else {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+									mysrvcCandidates[num_candidates]=mysrvc;
+									num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 								}
 							}
 						}
@@ -2317,6 +2377,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		}
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+#ifdef USE_MYSRVC_ARRAY
+			if (l>32) {
+				free(mysrvcCandidates);
+			}
+			array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
@@ -2324,13 +2390,27 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		unsigned int New_TotalUsedConn=0;
 
 		// we will now scan again to ignore overloaded servers
+#ifdef USE_MYSRVC_ARRAY
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+#else
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+#endif // USE_MYSRVC_ARRAY
 				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+#else
+
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+#endif // USE_MYSRVC_ARRAY
 						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+
+#ifdef USE_MYSRVC_ARRAY
+							New_sum+=mysrvc->weight;
+							New_TotalUsedConn+=len;
+#else
 							if (gtid_trxid) {
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									New_sum+=mysrvc->weight;
@@ -2347,14 +2427,33 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 									New_TotalUsedConn+=len;
 								}
 							}
+#endif // USE_MYSRVC_ARRAY
+#ifdef USE_MYSRVC_ARRAY
+						} else {
+							// remove the candidate
+							if (j+1 < num_candidates) {
+								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+							}
+							j--;
+							num_candidates--;
+#endif // USE_MYSRVC_ARRAY
 						}
+#ifdef USE_MYSRVC_ARRAY
+#else
 					}
 				}
 			}
+#endif // USE_MYSRVC_ARRAY
 		}
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+#ifdef USE_MYSRVC_ARRAY
+			if (l>32) {
+				free(mysrvcCandidates);
+			}
+			array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
@@ -2364,9 +2463,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		} else {
 			k=fastrand()%New_sum;
 		}
-  	k++;
+		k++;
 		New_sum=0;
 
+#ifdef USE_MYSRVC_ARRAY
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+#else
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
@@ -2374,10 +2477,14 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+#endif // USE_MYSRVC_ARRAY
+#ifdef USE_MYSRVC_ARRAY
+							New_sum+=mysrvc->weight;
+#else
 							if (gtid_trxid) {
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									New_sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+									//TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length(); // this line is a bug
 								}
 							} else {
 								if (max_lag_ms >= 0) {
@@ -2388,17 +2495,33 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 									New_sum+=mysrvc->weight;
 								}
 							}
+#endif // USE_MYSRVC_ARRAY
 							if (k<=New_sum) {
 								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+#ifdef USE_MYSRVC_ARRAY
+								if (l>32) {
+									free(mysrvcCandidates);
+								}
+								array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
 								return mysrvc;
 							}
+#ifdef USE_MYSRVC_ARRAY
+#else
 						}
 					}
 				}
 			}
+#endif // USE_MYSRVC_ARRAY
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
+#ifdef USE_MYSRVC_ARRAY
+	if (l>32) {
+		free(mysrvcCandidates);
+	}
+	array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
 	return NULL; // if we reach here, we couldn't find any target
 }
 
@@ -2488,7 +2611,11 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	wrlock();
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
-	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
+	MySrvC *mysrvc = NULL;
+#ifdef TEST_AURORA
+	for (int i=0; i<10; i++)
+#endif // TEST_AURORA
+	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {

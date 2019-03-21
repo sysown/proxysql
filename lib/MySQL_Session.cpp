@@ -3044,7 +3044,11 @@ handler_again:
 								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
 							}
 							bool retry_conn=false;
-							proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+							if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+								proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+							} else {
+								proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+							}
 							if (myds->query_retries_on_failure > 0) {
 								myds->query_retries_on_failure--;
 								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
