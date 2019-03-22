@@ -295,6 +295,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+	(char *)"keep_multiplexing_variables",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"sessions_sort",
 #ifdef IDLE_THREADS
@@ -458,6 +459,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_cert=NULL;
 	variables.ssl_p2s_key=NULL;
 	variables.ssl_p2s_cipher=NULL;
+	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,version");
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -612,6 +614,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
 }
@@ -834,6 +837,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
+	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
@@ -1980,6 +1984,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
+	if (!strcasecmp(name,"keep_multiplexing_variables")) {
+		if (vallen) {
+			free(variables.keep_multiplexing_variables);
+			variables.keep_multiplexing_variables=strdup(value);
+			return true;
+		} else {
+			return false;
+		}
+	}
 	// SSL proxy to server variables
 	if (!strcasecmp(name,"ssl_p2s_ca")) {
 		if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
@@ -2510,6 +2523,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
+	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
@@ -2626,6 +2640,7 @@ MySQL_Thread::~MySQL_Thread() {
 	}
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
+	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
@@ -3739,6 +3754,8 @@ void MySQL_Thread::refresh_variables() {
 	GloMyLogger->set_base_filename(); // both filename and filesize are set here
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
+	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
+	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___default_charset=GloMTH->get_variable_uint8((char *)"default_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");

@@ -176,6 +176,7 @@ class MySQL_Connection {
 	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool MultiplexDisabled();
+	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 	void optimize();
 	void close_mysql();
