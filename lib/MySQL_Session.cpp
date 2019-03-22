@@ -1777,7 +1777,12 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 	char *query=NULL;
 	unsigned long query_length=0;
 	if (myconn->async_state_machine==ASYNC_IDLE) {
-		char *q=(char *)"SET TIME_ZONE='%s'";
+		char *q = NULL;
+		if (myconn->options.time_zone[0]=='@') {
+			q=(char *)"SET TIME_ZONE=%s";
+		} else {
+			q=(char *)"SET TIME_ZONE='%s'";
+		}
 		query=(char *)malloc(strlen(q)+strlen(myconn->options.time_zone));
 		sprintf(query,q,myconn->options.time_zone);
 		query_length=strlen(query);

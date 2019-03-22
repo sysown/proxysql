@@ -111,6 +111,7 @@ static Test time_zone[] = {
   { "SET @@time_zone = '+00:00'", { Expected("time_zone",  {"+00:00"}) } },
   { "SET @@time_zone = \"Europe/Paris\"", { Expected("time_zone",  {"Europe/Paris"}) } },
   { "SET @@time_zone = \"+00:00\"", { Expected("time_zone",  {"+00:00"}) } },
+  { "SET @@time_zone = @OLD_TIME_ZONE", { Expected("time_zone",  {"@OLD_TIME_ZONE"}) } },
 };
 
 TEST(TestParse, SET_TIME_ZONE) {
