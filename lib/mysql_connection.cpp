@@ -1828,6 +1828,7 @@ void MySQL_Connection::reset() {
 		options.init_connect = NULL;
 		options.init_connect_sent = false;
 	}
+	auto_increment_delay_token = 0;
 	if (options.ldap_user_variable) {
 		if (options.ldap_user_variable_value) {
 			free(options.ldap_user_variable_value);
