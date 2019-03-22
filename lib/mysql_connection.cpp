@@ -1582,6 +1582,83 @@ bool MySQL_Connection::MultiplexDisabled() {
 	return ret;
 }
 
+bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) {
+    if (query_digest_text==NULL) return true;
+    
+    char *query_digest_text_filter_select;
+    unsigned long query_digest_text_len=strlen(query_digest_text);
+    if (strncasecmp(query_digest_text,"SELECT ",strlen("SELECT "))==0){
+        query_digest_text_filter_select=(char*)malloc(query_digest_text_len-7+1);
+        memcpy(query_digest_text_filter_select,&query_digest_text[7],query_digest_text_len-7);
+        query_digest_text_filter_select[query_digest_text_len-7]='\0';
+    }
+    //filter @@session. and @@
+    char *match=NULL;
+    while ((match = strcasestr(query_digest_text_filter_select,"@@session."))) {
+        *match = '\0';
+        strcat(query_digest_text_filter_select, match+strlen("@@session."));
+    }
+    while ((match = strcasestr(query_digest_text_filter_select,"@@"))) {
+        *match = '\0';
+        strcat(query_digest_text_filter_select, match+strlen("@@"));
+    }
+    
+    std::vector<char*>query_digest_text_filter_select_v;
+    char* query_digest_text_filter_select_tok=strtok(query_digest_text_filter_select, ",");
+    while(query_digest_text_filter_select_tok){
+        //filter "as"/space/alias,such as select @@version as a, @@version b
+        while (1){
+            char c = *query_digest_text_filter_select_tok;
+            if (!isspace(c)){
+                break;
+            }
+            query_digest_text_filter_select_tok++;
+        }
+        char* match_as;
+        match_as=strcasestr(query_digest_text_filter_select_tok," ");
+        if(match_as){
+            query_digest_text_filter_select_tok[match_as-query_digest_text_filter_select_tok]='\0';
+            query_digest_text_filter_select_v.push_back(query_digest_text_filter_select_tok);
+        }else{
+            query_digest_text_filter_select_v.push_back(query_digest_text_filter_select_tok);
+        }
+        query_digest_text_filter_select_tok=strtok(NULL, ",");
+    }
+    
+    std::vector<char*>keep_multiplexing_variables_v;
+    char* keep_multiplexing_variables_tmp;
+    unsigned long keep_multiplexing_variables_len=strlen(mysql_thread___keep_multiplexing_variables);
+    keep_multiplexing_variables_tmp=(char*)malloc(keep_multiplexing_variables_len+1);
+    memcpy(keep_multiplexing_variables_tmp, mysql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
+    keep_multiplexing_variables_tmp[keep_multiplexing_variables_len]='\0';
+    char* keep_multiplexing_variables_tok=strtok(keep_multiplexing_variables_tmp, " ,");
+    while (keep_multiplexing_variables_tok){
+        keep_multiplexing_variables_v.push_back(keep_multiplexing_variables_tok);
+        keep_multiplexing_variables_tok=strtok(NULL, " ,");
+    }
+    
+    for (std::vector<char*>::iterator it=query_digest_text_filter_select_v.begin();it!=query_digest_text_filter_select_v.end();it++){
+        bool is_match=false;
+        for (std::vector<char*>::iterator it1=keep_multiplexing_variables_v.begin();it1!=keep_multiplexing_variables_v.end();it1++){
+            //printf("%s,%s\n",*it,*it1);
+            if (strncasecmp(*it,*it1,strlen(*it1))==0){
+                is_match=true;
+                break;
+            }
+        }
+        if(is_match){
+            is_match=false;
+            continue;
+        }else{
+            free(query_digest_text_filter_select);
+            free(keep_multiplexing_variables_tmp);
+            return false;
+        }
+    }
+    free(query_digest_text_filter_select);
+    free(keep_multiplexing_variables_tmp);
+    return true;
+}
 
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (query_digest_text==NULL) return;
@@ -1603,11 +1680,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	}
 	if (get_status_user_variable()==false) { // we search for variables only if not already set
 		if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
-			if (
-				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
-				&&
-				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
-			) {
+			//if (
+			//	strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
+			//	&&
+			//	strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
+            if(!IsKeepMultiplexEnabledVariables(query_digest_text)) {
 				set_status_user_variable(true);
 			}
 		}

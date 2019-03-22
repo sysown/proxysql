@@ -312,6 +312,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connpoll_reset_queue_length",
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
+    (char *)"keep_multiplexing_variables",
 	NULL
 };
 
@@ -430,6 +431,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_cert=NULL;
 	variables.ssl_p2s_key=NULL;
 	variables.ssl_p2s_cipher=NULL;
+    variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,version");
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -570,6 +572,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
+    if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
 }
@@ -707,6 +710,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
+    if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
 		sprintf(intbuf,"%d",variables.server_capabilities);
@@ -1729,6 +1733,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		return true;
 	}
+    if (!strcasecmp(name,"keep_multiplexing_variables")) {
+        if (vallen) {
+            free(variables.keep_multiplexing_variables);
+            variables.keep_multiplexing_variables=strdup(value);
+            return true;
+        } else {
+            return false;
+        }
+    }
 
 	// SSL proxy to server variables
 	if (!strcasecmp(name,"ssl_p2s_ca")) {
@@ -3388,6 +3401,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___eventslog_filename=GloMTH->get_variable_string((char *)"eventslog_filename");
 	GloMyLogger->set_base_filename(); // both filename and filesize are set here
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
+    mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___default_charset=GloMTH->get_variable_uint8((char *)"default_charset");

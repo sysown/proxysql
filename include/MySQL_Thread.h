@@ -362,6 +362,7 @@ class MySQL_Threads_Handler
 		char *default_schema;
 		char *interfaces;
 		char *server_version;
+        char *keep_multiplexing_variables;
 		uint8_t default_charset;
 		bool servers_stats;
 		bool commands_stats;
