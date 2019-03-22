@@ -1767,4 +1767,5 @@ void MySQL_Connection::reset() {
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
+	auto_increment_delay_token = 0;
 }
