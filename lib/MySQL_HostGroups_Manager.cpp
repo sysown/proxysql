@@ -1517,7 +1517,6 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
-            conn->auto_increment_delay_token = 0;
 			status.myconnpoll_get_ok++;
 		}
 	}
