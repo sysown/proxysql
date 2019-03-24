@@ -1289,7 +1289,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca) 
 MySrvC *MyHGC::get_random_MySrvC() {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
-	unsigned int sum=0;
+	double sum=0.0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
 	if (l) {
@@ -1340,7 +1340,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				}
 			}
 		}
-		if (sum==0) {
+		if (sum==0.0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
@@ -1367,12 +1367,12 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				}
 			}
 		}
-		if (sum==0) {
+		if (sum==0.0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		unsigned int New_sum=0;
+		double New_sum=0.0;
 		unsigned int New_TotalUsedConn=0;
 
 		// we will now scan again to ignore overloaded server
@@ -1382,7 +1382,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+						if ((len * sum) <= (1.5 * TotalUsedConn * mysrvc->weight + 1)) {
 							New_sum+=mysrvc->weight;
 							New_TotalUsedConn+=len;
 						}
@@ -1391,19 +1391,18 @@ MySrvC *MyHGC::get_random_MySrvC() {
 			}
 		}
 
-		if (New_sum==0) {
+		if (New_sum==0.0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		unsigned int k;
-		if (New_sum > 32768) {
-			k=rand()%New_sum;
+		double k;
+		if (New_sum > 32768.0) {
+			k=drand48()*New_sum;
 		} else {
-			k=fastrand()%New_sum;
+			k=fastrand()%(unsigned int)New_sum;
 		}
-  	k++;
-		New_sum=0;
+		New_sum=0.0;
 
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
@@ -1411,7 +1410,7 @@ MySrvC *MyHGC::get_random_MySrvC() {
 				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+						if ((len * sum) <= (1.5 * TotalUsedConn * mysrvc->weight + 1)) {
 							New_sum+=mysrvc->weight;
 							if (k<=New_sum) {
 								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
