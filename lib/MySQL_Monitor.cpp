@@ -1113,25 +1113,30 @@ __exit_monitor_replication_lag_thread:
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
-					for(k = 0; k < num_fields; k++) {
-						if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
-							j=k;
-						}
-					}
-					if (j>-1) {
-						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-						if (row) {
-							repl_lag=-1; // this is old behavior
-							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
-							if (row[j]) { // if Seconds_Behind_Master is not NULL
-								repl_lag=atoi(row[j]);
+					if (fields) {
+						for(k = 0; k < num_fields; k++) {
+							if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
+								j=k;
 							}
 						}
-					}
-					if (repl_lag>=0) {
-						rc=sqlite3_bind_int64(statement, 5, repl_lag); assert(rc==SQLITE_OK);
+						if (j>-1) {
+							MYSQL_ROW row=mysql_fetch_row(mmsd->result);
+							if (row) {
+								repl_lag=-1; // this is old behavior
+							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
+							if (row[j]) { // if Seconds_Behind_Master is not NULL
+									repl_lag=atoi(row[j]);
+								}
+							}
+						}
+						if (repl_lag>=0) {
+							rc=sqlite3_bind_int64(statement, 5, repl_lag); assert(rc==SQLITE_OK);
+						} else {
+							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
+						}
 					} else {
-						rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
+							proxy_error("mysql_fetch_fields returns NULL, please report a bug\n");
+							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 					}
 					mysql_free_result(mmsd->result);
 					mmsd->result=NULL;
