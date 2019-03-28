@@ -12,12 +12,22 @@ DEBUG=${ALL_DEBUG}
 #export EXTRALINK
 export MAKE
 export CURVER?=2.0.4
-export MAKEOPT=-j 4
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
-	DISTRO := unknown
+	DISTRO := Unknown
 endif
+
+NPROCS := 4
+OS := $(shell uname -s)
+ifeq ($(OS),Linux)
+	NPROCS := $(shell nproc)
+endif
+ifeq ($(OS),Darwin)
+	NPROCS := $(shell sysctl -n hw.ncpu)
+endif
+export MAKEOPT=-j ${NPROCS}
+
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
 else
