@@ -125,7 +125,7 @@ static char *generate_home() {
 	html.append("<b>Uptime = </b>");
 	{
 		unsigned long long t1=monotonic_time();
-		char buf1[30];
+		char buf1[50];
 		unsigned long long uptime = (t1-GloVars.global.start_time)/1000/1000;
 		unsigned long long days = uptime / 86400;
 		unsigned long long hours = (uptime - days*86400)/3600;
