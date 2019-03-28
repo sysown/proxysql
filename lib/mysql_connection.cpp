@@ -1585,7 +1585,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) {
     if (query_digest_text==NULL) return true;
     
-    char *query_digest_text_filter_select == NULL;
+    char *query_digest_text_filter_select = NULL;
     unsigned long query_digest_text_len=strlen(query_digest_text);
     if (strncasecmp(query_digest_text,"SELECT ",strlen("SELECT "))==0){
         query_digest_text_filter_select=(char*)malloc(query_digest_text_len-7+1);
