@@ -2555,6 +2555,7 @@ MySQL_Thread::~MySQL_Thread() {
 			}
 		delete mysql_sessions;
 		mysql_sessions=NULL;
+		GloQPro->end_thread(); // only for real threads
 	}
 
 	if (mirror_queue_mysql_sessions) {
@@ -2630,7 +2631,6 @@ MySQL_Thread::~MySQL_Thread() {
 
 	if (my_idle_conns)
 		free(my_idle_conns);
-	GloQPro->end_thread();
 
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username=NULL; }
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password=NULL; }

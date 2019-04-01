@@ -62,9 +62,9 @@ class ConsumerThread : public Thread {
 		// Remove 1 item at a time and process it. Blocks if no items are 
 		// available to process.
 		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
-VALGRIND_DISABLE_ERROR_REPORTING;
+//VALGRIND_DISABLE_ERROR_REPORTING;
 			WorkItem* item = (WorkItem*)m_queue.remove();
-VALGRIND_ENABLE_ERROR_REPORTING;
+//VALGRIND_ENABLE_ERROR_REPORTING;
 			if (item==NULL) {
 				if (thrn) {
 					// we took a NULL item that wasn't meant to reach here! Add it again
@@ -193,7 +193,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 //		std::forward_as_tuple(hostname, port), std::forward_as_tuple()).first;
 //	it->second.push_back(my);
 	// code for old compilers (gcc 4.7 in debian7)
-	auto it = my_connections.find(std::make_pair(hostname, port));
+	auto it = my_connections.find(std::make_pair(string(hostname), port));
 	if (it != my_connections.end()) {
 		it->second.push_back(my);
 	} else {
@@ -2443,12 +2443,12 @@ __monitor_run:
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, 0);
-		threads[i]->start(128,false);
+		threads[i]->start(1024,false);
 	}
 	started_threads += num_threads;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
-	pthread_attr_setstacksize (&attr, 128*1024);
+	pthread_attr_setstacksize (&attr, 1024*1024);
 	pthread_t monitor_connect_thread;
 	if (pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL) != 0) {
 		proxy_error("Thread creation\n");
@@ -2494,7 +2494,7 @@ __monitor_run:
 					started_threads += (num_threads - old_num_threads);
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
 						threads[i] = new ConsumerThread(queue, 0);
-						threads[i]->start(128,false);
+						threads[i]->start(1024,false);
 					}
 				}
 			}
@@ -2520,7 +2520,7 @@ __monitor_run:
 					started_threads += new_threads;
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
 						threads[i] = new ConsumerThread(queue, 0);
-						threads[i]->start(128,false);
+						threads[i]->start(1024,false);
 					}
 				}
 			}
@@ -2540,7 +2540,7 @@ __monitor_run:
 					started_threads += aux_threads;
 					for (int i=0; i<qsize; i++) {
 						threads_aux[i] = new ConsumerThread(queue, 245);
-						threads_aux[i]->start(128,false);
+						threads_aux[i]->start(1024,false);
 					}
 					for (int i=0; i<qsize; i++) {
 						threads_aux[i]->join();
