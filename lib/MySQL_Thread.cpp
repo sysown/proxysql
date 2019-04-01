@@ -542,34 +542,34 @@ void MySQL_Threads_Handler::commit() {
 }
 
 char * MySQL_Threads_Handler::get_variable_string(char *name) {
-	if (!strncasecmp(name,"monitor_",8)) {
-		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
-		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
-		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
+	if (!strncmp(name,"monitor_",8)) {
+		if (!strcmp(name,"monitor_username")) return strdup(variables.monitor_username);
+		if (!strcmp(name,"monitor_password")) return strdup(variables.monitor_password);
+		if (!strcmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
-	if (!strncasecmp(name,"ssl_",4)) {
-		if (!strcasecmp(name,"ssl_p2s_ca")) {
+	if (!strncmp(name,"ssl_",4)) {
+		if (!strcmp(name,"ssl_p2s_ca")) {
 			if (variables.ssl_p2s_ca==NULL || strlen(variables.ssl_p2s_ca)==0) {
 				return NULL;
 			} else {
 				return strdup(variables.ssl_p2s_ca);
 			}
 		}
-		if (!strcasecmp(name,"ssl_p2s_cert")) {
+		if (!strcmp(name,"ssl_p2s_cert")) {
 			if (variables.ssl_p2s_cert==NULL || strlen(variables.ssl_p2s_cert)==0) {
 				return NULL;
 			} else {
 				return strdup(variables.ssl_p2s_cert);
 			}
 		}
-		if (!strcasecmp(name,"ssl_p2s_key")) {
+		if (!strcmp(name,"ssl_p2s_key")) {
 			if (variables.ssl_p2s_key==NULL || strlen(variables.ssl_p2s_key)==0) {
 				return NULL;
 			} else {
 				return strdup(variables.ssl_p2s_key);
 			}
 		}
-		if (!strcasecmp(name,"ssl_p2s_cipher")) {
+		if (!strcmp(name,"ssl_p2s_cipher")) {
 			if (variables.ssl_p2s_cipher==NULL || strlen(variables.ssl_p2s_cipher)==0) {
 				return NULL;
 			} else {
@@ -577,44 +577,44 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			}
 		}
 	}
-	if (!strcasecmp(name,"init_connect")) {
+	if (!strcmp(name,"init_connect")) {
 		if (variables.init_connect==NULL || strlen(variables.init_connect)==0) {
 			return NULL;
 		} else {
 			return strdup(variables.init_connect);
 		}
 	}
-	if (!strcasecmp(name,"ldap_user_variable")) {
+	if (!strcmp(name,"ldap_user_variable")) {
 		if (variables.ldap_user_variable==NULL || strlen(variables.ldap_user_variable)==0) {
 			return NULL;
 		} else {
 			return strdup(variables.ldap_user_variable);
 		}
 	}
-	if (!strcasecmp(name,"add_ldap_user_comment")) {
+	if (!strcmp(name,"add_ldap_user_comment")) {
 		if (variables.add_ldap_user_comment==NULL || strlen(variables.add_ldap_user_comment)==0) {
 			return NULL;
 		} else {
 			return strdup(variables.add_ldap_user_comment);
 		}
 	}
-	if (!strcasecmp(name,"default_sql_mode")) {
+	if (!strcmp(name,"default_sql_mode")) {
 		if (variables.default_sql_mode==NULL) {
 			variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
 		}
 		return strdup(variables.default_sql_mode);
 	}
-	if (!strcasecmp(name,"default_time_zone")) {
+	if (!strcmp(name,"default_time_zone")) {
 		if (variables.default_time_zone==NULL) {
 			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
 		}
 		return strdup(variables.default_time_zone);
 	}
-	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
-	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
-	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
-	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
-	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcmp(name,"server_version")) return strdup(variables.server_version);
+	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
+	if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
+	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
 }
