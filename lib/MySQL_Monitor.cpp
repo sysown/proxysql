@@ -1854,7 +1854,9 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		// now it is time to update current_lantency_ms
 		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NULL";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+VALGRIND_DISABLE_ERROR_REPORTING;
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+VALGRIND_ENABLE_ERROR_REPORTING;
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 		} else {
