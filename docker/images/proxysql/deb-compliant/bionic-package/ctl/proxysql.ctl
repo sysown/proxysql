@@ -11,7 +11,7 @@ Architecture: amd64
 # Readme: README.md
 Files: proxysql /usr/bin/
  etc/proxysql.cnf /etc/
- etc/logrotate.d/proxysql /etc/logrotate.d/proxysql
+ etc/logrotate.d/proxysql /etc/logrotate.d/
  systemd/system/proxysql.service /lib/systemd/system/
  tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/
