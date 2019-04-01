@@ -1941,7 +1941,9 @@ bool MySQL_Monitor::server_responds_to_ping(char *address, int port) {
 	char *buff=(char *)malloc(strlen(new_query)+strlen(address)+32);
 	int max_failures = mysql_thread___monitor_ping_max_failures;
 	sprintf(buff,new_query,address,port,max_failures,max_failures);
+VALGRIND_DISABLE_ERROR_REPORTING;
 	monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+VALGRIND_ENABLE_ERROR_REPORTING;
 	if (!error) {
 		if (resultset) {
 			if (resultset->rows_count) {
