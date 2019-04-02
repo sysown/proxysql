@@ -1429,7 +1429,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	if (use_percona_heartbeat == false) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
 	}
-	while (mmsd->async_exit_status) {
+	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
@@ -1441,10 +1441,13 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
+		} else {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			goto __exit_monitor_replication_lag_thread;
 		}
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
-	while (mmsd->async_exit_status) {
+	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
@@ -1456,6 +1459,9 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
+		} else {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			goto __exit_monitor_replication_lag_thread;
 		}
 	}
 	if (mmsd->interr) { // replication lag check failed
