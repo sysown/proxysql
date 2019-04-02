@@ -1,4 +1,4 @@
-/var/log/proxysql.log {
+/var/lib/proxysql/proxysql.log {
     missingok
     notifempty
     copytruncate
