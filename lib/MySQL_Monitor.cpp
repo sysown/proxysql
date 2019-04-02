@@ -1520,7 +1520,7 @@ __exit_monitor_replication_lag_thread:
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 						}
 					} else {
-							proxy_error("mysql_fetch_fields returns NULL, please report a bug\n");
+							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is not 1 ( %d ). See bug #1994\n", num_fields);
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 					}
 					mysql_free_result(mmsd->result);
