@@ -86,6 +86,7 @@ deps/mariadb-client-library/mariadb_client-2.0.0-src/
 deps/mariadb-client-library/mariadb-connector-c-2.1.0-src/
 deps/mariadb-client-library/mariadb-connector-c-2.3.1/
 deps/mariadb-client-library/mariadb-connector-c-3.0.2-src/
+deps/mariadb-client-library/mariadb-connector-c-3.0.9-src/
 
 #glib
 deps/glib/glib-2.40.0/
@@ -126,6 +127,7 @@ deps/protobuf/protobuf-2.6.1/
 
 deps/sqlite3/sqlite-amalgamation-3150000/
 deps/sqlite3/sqlite-amalgamation-3190200/
+deps/sqlite3/sqlite-amalgamation-3270200/
 
 deps/clickhouse-cpp
 deps/cityhash/cityhash/
