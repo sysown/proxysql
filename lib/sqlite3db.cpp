@@ -57,7 +57,7 @@ bool SQLite3DB::execute(const char *str) {
 	rc=sqlite3_exec(db, str, NULL, 0, &err);
 //	fprintf(stderr,"%d : %s\n", rc, str);
 		if(err!=NULL) {
-			if (rc!=SQLITE_LOCKED) {
+			if (rc!=SQLITE_LOCKED && rc!=SQLITE_BUSY) {
 				proxy_error("SQLITE error: %s --- %s\n", err, str);
 				if (assert_on_error) {
 					assert(err==0);
@@ -66,10 +66,10 @@ bool SQLite3DB::execute(const char *str) {
 			sqlite3_free(err);
 			err=NULL;
 		}
-		if (rc==SQLITE_LOCKED) { // the execution of sqlite3_exec() failed because locked
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of sqlite3_exec() failed because locked
 			usleep(USLEEP_SQLITE_LOCKED);
 		}
-	} while (rc==SQLITE_LOCKED);
+	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 	if (rc==SQLITE_OK) {
 		return true;
 	}
@@ -93,10 +93,10 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 		*resultset=NULL;
 		do {
 			rc=sqlite3_step(statement);
-			if (rc==SQLITE_LOCKED) { // the execution of the prepared statement failed because locked
+			if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
 				usleep(USLEEP_SQLITE_LOCKED);
 			}
-		} while (rc==SQLITE_LOCKED);
+		} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 		if (rc==SQLITE_DONE) {
 			*affected_rows=sqlite3_changes(db);
 			ret=true;
@@ -130,10 +130,10 @@ bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, 
 		//*resultset=NULL;
 		do {
 			rc=sqlite3_step(*statement);
-			if (rc==SQLITE_LOCKED) { // the execution of the prepared statement failed because locked
+			if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
 				usleep(USLEEP_SQLITE_LOCKED);
 			}
-		} while (rc==SQLITE_LOCKED);
+		} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 		if (rc==SQLITE_DONE) {
 			*affected_rows=sqlite3_changes(db);
 			ret=true;
