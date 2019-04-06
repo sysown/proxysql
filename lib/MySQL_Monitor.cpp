@@ -1500,8 +1500,10 @@ __exit_monitor_replication_lag_thread:
 					fields = mysql_fetch_fields(mmsd->result);
 					if (fields && num_fields == 1) {
 						for(k = 0; k < num_fields; k++) {
-							if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
-								j=k;
+							if (fields[k].name) {
+								if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
+									j=k;
+								}
 							}
 						}
 						if (j>-1) {
