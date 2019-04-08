@@ -1429,7 +1429,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	if (use_percona_heartbeat == false) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
 	}
-	while (mmsd->async_exit_status) {
+	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
@@ -1441,10 +1441,13 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
+		} else {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			goto __exit_monitor_replication_lag_thread;
 		}
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
-	while (mmsd->async_exit_status) {
+	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
@@ -1456,6 +1459,9 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
+		} else {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			goto __exit_monitor_replication_lag_thread;
 		}
 	}
 	if (mmsd->interr) { // replication lag check failed
@@ -1492,10 +1498,12 @@ __exit_monitor_replication_lag_thread:
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
-					if (fields) {
+					if (fields && num_fields == 1) {
 						for(k = 0; k < num_fields; k++) {
-							if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
-								j=k;
+							if (fields[k].name) {
+								if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
+									j=k;
+								}
 							}
 						}
 						if (j>-1) {
@@ -1514,7 +1522,7 @@ __exit_monitor_replication_lag_thread:
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 						}
 					} else {
-							proxy_error("mysql_fetch_fields returns NULL, please report a bug\n");
+							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is not 1 ( %d ). See bug #1994\n", num_fields);
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 					}
 					mysql_free_result(mmsd->result);
