@@ -3820,6 +3820,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				if (max_connections_reached==true) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Too many connections\n");
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,_pid,1040,(char *)"08004", (char *)"Too many connections", true);
+					proxy_warning("mysql-max_connections reached. Returning 'Too many connections'\n");
 					__sync_fetch_and_add(&MyHGM->status.access_denied_max_connections, 1);
 				} else { // see issue #794
 					__sync_fetch_and_add(&MyHGM->status.access_denied_max_user_connections, 1);
@@ -3828,6 +3829,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username)+16);
 					sprintf(b,a,client_myds->myconn->userinfo->username,used_users);
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1226,(char *)"42000", b, true);
+					proxy_warning("User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n",client_myds->myconn->userinfo->username,used_users);
 					free(b);
 				}
 				__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
