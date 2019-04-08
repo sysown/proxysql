@@ -26,7 +26,11 @@ void MySQL_Backend::reset() {
 			server_myds->myconn->last_time_used=server_myds->sess->thread->curtime;
 			server_myds->return_MySQL_Connection_To_Pool();
 		} else {
-			server_myds->destroy_MySQL_Connection_From_Pool(true);
+			if (server_myds->sess && server_myds->sess->session_fast_forward == false) {
+				server_myds->destroy_MySQL_Connection_From_Pool(true);
+			} else {
+				server_myds->destroy_MySQL_Connection_From_Pool(false);
+			}
 		}
 	};
 	//if (mshge) {

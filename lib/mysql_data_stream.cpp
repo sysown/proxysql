@@ -435,6 +435,7 @@ int MySQL_Data_Stream::buffer2array() {
 		queue_r(queueIN, queueIN.pkt.size);
 		PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
 		queueIN.pkt.size=0;
+		queueIN.pkt.ptr = NULL;
 		return ret;
 	}
 
