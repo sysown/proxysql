@@ -1491,14 +1491,20 @@ __exit_monitor_replication_lag_thread:
 				time_now=time_now-(mmsd->t2 - start_time);
 				rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
-				if (mmsd->result) {
+				if (mmsd->interr == 0 && mmsd->result) {
 					int num_fields=0;
 					int k=0;
 					MYSQL_FIELD * fields=NULL;
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
-					if (fields && num_fields == 1) {
+					if (
+						fields && (
+						( num_fields == 1 && use_percona_heartbeat == true )
+						||
+						( num_fields > 30 && use_percona_heartbeat == false )
+						)
+					) {
 						for(k = 0; k < num_fields; k++) {
 							if (fields[k].name) {
 								if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
@@ -1522,7 +1528,7 @@ __exit_monitor_replication_lag_thread:
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 						}
 					} else {
-							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is not 1 ( %d ). See bug #1994\n", num_fields);
+							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. See bug #1994\n");
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 					}
 					mysql_free_result(mmsd->result);
