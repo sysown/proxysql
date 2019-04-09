@@ -841,6 +841,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		}
 	}
 	if (mmsd->interr) { // check failed
+		if (mmsd->mysql) {
+			mysql_close(mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	} else {
 		if (crc==false) {
 			if (mmsd->mysql) {
@@ -1106,6 +1110,10 @@ __end_process_group_replication_result:
 
 	}
 	if (mmsd->interr) { // check failed
+		if (mmsd->mysql) {
+			mysql_close(mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	} else {
 		if (crc==false) {
 			if (mmsd->mysql) {
@@ -1235,10 +1243,12 @@ __exit_monitor_galera_thread:
 		bool wsrep_reject_queries = true;
 		bool wsrep_sst_donor_rejects_queries = true;
 		long long wsrep_local_recv_queue=0;
+		MYSQL_FIELD * fields=NULL;
 		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int num_rows=0;
 			num_fields = mysql_num_fields(mmsd->result);
+			fields = mysql_fetch_fields(mmsd->result);
 			if (num_fields!=7) {
 				proxy_error("Incorrect number of fields, please report a bug\n");
 				goto __end_process_galera_result;
@@ -1310,39 +1320,43 @@ __end_process_galera_result:
 		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 			MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 		} else {
-			if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
-				if (primary_partition == false) {
-					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
-				} else {
-					if (wsrep_desync == true) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+			if (fields) { // if we didn't get any error, but fileds is NULL, we are likely hitting bug #1994
+				if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+					if (primary_partition == false) {
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
 					} else {
-						char msg[80];
-						sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+						if (wsrep_desync == true) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+						} else {
+							char msg[80];
+							sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+						}
+					}
+				} else {
+					//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
+						if (wsrep_reject_queries) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
+					//	} else {
+					//		// wsrep_sst_donor_rejects_queries
+					//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
+					//	}
+					} else {
+						if (read_only==true) {
+							if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
+								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+							} else {
+								MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+							}
+						} else {
+							// the node is a writer
+							// TODO: for now we don't care about the number of writers
+							MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
+						}
 					}
 				}
 			} else {
-				//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
-					if (wsrep_reject_queries) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
-				//	} else {
-				//		// wsrep_sst_donor_rejects_queries
-				//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
-				//	}
-				} else {
-					if (read_only==true) {
-						if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
-						} else {
-							MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
-						}
-					} else {
-						// the node is a writer
-						// TODO: for now we don't care about the number of writers
-						MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
-					}
-				}
+				proxy_error("mysql_fetch_fields returns NULL. See bug #1994\n");
 			}
 		}
 
@@ -1353,6 +1367,10 @@ __end_process_galera_result:
 		}
 	}
 	if (mmsd->interr) { // check failed
+		if (mmsd->mysql) {
+			mysql_close(mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	} else {
 		if (crc==false) {
 			if (mmsd->mysql) {
@@ -1466,6 +1484,10 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		if (mmsd->mysql) {
+			mysql_close(mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	} else {
 		if (crc==false) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
@@ -1548,6 +1570,10 @@ __exit_monitor_replication_lag_thread:
 
 	}
 	if (mmsd->interr) { // check failed
+		if (mmsd->mysql) {
+			mysql_close(mmsd->mysql);
+			mmsd->mysql=NULL;
+		}
 	} else {
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
