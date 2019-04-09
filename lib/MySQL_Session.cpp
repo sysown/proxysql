@@ -5160,13 +5160,19 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	memcpy(_new_pkt.ptr , _pkt->ptr, 5);
 	unsigned char *_c=(unsigned char *)_new_pkt.ptr;
 	_c+=5;
-	// prefix comment
-	//memcpy(_c,b,strlen(b));
-	//_c+=strlen(b);
-	memcpy(_c, (char *)_pkt->ptr+5, _pkt->size-5);
-	// suffix comment
-	_c+=_pkt->size-5;
-	memcpy(_c,b,strlen(b));
+	void *idx = memchr((char *)_pkt->ptr+5, ' ', _pkt->size-5);
+	if (idx) {
+		size_t first_word_len = (char *)idx - (char *)_pkt->ptr - 5;
+		memcpy(_c, (char *)_pkt->ptr+5, first_word_len);
+		_c+= first_word_len;
+		memcpy(_c,b,strlen(b));
+		_c+= strlen(b);
+		memcpy(_c, (char *)idx, _pkt->size - 5 - first_word_len);
+	} else {
+		memcpy(_c, (char *)_pkt->ptr+5, _pkt->size-5);
+		_c+=_pkt->size-5;
+		memcpy(_c,b,strlen(b));
+	}
 	l_free(_pkt->size,_pkt->ptr);
 	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
