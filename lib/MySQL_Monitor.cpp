@@ -1356,7 +1356,7 @@ __end_process_galera_result:
 					}
 				}
 			} else {
-				proxy_error("mysql_fetch_fields returns NULL. See bug #1994\n");
+				proxy_error("mysql_fetch_fields returns NULL. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
 			}
 		}
 
@@ -1550,7 +1550,7 @@ __exit_monitor_replication_lag_thread:
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 						}
 					} else {
-							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. See bug #1994\n");
+							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
 							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 					}
 					mysql_free_result(mmsd->result);
