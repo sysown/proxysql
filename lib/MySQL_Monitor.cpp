@@ -429,6 +429,7 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 };
 
 void * monitor_connect_thread(void *arg) {
+	mysql_thread_init();
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -483,6 +484,7 @@ void * monitor_connect_thread(void *arg) {
 }
 
 void * monitor_ping_thread(void *arg) {
+	mysql_thread_init();
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -656,6 +658,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 }
 
 void * monitor_read_only_thread(void *arg) {
+	mysql_thread_init();
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -884,6 +887,7 @@ __fast_exit_monitor_read_only_thread:
 }
 
 void * monitor_group_replication_thread(void *arg) {
+	mysql_thread_init();
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1148,6 +1152,7 @@ __fast_exit_monitor_group_replication_thread:
 }
 
 void * monitor_galera_thread(void *arg) {
+	mysql_thread_init();
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1405,6 +1410,7 @@ __fast_exit_monitor_galera_thread:
 }
 
 void * monitor_replication_lag_thread(void *arg) {
+	mysql_thread_init();
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
