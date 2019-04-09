@@ -80,6 +80,14 @@ static Test sql_mode[] = {
   { "SET sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SQL_MODE   ='TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SQL_MODE  = \"TRADITIONAL\"", { Expected("sql_mode",  {"TRADITIONAL"}) } },
+  { "SET SQL_MODE  = TRADITIONAL", { Expected("sql_mode",  {"TRADITIONAL"}) } },
+  { "SET @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')", { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')"}) } },
+  { "set session sql_mode = 'ONLY_FULL_GROUP_BY'" , { Expected("sql_mode",  {"ONLY_FULL_GROUP_BY"}) } },
+  { "SET sql_mode = 'NO_ZERO_DATE,STRICT_ALL_TABLES,ONLY_FULL_GROUP_BY'" , { Expected("sql_mode",  {"NO_ZERO_DATE,STRICT_ALL_TABLES,ONLY_FULL_GROUP_BY"}) } },
+  { "SET @@sql_mode = CONCAT(@@sql_mode, ',', 'ONLY_FULL_GROUP_BY')" , { Expected("sql_mode",  {"CONCAT(@@sql_mode, ',', 'ONLY_FULL_GROUP_BY')"}) } },
+  { "SET @@sql_mode = REPLACE(REPLACE(REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')" , { Expected("sql_mode",  {"REPLACE(REPLACE(REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')"}) } },
+  { "SET @@sql_mode = REPLACE( REPLACE( REPLACE( @@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')" , { Expected("sql_mode",  {"REPLACE( REPLACE( REPLACE( @@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')"}) } },
+//	{ "SET @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')", { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')"}) } },
 };
 
 void TestParse(const Test* tests, int ntests, const string& title) {
@@ -107,6 +115,10 @@ TEST(TestParse, SET_SQL_MODE) {
 
 static Test time_zone[] = {
   { "SET @@time_zone = 'Europe/Paris'", { Expected("time_zone",  {"Europe/Paris"}) } },
+  { "SET @@time_zone = '+00:00'", { Expected("time_zone",  {"+00:00"}) } },
+  { "SET @@time_zone = \"Europe/Paris\"", { Expected("time_zone",  {"Europe/Paris"}) } },
+  { "SET @@time_zone = \"+00:00\"", { Expected("time_zone",  {"+00:00"}) } },
+  { "SET @@time_zone = @OLD_TIME_ZONE", { Expected("time_zone",  {"@OLD_TIME_ZONE"}) } },
 };
 
 TEST(TestParse, SET_TIME_ZONE) {

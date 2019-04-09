@@ -303,7 +303,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define STATS_SQLITE_TABLE_MYSQL_QUERY_RULES "CREATE TABLE stats_mysql_query_rules (rule_id INTEGER PRIMARY KEY , hits INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_USERS "CREATE TABLE stats_mysql_users (username VARCHAR PRIMARY KEY , frontend_connections INT NOT NULL , frontend_max_connections INT NOT NULL)"
 #define STATS_SQLITE_TABLE_MYSQL_COMMANDS_COUNTERS "CREATE TABLE stats_mysql_commands_counters (Command VARCHAR NOT NULL PRIMARY KEY , Total_Time_us INT NOT NULL , Total_cnt INT NOT NULL , cnt_100us INT NOT NULL , cnt_500us INT NOT NULL , cnt_1ms INT NOT NULL , cnt_5ms INT NOT NULL , cnt_10ms INT NOT NULL , cnt_50ms INT NOT NULL , cnt_100ms INT NOT NULL , cnt_500ms INT NOT NULL , cnt_1s INT NOT NULL , cnt_5s INT NOT NULL , cnt_10s INT NOT NULL , cnt_INFs)"
-#define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , db VARCHAR , cli_host VARCHAR , cli_port INT , hostgroup INT , l_srv_host VARCHAR , l_srv_port INT , srv_host VARCHAR , srv_port INT , command VARCHAR , time_ms INT NOT NULL , info VARCHAR)"
+#define STATS_SQLITE_TABLE_MYSQL_PROCESSLIST "CREATE TABLE stats_mysql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , db VARCHAR , cli_host VARCHAR , cli_port INT , hostgroup INT , l_srv_host VARCHAR , l_srv_port INT , srv_host VARCHAR , srv_port INT , command VARCHAR , time_ms INT NOT NULL , info VARCHAR, status_flags INT)"
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL "CREATE TABLE stats_mysql_connection_pool (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL_RESET "CREATE TABLE stats_mysql_connection_pool_reset (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
@@ -3324,18 +3324,18 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		admindb->execute("DELETE FROM stats.stats_proxysql_servers_status");
 		admindb->execute("VACUUM stats");
 	} else {
-		statsdb->execute("DELETE stats_mysql_commands_counters");
-		statsdb->execute("DELETE stats_mysql_connection_pool");
-		statsdb->execute("DELETE stats_mysql_connection_pool_reset");
-		statsdb->execute("DELETE stats_mysql_prepared_statements_info");
-		statsdb->execute("DELETE stats_mysql_processlist");
-		statsdb->execute("DELETE stats_mysql_query_digest");
-		statsdb->execute("DELETE stats_mysql_query_digest_reset");
-		statsdb->execute("DELETE stats_mysql_query_rules");
-		statsdb->execute("DELETE stats_mysql_users");
-		statsdb->execute("DELETE stats_proxysql_servers_checksums");
-		statsdb->execute("DELETE stats_proxysql_servers_metrics");
-		statsdb->execute("DELETE stats_proxysql_servers_status");
+		statsdb->execute("DELETE FROM stats_mysql_commands_counters");
+		statsdb->execute("DELETE FROM stats_mysql_connection_pool");
+		statsdb->execute("DELETE FROM stats_mysql_connection_pool_reset");
+		statsdb->execute("DELETE FROM stats_mysql_prepared_statements_info");
+		statsdb->execute("DELETE FROM stats_mysql_processlist");
+		statsdb->execute("DELETE FROM stats_mysql_query_digest");
+		statsdb->execute("DELETE FROM stats_mysql_query_digest_reset");
+		statsdb->execute("DELETE FROM stats_mysql_query_rules");
+		statsdb->execute("DELETE FROM stats_mysql_users");
+		statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
+		statsdb->execute("DELETE FROM stats_proxysql_servers_metrics");
+		statsdb->execute("DELETE FROM stats_proxysql_servers_status");
 		statsdb->execute("VACUUM");
 	}
 }
@@ -3519,6 +3519,7 @@ static void * admin_main_loop(void *arg)
 				client=(int *)malloc(sizeof(int));
 				*client= client_t;
 				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
+					perror("pthread_create");
 					proxy_error("Thread creation\n");
 					assert(0);
 				}
@@ -3639,7 +3640,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 #else
 		if (glovars.has_debug==true) {
 #endif /* DEBUG */
-			perror("Incompatible debagging version");
+			perror("Incompatible debugging version");
 			exit(EXIT_FAILURE);
 		}
 
@@ -5754,12 +5755,13 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_processlist");
-	char *a=(char *)"INSERT INTO stats_mysql_processlist VALUES ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s')";
+	char *a=(char *)"INSERT OR IGNORE INTO stats_mysql_processlist VALUES ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s')";
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		int arg_len=0;
 		char *o_info=NULL;
-		for (int i=0; i<13; i++) { // info (field 13) is left out! See #746
+		for (int i=0; i<15; i++) { // info (field 13) is left out! See #746
+			if(i == 13) continue;
 			if (r->fields[i])
 				arg_len+=strlen(r->fields[i]);
 		}
@@ -5783,7 +5785,8 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 			(r->fields[10] ? r->fields[10] : ""),
 			(r->fields[11] ? r->fields[11] : ""),
 			(r->fields[12] ? r->fields[12] : ""),
-			(r->fields[13] ? o_info : "")
+			(r->fields[13] ? o_info : ""),
+			(r->fields[14] ? r->fields[14] : "")
 		);
 		statsdb->execute(query);
 		free(query);
@@ -6692,8 +6695,6 @@ void ProxySQL_Admin::__refresh_users() {
 	GloMyAuth->remove_inactives(USERNAME_BACKEND);
 	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
 	uint64_t hash1 = 0;
-	if (calculate_checksum) {
-	}
 	set_variable((char *)"admin_credentials",(char *)"");
 	if (calculate_checksum) {
 		hash1 = GloMyAuth->get_runtime_checksum();
@@ -8130,12 +8131,13 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, comment) VALUES ('%s', '%s', %d, %d, '%s', %d, %d, %d, %d, '%s')";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s')";
 	for (i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
 		std::string password="";
 		int active=1;
+		int use_ssl=0;
 		int default_hostgroup=0;
 		std::string default_schema="";
 		int schema_locked=0;
@@ -8147,6 +8149,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		user.lookupValue("password", password);
 		user.lookupValue("default_hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
+		user.lookupValue("use_ssl", use_ssl);
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
 		user.lookupValue("default_schema", default_schema);
 		user.lookupValue("schema_locked", schema_locked);
@@ -8157,7 +8160,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		char *o1=strdup(comment.c_str());
 		char *o=escape_string_single_quotes(o1, false);
 		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, o);
+		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, o);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);

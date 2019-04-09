@@ -4,13 +4,14 @@ Homepage: http://www.proxysql.com
 Standards-Version: 3.9.2
 
 Package: proxysql
-Version: 2.0.0
+Version: PKG_VERSION_CURVER
 Maintainer: Rene Cannao <rene.cannao@gmail.com>
 Architecture: amd64
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/
  etc/proxysql.cnf /
+ etc/logrotate.d/proxysql /etc/logrotate.d/proxysql
  etc/init.d/proxysql /
  tools/proxysql_galera_checker.sh /usr/share/proxysql/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/

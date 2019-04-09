@@ -383,6 +383,7 @@ class MySQL_Threads_Handler
 		char *default_schema;
 		char *interfaces;
 		char *server_version;
+		char *keep_multiplexing_variables;
 		uint8_t default_charset;
 		bool servers_stats;
 		bool commands_stats;
@@ -427,6 +428,7 @@ class MySQL_Threads_Handler
 		int hostgroup_manager_verbose;
 		int binlog_reader_connect_retry_msec;
 		char *init_connect;
+		char *ldap_user_variable;
 		char *add_ldap_user_comment;
 		char *default_sql_mode;
 		char *default_time_zone;

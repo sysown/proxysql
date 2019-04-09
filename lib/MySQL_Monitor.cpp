@@ -62,9 +62,9 @@ class ConsumerThread : public Thread {
 		// Remove 1 item at a time and process it. Blocks if no items are 
 		// available to process.
 		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
-VALGRIND_DISABLE_ERROR_REPORTING;
+//VALGRIND_DISABLE_ERROR_REPORTING;
 			WorkItem* item = (WorkItem*)m_queue.remove();
-VALGRIND_ENABLE_ERROR_REPORTING;
+//VALGRIND_ENABLE_ERROR_REPORTING;
 			if (item==NULL) {
 				if (thrn) {
 					// we took a NULL item that wasn't meant to reach here! Add it again
@@ -193,7 +193,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 //		std::forward_as_tuple(hostname, port), std::forward_as_tuple()).first;
 //	it->second.push_back(my);
 	// code for old compilers (gcc 4.7 in debian7)
-	auto it = my_connections.find(std::make_pair(hostname, port));
+	auto it = my_connections.find(std::make_pair(string(hostname), port));
 	if (it != my_connections.end()) {
 		it->second.push_back(my);
 	} else {
@@ -1469,7 +1469,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	if (use_percona_heartbeat == false) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
 	}
-	while (mmsd->async_exit_status) {
+	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
@@ -1481,10 +1481,13 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
+		} else {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			goto __exit_monitor_replication_lag_thread;
 		}
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
-	while (mmsd->async_exit_status) {
+	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
@@ -1496,6 +1499,9 @@ void * monitor_replication_lag_thread(void *arg) {
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
+		} else {
+			mmsd->mysql_error_msg=strdup("timeout check");
+			goto __exit_monitor_replication_lag_thread;
 		}
 	}
 	if (mmsd->interr) { // replication lag check failed
@@ -1532,25 +1538,32 @@ __exit_monitor_replication_lag_thread:
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
-					for(k = 0; k < num_fields; k++) {
-						if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
-							j=k;
-						}
-					}
-					if (j>-1) {
-						MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-						if (row) {
-							repl_lag=-1; // this is old behavior
-							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
-							if (row[j]) { // if Seconds_Behind_Master is not NULL
-								repl_lag=atoi(row[j]);
+					if (fields && num_fields == 1) {
+						for(k = 0; k < num_fields; k++) {
+							if (fields[k].name) {
+								if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
+									j=k;
+								}
 							}
 						}
-					}
-					if (repl_lag>=0) {
-						rc=sqlite3_bind_int64(statement, 5, repl_lag); assert(rc==SQLITE_OK);
+						if (j>-1) {
+							MYSQL_ROW row=mysql_fetch_row(mmsd->result);
+							if (row) {
+								repl_lag=-1; // this is old behavior
+							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
+							if (row[j]) { // if Seconds_Behind_Master is not NULL
+									repl_lag=atoi(row[j]);
+								}
+							}
+						}
+						if (repl_lag>=0) {
+							rc=sqlite3_bind_int64(statement, 5, repl_lag); assert(rc==SQLITE_OK);
+						} else {
+							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
+						}
 					} else {
-						rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
+							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is not 1 ( %d ). See bug #1994\n", num_fields);
+							rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
 					}
 					mysql_free_result(mmsd->result);
 					mmsd->result=NULL;
@@ -1828,7 +1841,10 @@ __end_monitor_ping_loop:
 		// now it is time to shun all problematic hosts
 		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NOT NULL AND b.ping_error NOT LIKE 'Access denied for user\%'";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+// we disable valgrind here. Probably a bug in SQLite3
+VALGRIND_DISABLE_ERROR_REPORTING;
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+VALGRIND_ENABLE_ERROR_REPORTING;
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 		} else {
@@ -1886,7 +1902,9 @@ __end_monitor_ping_loop:
 		// now it is time to update current_lantency_ms
 		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NULL";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+VALGRIND_DISABLE_ERROR_REPORTING;
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+VALGRIND_ENABLE_ERROR_REPORTING;
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 		} else {
@@ -1973,7 +1991,9 @@ bool MySQL_Monitor::server_responds_to_ping(char *address, int port) {
 	char *buff=(char *)malloc(strlen(new_query)+strlen(address)+32);
 	int max_failures = mysql_thread___monitor_ping_max_failures;
 	sprintf(buff,new_query,address,port,max_failures,max_failures);
+VALGRIND_DISABLE_ERROR_REPORTING;
 	monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+VALGRIND_ENABLE_ERROR_REPORTING;
 	if (!error) {
 		if (resultset) {
 			if (resultset->rows_count) {
@@ -2478,12 +2498,12 @@ __monitor_run:
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
 		threads[i] = new ConsumerThread(queue, 0);
-		threads[i]->start(128,false);
+		threads[i]->start(2048,false);
 	}
 	started_threads += num_threads;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
-	pthread_attr_setstacksize (&attr, 128*1024);
+	pthread_attr_setstacksize (&attr, 2048*1024);
 	pthread_t monitor_connect_thread;
 	if (pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL) != 0) {
 		proxy_error("Thread creation\n");
@@ -2534,7 +2554,7 @@ __monitor_run:
 					started_threads += (num_threads - old_num_threads);
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
 						threads[i] = new ConsumerThread(queue, 0);
-						threads[i]->start(128,false);
+						threads[i]->start(2048,false);
 					}
 				}
 			}
@@ -2560,7 +2580,7 @@ __monitor_run:
 					started_threads += new_threads;
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
 						threads[i] = new ConsumerThread(queue, 0);
-						threads[i]->start(128,false);
+						threads[i]->start(2048,false);
 					}
 				}
 			}
@@ -2580,7 +2600,7 @@ __monitor_run:
 					started_threads += aux_threads;
 					for (int i=0; i<qsize; i++) {
 						threads_aux[i] = new ConsumerThread(queue, 245);
-						threads_aux[i]->start(128,false);
+						threads_aux[i]->start(2048,false);
 					}
 					for (int i=0; i<qsize; i++) {
 						threads_aux[i]->join();

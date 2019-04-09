@@ -204,6 +204,9 @@ MySQL_Connection::MySQL_Connection() {
 	options.autocommit=true;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.ldap_user_variable=NULL;
+	options.ldap_user_variable_value=NULL;
+	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
 	options.sql_mode=NULL;	// #509
 	options.sql_mode_int=0;	// #509
@@ -232,6 +235,8 @@ MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
+	if (options.ldap_user_variable) free(options.ldap_user_variable);
+	if (options.ldap_user_variable_value) free(options.ldap_user_variable_value);
 	if (userinfo) {
 		delete userinfo;
 		userinfo=NULL;
@@ -715,7 +720,6 @@ handler_again:
 			break;
 		case ASYNC_CHANGE_USER_END:
 			if (ret_bool) {
-				fprintf(stderr,"Failed to mysql_change_user()");
 				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_FAILED);
 			} else {
 				NEXT_IMMEDIATE(ASYNC_CHANGE_USER_SUCCESSFUL);
@@ -1020,7 +1024,7 @@ handler_again:
 					if (
 						(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
 							||
-						( mysql_thread___throttle_ratio_server_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
+						( mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
 					) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 					} else {
@@ -1634,6 +1638,83 @@ bool MySQL_Connection::MultiplexDisabled() {
 	return ret;
 }
 
+bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) {
+	if (query_digest_text==NULL) return true;
+
+	char *query_digest_text_filter_select = NULL;
+	unsigned long query_digest_text_len=strlen(query_digest_text);
+	if (strncasecmp(query_digest_text,"SELECT ",strlen("SELECT "))==0){
+		query_digest_text_filter_select=(char*)malloc(query_digest_text_len-7+1);
+		memcpy(query_digest_text_filter_select,&query_digest_text[7],query_digest_text_len-7);
+		query_digest_text_filter_select[query_digest_text_len-7]='\0';
+	}
+	//filter @@session. and @@
+	char *match=NULL;
+	while ((match = strcasestr(query_digest_text_filter_select,"@@session."))) {
+		*match = '\0';
+		strcat(query_digest_text_filter_select, match+strlen("@@session."));
+	}
+	while ((match = strcasestr(query_digest_text_filter_select,"@@"))) {
+		*match = '\0';
+		strcat(query_digest_text_filter_select, match+strlen("@@"));
+	}
+
+	std::vector<char*>query_digest_text_filter_select_v;
+	char* query_digest_text_filter_select_tok=strtok(query_digest_text_filter_select, ",");
+	while(query_digest_text_filter_select_tok){
+		//filter "as"/space/alias,such as select @@version as a, @@version b
+		while (1){
+			char c = *query_digest_text_filter_select_tok;
+			if (!isspace(c)){
+				break;
+			}
+			query_digest_text_filter_select_tok++;
+		}
+		char* match_as;
+		match_as=strcasestr(query_digest_text_filter_select_tok," ");
+		if(match_as){
+			query_digest_text_filter_select_tok[match_as-query_digest_text_filter_select_tok]='\0';
+			query_digest_text_filter_select_v.push_back(query_digest_text_filter_select_tok);
+		}else{
+			query_digest_text_filter_select_v.push_back(query_digest_text_filter_select_tok);
+		}
+		query_digest_text_filter_select_tok=strtok(NULL, ",");
+	}
+
+	std::vector<char*>keep_multiplexing_variables_v;
+	char* keep_multiplexing_variables_tmp;
+	unsigned long keep_multiplexing_variables_len=strlen(mysql_thread___keep_multiplexing_variables);
+	keep_multiplexing_variables_tmp=(char*)malloc(keep_multiplexing_variables_len+1);
+	memcpy(keep_multiplexing_variables_tmp, mysql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
+	keep_multiplexing_variables_tmp[keep_multiplexing_variables_len]='\0';
+	char* keep_multiplexing_variables_tok=strtok(keep_multiplexing_variables_tmp, " ,");
+	while (keep_multiplexing_variables_tok){
+		keep_multiplexing_variables_v.push_back(keep_multiplexing_variables_tok);
+		keep_multiplexing_variables_tok=strtok(NULL, " ,");
+	}
+
+	for (std::vector<char*>::iterator it=query_digest_text_filter_select_v.begin();it!=query_digest_text_filter_select_v.end();it++){
+		bool is_match=false;
+		for (std::vector<char*>::iterator it1=keep_multiplexing_variables_v.begin();it1!=keep_multiplexing_variables_v.end();it1++){
+			//printf("%s,%s\n",*it,*it1);
+			if (strncasecmp(*it,*it1,strlen(*it1))==0){
+				is_match=true;
+				break;
+			}
+		}
+		if(is_match){
+			is_match=false;
+			continue;
+		}else{
+			free(query_digest_text_filter_select);
+			free(keep_multiplexing_variables_tmp);
+			return false;
+		}
+	}
+	free(query_digest_text_filter_select);
+	free(keep_multiplexing_variables_tmp);
+	return true;
+}
 
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (query_digest_text==NULL) return;
@@ -1655,11 +1736,11 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	}
 	if (get_status_user_variable()==false) { // we search for variables only if not already set
 		if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
-			if (
-				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
-				&&
-				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
-			) {
+//			if (
+//				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
+//				&&
+//				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
+			if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
 				set_status_user_variable(true);
 			}
 		}
@@ -1819,6 +1900,20 @@ void MySQL_Connection::reset() {
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
+	if (options.init_connect) {
+		free(options.init_connect);
+		options.init_connect = NULL;
+		options.init_connect_sent = false;
+	}
+	auto_increment_delay_token = 0;
+	if (options.ldap_user_variable) {
+		if (options.ldap_user_variable_value) {
+			free(options.ldap_user_variable_value);
+			options.ldap_user_variable_value = NULL;
+		}
+		options.ldap_user_variable = NULL;
+		options.ldap_user_variable_sent = false;
+	}
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {

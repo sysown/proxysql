@@ -60,8 +60,14 @@ testpid() {
 }
 
 is_pid_child_of_docker() {
+	# Check if docker is installed (no point in checking if docker isn't present)
 	which docker &> /dev/null
 	if [ "$?" -eq 1 ] ; then
+		return 0;
+	fi
+
+	# Check if any docker containers are running (check required since empty output fails next command)
+	if [ "$(docker ps -q | wc -l)" -eq 0 ] ; then
 		return 0;
 	fi
 

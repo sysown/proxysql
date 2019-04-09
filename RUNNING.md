@@ -16,7 +16,7 @@ USAGE: proxysql [OPTIONS]
 
 OPTIONS:
 
--c, --config ARG             Configuraton file
+-c, --config ARG             Configuration file
 -D, --datadir ARG            Datadir
 -e, --exit-on-error          Do not restart ProxySQL if crashes
 -f, --foreground             Run in foreground

@@ -97,12 +97,14 @@ class MySQL_Session
 
 	bool handler_again___verify_backend_charset();
 	bool handler_again___verify_init_connect();
+	bool handler_again___verify_ldap_user_variable();
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_backend_sql_log_bin();
 	bool handler_again___verify_backend_sql_mode();
 	bool handler_again___verify_backend_time_zone();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
+	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
 	bool handler_again___status_SETTING_TIME_ZONE(int *);
@@ -173,7 +175,7 @@ class MySQL_Session
 	bool schema_locked;
 	bool transaction_persistent;
 	bool session_fast_forward;
-	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, of if proysql is still buffering everything
+	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
 
 	bool with_gtid;

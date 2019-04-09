@@ -11,14 +11,30 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.0.0
-export MAKEOPT=-j 4
-DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
+export CURVER?=2.0.4
+ifneq (,$(wildcard /etc/os-release))
+	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
+else
+	DISTRO := Unknown
+endif
+
+NPROCS := 4
+OS := $(shell uname -s)
+ifeq ($(OS),Linux)
+	NPROCS := $(shell nproc)
+endif
+ifeq ($(OS),Darwin)
+	NPROCS := $(shell sysctl -n hw.ncpu)
+endif
+export MAKEOPT=-j ${NPROCS}
+
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
 else
 	SYSTEMD=0
 endif
+USERCHECK := $(shell getent passwd proxysql)
+GROUPCHECK := $(shell getent group proxysql)
 
 .PHONY: default
 default: build_deps build_lib build_src
@@ -357,12 +373,17 @@ cleanbuild:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 
+.PHONY: install
 install: src/proxysql
 	install -m 0755 src/proxysql /usr/bin
 	install -m 0600 etc/proxysql.cnf /etc
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
+ifeq ($(findstring proxysql,$(USERCHECK)),)
+	@echo "Creating proxysql user and group"
+	useradd -r -U -s /bin/false proxysql
+endif
 ifeq ($(SYSTEMD), 1)
-	install -m 0644 systemd/proxysql.service /usr/lib/systemd/system/
+	install -m 0644 systemd/system/proxysql.service /usr/lib/systemd/system/
 	systemctl enable proxysql.service
 else
 	install -m 0755 etc/init.d/proxysql /etc/init.d
@@ -377,39 +398,56 @@ ifeq ($(DISTRO),"Ubuntu")
 else
 ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql defaults
+else
+ifeq ($(DISTRO),"Unknown")
+		$(warning Not sure how to install proxysql service on this OS)
 endif
 endif
 endif
 endif
-.PHONY: install
+endif
+endif
 
+.PHONY: uninstall
 uninstall:
-	rm /etc/proxysql.cnf
-	rm /usr/bin/proxysql
-	rmdir /var/lib/proxysql 2>/dev/null || true
+	if [ -f /etc/proxysql.cnf ]; then rm /etc/proxysql.cnf ; fi
+	if [ -f /usr/bin/proxysql ]; then rm /usr/bin/proxysql ; fi
+	if [ -d /var/lib/proxysql ]; then rmdir /var/lib/proxysql 2>/dev/null || true ; fi
 ifeq ($(SYSTEMD), 1)
 		systemctl stop proxysql.service
-		rm /usr/lib/systemd/system/proxysql.service
+		if [ -f /usr/lib/systemd/system/proxysql.service ]; then rm /usr/lib/systemd/system/proxysql.service ; fi
+		find /etc/systemd -name "proxysql.service" -exec rm {} \;
+		systemctl daemon-reload
 else
 ifeq ($(DISTRO),"CentOS Linux")
 		chkconfig --level 0123456 proxysql off
-		rm /etc/init.d/proxysql
+		if [ -f /etc/init.d/proxysql ]; then rm /etc/init.d/proxysql ; fi
 else
 ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
 		chkconfig --level 0123456 proxysql off
-		rm /etc/init.d/proxysql
+		if [ -f /etc/init.d/proxysql ]; then rm /etc/init.d/proxysql ; fi
 else
 ifeq ($(DISTRO),"Ubuntu")
-		rm /etc/init.d/proxysql
+		if [ -f /etc/init.d/proxysql ]; then rm /etc/init.d/proxysql ; fi
 		update-rc.d proxysql remove
 else
 ifeq ($(DISTRO),"Debian GNU/Linux")
-		rm /etc/init.d/proxysql
+		if [ -f /etc/init.d/proxysql ]; then rm /etc/init.d/proxysql ; fi
 		update-rc.d proxysql remove
+else
+ifeq ($(DISTRO),"Unknown")
+		$(warning Not sure how to uninstall proxysql service on this OS)
 endif
 endif
 endif
 endif
 endif
 endif
-.PHONY: uninstall
+ifneq ($(findstring proxysql,$(USERCHECK)),)
+	@echo "Deleting proxysql user"
+	userdel proxysql
+endif
+ifneq ($(findstring proxysql,$(GROUPCHECK)),)
+	@echo "Deleting proxysql group"
+	groupdel proxysql
+endif

@@ -29,13 +29,14 @@ std::map<std::string,std::vector<string>> SetParser::parse() {
   std::map<std::string,std::vector<string>> result;
 
 #define NAMES "(NAMES)"
-#define QUOTES "(?:'||\")"
+#define QUOTES "(?:'|\")?"
 #define NAME_VALUE "((?:\\w|\\d)+)"
 #define SESSION "(?:|SESSION +|@@|@@session.)"
 #define VAR "(\\w+)"
 #define SPACES " *"
 //#define VAR_VALUE "((?:[\\w/\\d:\\+\\-]|,)+)"
-#define VAR_VALUE "((?:CONCAT\\((?:REPLACE\\()+@@sql_mode,(?:(?:'|\\w|,| |\"|\\))+(?:\\)))|(?:[\\w/\\d:\\+\\-]|,)+|(?:)))"
+//#define VAR_VALUE "((?:CONCAT\\((?:(REPLACE|CONCAT)\\()+@@sql_mode,(?:(?:'|\\w|,| |\"|\\))+(?:\\)))|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"
+#define VAR_VALUE "(((?:CONCAT\\()*(?:((?: )*REPLACE|CONCAT)\\()+(?: )*@@sql_mode,(?:(?:'|\\w|,| |\"|\\))+(?:\\))*)|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"
 
   const string pattern="(?:" NAMES SPACES QUOTES NAME_VALUE QUOTES "(?: +COLLATE +" QUOTES NAME_VALUE QUOTES "|)" "|" SESSION VAR SPACES "(?:|:)=" SPACES QUOTES VAR_VALUE QUOTES ") *,? *";
   re2::RE2 re(pattern, *opt2);

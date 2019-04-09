@@ -539,7 +539,7 @@ int MySQL_Data_Stream::write_to_net() {
 			return 0;
 		}
 	}
-	VALGRIND_DISABLE_ERROR_REPORTING;
+	//VALGRIND_DISABLE_ERROR_REPORTING;
 	// splitting the ternary operation in IF condition for better readability 
 	if (encrypted) {
 		bytes_io = SSL_write (ssl, queue_r_ptr(queueOUT), s);
@@ -597,7 +597,7 @@ int MySQL_Data_Stream::write_to_net() {
 	if (encrypted) {
 		//proxy_info("bytes_io: %d\n", bytes_io);
 	}
-	VALGRIND_ENABLE_ERROR_REPORTING;
+	//VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
 			if ((poll_fds_idx < 0) || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) { // in write_to_net_poll() we has remove this safety
@@ -783,6 +783,7 @@ int MySQL_Data_Stream::buffer2array() {
 	}
 
 	if (fast_mode) {
+		if (pkts_recv==0) { pkts_recv=1; }
 		queueIN.pkt.size=queue_data(queueIN);
 		ret=queueIN.pkt.size;
 		if (ret >= RESULTSET_BUFLEN_DS_16K) {
@@ -791,6 +792,7 @@ int MySQL_Data_Stream::buffer2array() {
 			memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
 			queue_r(queueIN, queueIN.pkt.size);
 			PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+			queueIN.pkt.ptr = NULL;
 		} else {
 			if (PSarrayIN->len == 0) {
 				// it is empty, create a new block
@@ -800,6 +802,7 @@ int MySQL_Data_Stream::buffer2array() {
 				memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
 				queue_r(queueIN, queueIN.pkt.size);
 				PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+				queueIN.pkt.ptr = NULL;
 			} else {
 				// get a pointer to the last entry in PSarrayIN
 				PtrSize_t *last_pkt = PSarrayIN->index(PSarrayIN->len - 1);
@@ -811,6 +814,7 @@ int MySQL_Data_Stream::buffer2array() {
 					memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
 					queue_r(queueIN, queueIN.pkt.size);
 					PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+					queueIN.pkt.ptr = NULL;
 				} else {
 					// we append the packet at the end of the previous packet
 					memcpy((char *)last_pkt->ptr+last_pkt->size, queue_r_ptr(queueIN) , queueIN.pkt.size);
@@ -867,7 +871,7 @@ int MySQL_Data_Stream::buffer2array() {
 	}
 	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
 		if (myconn->get_status_compression()==true) {
-			Bytef *dest;
+			Bytef *dest = NULL;
 			uLongf destLen;
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied the whole compressed packet\n");
 			unsigned int progress=0;
@@ -1079,7 +1083,7 @@ int MySQL_Data_Stream::array2buffer() {
 		}
 	}
 	while (cont) {
-		VALGRIND_DISABLE_ERROR_REPORTING;
+		//VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT)==0) {
 			goto __exit_array2buffer;
 		}
@@ -1090,15 +1094,15 @@ int MySQL_Data_Stream::array2buffer() {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					queueOUT.pkt.ptr=NULL;
 				}
-		VALGRIND_ENABLE_ERROR_REPORTING;
+		//VALGRIND_ENABLE_ERROR_REPORTING;
 				if (myconn->get_status_compression()==true) {
 					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
-		VALGRIND_DISABLE_ERROR_REPORTING;
+		//VALGRIND_DISABLE_ERROR_REPORTING;
 					memcpy(&queueOUT.pkt,PSarrayOUT->index(idx), sizeof(PtrSize_t));
 					idx++;
-		VALGRIND_ENABLE_ERROR_REPORTING;
+		//VALGRIND_ENABLE_ERROR_REPORTING;
 					// this is a special case, needed because compression is enabled *after* the first OK
 					if (DSS==STATE_CLIENT_AUTH_OK) {
 						DSS=STATE_SLEEP;
@@ -1123,9 +1127,9 @@ int MySQL_Data_Stream::array2buffer() {
 			}
 		}
 		int b= ( queue_available(queueOUT) > (queueOUT.pkt.size - queueOUT.partial) ? (queueOUT.pkt.size - queueOUT.partial) : queue_available(queueOUT) );
-		VALGRIND_DISABLE_ERROR_REPORTING;
+		//VALGRIND_DISABLE_ERROR_REPORTING;
 		memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
-		VALGRIND_ENABLE_ERROR_REPORTING;
+		//VALGRIND_ENABLE_ERROR_REPORTING;
 		queue_w(queueOUT,b);
 		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
 		queueOUT.partial+=b;

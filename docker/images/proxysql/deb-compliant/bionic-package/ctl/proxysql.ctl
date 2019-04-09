@@ -4,13 +4,14 @@ Homepage: http://www.proxysql.com
 Standards-Version: 3.9.2
 
 Package: proxysql
-Version: 2.0.0
+Version: PKG_VERSION_CURVER
 Maintainer: Rene Cannao <rene.cannao@gmail.com>
 Architecture: amd64
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/
  etc/proxysql.cnf /etc/
+ etc/logrotate.d/proxysql /etc/logrotate.d/
  systemd/system/proxysql.service /lib/systemd/system/
  tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/
@@ -25,4 +26,7 @@ File: postinst
  chown -R proxysql: /var/lib/proxysql
  chown root:proxysql /etc/proxysql.cnf
  chmod 640 /etc/proxysql.cnf
- systemctl enable proxysql.service
+ if [ -d /run/systemd/system ]; then
+     systemctl enable proxysql.service > /dev/null || true
+     systemctl --system daemon-reload > /dev/null || true
+ fi

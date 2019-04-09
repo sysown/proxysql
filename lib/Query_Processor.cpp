@@ -367,7 +367,7 @@ Query_Processor::Query_Processor() {
 #else
 	if (glovars.has_debug==true) {
 #endif /* DEBUG */
-		perror("Incompatible debagging version");
+		perror("Incompatible debugging version");
 		exit(EXIT_FAILURE);
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
