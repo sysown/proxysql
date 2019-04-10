@@ -75,7 +75,11 @@ class ConsumerThread : public Thread {
 				return NULL;
 			}
 			if (item->routine) { // NULL is allowed, do nothing for it
-				if (GloMyMon->monitor_enabled==true) {
+
+				pthread_mutex_lock(&GloMyMon->mon_en_mutex);
+				bool me = GloMyMon->monitor_enabled;
+				pthread_mutex_unlock(&GloMyMon->mon_en_mutex);
+				if (me) {
 					item->routine((void *)item->mmsd);
 				}
 			}
@@ -460,6 +464,7 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 };
 
 void * monitor_connect_thread(void *arg) {
+	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -514,6 +519,7 @@ void * monitor_connect_thread(void *arg) {
 }
 
 void * monitor_ping_thread(void *arg) {
+	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -696,6 +702,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 }
 
 void * monitor_read_only_thread(void *arg) {
+	mysql_close(mysql_init(NULL));
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -920,6 +927,7 @@ __fast_exit_monitor_read_only_thread:
 }
 
 void * monitor_group_replication_thread(void *arg) {
+	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1180,6 +1188,7 @@ __fast_exit_monitor_group_replication_thread:
 }
 
 void * monitor_galera_thread(void *arg) {
+	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -1427,11 +1436,16 @@ __fast_exit_monitor_galera_thread:
 }
 
 void * monitor_replication_lag_thread(void *arg) {
+	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
+
+#ifdef DEBUG
+	MYSQL *mysqlcopy = NULL;
+#endif // DEBUG
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -1452,6 +1466,10 @@ void * monitor_replication_lag_thread(void *arg) {
 			goto __fast_exit_monitor_replication_lag_thread;
 		}
 	}
+
+#ifdef DEBUG
+	mysqlcopy = mmsd->mysql;
+#endif // DEBUG
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
@@ -2482,6 +2500,7 @@ void * MySQL_Monitor::run() {
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
+	pthread_mutex_init(&mon_en_mutex,NULL);
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 	//if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -2559,7 +2578,9 @@ __monitor_run:
 				}
 			}
 		}
+		pthread_mutex_lock(&mon_en_mutex);
 		monitor_enabled=mysql_thread___monitor_enabled;
+		pthread_mutex_unlock(&mon_en_mutex);
 		if ( rand()%5 == 0) { // purge once in a while
 			My_Conn_Pool->purge_idle_connections();
 		}
@@ -3812,6 +3833,7 @@ __sleep_monitor_aws_aurora:
 }
 
 void * monitor_AWS_Aurora_thread(void *arg) {
+	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();

@@ -1384,6 +1384,8 @@ bool ProxySQL_daemonize_phase3() {
 int main(int argc, const char * argv[]) {
 
 	{
+		MYSQL *my = mysql_init(NULL);
+		mysql_close(my);
 //		cpu_timer t;
 		ProxySQL_Main_init();
 #ifdef DEBUG

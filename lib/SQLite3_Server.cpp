@@ -480,6 +480,10 @@ __run_query:
 				pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
 				GloSQLite3Server->populate_aws_aurora_table(sess);
 			}
+			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
+				free(query);
+				query = strdup((char *)"SELECT 19 as Seconds_Behind_Master");
+			}
 		}
 #endif // TEST_AURORA
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
@@ -490,6 +494,12 @@ __run_query:
 				pthread_mutex_unlock(&GloSQLite3Server->aurora_mutex);
 				if (rand() % 100 == 0) {
 					// randomly add some latency on 1% of the traffic
+					sleep(2);
+				}
+			}
+			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
+				if (rand() % 10 == 0) {
+					// randomly add some latency on 10% of the traffic
 					sleep(2);
 				}
 			}
