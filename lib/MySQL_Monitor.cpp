@@ -159,7 +159,7 @@ private:
 public:
 	MYSQL * get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd);
 	void put_connection(char *hostname, int port, MYSQL *my);
-//	void purge_idle_connections();
+	void purge_some_connections();
 	MySQL_Monitor_Connection_Pool() {
 		servers = new PtrArray();
 		conns = new PtrArray();
@@ -277,6 +277,32 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 
 }
 
+void MySQL_Monitor_Connection_Pool::purge_some_connections() {
+	unsigned long long now = monotonic_time();
+	std::lock_guard<std::mutex> lock(mutex);
+	pthread_mutex_lock(&m2);
+	for (unsigned int i=0; i<servers->len; i++) {
+		MonMySrvC *srv = (MonMySrvC *)servers->index(i);
+		while (srv->conns->len > 4) {
+			MYSQL *my = (MYSQL *)srv->conns->remove_index_fast(0);
+			MySQL_Monitor_State_Data *mmsd= new MySQL_Monitor_State_Data((char *)"",0,NULL,false);
+			mmsd->mysql=my;
+			GloMyMon->queue->add(new WorkItem(mmsd,NULL));
+		}
+		for (unsigned int j=0 ; j<srv->conns->len ; j++) {
+			MYSQL *my = (MYSQL *)srv->conns->index(j);
+			unsigned long long then = *(unsigned long long*)my->net.buff;
+			if (now > (then + mysql_thread___monitor_ping_interval*1000 * 10)) {
+				srv->conns->remove_index_fast(j);
+				MySQL_Monitor_State_Data *mmsd= new MySQL_Monitor_State_Data((char *)"",0,NULL,false);
+				mmsd->mysql=my;
+				GloMyMon->queue->add(new WorkItem(mmsd,NULL));
+			}
+		}
+	}
+	pthread_mutex_unlock(&m2);
+}
+
 /*
 void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 	unsigned long long now = monotonic_time();
@@ -306,6 +332,7 @@ void MySQL_Monitor_Connection_Pool::purge_idle_connections() {
 	}
 }
 */
+
 /*
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) {
 	std::lock_guard<std::mutex> lock(mutex);
@@ -2731,8 +2758,8 @@ __monitor_run:
 			}
 		}
 		monitor_enabled=mysql_thread___monitor_enabled;
-		if ( rand()%5 == 0) { // purge once in a while
-			//My_Conn_Pool->purge_idle_connections();
+		if ( rand()%10 == 0) { // purge once in a while
+			My_Conn_Pool->purge_some_connections();
 		}
 		usleep(200000);
 		int qsize=queue->size();
