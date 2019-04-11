@@ -644,7 +644,7 @@ void * monitor_ping_thread(void *arg) {
 			goto __exit_monitor_ping_thread;
 		}
 	} else {
-		GloMyMon->My_Conn_Pool->conn_register(mmsd);
+		//GloMyMon->My_Conn_Pool->conn_register(mmsd);
 	}
 
 	mmsd->t1=monotonic_time();
@@ -667,6 +667,7 @@ void * monitor_ping_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 	} else {
 		if (crc==false) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
@@ -704,8 +705,9 @@ __fast_exit_monitor_ping_thread:
 	if (mmsd->mysql) {
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
+			proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
 		} else {
 			if (crc) {
@@ -714,11 +716,13 @@ __fast_exit_monitor_ping_thread:
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
+					proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
+				proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
@@ -1591,7 +1595,7 @@ void * monitor_replication_lag_thread(void *arg) {
 			goto __fast_exit_monitor_replication_lag_thread;
 		}
 	} else {
-		GloMyMon->My_Conn_Pool->conn_register(mmsd);
+		//GloMyMon->My_Conn_Pool->conn_register(mmsd);
 	}
 
 #ifdef DEBUG
@@ -1651,6 +1655,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
@@ -1740,6 +1745,7 @@ __exit_monitor_replication_lag_thread:
 	}
 	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
+			proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
 			mmsd->mysql=NULL;
@@ -1755,6 +1761,8 @@ __fast_exit_monitor_replication_lag_thread:
 	if (mmsd->mysql) {
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
+			proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
 		} else {
@@ -1764,11 +1772,13 @@ __fast_exit_monitor_replication_lag_thread:
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
+					proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
+				proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
