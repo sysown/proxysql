@@ -157,7 +157,7 @@ private:
 //	std::map<std::pair<std::string, int>, std::vector<MYSQL*> > my_connections;
 	PtrArray *servers;
 public:
-	MYSQL * get_connection(char *hostname, int port);
+	MYSQL * get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd);
 	void put_connection(char *hostname, int port, MYSQL *my);
 //	void purge_idle_connections();
 	MySQL_Monitor_Connection_Pool() {
@@ -165,21 +165,23 @@ public:
 		conns = new PtrArray();
 		pthread_mutex_init(&m2, NULL);
 	};
-	void conn_register(MYSQL *my) {
+	void conn_register(MySQL_Monitor_State_Data *mmsd) {
 		std::lock_guard<std::mutex> lock(mutex);
 		pthread_mutex_lock(&m2);
+		MYSQL *my = mmsd->mysql;
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			assert(my!=my1);
 			assert(my->net.fd!=my1->net.fd);
 		}
-		fprintf(stderr,"Registering MYSQL with FD %d\n", my->net.fd);
+		fprintf(stderr,"Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
 		conns->add(my);
 		pthread_mutex_unlock(&m2);
 	};
-	void conn_unregister(MYSQL *my) {
+	void conn_unregister(MySQL_Monitor_State_Data *mmsd) {
 		std::lock_guard<std::mutex> lock(mutex);
 		pthread_mutex_lock(&m2);
+		MYSQL *my = mmsd->mysql;
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			if (my1 == my) {
@@ -193,7 +195,7 @@ public:
 	};
 };
 
-MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) {
+MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd) {
 	std::lock_guard<std::mutex> lock(mutex);
 	pthread_mutex_lock(&m2);
 	MYSQL *my = NULL;
@@ -218,6 +220,13 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port) 
 					assert(my!=my1);
 					assert(my->net.fd!=my1->net.fd);
 				}
+				for (unsigned int l=0; l<conns->len; l++) {
+					MYSQL *my1 = (MYSQL *)conns->index(l);
+					assert(my!=my1);
+					assert(my->net.fd!=my1->net.fd);
+				}
+				fprintf(stderr,"Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, my);
+				conns->add(my);
 			}
 			pthread_mutex_unlock(&m2);
 			return my;
@@ -236,15 +245,36 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 		MonMySrvC *srv = (MonMySrvC *)servers->index(i);
 		if (srv->port == port && strcmp(hostname,srv->address)==0) {
 			srv->conns->add(my);
-			pthread_mutex_unlock(&m2);
-			return;
+//			pthread_mutex_unlock(&m2);
+//			return;
+			for (unsigned int j=0; j<conns->len; j++) {
+				MYSQL *my1 = (MYSQL *)conns->index(j);
+				if (my1 == my) {
+					conns->remove_index_fast(j);
+					fprintf(stderr,"Un-registering MYSQL with FD %d\n", my->net.fd);
+					pthread_mutex_unlock(&m2);
+					return;
+				}
+			}
+			assert(0); // it didn't register it
 		}
 	}
 	// if no server was found
 	MonMySrvC *srv = new MonMySrvC(hostname,port);
 	srv->conns->add(my);
 	servers->add(srv);
-	pthread_mutex_unlock(&m2);
+//	pthread_mutex_unlock(&m2);
+	for (unsigned int j=0; j<conns->len; j++) {
+		MYSQL *my1 = (MYSQL *)conns->index(j);
+		if (my1 == my) {
+			conns->remove_index_fast(j);
+			fprintf(stderr,"Un-registering MYSQL with FD %d\n", my->net.fd);
+			pthread_mutex_unlock(&m2);
+			return;
+		}
+	}
+	assert(0);
+
 }
 
 /*
@@ -598,7 +628,7 @@ void * monitor_ping_thread(void *arg) {
 	mysql_thr->refresh_variables();
 
 	bool ping_success = false;
-	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
+	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
 
 	mmsd->t1=start_time;
@@ -607,14 +637,14 @@ void * monitor_ping_thread(void *arg) {
 		bool rc;
 		rc=mmsd->create_new_connection();
 		if (mmsd->mysql) {
-			GloMyMon->My_Conn_Pool->conn_register(mmsd->mysql);
+			GloMyMon->My_Conn_Pool->conn_register(mmsd);
 		}
 		crc=true;
 		if (rc==false) {
 			goto __exit_monitor_ping_thread;
 		}
 	} else {
-		GloMyMon->My_Conn_Pool->conn_register(mmsd->mysql);
+		GloMyMon->My_Conn_Pool->conn_register(mmsd);
 	}
 
 	mmsd->t1=monotonic_time();
@@ -640,7 +670,7 @@ void * monitor_ping_thread(void *arg) {
 	} else {
 		if (crc==false) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+			//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 			mmsd->mysql=NULL;
 		}
 	}
@@ -675,21 +705,21 @@ __fast_exit_monitor_ping_thread:
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mmsd->mysql=NULL;
 		} else {
 			if (crc) {
 				bool rc=mmsd->set_wait_timeout();
 				if (rc) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
 			}
@@ -784,7 +814,7 @@ void * monitor_read_only_thread(void *arg) {
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
 
-	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
+	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
 
 	bool read_only_success = false;
@@ -1012,7 +1042,7 @@ void * monitor_group_replication_thread(void *arg) {
 	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
-	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
+	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
 
 
@@ -1277,7 +1307,7 @@ void * monitor_galera_thread(void *arg) {
 	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
-	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
+	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
 
 
@@ -1539,7 +1569,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	MYSQL *mysqlcopy = NULL;
 #endif // DEBUG
 
-	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port);
+	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
 
 	bool replication_lag_success = false;
@@ -1554,14 +1584,14 @@ void * monitor_replication_lag_thread(void *arg) {
 		bool rc;
 		rc=mmsd->create_new_connection();
 		if (mmsd->mysql) {
-			GloMyMon->My_Conn_Pool->conn_register(mmsd->mysql);
+			GloMyMon->My_Conn_Pool->conn_register(mmsd);
 		}
 		crc=true;
 		if (rc==false) {
 			goto __fast_exit_monitor_replication_lag_thread;
 		}
 	} else {
-		GloMyMon->My_Conn_Pool->conn_register(mmsd->mysql);
+		GloMyMon->My_Conn_Pool->conn_register(mmsd);
 	}
 
 #ifdef DEBUG
@@ -1622,13 +1652,13 @@ void * monitor_replication_lag_thread(void *arg) {
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 		if (mmsd->mysql) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
 			mmsd->mysql=NULL;
 		}
 	} else {
 		if (crc==false) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+			//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 			mmsd->mysql=NULL;
 		}
@@ -1708,16 +1738,16 @@ __exit_monitor_replication_lag_thread:
 			}
 
 	}
-	if (mmsd->interr) { // check failed
+	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
 			mmsd->mysql=NULL;
 		}
 	} else {
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+			//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 			mmsd->mysql=NULL;
 		}
 	}
@@ -1732,14 +1762,14 @@ __fast_exit_monitor_replication_lag_thread:
 				bool rc=mmsd->set_wait_timeout();
 				if (rc) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
-				GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
+				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
 			}
