@@ -151,9 +151,3 @@ heaptrack.*
 .cproject
 .project
 .settings/
-
-*GPATH
-*GRTAGS
-*GTAGS
-
-*.pem
