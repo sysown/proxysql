@@ -4,7 +4,6 @@
 *.oo
 *.oo2
 *.pyc
-*ycm_extra_conf.py
 
 # Libraries
 *.lib
