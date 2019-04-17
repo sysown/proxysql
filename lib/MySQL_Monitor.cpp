@@ -178,7 +178,6 @@ public:
 		std::lock_guard<std::mutex> lock(mutex);
 		MYSQL *my = mmsd->mysql;
 		pthread_mutex_lock(&m2);
-		MYSQL *my = mmsd->mysql;
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			assert(my!=my1);
