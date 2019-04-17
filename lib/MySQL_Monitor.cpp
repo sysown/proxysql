@@ -2945,6 +2945,7 @@ __monitor_run:
 		}
 		pthread_mutex_lock(&mon_en_mutex);
 		monitor_enabled=mysql_thread___monitor_enabled;
+		pthread_mutex_unlock(&mon_en_mutex);
 		if ( rand()%10 == 0) { // purge once in a while
 			My_Conn_Pool->purge_some_connections();
 		}
