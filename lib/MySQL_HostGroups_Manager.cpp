@@ -4228,7 +4228,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 		it2 = Galera_Info_Map.find(_writer_hostgroup);
 		Galera_Info* info = (it2 != Galera_Info_Map.end()) ? it2->second : nullptr;
 
-		if (set_offline) {
+		if (set_offline && info) {
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
@@ -4347,57 +4347,57 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 	Galera_Info* info = (it != Galera_Info_Map.end()) ? it->second : nullptr;
 	if (resultset && info) { // we lock only if needed
 		if (resultset->rows_count) {
-		proxy_warning("Galera: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
-		GloAdmin->mysql_servers_wrlock();
-		mydb->execute("DELETE FROM mysql_servers_incoming");
-		mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-		q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d)";
-		query=(char *)malloc(strlen(q)+strlen(_hostname)+512);
-		sprintf(query, q, info->reader_hostgroup, _hostname, _port, info->writer_hostgroup, info->backup_writer_hostgroup);
-		mydb->execute(query);
-		//free(query);
-		q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d) FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
-		//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-		sprintf(query,q,_writer_hostgroup,_hostname,_port, info->writer_hostgroup, info->backup_writer_hostgroup);
-		mydb->execute(query);
-		//free(query);
-		q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
-		//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-		sprintf(query,q,_hostname,_port,info->reader_hostgroup);
-		mydb->execute(query);
-		//free(query);
-		converge_galera_config(_writer_hostgroup);
-		commit();
-		wrlock();
-		SQLite3_result *resultset2=NULL;
-		q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
-		//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-		sprintf(query,q,_writer_hostgroup);
-		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
-		if (resultset2) {
-			if (resultset2->rows_count) {
-				for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
-					SQLite3_row *r=*it;
-					int writer_hostgroup=atoi(r->fields[0]);
-					int backup_writer_hostgroup=atoi(r->fields[1]);
-					int reader_hostgroup=atoi(r->fields[2]);
-					int offline_hostgroup=atoi(r->fields[3]);
-					q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
-					sprintf(query,q,writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
-					mydb->execute(query);
-					generate_mysql_servers_table(&writer_hostgroup);
-					generate_mysql_servers_table(&backup_writer_hostgroup);
-					generate_mysql_servers_table(&reader_hostgroup);
-					generate_mysql_servers_table(&offline_hostgroup);
+			proxy_warning("Galera: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
+			GloAdmin->mysql_servers_wrlock();
+			mydb->execute("DELETE FROM mysql_servers_incoming");
+			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d)";
+			query=(char *)malloc(strlen(q)+strlen(_hostname)+512);
+			sprintf(query, q, info->reader_hostgroup, _hostname, _port, info->writer_hostgroup, info->backup_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d) FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port, info->writer_hostgroup, info->backup_writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_hostname,_port,info->reader_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			converge_galera_config(_writer_hostgroup);
+			commit();
+			wrlock();
+			SQLite3_result *resultset2=NULL;
+			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_writer_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count) {
+					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int writer_hostgroup=atoi(r->fields[0]);
+						int backup_writer_hostgroup=atoi(r->fields[1]);
+						int reader_hostgroup=atoi(r->fields[2]);
+						int offline_hostgroup=atoi(r->fields[3]);
+						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d , %d , %d)";
+						sprintf(query,q,writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup);
+						mydb->execute(query);
+						generate_mysql_servers_table(&writer_hostgroup);
+						generate_mysql_servers_table(&backup_writer_hostgroup);
+						generate_mysql_servers_table(&reader_hostgroup);
+						generate_mysql_servers_table(&offline_hostgroup);
+					}
 				}
+				delete resultset2;
+				resultset2=NULL;
 			}
-			delete resultset2;
-			resultset2=NULL;
+			wrunlock();
+			GloAdmin->mysql_servers_wrunlock();
+			free(query);
 		}
-		wrunlock();
-		GloAdmin->mysql_servers_wrunlock();
-		free(query);
-	}
 	}
 	if (resultset) {
 		delete resultset;
