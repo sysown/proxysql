@@ -611,7 +611,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	_ptr[l]=0x00; l++;
 	l+=write_encoded_length(_ptr+l, affected_rows, affected_rows_len, affected_rows_prefix);
 	l+=write_encoded_length(_ptr+l, last_insert_id, last_insert_id_len, last_insert_id_prefix);
-	int16_t internal_status = status;
+	int16_t internal_status = server_status;
 	if (sess) {
 		switch (sess->session_type) {
 			case PROXYSQL_SESSION_SQLITE:

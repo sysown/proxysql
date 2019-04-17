@@ -1585,9 +1585,9 @@ __exit_monitor_galera_thread:
 		if (l<110) {
 			s=buf;
 		}	else {
-			s=(char *)malloc(l+16);
+			s=(char *)malloc(l+32);
 		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		sprintf(s,"%s:%d:%d",mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 		bool primary_partition = false;
 		bool read_only=true;
 		bool wsrep_desync = true;
