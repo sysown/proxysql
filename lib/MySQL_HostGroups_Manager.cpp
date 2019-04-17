@@ -969,7 +969,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
 #ifdef DEBUG
-	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	mydb->open((char *)"/tmp/proxysql/inmemory.db", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
 	mydb->open((char *)"file:mem_mydb?mode=memory", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #endif /* DEBUG */
@@ -4198,6 +4198,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 	sprintf(query,q,_hostname,_port);
+
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
@@ -4222,22 +4223,27 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				delete numw_result;
 			}
 		}
+
+		std::map<int , Galera_Info *>::iterator it2;
+		it2 = Galera_Info_Map.find(_writer_hostgroup);
+		Galera_Info* info = (it2 != Galera_Info_Map.end()) ? it2->second : nullptr;
+
 		if (set_offline) {
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port, info->offline_hostgroup, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
 			mydb->execute(query);
 			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_hostname,_port, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
 			mydb->execute(query);
 			//free(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d)";
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_hostname,_port, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			converge_galera_config(_writer_hostgroup);

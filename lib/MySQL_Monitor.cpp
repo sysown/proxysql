@@ -565,7 +565,12 @@ MySQL_Monitor::MySQL_Monitor() {
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_galera_log_time_start ON mysql_server_galera_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_aws_aurora_log_time_start ON mysql_server_aws_aurora_log (time_start_us)");
 
+#ifdef DEBUG
+	num_threads=1;
+#else
 	num_threads=2;
+#endif
+
 	aux_threads=0;
 	started_threads=0;
 
