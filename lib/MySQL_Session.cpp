@@ -15,6 +15,10 @@
 #define SELECT_LAST_INSERT_ID_LEN 23
 #define SELECT_LAST_INSERT_ID_LIMIT1 "SELECT LAST_INSERT_ID() LIMIT 1"
 #define SELECT_LAST_INSERT_ID_LIMIT1_LEN 31
+#define SELECT_VARIABLE_IDENTITY "SELECT @@IDENTITY"
+#define SELECT_VARIABLE_IDENTITY_LEN 17
+#define SELECT_VARIABLE_IDENTITY_LIMIT1 "SELECT @@IDENTITY LIMIT 1"
+#define SELECT_VARIABLE_IDENTITY_LIMIT1_LEN 25
 
 #define EXPMARIA
 
@@ -4455,7 +4459,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	// handle case #1421 , about LAST_INSERT_ID
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		char *dig=CurrentQuery.QueryParserArgs.digest_text;
-		if (strcasestr(dig,"LAST_INSERT_ID")) {
+		if (strcasestr(dig,"LAST_INSERT_ID") || strcasestr(dig,"@@IDENTITY")) {
 			// we need to try to execute it where the last write was successful
 			if (last_HG_affected_rows >= 0) {
 				MySQL_Backend * _mybe = NULL;
@@ -4474,19 +4478,29 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 			// if we reached here, we don't know the right backend
-			// we try to determine if it is a simple "SELECT LAST_INSERT_ID()" and we return mysql->last_insert_id
+			// we try to determine if it is a simple "SELECT LAST_INSERT_ID()" or "SELECT @@IDENTITY" and we return mysql->last_insert_id
 
 
 			if (
 				(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
 				||
 				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+                ||
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
+                ||
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
 			) {
 				char buf[32];
 				sprintf(buf,"%llu",last_insert_id);
 				char buf2[32];
-				int l0=strlen("LAST_INSERT_ID()");
-				memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+                int l0=0;
+                if (strcasestr(dig,"LAST_INSERT_ID")){
+    				l0=strlen("LAST_INSERT_ID()");
+                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+                }else if(strcasestr(dig,"@@IDENTITY")){
+                    l0=strlen("@@IDENTITY");
+                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_VARIABLE_IDENTITY_LEN-l0,l0);
+                }
 				buf2[l0]=0;
 				unsigned int nTrx=NumActiveTransactions();
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
