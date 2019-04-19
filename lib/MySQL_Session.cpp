@@ -1727,6 +1727,30 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		st=previous_status.top();
 		previous_status.pop();
+		bool nbe = (myconn->mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES);
+		if (client_myds) {
+			client_myds->myconn->set_no_backslash_escapes(nbe);
+		}
+		if (nbe) {
+			myconn->set_status_no_backslash_escapes(nbe);
+		}
+		if (st == PROCESSING_QUERY) { // only TEXT protocol, no prepared statements
+			if (client_myds && mirror==false) {
+				if (CurrentQuery.QueryParserArgs.digest_text) {
+					// this is not meant to match all the SET SQL_MODE, but just to
+					// reduce unnecessary SET SQL_MODE when possible
+					if (strncasecmp(CurrentQuery.QueryParserArgs.digest_text,(char *)"set sql_mode",12)==0) {
+						unsigned int nTrx=NumActiveTransactions();
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						RequestEnd(myds);
+						finishQuery(myds,myconn,false);
+						return ret;
+					}
+				}
+			}
+		}
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
 		if (rc==-1) {
@@ -3129,52 +3153,7 @@ handler_again:
 					}
 
 					RequestEnd(myds);
-					myds->myconn->reduce_auto_increment_delay_token();
-					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
-							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
-							myconn->async_state_machine=ASYNC_IDLE;
-							myconn->multiplex_delayed=true;
-							myds->DSS=STATE_MARIADB_GENERIC;
-						} else if (prepared_stmt_with_no_params==true) { // see issue #1432
-							myconn->async_state_machine=ASYNC_IDLE;
-							myds->DSS=STATE_MARIADB_GENERIC;
-							myds->wait_until=0;
-							myconn->multiplex_delayed=false;
-						} else {
-							myconn->multiplex_delayed=false;
-							myds->wait_until=0;
-							myds->DSS=STATE_NOT_INITIALIZED;
-							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-								if (mysql_thread___reset_connection_algorithm == 2) {
-									create_new_session_and_reset_connection(myds);
-								} else {
-									myds->destroy_MySQL_Connection_From_Pool(true);
-								}
-							} else {
-								myds->return_MySQL_Connection_To_Pool();
-							}
-						}
-						if (transaction_persistent==true) {
-							transaction_persistent_hostgroup=-1;
-						}
-					} else {
-						myconn->multiplex_delayed=false;
-						myconn->compute_unknown_transaction_status();
-						myconn->async_state_machine=ASYNC_IDLE;
-						myds->DSS=STATE_MARIADB_GENERIC;
-						if (transaction_persistent==true) {
-							if (transaction_persistent_hostgroup==-1) { // change only if not set already, do not allow to change it again
-								if (myds->myconn->IsActiveTransaction()==true) { // only active transaction is important here. Ignore other criterias
-									transaction_persistent_hostgroup=current_hostgroup;
-								}
-							} else {
-								if (myds->myconn->IsActiveTransaction()==false) { // a transaction just completed
-									transaction_persistent_hostgroup=-1;
-								}
-							}
-						}
-					}
+					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
 					if (rc==-1) {
 						int myerr=mysql_errno(myconn->mysql);
@@ -4302,6 +4281,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 							client_myds->myconn->options.sql_mode=strdup(value1.c_str());
+							if (strcasestr(value1.c_str(), (char *)"NO_BACKSLASH_ESCAPES")) {
+								goto __exit_set_destination_hostgroup;
+							}
 						}
 					} else if (var == "time_zone") {
 						std::string value1 = *values;
@@ -5190,4 +5172,53 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	l_free(_pkt->size,_pkt->ptr);
 	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
+}
+
+void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
+					myds->myconn->reduce_auto_increment_delay_token();
+					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
+							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
+							myconn->async_state_machine=ASYNC_IDLE;
+							myconn->multiplex_delayed=true;
+							myds->DSS=STATE_MARIADB_GENERIC;
+						} else if (prepared_stmt_with_no_params==true) { // see issue #1432
+							myconn->async_state_machine=ASYNC_IDLE;
+							myds->DSS=STATE_MARIADB_GENERIC;
+							myds->wait_until=0;
+							myconn->multiplex_delayed=false;
+						} else {
+							myconn->multiplex_delayed=false;
+							myds->wait_until=0;
+							myds->DSS=STATE_NOT_INITIALIZED;
+							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+								if (mysql_thread___reset_connection_algorithm == 2) {
+									create_new_session_and_reset_connection(myds);
+								} else {
+									myds->destroy_MySQL_Connection_From_Pool(true);
+								}
+							} else {
+								myds->return_MySQL_Connection_To_Pool();
+							}
+						}
+						if (transaction_persistent==true) {
+							transaction_persistent_hostgroup=-1;
+						}
+					} else {
+						myconn->multiplex_delayed=false;
+						myconn->compute_unknown_transaction_status();
+						myconn->async_state_machine=ASYNC_IDLE;
+						myds->DSS=STATE_MARIADB_GENERIC;
+						if (transaction_persistent==true) {
+							if (transaction_persistent_hostgroup==-1) { // change only if not set already, do not allow to change it again
+								if (myds->myconn->IsActiveTransaction()==true) { // only active transaction is important here. Ignore other criterias
+									transaction_persistent_hostgroup=current_hostgroup;
+								}
+							} else {
+								if (myds->myconn->IsActiveTransaction()==false) { // a transaction just completed
+									transaction_persistent_hostgroup=-1;
+								}
+							}
+						}
+					}
 }
