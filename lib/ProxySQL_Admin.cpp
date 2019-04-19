@@ -2804,13 +2804,25 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT 'max_allowed_packet' Variable_name,'4194304' Value UNION ALL SELECT 'sql_mode', 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION' UNION ALL SELECT 'system_time_zone', 'UTC' UNION ALL SELECT 'time_zone','SYSTEM'";
-		query_length=strlen(q)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
+	if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in"))) {
+		// Allow MariaDB ConnectorJ to connect to Admin #743
+		if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')"))) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT 'max_allowed_packet' Variable_name,'4194304' Value UNION ALL SELECT 'sql_mode', 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION' UNION ALL SELECT 'system_time_zone', 'UTC' UNION ALL SELECT 'time_zone','SYSTEM'";
+			query_length=strlen(q)+20;
+			query=(char *)l_alloc(query_length);
+			sprintf(query,q,PROXYSQL_VERSION);
+			goto __run_query;
+		}
+		// Allow MariaDB ConnectorJ 2.4.1 to connect to Admin #2009
+		if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','auto_increment_increment')", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','auto_increment_increment')"))) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT 'max_allowed_packet' Variable_name,'4194304' Value UNION ALL SELECT 'auto_increment_increment', '1' UNION ALL SELECT 'system_time_zone', 'UTC' UNION ALL SELECT 'time_zone','SYSTEM'";
+			query_length=strlen(q)+20;
+			query=(char *)l_alloc(query_length);
+			sprintf(query,q,PROXYSQL_VERSION);
+			goto __run_query;
+		}
 	}
 
 	{
