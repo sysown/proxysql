@@ -1591,20 +1591,25 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
         query_digest_text_filter_select=(char*)malloc(query_digest_text_len-7+1);
         memcpy(query_digest_text_filter_select,&query_digest_text[7],query_digest_text_len-7);
         query_digest_text_filter_select[query_digest_text_len-7]='\0';
+    } else {
+        return false;
     }
     //filter @@session. and @@
     char *match=NULL;
-    while ((match = strcasestr(query_digest_text_filter_select,"@@session."))) {
+    while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@session."))) {
         *match = '\0';
         strcat(query_digest_text_filter_select, match+strlen("@@session."));
     }
-    while ((match = strcasestr(query_digest_text_filter_select,"@@"))) {
+    while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {
         *match = '\0';
         strcat(query_digest_text_filter_select, match+strlen("@@"));
     }
     
     std::vector<char*>query_digest_text_filter_select_v;
-    char* query_digest_text_filter_select_tok=strtok(query_digest_text_filter_select, ",");
+    char* query_digest_text_filter_select_tok = NULL;
+    if (query_digest_text_filter_select) {
+        query_digest_text_filter_select_tok = strtok(query_digest_text_filter_select, ",");
+    }
     while(query_digest_text_filter_select_tok){
         //filter "as"/space/alias,such as select @@version as a, @@version b
         while (1){
