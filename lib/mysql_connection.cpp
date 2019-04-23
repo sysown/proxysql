@@ -202,6 +202,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.server_version=NULL;
 	options.last_set_autocommit=-1;	// -1 = never set
 	options.autocommit=true;
+	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
 	options.ldap_user_variable=NULL;
@@ -279,6 +280,12 @@ bool MySQL_Connection::set_autocommit(bool _ac) {
 	return _ac;
 }
 
+bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting no_backslash_escapes %d\n", _ac);
+	options.no_backslash_escapes=_ac;
+	return _ac;
+}
+
 uint8_t MySQL_Connection::set_charset(uint8_t _c) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
 	options.charset=_c;
@@ -336,6 +343,14 @@ void MySQL_Connection::set_status_temporary_table(bool v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
 	} else {
 		status_flags &= ~STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
+	}
+}
+
+void MySQL_Connection::set_status_no_backslash_escapes(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
 	}
 }
 
@@ -400,6 +415,10 @@ bool MySQL_Connection::get_status_lock_tables() {
 
 bool MySQL_Connection::get_status_temporary_table() {
 	return status_flags & STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
+}
+
+bool MySQL_Connection::get_status_no_backslash_escapes() {
+	return status_flags & STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
 }
 
 bool MySQL_Connection::get_status_prepared_statement() {
@@ -1631,7 +1650,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES) ) {
 		ret=true;
 	}
 	if (auto_increment_delay_token) return true;
