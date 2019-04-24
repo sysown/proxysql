@@ -739,12 +739,15 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
+			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
+			j["backends"][i]["stream"]["myconnpoll_get"] = _myds->statuses.myconnpoll_get;
+			j["backends"][i]["stream"]["myconnpoll_put"] = _myds->statuses.myconnpoll_put;
 			/* when fast_forward is not used, these metrics are always 0. Explicitly disabled
 			j["backend"][i]["stream"]["pkts_recv"] = _myds->pkts_recv;
 			j["backend"][i]["stream"]["pkts_sent"] = _myds->pkts_sent;
-			j["backend"][i]["stream"]["bytes_recv"] = _myds->bytes_info.bytes_recv;
-			j["backend"][i]["stream"]["bytes_sent"] = _myds->bytes_info.bytes_sent;
 			*/
+			j["backends"][i]["stream"]["bytes_recv"] = _myds->bytes_info.bytes_recv;
+			j["backends"][i]["stream"]["bytes_sent"] = _myds->bytes_info.bytes_sent;
 			if (_myds->myconn) {
 				MySQL_Connection * _myconn = _myds->myconn;
 				j["backends"][i]["conn"]["sql_mode"] = ( _myconn->options.sql_mode ? _myconn->options.sql_mode : "") ;
@@ -2644,6 +2647,7 @@ __get_pkts_from_client:
 										}
 									}
 									mybe->server_myds->mysql_real_query.init(&pkt);
+									mybe->server_myds->statuses.questions++;
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
 									switch (session_type) {
@@ -2774,6 +2778,7 @@ __get_pkts_from_client:
 										mybe->server_myds->killed_at=0;
 										mybe->server_myds->kill_type=0;
 										mybe->server_myds->mysql_real_query.init(&pkt); // fix memory leak for PREPARE in prepared statements #796
+										mybe->server_myds->statuses.questions++;
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 									}
 									GloMyStmt->unlock();
