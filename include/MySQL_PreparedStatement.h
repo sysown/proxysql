@@ -181,6 +181,9 @@ class MySQL_STMTs_meta {
 class MySQL_STMTs_local_v14 {
 	private:
 	bool is_client_;
+	std::stack<uint32_t> free_client_ids;
+	uint32_t local_max_stmt_id;
+	public:
 	// this map associate client_stmt_id to global_stmt_id : this is used only for client connections
 	std::map<uint32_t, uint64_t> client_stmt_to_global_ids;
 	// this multimap associate global_stmt_id to client_stmt_id : this is used only for client connections
@@ -193,9 +196,6 @@ class MySQL_STMTs_local_v14 {
 
 	std::map<uint64_t, MYSQL_STMT *> global_stmt_to_backend_stmt;
 
-	std::stack<uint32_t> free_client_ids;
-	uint32_t local_max_stmt_id;
-	public:
 	MySQL_Session *sess;
 	MySQL_STMTs_local_v14(bool _ic) {
 		local_max_stmt_id = 0;
