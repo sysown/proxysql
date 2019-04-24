@@ -188,12 +188,14 @@ class MySQL_Data_Stream
 	void attach_connection(MySQL_Connection *mc) {
 		statuses.myconnpoll_get++;
 		myconn=mc;
+		myconn->statuses.myconnpoll_get++;
 		mc->myds=this;
 	}
 
 	// safe way to detach a MySQL Connection
 	void detach_connection() {
 		assert(myconn);
+		myconn->statuses.myconnpoll_put++;
 		statuses.myconnpoll_put++;
 		myconn->myds=NULL;
 		myconn=NULL;

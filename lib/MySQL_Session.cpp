@@ -750,6 +750,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["backends"][i]["stream"]["bytes_sent"] = _myds->bytes_info.bytes_sent;
 			if (_myds->myconn) {
 				MySQL_Connection * _myconn = _myds->myconn;
+				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
+				j["backends"][i]["conn"]["bytes_sent"] = _myconn->bytes_info.bytes_sent;
+				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
+				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
+				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
 				j["backends"][i]["conn"]["sql_mode"] = ( _myconn->options.sql_mode ? _myconn->options.sql_mode : "") ;
 				j["backends"][i]["conn"]["time_zone"] = ( _myconn->options.time_zone ? _myconn->options.time_zone : "") ;
 				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend

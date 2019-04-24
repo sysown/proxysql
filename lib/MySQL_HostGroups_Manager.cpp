@@ -2636,6 +2636,115 @@ void MySQL_HostGroups_Manager::set_incoming_galera_hostgroups(SQLite3_result *s)
 	incoming_galera_hostgroups=s;
 }
 
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
+	const int colnum=13;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Free Connections in Pool\n");
+	SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"fd");
+	result->add_column_definition(SQLITE_TEXT,"hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"srv_host");
+	result->add_column_definition(SQLITE_TEXT,"srv_port");
+	result->add_column_definition(SQLITE_TEXT,"user");
+	result->add_column_definition(SQLITE_TEXT,"schema");
+	result->add_column_definition(SQLITE_TEXT,"init_connect");
+	result->add_column_definition(SQLITE_TEXT,"time_zone");
+	result->add_column_definition(SQLITE_TEXT,"sql_mode");
+	result->add_column_definition(SQLITE_TEXT,"autocommit");
+	result->add_column_definition(SQLITE_TEXT,"idle_ms");
+	result->add_column_definition(SQLITE_TEXT,"statistics");
+	result->add_column_definition(SQLITE_TEXT,"mysql_info");
+	unsigned long long curtime = monotonic_time();
+	wrlock();
+	int i,j, k, l;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
+				mysrvc->ConnectionsFree->drop_all_connections();
+			}
+			// drop idle connections if beyond max_connection
+			while (mysrvc->ConnectionsFree->conns_length() && mysrvc->ConnectionsUsed->conns_length()+mysrvc->ConnectionsFree->conns_length() > mysrvc->max_connections) {
+				//MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
+				MySQL_Connection *conn=mysrvc->ConnectionsFree->remove(0);
+				delete conn;
+			}
+			char buf[1024];
+			for (l=0; l<mysrvc->ConnectionsFree->conns_length(); l++) {
+				char **pta=(char **)malloc(sizeof(char *)*colnum);
+				MySQL_Connection *conn = mysrvc->ConnectionsFree->index(l);
+				sprintf(buf,"%d", conn->fd);
+				pta[0]=strdup(buf);
+				sprintf(buf,"%d", (int)myhgc->hid);
+				pta[1]=strdup(buf);
+				pta[2]=strdup(mysrvc->address);
+				sprintf(buf,"%d", mysrvc->port);
+				pta[3]=strdup(buf);
+				pta[4] = strdup(conn->userinfo->username);
+				pta[5] = strdup(conn->userinfo->schemaname);
+				pta[6] = NULL;
+				if (conn->options.init_connect) {
+					pta[6] = strdup(conn->options.init_connect);
+				}
+				pta[7] = NULL;
+				if (conn->options.time_zone) {
+					pta[7] = strdup(conn->options.time_zone);
+				}
+				pta[8] = NULL;
+				if (conn->options.sql_mode) {
+					pta[8] = strdup(conn->options.sql_mode);
+				}
+				sprintf(buf,"%d", conn->options.autocommit);
+				pta[9]=strdup(buf);
+				sprintf(buf,"%llu", (curtime-conn->last_time_used)/1000);
+				pta[10]=strdup(buf);
+				{
+					json j;
+					j["bytes_recv"] = conn->bytes_info.bytes_recv;
+					j["bytes_sent"] = conn->bytes_info.bytes_sent;
+					j["myconnpoll_get"] = conn->statuses.myconnpoll_get;
+					j["myconnpoll_put"] = conn->statuses.myconnpoll_put;
+					j["questions"] = conn->statuses.questions;
+					string s = j.dump();
+					pta[11] = strdup(s.c_str());
+				}
+				{
+					MYSQL *_my = conn->mysql;
+					json j;
+					j["host"] = _my->host;
+					j["host_info"] = _my->host_info;
+					j["port"] = _my->port;
+					j["server_version"] = _my->server_version;
+					j["user"] = _my->user;
+					j["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
+					j["db"] = (_my->db ? _my->db : "");
+					j["affected_rows"] = _my->affected_rows;
+					j["insert_id"] = _my->insert_id;
+					j["server_status"] = _my->server_status;
+					j["charset"] = _my->charset->nr;
+					j["options"]["charset_name"] = _my->options.charset_name;
+					j["options"]["use_ssl"] = _my->options.use_ssl;
+					j["net"]["last_errno"] = _my->net.last_errno;
+					j["net"]["fd"] = _my->net.fd;
+					j["net"]["max_packet_size"] = _my->net.max_packet_size;
+					j["net"]["sqlstate"] = _my->net.sqlstate;
+					string s = j.dump();
+					pta[12] = strdup(s.c_str());
+				}
+				result->add_row(pta);
+				for (k=0; k<colnum; k++) {
+					if (pta[k])
+						free(pta[k]);
+				}
+				free(pta);
+			}
+		}
+	}
+	wrunlock();
+	return result;
+}
+
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
   const int colnum=14;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
