@@ -202,6 +202,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.server_version=NULL;
 	options.last_set_autocommit=-1;	// -1 = never set
 	options.autocommit=true;
+	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
 	options.ldap_user_variable=NULL;
@@ -229,6 +230,12 @@ MySQL_Connection::MySQL_Connection() {
 	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
 	local_stmts=new MySQL_STMTs_local_v14(false); // false by default, it is a backend
+	bytes_info.bytes_recv = 0;
+	bytes_info.bytes_sent = 0;
+	statuses.questions = 0;
+	statuses.myconnpoll_get = 0;
+	statuses.myconnpoll_put = 0;
+
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -276,6 +283,12 @@ MySQL_Connection::~MySQL_Connection() {
 bool MySQL_Connection::set_autocommit(bool _ac) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting autocommit %d\n", _ac);
 	options.autocommit=_ac;
+	return _ac;
+}
+
+bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting no_backslash_escapes %d\n", _ac);
+	options.no_backslash_escapes=_ac;
 	return _ac;
 }
 
@@ -336,6 +349,14 @@ void MySQL_Connection::set_status_temporary_table(bool v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
 	} else {
 		status_flags &= ~STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
+	}
+}
+
+void MySQL_Connection::set_status_no_backslash_escapes(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
 	}
 }
 
@@ -400,6 +421,10 @@ bool MySQL_Connection::get_status_lock_tables() {
 
 bool MySQL_Connection::get_status_temporary_table() {
 	return status_flags & STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
+}
+
+bool MySQL_Connection::get_status_no_backslash_escapes() {
+	return status_flags & STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
 }
 
 bool MySQL_Connection::get_status_prepared_statement() {
@@ -772,7 +797,10 @@ handler_again:
 			real_query_start();
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.length);
+			statuses.questions++;
 			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
+			myds->bytes_info.bytes_sent += query.length;
+			bytes_info.bytes_sent += query.length;
 			if (myds->sess->with_gtid == true) {
 				__sync_fetch_and_add(&parent->queries_gtid_sync,1);
 			}
@@ -804,6 +832,8 @@ handler_again:
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.length);
 			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
+			myds->bytes_info.bytes_sent += query.length;
+			bytes_info.bytes_sent += query.length;
 			if (async_exit_status) {
 				next_event(ASYNC_STMT_PREPARE_CONT);
 			} else {
@@ -836,6 +866,8 @@ handler_again:
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.stmt_meta->size);
 			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.stmt_meta->size;
+			myds->bytes_info.bytes_sent += query.stmt_meta->size;
+			bytes_info.bytes_sent += query.stmt_meta->size;
 			if (async_exit_status) {
 				next_event(ASYNC_STMT_EXECUTE_CONT);
 			} else {
@@ -898,6 +930,8 @@ handler_again:
 					}
 					__sync_fetch_and_add(&parent->bytes_recv,total_size);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=total_size;
+					myds->bytes_info.bytes_recv += total_size;
+					bytes_info.bytes_recv += total_size;
 				}
 			}
 /*
@@ -1020,6 +1054,8 @@ handler_again:
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
+					myds->bytes_info.bytes_recv += br;
+					bytes_info.bytes_recv += br;
 					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
 					if (
 						(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
@@ -1631,7 +1667,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES) ) {
 		ret=true;
 	}
 	if (auto_increment_delay_token) return true;
@@ -1647,20 +1683,25 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 		query_digest_text_filter_select=(char*)malloc(query_digest_text_len-7+1);
 		memcpy(query_digest_text_filter_select,&query_digest_text[7],query_digest_text_len-7);
 		query_digest_text_filter_select[query_digest_text_len-7]='\0';
+	} else {
+		return false;
 	}
 	//filter @@session. and @@
 	char *match=NULL;
-	while ((match = strcasestr(query_digest_text_filter_select,"@@session."))) {
+	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@session."))) {
 		*match = '\0';
 		strcat(query_digest_text_filter_select, match+strlen("@@session."));
 	}
-	while ((match = strcasestr(query_digest_text_filter_select,"@@"))) {
+	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {
 		*match = '\0';
 		strcat(query_digest_text_filter_select, match+strlen("@@"));
 	}
 
 	std::vector<char*>query_digest_text_filter_select_v;
-	char* query_digest_text_filter_select_tok=strtok(query_digest_text_filter_select, ",");
+	char* query_digest_text_filter_select_tok = NULL;
+	if (query_digest_text_filter_select) {
+	query_digest_text_filter_select_tok = strtok(query_digest_text_filter_select, ",");
+	}
 	while(query_digest_text_filter_select_tok){
 		//filter "as"/space/alias,such as select @@version as a, @@version b
 		while (1){

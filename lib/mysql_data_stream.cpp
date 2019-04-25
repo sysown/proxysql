@@ -217,6 +217,10 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	CompPktOUT.partial=0;
 	multi_pkt.ptr=NULL;
 	multi_pkt.size=0;
+
+	statuses.questions = 0;
+	statuses.myconnpoll_get = 0;
+	statuses.myconnpoll_put = 0;
 }
 
 // Destructor

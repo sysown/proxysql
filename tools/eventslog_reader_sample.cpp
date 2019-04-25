@@ -126,9 +126,7 @@ class MySQL_Event {
 		read_encoded_length((uint64_t *)&end_time,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
 		char digest_hex[20];
-		uint32_t d32[2];
-		memcpy(&d32,&query_digest,sizeof(digest_hex));
-		sprintf(digest_hex,"0x%X%X", d32[0], d32[1]);
+		sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
 		read_encoded_length((uint64_t *)&query_len,f);
 		query_ptr=read_string(f,query_len);
 		char buffer[26];

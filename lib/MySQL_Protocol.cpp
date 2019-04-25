@@ -509,6 +509,11 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 				break;
 		}
 	}
+	if (*myds && (*myds)->myconn) {
+		if ((*myds)->myconn->options.no_backslash_escapes) {
+			internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+		}
+	}
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t));
 	
@@ -616,6 +621,11 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				break;
 			default:
 				break;
+		}
+	}
+	if (*myds && (*myds)->myconn) {
+		if ((*myds)->myconn->options.no_backslash_escapes) {
+			internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
 	}
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t)); l+=sizeof(uint16_t);

@@ -15,6 +15,10 @@
 #define SELECT_LAST_INSERT_ID_LEN 23
 #define SELECT_LAST_INSERT_ID_LIMIT1 "SELECT LAST_INSERT_ID() LIMIT 1"
 #define SELECT_LAST_INSERT_ID_LIMIT1_LEN 31
+#define SELECT_VARIABLE_IDENTITY "SELECT @@IDENTITY"
+#define SELECT_VARIABLE_IDENTITY_LEN 17
+#define SELECT_VARIABLE_IDENTITY_LIMIT1 "SELECT @@IDENTITY LIMIT 1"
+#define SELECT_VARIABLE_IDENTITY_LIMIT1_LEN 25
 
 #define EXPMARIA
 
@@ -699,8 +703,135 @@ __ret_autocommit_OK:
 	return false;
 }
 
+void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
+	j["autocommit"] = autocommit;
+	j["thread_session_id"] = thread_session_id;
+	j["current_hostgroup"] = current_hostgroup;
+	j["default_hostgroup"] = default_hostgroup;
+	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
+	j["last_insert_id"] = last_insert_id;
+	j["last_HG_affected_rows"] = last_HG_affected_rows;
+	j["client"]["userinfo"]["username"] = client_myds->myconn->userinfo->username;
+	j["client"]["userinfo"]["password"] = client_myds->myconn->userinfo->password;
+	j["client"]["stream"]["pkts_recv"] = client_myds->pkts_recv;
+	j["client"]["stream"]["pkts_sent"] = client_myds->pkts_sent;
+	j["client"]["stream"]["bytes_recv"] = client_myds->bytes_info.bytes_recv;
+	j["client"]["stream"]["bytes_sent"] = client_myds->bytes_info.bytes_sent;
+	j["client"]["client_addr"]["address"] = client_myds->addr.addr;
+	j["client"]["client_addr"]["port"] = client_myds->addr.port;
+	j["client"]["proxy_addr"]["address"] = client_myds->proxy_addr.addr;
+	j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
+	j["client"]["encrypted"] = client_myds->encrypted;
+	j["default_schema"] = default_schema;
+	j["transaction_persistent"] = transaction_persistent;
+	j["conn"]["sql_mode"] = ( client_myds->myconn->options.sql_mode ? client_myds->myconn->options.sql_mode : "") ;
+	j["conn"]["time_zone"] = ( client_myds->myconn->options.time_zone ? client_myds->myconn->options.time_zone : "") ;
+	j["conn"]["charset"] = client_myds->myconn->options.charset;
+	j["conn"]["sql_log_bin"] = client_myds->myconn->options.sql_log_bin;
+	j["conn"]["autocommit"] = client_myds->myconn->options.autocommit;
+	j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
+	j["conn"]["status"]["compression"] = client_myds->myconn->get_status_compression();
+	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status_transaction();
+	j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
+	for (unsigned int i=0; i<mybes->len; i++) {
+		MySQL_Backend *_mybe = NULL;
+		_mybe=(MySQL_Backend *)mybes->index(i);
+		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
+		if (_mybe->server_myds) {
+			MySQL_Data_Stream *_myds=_mybe->server_myds;
+			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
+			j["backends"][i]["stream"]["myconnpoll_get"] = _myds->statuses.myconnpoll_get;
+			j["backends"][i]["stream"]["myconnpoll_put"] = _myds->statuses.myconnpoll_put;
+			/* when fast_forward is not used, these metrics are always 0. Explicitly disabled
+			j["backend"][i]["stream"]["pkts_recv"] = _myds->pkts_recv;
+			j["backend"][i]["stream"]["pkts_sent"] = _myds->pkts_sent;
+			*/
+			j["backends"][i]["stream"]["bytes_recv"] = _myds->bytes_info.bytes_recv;
+			j["backends"][i]["stream"]["bytes_sent"] = _myds->bytes_info.bytes_sent;
+			if (_myds->myconn) {
+				MySQL_Connection * _myconn = _myds->myconn;
+				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
+				j["backends"][i]["conn"]["bytes_sent"] = _myconn->bytes_info.bytes_sent;
+				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
+				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
+				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
+				j["backends"][i]["conn"]["sql_mode"] = ( _myconn->options.sql_mode ? _myconn->options.sql_mode : "") ;
+				j["backends"][i]["conn"]["time_zone"] = ( _myconn->options.time_zone ? _myconn->options.time_zone : "") ;
+				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
+				j["backends"][i]["conn"]["sql_log_bin"] = _myconn->options.sql_log_bin;
+				j["backends"][i]["conn"]["init_connect"] = ( _myconn->options.init_connect ? _myconn->options.init_connect : "");
+				j["backends"][i]["conn"]["init_connect_sent"] = _myds->myconn->options.init_connect_sent;
+				j["backends"][i]["conn"]["autocommit"] = _myds->myconn->options.autocommit;
+				j["backends"][i]["conn"]["last_set_autocommit"] = _myds->myconn->options.last_set_autocommit;
+				j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
+				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status_get_lock();
+				j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status_lock_tables();
+				j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status_temporary_table();
+				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status_user_variable();
+				j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status_found_rows();
+				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status_no_multiplex();
+				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
+				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
+				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
+				if (_myconn->mysql) {
+					MYSQL * _my = _myconn->mysql;
+					j["backends"][i]["conn"]["mysql"]["host"] = _my->host;
+					j["backends"][i]["conn"]["mysql"]["host_info"] = _my->host_info;
+					j["backends"][i]["conn"]["mysql"]["port"] = _my->port;
+					j["backends"][i]["conn"]["mysql"]["server_version"] = _my->server_version;
+					j["backends"][i]["conn"]["mysql"]["user"] = _my->user;
+					j["backends"][i]["conn"]["mysql"]["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
+					j["backends"][i]["conn"]["mysql"]["db"] = (_my->db ? _my->db : "");
+					j["backends"][i]["conn"]["mysql"]["affected_rows"] = _my->affected_rows;
+					j["backends"][i]["conn"]["mysql"]["insert_id"] = _my->insert_id;
+					j["backends"][i]["conn"]["mysql"]["server_status"] = _my->server_status;
+					j["backends"][i]["conn"]["mysql"]["charset"] = _my->charset->nr;
+					//j["backends"][i]["conn"]["mysql"][""] = _my->;
+					//j["backends"][i]["conn"]["mysql"][""] = _my->;
+					j["backends"][i]["conn"]["mysql"]["options"]["charset_name"] = _my->options.charset_name;
+					j["backends"][i]["conn"]["mysql"]["options"]["use_ssl"] = _my->options.use_ssl;
+					j["backends"][i]["conn"]["mysql"]["net"]["last_errno"] = _my->net.last_errno;
+					j["backends"][i]["conn"]["mysql"]["net"]["fd"] = _my->net.fd;
+					j["backends"][i]["conn"]["mysql"]["net"]["max_packet_size"] = _my->net.max_packet_size;
+					j["backends"][i]["conn"]["mysql"]["net"]["sqlstate"] = _my->net.sqlstate;
+					//j["backends"][i]["conn"]["mysql"]["net"][""] = _my->net.;
+					//j["backends"][i]["conn"]["mysql"]["net"][""] = _my->net.;
+				}
+			}
+		}
+	}
+}
+
+void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
+	int l = 0;
+	l = strlen((char *)"PROXYSQL INTERNAL SESSION");
+	if (pkt->size==(5+l) && strncasecmp((char *)"PROXYSQL INTERNAL SESSION", (char *)pkt->ptr+5, l)==0) {
+		json j;
+		generate_proxysql_internal_session_json(j);
+		std::string s = j.dump(4);
+		SQLite3_result *resultset = new SQLite3_result(1);
+		resultset->add_column_definition(SQLITE_TEXT,"session_info");
+		char *pta[1];
+		pta[0] = (char *)s.c_str();
+		resultset->add_row(pta);
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot);
+		delete resultset;
+		return;
+	}
+	// default
+	client_myds->DSS=STATE_QUERY_SENT_NET;
+	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1064,(char *)"42000",(char *)"Unknown PROXYSQL INTERNAL command",true);
+	client_myds->DSS=STATE_SLEEP;
+	status=WAITING_CLIENT_DATA;
+	l_free(pkt->size,pkt->ptr);
+}
+
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 
+	if (pkt->size>(5+18) && strncasecmp((char *)"PROXYSQL INTERNAL ",(char *)pkt->ptr+5,18)==0) {
+		return_proxysql_internal(pkt);
+		return true;
+	}
 	if (mysql_thread___forward_autocommit == false) {
 		if (handler_SetAutocommit(pkt) == true) {
 			return true;
@@ -1723,6 +1854,30 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		st=previous_status.top();
 		previous_status.pop();
+		bool nbe = (myconn->mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES);
+		if (client_myds) {
+			client_myds->myconn->set_no_backslash_escapes(nbe);
+		}
+		if (nbe) {
+			myconn->set_status_no_backslash_escapes(nbe);
+		}
+		if (st == PROCESSING_QUERY) { // only TEXT protocol, no prepared statements
+			if (client_myds && mirror==false) {
+				if (CurrentQuery.QueryParserArgs.digest_text) {
+					// this is not meant to match all the SET SQL_MODE, but just to
+					// reduce unnecessary SET SQL_MODE when possible
+					if (strncasecmp(CurrentQuery.QueryParserArgs.digest_text,(char *)"set sql_mode",12)==0) {
+						unsigned int nTrx=NumActiveTransactions();
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						RequestEnd(myds);
+						finishQuery(myds,myconn,false);
+						return ret;
+					}
+				}
+			}
+		}
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
 		if (rc==-1) {
@@ -2500,6 +2655,7 @@ __get_pkts_from_client:
 										}
 									}
 									mybe->server_myds->mysql_real_query.init(&pkt);
+									mybe->server_myds->statuses.questions++;
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
 									switch (session_type) {
@@ -2630,6 +2786,7 @@ __get_pkts_from_client:
 										mybe->server_myds->killed_at=0;
 										mybe->server_myds->kill_type=0;
 										mybe->server_myds->mysql_real_query.init(&pkt); // fix memory leak for PREPARE in prepared statements #796
+										mybe->server_myds->statuses.questions++;
 										client_myds->setDSS_STATE_QUERY_SENT_NET();
 									}
 									GloMyStmt->unlock();
@@ -3128,52 +3285,7 @@ handler_again:
 					}
 
 					RequestEnd(myds);
-					myds->myconn->reduce_auto_increment_delay_token();
-					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
-							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
-							myconn->async_state_machine=ASYNC_IDLE;
-							myconn->multiplex_delayed=true;
-							myds->DSS=STATE_MARIADB_GENERIC;
-						} else if (prepared_stmt_with_no_params==true) { // see issue #1432
-							myconn->async_state_machine=ASYNC_IDLE;
-							myds->DSS=STATE_MARIADB_GENERIC;
-							myds->wait_until=0;
-							myconn->multiplex_delayed=false;
-						} else {
-							myconn->multiplex_delayed=false;
-							myds->wait_until=0;
-							myds->DSS=STATE_NOT_INITIALIZED;
-							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-								if (mysql_thread___reset_connection_algorithm == 2) {
-									create_new_session_and_reset_connection(myds);
-								} else {
-									myds->destroy_MySQL_Connection_From_Pool(true);
-								}
-							} else {
-								myds->return_MySQL_Connection_To_Pool();
-							}
-						}
-						if (transaction_persistent==true) {
-							transaction_persistent_hostgroup=-1;
-						}
-					} else {
-						myconn->multiplex_delayed=false;
-						myconn->compute_unknown_transaction_status();
-						myconn->async_state_machine=ASYNC_IDLE;
-						myds->DSS=STATE_MARIADB_GENERIC;
-						if (transaction_persistent==true) {
-							if (transaction_persistent_hostgroup==-1) { // change only if not set already, do not allow to change it again
-								if (myds->myconn->IsActiveTransaction()==true) { // only active transaction is important here. Ignore other criterias
-									transaction_persistent_hostgroup=current_hostgroup;
-								}
-							} else {
-								if (myds->myconn->IsActiveTransaction()==false) { // a transaction just completed
-									transaction_persistent_hostgroup=-1;
-								}
-							}
-						}
-					}
+					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
 					if (rc==-1) {
 						int myerr=mysql_errno(myconn->mysql);
@@ -4314,6 +4426,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 							client_myds->myconn->options.sql_mode=strdup(value1.c_str());
+							if (strcasestr(value1.c_str(), (char *)"NO_BACKSLASH_ESCAPES")) {
+								goto __exit_set_destination_hostgroup;
+							}
 						}
 					} else if (var == "time_zone") {
 						std::string value1 = *values;
@@ -4471,7 +4586,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	// handle case #1421 , about LAST_INSERT_ID
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		char *dig=CurrentQuery.QueryParserArgs.digest_text;
-		if (strcasestr(dig,"LAST_INSERT_ID")) {
+		if (strcasestr(dig,"LAST_INSERT_ID") || strcasestr(dig,"@@IDENTITY")) {
 			// we need to try to execute it where the last write was successful
 			if (last_HG_affected_rows >= 0) {
 				MySQL_Backend * _mybe = NULL;
@@ -4490,19 +4605,29 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 			// if we reached here, we don't know the right backend
-			// we try to determine if it is a simple "SELECT LAST_INSERT_ID()" and we return mysql->last_insert_id
+			// we try to determine if it is a simple "SELECT LAST_INSERT_ID()" or "SELECT @@IDENTITY" and we return mysql->last_insert_id
 
 
 			if (
 				(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
 				||
 				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+                ||
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
+                ||
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
 			) {
 				char buf[32];
 				sprintf(buf,"%llu",last_insert_id);
 				char buf2[32];
-				int l0=strlen("LAST_INSERT_ID()");
-				memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+                int l0=0;
+                if (strcasestr(dig,"LAST_INSERT_ID")){
+    				l0=strlen("LAST_INSERT_ID()");
+                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+                }else if(strcasestr(dig,"@@IDENTITY")){
+                    l0=strlen("@@IDENTITY");
+                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_VARIABLE_IDENTITY_LEN-l0,l0);
+                }
 				buf2[l0]=0;
 				unsigned int nTrx=NumActiveTransactions();
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -5214,4 +5339,53 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	l_free(_pkt->size,_pkt->ptr);
 	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
+}
+
+void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
+					myds->myconn->reduce_auto_increment_delay_token();
+					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
+							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
+							myconn->async_state_machine=ASYNC_IDLE;
+							myconn->multiplex_delayed=true;
+							myds->DSS=STATE_MARIADB_GENERIC;
+						} else if (prepared_stmt_with_no_params==true) { // see issue #1432
+							myconn->async_state_machine=ASYNC_IDLE;
+							myds->DSS=STATE_MARIADB_GENERIC;
+							myds->wait_until=0;
+							myconn->multiplex_delayed=false;
+						} else {
+							myconn->multiplex_delayed=false;
+							myds->wait_until=0;
+							myds->DSS=STATE_NOT_INITIALIZED;
+							if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+								if (mysql_thread___reset_connection_algorithm == 2) {
+									create_new_session_and_reset_connection(myds);
+								} else {
+									myds->destroy_MySQL_Connection_From_Pool(true);
+								}
+							} else {
+								myds->return_MySQL_Connection_To_Pool();
+							}
+						}
+						if (transaction_persistent==true) {
+							transaction_persistent_hostgroup=-1;
+						}
+					} else {
+						myconn->multiplex_delayed=false;
+						myconn->compute_unknown_transaction_status();
+						myconn->async_state_machine=ASYNC_IDLE;
+						myds->DSS=STATE_MARIADB_GENERIC;
+						if (transaction_persistent==true) {
+							if (transaction_persistent_hostgroup==-1) { // change only if not set already, do not allow to change it again
+								if (myds->myconn->IsActiveTransaction()==true) { // only active transaction is important here. Ignore other criterias
+									transaction_persistent_hostgroup=current_hostgroup;
+								}
+							} else {
+								if (myds->myconn->IsActiveTransaction()==false) { // a transaction just completed
+									transaction_persistent_hostgroup=-1;
+								}
+							}
+						}
+					}
 }

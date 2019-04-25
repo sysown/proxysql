@@ -301,6 +301,7 @@ static char * mysql_thread_variables_names[]= {
 #ifdef IDLE_THREADS
 	(char *)"session_idle_show_processlist",
 #endif // IDLE_THREADS
+	(char *)"show_processlist_extended",
 	(char *)"commands_stats",
 	(char *)"query_digests",
 	(char *)"query_digests_lowercase",
@@ -455,6 +456,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.session_idle_ms=1000;
 	variables.session_idle_show_processlist=true;
 #endif // IDLE_THREADS
+	variables.show_processlist_extended = 0;
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
 	variables.ssl_p2s_ca=NULL;
@@ -703,6 +705,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 #ifdef IDLE_THREADS
 		if (!strcmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
 #endif // IDLE_THREADS
+		if (!strcmp(name,"show_processlist_extended")) return (int)variables.show_processlist_extended;
 		if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
 		if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	}
@@ -790,6 +793,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 #ifdef IDLE_THREADS
 	if (!strcmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
 #endif // IDLE_THREADS
+	if (!strcmp(name,"show_processlist_extended")) return (int)variables.show_processlist_extended;
 	if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
 	if (!strcmp(name,"default_reconnect")) return (int)variables.default_reconnect;
 	if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
@@ -1242,6 +1246,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		return strdup((variables.session_idle_show_processlist ? "true" : "false"));
 	}
 #endif // IDLE_THREADS
+	if (!strcasecmp(name,"show_processlist_extended")) {
+		sprintf(intbuf,"%d",variables.show_processlist_extended);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"servers_stats")) {
 		return strdup((variables.servers_stats ? "true" : "false"));
 	}
@@ -2362,6 +2370,16 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return false;
 	}
 #endif // IDLE_THREADS
+	if (!strcasecmp(name,"show_processlist_extended")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 2) {
+			variables.show_processlist_extended=intv;
+			return true;
+		} else {
+			return false;
+		}
+		return false;
+	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.sessions_sort=true;
@@ -3801,6 +3819,7 @@ void MySQL_Thread::refresh_variables() {
 #ifdef IDLE_THREADS
 	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");
 #endif // IDLE_THREADS
+	mysql_thread___show_processlist_extended=GloMTH->get_variable_int((char *)"show_processlist_extended");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 #ifdef DEBUG
@@ -4464,7 +4483,7 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 }
 
 SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
-	const int colnum=15;
+	const int colnum=16;
         char port[NI_MAXSERV];
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping MySQL Processlist\n");
 	SQLite3_result *result=new SQLite3_result(colnum);
@@ -4483,6 +4502,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	result->add_column_definition(SQLITE_TEXT,"time_ms");
 	result->add_column_definition(SQLITE_TEXT,"info");
 	result->add_column_definition(SQLITE_TEXT,"status_flags");
+	result->add_column_definition(SQLITE_TEXT,"extended_info");
 	unsigned int i;
 	unsigned int i2;
 //	signal_all_threads(1);
@@ -4713,6 +4733,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 				}
 				pta[12]=strdup(buf);
 
+				pta[15]=NULL;
+				if (mysql_thread___show_processlist_extended) {
+					json j;
+					sess->generate_proxysql_internal_session_json(j);
+					if (mysql_thread___show_processlist_extended == 2) {
+						std::string s = j.dump(4);
+						pta[15] = strdup(s.c_str());
+					} else {
+						std::string s = j.dump();
+						pta[15] = strdup(s.c_str());
+					}
+				}
 				result->add_row(pta);
 				unsigned int k;
 				for (k=0; k<colnum; k++) {

@@ -14,6 +14,7 @@
 #define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX         0x00000080
 #define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
+#define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
 
 class MySQL_Connection_userinfo {
 	private:
@@ -57,6 +58,7 @@ class MySQL_Connection {
 		uint8_t sql_log_bin;
 		int8_t last_set_autocommit;
 		bool autocommit;
+		bool no_backslash_escapes;
 	} options;
 	struct {
 		unsigned long length;
@@ -82,6 +84,14 @@ class MySQL_Connection {
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
 	enum MySerStatus server_status; // this to solve a side effect of #774
+
+	bytes_stats_t bytes_info; // bytes statistics
+	struct {
+		unsigned long long questions;
+		unsigned long long myconnpoll_get;
+		unsigned long long myconnpoll_put;
+	} statuses;
+
 	unsigned long largest_query_length;
 	uint32_t status_flags;
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
@@ -103,6 +113,7 @@ class MySQL_Connection {
 	MySQL_Connection();
 	~MySQL_Connection();
 	bool set_autocommit(bool);
+	bool set_no_backslash_escapes(bool);
 	uint8_t set_charset(uint8_t);
 
 	void set_status_transaction(bool);
@@ -110,6 +121,7 @@ class MySQL_Connection {
 	void set_status_get_lock(bool);
 	void set_status_lock_tables(bool);
 	void set_status_temporary_table(bool);
+	void set_status_no_backslash_escapes(bool);
 	void set_status_prepared_statement(bool);
 	void set_status_user_variable(bool);
 	void set_status_no_multiplex(bool);
@@ -120,6 +132,7 @@ class MySQL_Connection {
 	bool get_status_get_lock();
 	bool get_status_lock_tables();
 	bool get_status_temporary_table();
+	bool get_status_no_backslash_escapes();
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
 	bool get_status_no_multiplex();

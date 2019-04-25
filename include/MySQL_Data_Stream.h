@@ -84,6 +84,12 @@ class MySQL_Data_Stream
 	unsigned long long wait_until;
 	unsigned long long killed_at;
 	unsigned long long max_connect_time;
+	
+	struct {
+		unsigned long long questions;
+		unsigned long long myconnpoll_get;
+		unsigned long long myconnpoll_put;
+	} statuses;
 
 	PtrSizeArray *PSarrayIN;
 	PtrSizeArray *PSarrayOUT;
@@ -180,13 +186,17 @@ class MySQL_Data_Stream
 
 	// safe way to attach a MySQL Connection
 	void attach_connection(MySQL_Connection *mc) {
+		statuses.myconnpoll_get++;
 		myconn=mc;
+		myconn->statuses.myconnpoll_get++;
 		mc->myds=this;
 	}
 
 	// safe way to detach a MySQL Connection
 	void detach_connection() {
 		assert(myconn);
+		myconn->statuses.myconnpoll_put++;
+		statuses.myconnpoll_put++;
 		myconn->myds=NULL;
 		myconn=NULL;
 	}
