@@ -84,6 +84,14 @@ class MySQL_Connection {
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
 	enum MySerStatus server_status; // this to solve a side effect of #774
+
+	bytes_stats_t bytes_info; // bytes statistics
+	struct {
+		unsigned long long questions;
+		unsigned long long myconnpoll_get;
+		unsigned long long myconnpoll_put;
+	} statuses;
+
 	unsigned long largest_query_length;
 	uint32_t status_flags;
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API

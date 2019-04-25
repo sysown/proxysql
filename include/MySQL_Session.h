@@ -3,6 +3,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
 	PROXYSQL_SESSION_ADMIN,
@@ -85,6 +88,7 @@ class MySQL_Session
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
+	void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
@@ -226,6 +230,7 @@ class MySQL_Session
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
+	void generate_proxysql_internal_session_json(json &);
 };
 
 #define KILL_QUERY       1

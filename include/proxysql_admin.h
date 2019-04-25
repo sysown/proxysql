@@ -102,6 +102,7 @@ class ProxySQL_Admin {
 		int stats_mysql_query_cache;
 		int stats_system_cpu;
 		int stats_system_memory;
+		int mysql_show_processlist_extended;
 		bool web_enabled;
 		bool web_enabled_old;
 		int web_port;
@@ -242,6 +243,7 @@ class ProxySQL_Admin {
 	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();
+	void stats___mysql_free_connections();
 	void stats___mysql_connection_pool(bool _reset);
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
