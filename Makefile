@@ -45,6 +45,12 @@ debug: build_deps_debug build_lib_debug build_src_debug
 .PHONY: testaurora
 testaurora: build_deps_debug build_lib_testaurora build_src_testaurora
 
+.PHONY: testgalera
+testgalera: build_deps_debug build_lib_testgalera build_src_testgalera
+
+.PHONY: testall
+testall: build_deps_debug build_lib_testall build_src_testall
+
 .PHONY: clickhouse
 clickhouse: build_deps_clickhouse build_lib_clickhouse build_src_clickhouse
 
@@ -79,6 +85,22 @@ build_src_testaurora: build_deps build_lib_testaurora
 .PHONY: build_lib_testaurora
 build_lib_testaurora: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_testgalera
+build_src_testgalera: build_deps build_lib_testgalera
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_testgalera
+build_lib_testgalera: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_testall
+build_src_testall: build_deps build_lib_testall
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_testall
+build_lib_testall: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug
 build_src_debug: build_deps build_lib_debug

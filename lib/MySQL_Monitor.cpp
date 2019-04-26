@@ -846,9 +846,9 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 	if (mysql_thread___monitor_wait_timeout==false) {
 		return true;
 	}
-#ifdef TEST_AURORA
+#if defined(TEST_AURORA) || defined(TEST_GALERA)
 	return true;
-#endif // TEST_AURORA
+#endif // TEST_AURORA || TEST_GALERA
 	bool ret=false;
 	char *query=NULL;
 	char *qt=(char *)"SET wait_timeout=%d";
@@ -1471,6 +1471,9 @@ void * monitor_galera_thread(void *arg) {
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
 
+#ifdef DEBUG
+	MYSQL *mysqlcopy = NULL;
+#endif // DEBUG
 
 	mmsd->t1=start_time;
 
@@ -1493,9 +1496,20 @@ void * monitor_galera_thread(void *arg) {
 		}
 	}
 
+#ifdef DEBUG
+	mysqlcopy = mmsd->mysql;
+#endif // DEBUG
+
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
 	{
+#ifdef TEST_GALERA
+		char *q1 = (char *)"SELECT wsrep_local_state , read_only , wsrep_local_recv_queue , wsrep_desync , wsrep_reject_queries , wsrep_sst_donor_rejects_queries , wsrep_cluster_status FROM HOST_STATUS_GALERA WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+		char *q2 = (char *)malloc(strlen(q1)+strlen(mmsd->hostname)+32);
+		sprintf(q2,q1, mmsd->writer_hostgroup, mmsd->hostname, mmsd->port);
+		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, q2);
+		free(q2);
+#else
 		char *sv = mmsd->mysql->server_version;
 		if (strncmp(sv,(char *)"5.7",3)==0 || strncmp(sv,(char *)"8",1)==0) {
 			// the backend is either MySQL 5.7 or MySQL 8 : INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated
@@ -1504,11 +1518,12 @@ void * monitor_galera_thread(void *arg) {
 			// any other version
 			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , @@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status");
 		}
+#endif // TEST_GALERA
 	}
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
-		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
+		 if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_cluster_status	 is NOT Primary\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_galera_thread;
@@ -3812,6 +3827,9 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
 			bool rc;
 			rc=mmsd->create_new_connection();
+			if (mmsd->mysql) {
+				GloMyMon->My_Conn_Pool->conn_register(mmsd);
+			}
 			crc=true;
 			if (rc==false) {
 				unsigned long long now=monotonic_time();
@@ -3955,7 +3973,13 @@ __exit_monitor_aws_aurora_HG_thread:
 __fast_exit_monitor_aws_aurora_HG_thread:
 	if (mmsd->mysql) {
 		// if we reached here we didn't put the connection back
-		if (mmsd->mysql_error_msg || mmsd->async_exit_status) {
+		if (mmsd->mysql_error_msg) {
+#ifdef DEBUG
+			proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+#else
+			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+#endif // DEBUG
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
 		} else {
@@ -3964,10 +3988,14 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 				if (rc) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 				} else {
+					proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
+				proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
 			}

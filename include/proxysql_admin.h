@@ -315,5 +315,9 @@ class ProxySQL_Admin {
 	void enable_aurora_testing();
 #endif // TEST_AURORA
 
+#ifdef TEST_GALERA
+	void enable_galera_testing();
+#endif // TEST_GALERA
+
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

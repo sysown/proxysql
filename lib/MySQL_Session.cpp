@@ -3867,11 +3867,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		(handshake_response_return == true) 
 		&&
 		(
-#ifdef TEST_AURORA
+#if defined(TEST_AURORA) || defined(TEST_GALERA)
 			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
 #else
 			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) )
-#endif // TEST_AURORA
+#endif // TEST_AURORA || TEST_GALERA
 			||
 			(default_hostgroup == 0 && session_type == PROXYSQL_SESSION_CLICKHOUSE)
 			||
@@ -3916,10 +3916,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=true;
 				switch (session_type) {
 					case PROXYSQL_SESSION_SQLITE:
-#ifdef TEST_AURORA
+#if defined(TEST_AURORA) || defined(TEST_GALERA)
 						free_users=1;
 						break;
-#endif // TEST_AURORA
+#endif // TEST_AURORA || TEST_GALERA
 					case PROXYSQL_SESSION_MYSQL:
 						if (ldap_ctx==NULL) {
 							free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
