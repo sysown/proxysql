@@ -35,6 +35,7 @@ static char * session_vars[]= {
 	(char *)"UNIQUE_CHECKS",
 	(char *)"AUTO_INCREMENT_INCREMENT",
 	(char *)"AUTO_INCREMENT_OFFSET",
+	(char *)"TIMESTAMP",
 	(char *)"GROUP_CONCAT_MAX_LEN"
 };
 
