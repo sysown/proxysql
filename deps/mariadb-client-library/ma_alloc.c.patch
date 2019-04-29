@@ -3,7 +3,7 @@
    {						/* Time to alloc new block */
      get_size= MAX(Size+ALIGN_SIZE(sizeof(MA_USED_MEM)),
 -              (mem_root->block_size & ~1) * (mem_root->block_num >> 2));
-+              (mem_root->block_size & ~1) * ( (mem_root->block_num >> 2) > 4 ? 4 : (mem_root->block_num >> 2) ) );
++              (mem_root->block_size & ~1) * ( (mem_root->block_num >> 2) < 4 ? 4 : (mem_root->block_num >> 2) ) );
  
      if (!(next = (MA_USED_MEM*) malloc(get_size)))
      {
