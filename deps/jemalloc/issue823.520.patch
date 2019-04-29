@@ -1,0 +1,20 @@
+@@ -107,8 +107,7 @@
+ 	flag_opt_junk_alloc	= (1U),
+ 	flag_opt_junk_free	= (1U << 1),
+ 	flag_opt_zero		= (1U << 2),
+-	flag_opt_utrace		= (1U << 3),
+-	flag_opt_xmalloc	= (1U << 4)
++	flag_opt_utrace		= (1U << 3)
+ };
+ static uint8_t	malloc_slow_flags;
+ 
+@@ -922,8 +921,7 @@
+ 	malloc_slow_flags |= (opt_junk_alloc ? flag_opt_junk_alloc : 0)
+ 	    | (opt_junk_free ? flag_opt_junk_free : 0)
+ 	    | (opt_zero ? flag_opt_zero : 0)
+-	    | (opt_utrace ? flag_opt_utrace : 0)
+-	    | (opt_xmalloc ? flag_opt_xmalloc : 0);
++	    | (opt_utrace ? flag_opt_utrace : 0);
+ 
+ 	malloc_slow = (malloc_slow_flags != 0);
+ }
