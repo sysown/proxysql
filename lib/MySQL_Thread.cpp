@@ -245,6 +245,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_galera_healthcheck_interval",
 	(char *)"monitor_galera_healthcheck_timeout",
+	(char *)"monitor_galera_healthcheck_max_timeout_count",
 	(char *)"monitor_username",
 	(char *)"monitor_password",
 	(char *)"monitor_replication_lag_use_percona_heartbeat",
@@ -376,6 +377,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_galera_healthcheck_interval=5000;
 	variables.monitor_galera_healthcheck_timeout=800;
+	variables.monitor_galera_healthcheck_max_timeout_count=3;
 	variables.monitor_query_interval=60000;
 	variables.monitor_query_timeout=100;
 	variables.monitor_slave_lag_when_null=60;
@@ -654,6 +656,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"monitor_groupreplication_healthcheck_timeout")) return (int)variables.monitor_groupreplication_healthcheck_timeout;
 			if (!strcmp(name,"monitor_galera_healthcheck_interval")) return (int)variables.monitor_galera_healthcheck_interval;
 			if (!strcmp(name,"monitor_galera_healthcheck_timeout")) return (int)variables.monitor_galera_healthcheck_timeout;
+			if (!strcmp(name,"monitor_galera_healthcheck_max_timeout_count")) return (int)variables.monitor_galera_healthcheck_max_timeout_count;
 		}
 		if (a == 'p' || a == 'P') {
 			if (!strcmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
@@ -949,6 +952,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_galera_healthcheck_timeout")) {
 			sprintf(intbuf,"%d",variables.monitor_galera_healthcheck_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_galera_healthcheck_max_timeout_count")) {
+			sprintf(intbuf,"%d",variables.monitor_galera_healthcheck_max_timeout_count);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_query_interval")) {
@@ -1455,6 +1462,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			int intv=atoi(value);
 			if (intv >= 50 && intv <= 600*1000) {
 				variables.monitor_galera_healthcheck_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_galera_healthcheck_max_timeout_count")) {
+			int intv=atoi(value);
+			if (intv >= 1 && intv <= 10) {
+				variables.monitor_galera_healthcheck_max_timeout_count=intv;
 				return true;
 			} else {
 				return false;
@@ -3764,6 +3780,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_galera_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_interval");
 	mysql_thread___monitor_galera_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_timeout");
+	mysql_thread___monitor_galera_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_max_timeout_count");
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
 	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
 	mysql_thread___monitor_slave_lag_when_null=GloMTH->get_variable_int((char *)"monitor_slave_lag_when_null");

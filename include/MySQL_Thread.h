@@ -353,6 +353,7 @@ class MySQL_Threads_Handler
 		int monitor_groupreplication_healthcheck_timeout;
 		int monitor_galera_healthcheck_interval;
 		int monitor_galera_healthcheck_timeout;
+		int monitor_galera_healthcheck_max_timeout_count;
 		int monitor_query_interval;
 		int monitor_query_timeout;
 		int monitor_slave_lag_when_null;

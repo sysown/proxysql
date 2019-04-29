@@ -1586,6 +1586,7 @@ __exit_monitor_galera_thread:
 		bool wsrep_reject_queries = true;
 		bool wsrep_sst_donor_rejects_queries = true;
 		long long wsrep_local_recv_queue=0;
+		int num_timeouts = 0;
 		MYSQL_FIELD * fields=NULL;
 		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
@@ -1665,12 +1666,65 @@ __end_process_galera_result:
 			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
 			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
 			GloMyMon->Galera_Hosts_Map.insert(std::make_pair(s,node));
+			if (mmsd->mysql_error_msg) {
+				if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
+					// it was a timeout . Let's count the number of consecutive timeouts
+					int max_num_timeout = 10;
+					if (mysql_thread___monitor_galera_healthcheck_max_timeout_count < max_num_timeout) {
+						max_num_timeout = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
+					}
+					unsigned long long start_times[max_num_timeout];
+					bool timeouts[max_num_timeout];
+					for (int i=0; i<max_num_timeout; i++) {
+						start_times[i]=0;
+						timeouts[i]=false;
+					}
+					for (int i=0; i<Galera_Nentries; i++) {
+						if (node->last_entries[i].start_time) {
+							int smallidx = 0;
+							for (int j=0; j<max_num_timeout; j++) {
+								//find the smaller value
+								if (j!=smallidx) {
+									if (start_times[j] < start_times[j]) {
+										smallidx = j;
+									}
+								}
+								if (start_times[j] < node->last_entries[i].start_time) {
+									start_times[j] = node->last_entries[i].start_time;
+									timeouts[j] = false;
+									if (node->last_entries[i].error) {
+										if (strncasecmp(node->last_entries[i].error, (char *)"timeout", 7) == 0) {
+											timeouts[j] = true;
+										}
+									}
+								}
+							}
+						}
+					}
+					for (int i=0; i<max_num_timeout; i++) {
+						if (timeouts[i]) {
+							num_timeouts++;
+						}
+					}
+				}
+			}
 		}
 		pthread_mutex_unlock(&GloMyMon->galera_mutex);
 
 		// NOTE: we update MyHGM outside the mutex galera_mutex
-		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
-			MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
+		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure Galera
+			if (num_timeouts == 0) {
+				// it wasn't a timeout, reconfigure immediately
+				MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
+			} else {
+				// it was a timeout. Check if we are having consecutive timeout
+				if (num_timeouts == mysql_thread___monitor_galera_healthcheck_max_timeout_count) {
+					proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, num_timeouts);
+					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
+				} else {
+					// not enough timeout
+				}
+			}
 		} else {
 			if (fields) { // if we didn't get any error, but fileds is NULL, we are likely hitting bug #1994
 				if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
