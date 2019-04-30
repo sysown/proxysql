@@ -83,7 +83,14 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 	*error=NULL;
 	bool ret=false;
 	VALGRIND_DISABLE_ERROR_REPORTING;
-	if(sqlite3_prepare_v2(db, str, -1, &statement, 0) != SQLITE_OK) {
+	do {
+		rc = sqlite3_prepare_v2(db, str, -1, &statement, 0);
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
+			usleep(USLEEP_SQLITE_LOCKED);
+		}
+	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
+	if (rc == SQLITE_OK) {
+	} else {
 		*error=strdup(sqlite3_errmsg(db));
 		goto __exit_execute_statement;
 	}
