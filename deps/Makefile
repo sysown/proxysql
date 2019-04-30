@@ -18,8 +18,10 @@ endif
 .PHONY: default
 
 libssl/openssl/libssl.a:
-	cd libssl && rm -rf openssl-1.1.0h || true
-	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
+#	cd libssl && rm -rf openssl-1.1.0h || true
+#	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
+	cd libssl && rm -rf openssl-1.1.1b || true
+	cd libssl && tar -zxf openssl-1.1.1b.tar.gz
 	cd libssl/openssl  && ./config
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 libssl: libssl/openssl/libssl.a
