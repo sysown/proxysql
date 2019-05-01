@@ -1546,7 +1546,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			auth_plugin_id = 2;
 		}
 	}
-__switch_auth_plugin:
+//__switch_auth_plugin:
 	if (auth_plugin_id == 0) {
 		if ((*myds)->switching_auth_stage == 0) {
 			(*myds)->switching_auth_stage = 1;
@@ -2279,7 +2279,7 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 }
 
 void MySQL_ResultSet::add_eof() {
-	PtrSize_t pkt;
+	//PtrSize_t pkt;
 	if (myprot) {
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );

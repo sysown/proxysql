@@ -24,7 +24,6 @@ struct bio_st {
 	CRYPTO_RWLOCK *lock;
 };
 
-
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
 

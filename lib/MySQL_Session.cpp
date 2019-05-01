@@ -803,7 +803,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 }
 
 void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
-	int l = 0;
+	unsigned int l = 0;
 	l = strlen((char *)"PROXYSQL INTERNAL SESSION");
 	if (pkt->size==(5+l) && strncasecmp((char *)"PROXYSQL INTERNAL SESSION", (char *)pkt->ptr+5, l)==0) {
 		json j;

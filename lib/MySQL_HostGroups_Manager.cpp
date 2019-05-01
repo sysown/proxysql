@@ -2679,7 +2679,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 				delete conn;
 			}
 			char buf[1024];
-			for (l=0; l<mysrvc->ConnectionsFree->conns_length(); l++) {
+			for (l=0; l < (int) mysrvc->ConnectionsFree->conns_length(); l++) {
 				char **pta=(char **)malloc(sizeof(char *)*colnum);
 				MySQL_Connection *conn = mysrvc->ConnectionsFree->index(l);
 				sprintf(buf,"%d", conn->fd);

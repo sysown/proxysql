@@ -537,8 +537,8 @@ void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lo
 				    (uint64_t *)malloc(max_purge * sizeof(uint64_t));
 				for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it =
 				         map_stmt_id_to_info.begin();
-				     it != map_stmt_id_to_info.end(); ++it) {
-					if ( (i == (max_purge - 1)) || (i == (num_client_count_zero - 1)) ) {
+					it != map_stmt_id_to_info.end(); ++it) {
+					if ( (i == (max_purge - 1)) || (i == ((int)num_client_count_zero - 1)) ) {
 						break; // nothing left to clean up
 					}
 					MySQL_STMT_Global_info *a = it->second;
