@@ -6289,8 +6289,8 @@ void ProxySQL_Admin::stats___mysql_errors(bool reset) {
 			rc=sqlite3_bind_text(statement32, (idx*11)+11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
-				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement32); //assert(rc==SQLITE_OK);
+				rc=sqlite3_reset(statement32); //assert(rc==SQLITE_OK);
 			}
 		} else { // single row
 			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); assert(rc==SQLITE_OK);
@@ -6305,8 +6305,8 @@ void ProxySQL_Admin::stats___mysql_errors(bool reset) {
 			rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[9])); assert(rc==SQLITE_OK);
 			rc=sqlite3_bind_text(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); //assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement1); //assert(rc==SQLITE_OK);
 		}
 		row_idx++;
 	}
