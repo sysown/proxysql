@@ -4415,10 +4415,12 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 	for (i=0;i<j;i++) {
 		if (i<num_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr==NULL) return; // quick exit, at least one thread is not ready
 #ifdef IDLE_THREADS
 		} else {
 			if (GloVars.global.idle_threads) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
+				if (thr==NULL) return; // quick exit, at least one thread is not ready
 			}
 #endif // IDLE_THREADS
 		}
@@ -4711,6 +4713,7 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	if (mysql_threads==0) return;
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		if (thr==NULL) return; // quick exit, at least one thread is not ready
 		int fd=thr->pipefd[1];
 		if (write(fd,&c,1)==-1) {
 			proxy_error("Error during write in signal_all_threads()\n");
@@ -4720,6 +4723,7 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	if (GloVars.global.idle_threads)
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+		if (thr==NULL) return; // quick exit, at least one thread is not ready
 		int fd=thr->pipefd[1];
 		if (write(fd,&c,1)==-1) {
 			proxy_error("Error during write in signal_all_threads()\n");
