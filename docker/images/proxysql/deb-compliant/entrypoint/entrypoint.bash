@@ -26,7 +26,12 @@ else
 fi
 ${MAKE} cleanbuild
 ${MAKE} ${MAKEOPT} "${deps_target}"
-${MAKE} ${MAKEOPT} "${build_target}"
+
+if [[ -z ${build_target} ]] ; then
+  ${MAKE} ${MAKEOPT}
+else
+  ${MAKE} ${MAKEOPT} "${build_target}"
+fi
 # Prepare package files and build RPM
 cp /root/ctl/proxysql.ctl /opt/proxysql/proxysql.ctl
 sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl
