@@ -1320,6 +1320,14 @@ bool MySQL_HostGroups_Manager::commit() {
 					if (GloMTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing max_replication_lag for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[8]) , mysrvc->max_replication_lag , atoi(r->fields[18]));
 					mysrvc->max_replication_lag=atoi(r->fields[18]);
+					if (mysrvc->max_replication_lag == 0) { // we just changed it to 0
+						if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+							// the server is currently shunned due to replication lag
+							// but we reset max_replication_lag to 0
+							// therefore we immediately reset the status too
+							mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+						}
+					}
 				}
 				if (atoi(r->fields[9])!=atoi(r->fields[19])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
