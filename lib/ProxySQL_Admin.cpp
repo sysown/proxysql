@@ -3285,7 +3285,16 @@ __run_query:
 				SPA->vacuum_stats(false);
 			}
 		}
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		if (error == NULL) {
+			sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		} else {
+			char *a = (char *)"ProxySQL Admin Error: ";
+			char *new_msg = (char *)malloc(strlen(error)+strlen(a)+1);
+			sprintf(new_msg, "%s%s", a, error);
+			sess->SQLite3_to_MySQL(resultset, new_msg, affected_rows, &sess->client_myds->myprot);
+			free(new_msg);
+			free(error);
+		}
 		delete resultset;
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
@@ -6925,7 +6934,11 @@ void ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
-	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",msg);
+	char *a = (char *)"ProxySQL Admin Error: ";
+	char *new_msg = (char *)malloc(strlen(msg)+strlen(a)+1);
+	sprintf(new_msg, "%s%s", a, msg);
+	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",new_msg);
+	free(new_msg);
 	myds->DSS=STATE_SLEEP;
 }
 
