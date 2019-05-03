@@ -160,7 +160,8 @@ cleanpart:
 
 cleanall:
 	cd libdaemon && rm -rf libdaemon-0.14
-	cd jemalloc && rm -rf jemalloc-4.3.1
+	cd jemalloc && rm -rf jemalloc-4.3.1 || true
+	cd jemalloc && rm -rf jemalloc-5.2.0 || true
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd libconfig && rm -rf libconfig-1.4.9
@@ -174,6 +175,7 @@ cleanall:
 	cd google-coredumper && rm -rf google-coredumper || true
 	cd libev && rm -rf libev-4.24 || true
 	cd libssl && rm -rf openssl-1.1.0h || true
+	cd libssl && rm -rf openssl-1.1.1b || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 .PHONY: cleanall
 
