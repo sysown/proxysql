@@ -233,6 +233,16 @@ MySQL_Connection::~MySQL_Connection() {
 		// always decrease the counter
 		if (ret_mysql)
 			__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
+		if (query.stmt_result) {
+			if (query.stmt_result->handle) {
+				query.stmt_result->handle->status = MYSQL_STATUS_READY; // avoid calling mthd_my_skip_result()
+			}
+		}
+		if (mysql_result) {
+			if (mysql_result->handle) {
+				mysql_result->handle->status = MYSQL_STATUS_READY; // avoid calling mthd_my_skip_result()
+			}
+		}
 		async_free_result();
 		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
