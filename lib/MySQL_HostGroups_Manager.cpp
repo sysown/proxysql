@@ -10,6 +10,7 @@
 
 #include "ev.h"
 
+#include <mutex>
 
 #define USE_MYSRVC_ARRAY
 
@@ -1805,12 +1806,25 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		mydb->execute_statement((char *)"SELECT * FROM mysql_servers", &error , &cols , &affected_rows , &resultset);
+		if (_onlyhg==NULL) {
+			mydb->execute_statement((char *)"SELECT hostgroup_id hid, hostname, port, gtid_port gtid, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM mysql_servers", &error , &cols , &affected_rows , &resultset);
+		} else {
+			int hidonly=*_onlyhg;
+			char *q1 = (char *)malloc(256);
+			sprintf(q1,"SELECT hostgroup_id hid, hostname, port, gtid_port gtid, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM mysql_servers WHERE hostgroup_id=%d" , hidonly);
+			mydb->execute_statement(q1, &error , &cols , &affected_rows , &resultset);
+			free(q1);
+		}
 		if (error) {
 			proxy_error("Error on read from mysql_servers : %s\n", error);
 		} else {
 			if (resultset) {
-				proxy_info("Dumping mysql_servers\n");
+				if (_onlyhg==NULL) {
+					proxy_info("Dumping mysql_servers: ALL\n");
+				} else {
+					int hidonly=*_onlyhg;
+					proxy_info("Dumping mysql_servers: HG %d\n", hidonly);
+				}
 				resultset->dump_to_stderr();
 			}
 		}
@@ -4376,6 +4390,8 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 }
 
 void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
+	std::mutex local_mutex;
+	std::lock_guard<std::mutex> lock(local_mutex);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -4475,6 +4491,9 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";

@@ -6684,6 +6684,9 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 		admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
+#if defined(TEST_AURORA) || defined(TEST_GALERA)
+	admindb->execute("DELETE FROM mysql_servers WHERE gtid_port > 0"); // temporary disable add GTID checks
+#endif
 }
 
 void ProxySQL_Admin::__delete_disktable() {

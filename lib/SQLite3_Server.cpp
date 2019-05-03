@@ -515,8 +515,8 @@ __run_query:
 				if (resultset->rows_count == 0) {
 					PROXY_TRACE();
 				}
-				if (rand() % 100 == 0) {
-					// randomly add some latency on 1% of the traffic
+				if (rand() % 20 == 0) {
+					// randomly add some latency on 5% of the traffic
 					sleep(2);
 				}
 			}

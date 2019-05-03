@@ -1525,7 +1525,7 @@ void * monitor_galera_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		 if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_cluster_status	 is NOT Primary\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1541,7 +1541,7 @@ void * monitor_galera_thread(void *arg) {
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout. Assuming wsrep_local_state is NOT 4 and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1666,45 +1666,45 @@ __end_process_galera_result:
 			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
 			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
 			GloMyMon->Galera_Hosts_Map.insert(std::make_pair(s,node));
-			if (mmsd->mysql_error_msg) {
-				if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
-					// it was a timeout . Let's count the number of consecutive timeouts
-					int max_num_timeout = 10;
-					if (mysql_thread___monitor_galera_healthcheck_max_timeout_count < max_num_timeout) {
-						max_num_timeout = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
-					}
-					unsigned long long start_times[max_num_timeout];
-					bool timeouts[max_num_timeout];
-					for (int i=0; i<max_num_timeout; i++) {
-						start_times[i]=0;
-						timeouts[i]=false;
-					}
-					for (int i=0; i<Galera_Nentries; i++) {
-						if (node->last_entries[i].start_time) {
-							int smallidx = 0;
-							for (int j=0; j<max_num_timeout; j++) {
-								//find the smaller value
-								if (j!=smallidx) {
-									if (start_times[j] < start_times[j]) {
-										smallidx = j;
-									}
+		}
+		if (mmsd->mysql_error_msg) {
+			if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
+				// it was a timeout . Let's count the number of consecutive timeouts
+				int max_num_timeout = 10;
+				if (mysql_thread___monitor_galera_healthcheck_max_timeout_count < max_num_timeout) {
+					max_num_timeout = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
+				}
+				unsigned long long start_times[max_num_timeout];
+				bool timeouts[max_num_timeout];
+				for (int i=0; i<max_num_timeout; i++) {
+					start_times[i]=0;
+					timeouts[i]=false;
+				}
+				for (int i=0; i<Galera_Nentries; i++) {
+					if (node->last_entries[i].start_time) {
+						int smallidx = 0;
+						for (int j=0; j<max_num_timeout; j++) {
+							//find the smaller value
+							if (j!=smallidx) {
+								if (start_times[j] < start_times[smallidx]) {
+									smallidx = j;
 								}
-								if (start_times[j] < node->last_entries[i].start_time) {
-									start_times[j] = node->last_entries[i].start_time;
-									timeouts[j] = false;
-									if (node->last_entries[i].error) {
-										if (strncasecmp(node->last_entries[i].error, (char *)"timeout", 7) == 0) {
-											timeouts[j] = true;
-										}
-									}
+							}
+						}
+						if (start_times[smallidx] < node->last_entries[i].start_time) {
+							start_times[smallidx] = node->last_entries[i].start_time;
+							timeouts[smallidx] = false;
+							if (node->last_entries[i].error) {
+								if (strncasecmp(node->last_entries[i].error, (char *)"timeout", 7) == 0) {
+									timeouts[smallidx] = true;
 								}
 							}
 						}
 					}
-					for (int i=0; i<max_num_timeout; i++) {
-						if (timeouts[i]) {
-							num_timeouts++;
-						}
+				}
+				for (int i=0; i<max_num_timeout; i++) {
+					if (timeouts[i]) {
+						num_timeouts++;
 					}
 				}
 			}
@@ -1719,7 +1719,7 @@ __end_process_galera_result:
 			} else {
 				// it was a timeout. Check if we are having consecutive timeout
 				if (num_timeouts == mysql_thread___monitor_galera_healthcheck_max_timeout_count) {
-					proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, num_timeouts);
+					proxy_error("Server %s:%d missed %d Galera checks. Assuming offline\n", mmsd->hostname, mmsd->port, num_timeouts);
 					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 				} else {
 					// not enough timeout
