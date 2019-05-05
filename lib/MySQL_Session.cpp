@@ -775,11 +775,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
 				if (_myconn->mysql) {
 					MYSQL * _my = _myconn->mysql;
-					j["backends"][i]["conn"]["mysql"]["host"] = _my->host;
-					j["backends"][i]["conn"]["mysql"]["host_info"] = _my->host_info;
+					j["backends"][i]["conn"]["mysql"]["host"] = ( _my->host ? _my->host : "" );
+					j["backends"][i]["conn"]["mysql"]["host_info"] = ( _my->host_info ? _my->host_info : "" );
 					j["backends"][i]["conn"]["mysql"]["port"] = _my->port;
-					j["backends"][i]["conn"]["mysql"]["server_version"] = _my->server_version;
-					j["backends"][i]["conn"]["mysql"]["user"] = _my->user;
+					j["backends"][i]["conn"]["mysql"]["server_version"] = ( _my->server_version ? _my->server_version : "" );
+					j["backends"][i]["conn"]["mysql"]["user"] = ( _my->user ? _my->user : "" );
 					j["backends"][i]["conn"]["mysql"]["unix_socket"] = (_my->unix_socket ? _my->unix_socket : "");
 					j["backends"][i]["conn"]["mysql"]["db"] = (_my->db ? _my->db : "");
 					j["backends"][i]["conn"]["mysql"]["affected_rows"] = _my->affected_rows;
@@ -788,7 +788,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 					j["backends"][i]["conn"]["mysql"]["charset"] = _my->charset->nr;
 					//j["backends"][i]["conn"]["mysql"][""] = _my->;
 					//j["backends"][i]["conn"]["mysql"][""] = _my->;
-					j["backends"][i]["conn"]["mysql"]["options"]["charset_name"] = _my->options.charset_name;
+					j["backends"][i]["conn"]["mysql"]["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );
 					j["backends"][i]["conn"]["mysql"]["options"]["use_ssl"] = _my->options.use_ssl;
 					j["backends"][i]["conn"]["mysql"]["net"]["last_errno"] = _my->net.last_errno;
 					j["backends"][i]["conn"]["mysql"]["net"]["fd"] = _my->net.fd;
