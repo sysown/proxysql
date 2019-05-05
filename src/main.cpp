@@ -566,7 +566,7 @@ static volatile int load_;
 //#else
 //const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay";
 #ifndef __FreeBSD__
-const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,purge:decay,prof:true,prof_leak:true,lg_prof_sample:20,lg_prof_interval:30,prof_active:false";
+const char *malloc_conf = "xmalloc:true,lg_tcache_max:16,prof:true,prof_leak:true,lg_prof_sample:20,lg_prof_interval:30,prof_active:false";
 #endif
 //#endif /* DEBUG */
 //const char *malloc_conf = "prof_leak:true,lg_prof_sample:0,prof_final:true,xmalloc:true,lg_tcache_max:16";
