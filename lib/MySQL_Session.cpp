@@ -5326,6 +5326,12 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	void *idx = memchr((char *)_pkt->ptr+5, ' ', _pkt->size-5);
 	if (idx) {
 		size_t first_word_len = (char *)idx - (char *)_pkt->ptr - 5;
+		if (((char *)_pkt->ptr+5)[0]=='/' && ((char *)_pkt->ptr+5)[1]=='*') {
+			b[1]=' ';
+			b[2]=' ';
+			b[strlen(b)-1] = ' ';
+			b[strlen(b)-2] = ' ';
+		}
 		memcpy(_c, (char *)_pkt->ptr+5, first_word_len);
 		_c+= first_word_len;
 		memcpy(_c,b,strlen(b));
@@ -5339,6 +5345,7 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	l_free(_pkt->size,_pkt->ptr);
 	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
+	free(b);
 }
 
 void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
