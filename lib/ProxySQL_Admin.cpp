@@ -351,6 +351,15 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GALERA_HOSTGROUPS "CREATE TABLE runtime_mysql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1,2)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
 
+// AWS Aurora
+
+#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_1_0a "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , endpoint_address VARCHAR NOT NULL DEFAULT '' , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_1_0a
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE runtime_mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , endpoint_address VARCHAR NOT NULL DEFAULT '' , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
+
+
 
 // Cluster solution
 
@@ -2066,6 +2075,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool monitor_mysql_server_galera_log=false;
 
+	bool monitor_mysql_server_aws_aurora_log=false;
+	bool monitor_mysql_server_aws_aurora_check_status=false;
+
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
 	bool stats_proxysql_servers_status = false;
@@ -2128,6 +2140,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_group_replication_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_galera_hostgroups")
+				||
+				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
 			) {
 				runtime_mysql_servers=true; refresh=true;
 			}
@@ -2168,6 +2182,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 	if (strstr(query_no_space,"mysql_server_galera_log")) {
 		monitor_mysql_server_galera_log=true; refresh=true;
+	}
+	if (strstr(query_no_space,"mysql_server_aws_aurora_log")) {
+		monitor_mysql_server_aws_aurora_log=true; refresh=true;
+	}
+	if (strstr(query_no_space,"mysql_server_aws_aurora_check_status")) {
+		monitor_mysql_server_aws_aurora_check_status=true; refresh=true;
 	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
@@ -2276,6 +2296,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (monitor_mysql_server_galera_log) {
 			if (GloMyMon) {
 				GloMyMon->populate_monitor_mysql_server_galera_log();
+			}
+		}
+		if (monitor_mysql_server_aws_aurora_log) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_aws_aurora_log();
+			}
+		}
+		if (monitor_mysql_server_aws_aurora_check_status) {
+			if (GloMyMon) {
+				GloMyMon->populate_monitor_mysql_server_aws_aurora_check_status();
 			}
 		}
 		pthread_mutex_unlock(&admin_mutex);
@@ -3013,6 +3043,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			(strlen(query_no_space)==strlen("CHECKSUM MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))){
 			char *q=(char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL GALERA HOSTGROUPS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
+			tablename=(char *)"MYSQL AURORA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
@@ -3850,6 +3889,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GALERA_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin,"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
@@ -3875,6 +3916,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_config,"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -6605,6 +6647,7 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
@@ -6631,6 +6674,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
@@ -6649,6 +6693,9 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 		admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
+#if defined(TEST_AURORA) || defined(TEST_GALERA)
+	admindb->execute("DELETE FROM mysql_servers WHERE gtid_port > 0"); // temporary disable add GTID checks
+#endif
 }
 
 void ProxySQL_Admin::__delete_disktable() {
@@ -6678,6 +6725,7 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_aws_aurora_hostgroups SELECT * FROM main.mysql_aws_aurora_hostgroups");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
@@ -6765,10 +6813,12 @@ void ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
 	admindb->execute("DELETE FROM main.mysql_replication_hostgroups");
 	admindb->execute("DELETE FROM main.mysql_group_replication_hostgroups");
 	admindb->execute("DELETE FROM main.mysql_galera_hostgroups");
+	admindb->execute("DELETE FROM main.mysql_aws_aurora_hostgroups");
 	admindb->execute("INSERT INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
 	admindb->execute("INSERT INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
 	admindb->execute("INSERT INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
 	admindb->execute("INSERT INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
+	admindb->execute("INSERT INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -6780,10 +6830,12 @@ void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
 	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
 	admindb->execute("DELETE FROM disk.mysql_group_replication_hostgroups");
 	admindb->execute("DELETE FROM disk.mysql_galera_hostgroups");
+	admindb->execute("DELETE FROM disk.mysql_aws_aurora_hostgroups");
 	admindb->execute("INSERT INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
 	admindb->execute("INSERT INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
 	admindb->execute("INSERT INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
 	admindb->execute("INSERT INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
+	admindb->execute("INSERT INTO disk.mysql_aws_aurora_hostgroups SELECT * FROM main.mysql_aws_aurora_hostgroups");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -7948,6 +8000,50 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		}
 		sqlite3_finalize(statement);
 	}
+
+	// dump mysql_aws_aurora_hostgroups
+
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_aws_aurora_hostgroups";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_aws_aurora_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset=MyHGM->dump_table_mysql_aws_aurora_hostgroups();
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement=NULL;
+		sqlite3 *mydb3=admindb->get_db();
+		char *query=NULL;
+		if (_runtime) {
+			query=(char *)"INSERT INTO runtime_mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		} else {
+			query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		}
+		rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+		assert(rc==SQLITE_OK);
+		//proxy_info("New mysql_aws_aurora_hostgroups table\n");
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 9, atoi(r->fields[8])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 10, atoi(r->fields[9])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		}
+		sqlite3_finalize(statement);
+	}
 	if(resultset) delete resultset;
 	resultset=NULL;
 }
@@ -7978,6 +8074,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	SQLite3_result *resultset_replication=NULL;
 	SQLite3_result *resultset_group_replication=NULL;
 	SQLite3_result *resultset_galera=NULL;
+	SQLite3_result *resultset_aws_aurora=NULL;
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -8072,6 +8169,36 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		MyHGM->set_incoming_galera_hostgroups(resultset_galera);
 	}
 
+	// support for AWS Aurora, table mysql_aws_aurora_hostgroups
+
+	// look for invalid combinations
+	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a JOIN mysql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			proxy_error("Incompatible entry in mysql_aws_aurora_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
+		}
+	}
+	if (resultset) delete resultset;
+	resultset=NULL;
+
+#ifdef AURORA_TEST // temporary enabled only for testing purpose
+	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a LEFT JOIN mysql_aws_aurora_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL";
+#else
+	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a WHERE 1=0";
+#endif
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_aurora);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to MyHGM
+		MyHGM->set_incoming_aws_aurora_hostgroups(resultset_aws_aurora);
+	}
 	// commit all the changes
 	MyHGM->commit();
 
@@ -8089,6 +8216,10 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (resultset_galera) {
 		//delete resultset_galera; // do not delete, resultset is stored in MyHGM
 		resultset_galera=NULL;
+	}
+	if (resultset_aws_aurora) {
+		//delete resultset_aws_aurora; // do not delete, resultset is stored in MyHGM
+		resultset_aws_aurora=NULL;
 	}
 }
 
@@ -8814,6 +8945,49 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
+                    free(query);
+                    rows++;
+            }
+    }
+    if (root.exists("mysql_aws_aurora_hostgroups")==true) {
+            const Setting &mysql_aws_aurora_hostgroups = root["mysql_aws_aurora_hostgroups"];
+            int count = mysql_aws_aurora_hostgroups.getLength();
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, endpoint_address, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, '%s')";
+            for (i=0; i< count; i++) {
+                    const Setting &line = mysql_aws_aurora_hostgroups[i];
+                    int writer_hostgroup;
+                    int reader_hostgroup;
+                    int active=1; // default
+					int aurora_port;
+                    int max_lag_ms;
+                    int check_interval_ms;
+                    int check_timeout_ms;
+                    int writer_is_also_reader;
+					int new_reader_weight;
+                    std::string comment="";
+                    std::string endpoint_address="";
+                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
+                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
+                    if (line.lookupValue("aurora_port", aurora_port)==false) aurora_port=3306;
+                    if (line.lookupValue("max_lag_ms", max_lag_ms)==false) max_lag_ms=600000;
+                    if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
+                    if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=1000;
+                    if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
+                    if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=0;
+                    line.lookupValue("comment", comment);
+                    line.lookupValue("endpoint_address", comment);
+                    char *o1=strdup(comment.c_str());
+                    char *o=escape_string_single_quotes(o1, false);
+                    char *p1=strdup(endpoint_address.c_str());
+                    char *p=escape_string_single_quotes(p1, false);
+                    char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, o);
+                    //fprintf(stderr, "%s\n", query);
+                    admindb->execute(query);
+                    if (o!=o1) free(o);
+                    free(o1);
+                    if (p!=p1) free(p);
+                    free(p1);
                     free(query);
                     rows++;
             }
@@ -9747,3 +9921,104 @@ void ProxySQL_Admin::stats___mysql_prepared_statements_info() {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+
+#ifdef TEST_GALERA
+void ProxySQL_Admin::enable_galera_testing() {
+	proxy_info("Admin is enabling Galera Testing using SQLite3 Server and HGs from 2271 and 2290\n");
+	sqlite3_stmt *statement=NULL;
+	sqlite3 *mydb3=admindb->get_db();
+	unsigned int num_galera_servers = GloSQLite3Server->num_galera_servers[0];
+	int rc;
+	mysql_servers_wrlock();
+	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 2271 AND 2300");
+	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
+	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	assert(rc==SQLITE_OK);
+	for (unsigned int j=1; j<4; j++) {
+		proxy_info("Admin is enabling Galera Testing using SQLite3 Server and writer_HG %d\n" , 2260+j*10+1);
+		for (unsigned int i=0; i<num_galera_servers; i++) {
+			string serverid = "";
+			serverid = "127.1." + std::to_string(j) + "." + std::to_string(i+11);
+			string sessionid= "";
+			sessionid = "node_" + serverid;
+			rc=sqlite3_bind_int64(statement, 1, 2260+j*10+1 ); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 3, 0); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 4, sessionid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			SAFE_SQLITE3_STEP2(statement);
+			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		}
+	}
+	sqlite3_finalize(statement);
+	admindb->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (2271, 2272, 2273, 2274, 0, 1, 1, 0, 'Automated Galera Testing Cluster 1')");
+	admindb->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (2281, 2282, 2283, 2284, 0, 1, 1, 0, 'Automated Galera Testing Cluster 2')");
+	admindb->execute("INSERT INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (2291, 2292, 2293, 2294, 0, 1, 1, 0, 'Automated Galera Testing Cluster 3')");
+	admindb->execute("UPDATE mysql_galera_hostgroups SET active=1");
+	//admindb->execute("update mysql_servers set max_replication_lag=20");
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_ping_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_timeout'");
+	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_replication_lag_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
+	admindb->execute("UPDATE global_variables SET variable_value='percona.heartbeat' WHERE variable_name='mysql-monitor_replication_lag_use_percona_heartbeat'");
+	load_mysql_variables_to_runtime();
+	admindb->execute("INSERT INTO mysql_users (username,password,default_hostgroup) VALUES ('galera1','pass1',2271), ('galera2','pass2',2281), ('galera','pass3',2291)");
+	init_users();
+}
+#endif // TEST_GALERA
+#ifdef TEST_AURORA
+void ProxySQL_Admin::enable_aurora_testing() {
+	proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs from 1271 to 1276\n");
+	sqlite3_stmt *statement=NULL;
+	sqlite3 *mydb3=admindb->get_db();
+	unsigned int num_aurora_servers = GloSQLite3Server->num_aurora_servers[0];
+	int rc;
+	mysql_servers_wrlock();
+	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 1271 AND 1276");
+	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
+	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	assert(rc==SQLITE_OK);
+	for (unsigned int j=1; j<4; j++) {
+		proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs 127%d and 127%d\n" , j*2-1 , j*2);
+		for (unsigned int i=0; i<num_aurora_servers; i++) {
+			string serverid = "";
+			if (j==1) {
+				serverid = "host." + std::to_string(j) + "." + std::to_string(i+11) + ".aws-test.com";
+			} else {
+				serverid = "127.0." + std::to_string(j) + "." + std::to_string(i+11);
+			}
+			string sessionid= "";
+			sessionid = "b80ef4b4-" + serverid + "-aa01";
+			rc=sqlite3_bind_int64(statement, 1, 1270+j*2 ); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 3, 0); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement, 4, sessionid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			SAFE_SQLITE3_STEP2(statement);
+			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		}
+	}
+	sqlite3_finalize(statement);
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, endpoint_address, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 'Automated Aurora Testing Cluster 1')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1273, 1274, 1, 25, 120, 90, 0, 1, 'Automated Aurora Testing Cluster 2')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1275, 1276, 1, 25, 120, 90, 0, 2, 'Automated Aurora Testing Cluster 3')");
+	admindb->execute("UPDATE mysql_aws_aurora_hostgroups SET active=1");
+	//admindb->execute("update mysql_servers set max_replication_lag=20");
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+	//admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_interval'");
+	//admindb->execute("UPDATE global_variables SET variable_value=1500 WHERE variable_name='mysql-monitor_ping_timeout'");
+	//admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_interval'");
+	//admindb->execute("UPDATE global_variables SET variable_value=1500 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
+	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_ping_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_timeout'");
+	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_replication_lag_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
+	admindb->execute("UPDATE global_variables SET variable_value='percona.heartbeat' WHERE variable_name='mysql-monitor_replication_lag_use_percona_heartbeat'");
+	load_mysql_variables_to_runtime();
+	admindb->execute("INSERT INTO mysql_users (username,password,default_hostgroup) VALUES ('aurora1','pass1',1271), ('aurora2','pass2',1273), ('aurora3','pass3',1275)");
+	init_users();
+}
+#endif // TEST_AURORA

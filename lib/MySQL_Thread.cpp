@@ -245,6 +245,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_galera_healthcheck_interval",
 	(char *)"monitor_galera_healthcheck_timeout",
+	(char *)"monitor_galera_healthcheck_max_timeout_count",
 	(char *)"monitor_username",
 	(char *)"monitor_password",
 	(char *)"monitor_replication_lag_use_percona_heartbeat",
@@ -324,6 +325,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_sql_mode",
 	(char *)"default_time_zone",
 	(char *)"connpoll_reset_queue_length",
+	(char *)"min_num_servers_lantency_awareness",
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
@@ -375,6 +377,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_galera_healthcheck_interval=5000;
 	variables.monitor_galera_healthcheck_timeout=800;
+	variables.monitor_galera_healthcheck_max_timeout_count=3;
 	variables.monitor_query_interval=60000;
 	variables.monitor_query_timeout=100;
 	variables.monitor_slave_lag_when_null=60;
@@ -445,6 +448,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_normalize_digest_text=false;
 	variables.query_digests_track_hostname=false;
 	variables.connpoll_reset_queue_length = 50;
+	variables.min_num_servers_lantency_awareness = 1000;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
@@ -652,6 +656,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"monitor_groupreplication_healthcheck_timeout")) return (int)variables.monitor_groupreplication_healthcheck_timeout;
 			if (!strcmp(name,"monitor_galera_healthcheck_interval")) return (int)variables.monitor_galera_healthcheck_interval;
 			if (!strcmp(name,"monitor_galera_healthcheck_timeout")) return (int)variables.monitor_galera_healthcheck_timeout;
+			if (!strcmp(name,"monitor_galera_healthcheck_max_timeout_count")) return (int)variables.monitor_galera_healthcheck_max_timeout_count;
 		}
 		if (a == 'p' || a == 'P') {
 			if (!strcmp(name,"monitor_ping_interval")) return (int)variables.monitor_ping_interval;
@@ -696,6 +701,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 #ifdef IDLE_THREADS
 		if (!strcmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
 #endif // IDLE_THREADS
+		if (!strcmp(name,"min_num_servers_lantency_awareness")) return variables.min_num_servers_lantency_awareness;
 		if (!strcmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 		if (!strcmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 		if (!strcmp(name,"sessions_sort")) return (int)variables.sessions_sort;
@@ -781,6 +787,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	if (!strcmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
 	if (!strcmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	if (!strcmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
+	if (!strcmp(name,"min_num_servers_lantency_awareness")) return (int)variables.min_num_servers_lantency_awareness;
 	if (!strcmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
 	if (!strcmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 	if (!strcmp(name,"query_cache_stores_empty_result")) return (int)variables.query_cache_stores_empty_result;
@@ -945,6 +952,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_galera_healthcheck_timeout")) {
 			sprintf(intbuf,"%d",variables.monitor_galera_healthcheck_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_galera_healthcheck_max_timeout_count")) {
+			sprintf(intbuf,"%d",variables.monitor_galera_healthcheck_max_timeout_count);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_query_interval")) {
@@ -1161,6 +1172,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"poll_timeout_on_failure")) {
 		sprintf(intbuf,"%d",variables.poll_timeout_on_failure);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"min_num_servers_lantency_awareness")) {
+		sprintf(intbuf,"%d",variables.min_num_servers_lantency_awareness);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"threads")) {
@@ -1447,6 +1462,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			int intv=atoi(value);
 			if (intv >= 50 && intv <= 600*1000) {
 				variables.monitor_galera_healthcheck_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_galera_healthcheck_max_timeout_count")) {
+			int intv=atoi(value);
+			if (intv >= 1 && intv <= 10) {
+				variables.monitor_galera_healthcheck_max_timeout_count=intv;
 				return true;
 			} else {
 				return false;
@@ -2100,6 +2124,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
 			variables.connpoll_reset_queue_length=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"min_num_servers_lantency_awareness")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 10000) {
+			variables.min_num_servers_lantency_awareness=intv;
 			return true;
 		} else {
 			return false;
@@ -3747,6 +3780,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_galera_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_interval");
 	mysql_thread___monitor_galera_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_timeout");
+	mysql_thread___monitor_galera_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_max_timeout_count");
 	mysql_thread___monitor_query_interval=GloMTH->get_variable_int((char *)"monitor_query_interval");
 	mysql_thread___monitor_query_timeout=GloMTH->get_variable_int((char *)"monitor_query_timeout");
 	mysql_thread___monitor_slave_lag_when_null=GloMTH->get_variable_int((char *)"monitor_slave_lag_when_null");
@@ -3792,6 +3826,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
+	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
 	variables.query_cache_stores_empty_result=(bool)GloMTH->get_variable_int((char *)"query_cache_stores_empty_result");
@@ -3869,17 +3904,23 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.ConnPool_get_conn_immediate=0;
 	status_variables.ConnPool_get_conn_success=0;
 	status_variables.ConnPool_get_conn_failure=0;
+	status_variables.ConnPool_get_conn_latency_awareness=0;
 	status_variables.active_transactions=0;
 	status_variables.gtid_session_collected = 0;
 	status_variables.generated_pkt_err = 0;
 	status_variables.max_connect_timeout_err = 0;
+	status_variables.backend_lagging_during_query = 0;
+	status_variables.backend_offline_during_query = 0;
+	status_variables.queries_with_max_lag_ms = 0;
 	status_variables.unexpected_com_quit = 0;
 	status_variables.unexpected_packet = 0;
 	status_variables.killed_connections = 0;
 	status_variables.killed_queries = 0;
+	status_variables.aws_aurora_replicas_skipped_during_query = 0;
 
 	match_regexes=NULL;
 
+	variables.min_num_servers_lantency_awareness = 1000;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
@@ -4343,6 +4384,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			result->add_row(pta);
 		}
 	}
+	{	// ConnPool_get_conn_latency_awareness
+		pta[0]=(char *)"ConnPool_get_conn_latency_awareness";
+		sprintf(buf,"%llu",get_ConnPool_get_conn_latency_awareness());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// ConnPool_get_conn_immediate
 		pta[0]=(char *)"ConnPool_get_conn_immediate";
 		sprintf(buf,"%llu",get_ConnPool_get_conn_immediate());
@@ -4373,6 +4420,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// backend_lagging_during_query
+		pta[0]=(char *)"backend_lagging_during_query";
+		sprintf(buf,"%llu",get_backend_lagging_during_query());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// backend_offline_during_query
+		pta[0]=(char *)"backend_offline_during_query";
+		sprintf(buf,"%llu",get_backend_offline_during_query());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// queries_with_max_lag_ms
+		pta[0]=(char *)"queries_with_max_lag_ms";
+		sprintf(buf,"%llu",get_queries_with_max_lag_ms());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Unexpected COM_QUIT
 		pta[0]=(char *)"mysql_unexpected_frontend_com_quit";
 		sprintf(buf,"%llu",get_unexpected_com_quit());
@@ -4382,6 +4447,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Unexpected packet
 		pta[0]=(char *)"mysql_unexpected_frontend_packets";
 		sprintf(buf,"%llu",get_unexpected_packet());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// AWS Aurora replicas skipped during query
+		pta[0]=(char *)"aws_aurora_replicas_skipped_during_query";
+		sprintf(buf,"%llu",get_aws_aurora_replicas_skipped_during_query());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5156,7 +5227,7 @@ void MySQL_Thread::Get_Memory_Stats() {
 }
 
 
-MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid) {
+MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	unsigned int i;
 	unsigned int bc = 0; // best candidate
 	bool pcf = false; // possible candidate found
@@ -5210,6 +5281,12 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 			} else {
 //				c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 
+				if (max_lag_ms >= 0) {
+					if (max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
+						status_variables.aws_aurora_replicas_skipped_during_query++;
+						continue;
+					}
+				}
 				if (pcf == false) {
 					bc = i;
 					pcf = true;
@@ -5278,6 +5355,19 @@ void MySQL_Thread::return_local_connections() {
 	}
 }
 
+unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_latency_awareness() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_latency_awareness,0);
+		}
+	}
+	return q;
+}
+
 unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {
 	unsigned long long q=0;
 	unsigned int i;
@@ -5330,6 +5420,45 @@ unsigned long long MySQL_Threads_Handler::get_generated_pkt_err() {
 	return q;
 }
 
+unsigned long long MySQL_Threads_Handler::get_backend_lagging_during_query() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.backend_lagging_during_query,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_backend_offline_during_query() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.backend_offline_during_query,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms,0);
+		}
+	}
+	return q;
+}
+
 unsigned long long MySQL_Threads_Handler::get_max_connect_timeout() {
 	unsigned long long q=0;
 	unsigned int i;
@@ -5364,6 +5493,19 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_packet() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.unexpected_packet,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_aws_aurora_replicas_skipped_during_query() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.aws_aurora_replicas_skipped_during_query,0);
 		}
 	}
 	return q;
