@@ -733,10 +733,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["status"]["compression"] = client_myds->myconn->get_status_compression();
 	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status_transaction();
 	j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
-	for (unsigned int i=0; i<mybes->len; i++) {
+	for (unsigned int k=0; k<mybes->len; k++) {
 		MySQL_Backend *_mybe = NULL;
-		_mybe=(MySQL_Backend *)mybes->index(i);
-		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
+		_mybe=(MySQL_Backend *)mybes->index(k);
+		unsigned int i = _mybe->hostgroup_id;
+		j["backends"][i]["hostgroup_id"] = i;
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
 			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
