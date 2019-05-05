@@ -10,6 +10,15 @@
 
 #include "ev.h"
 
+#include <mutex>
+
+#define USE_MYSRVC_ARRAY
+
+#ifdef USE_MYSRVC_ARRAY
+static unsigned long long array_mysrvc_total = 0;
+static unsigned long long array_mysrvc_cands = 0;
+#endif // USE_MYSRVC_ARRAY
+
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
     rc=sqlite3_step(_stmt);\
@@ -814,6 +823,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	use_ssl=_use_ssl;
 	max_latency_us=_max_latency_ms*1000;
 	current_latency_us=0;
+	aws_aurora_current_lag_us = 0;
 	connect_OK=0;
 	connect_ERR=0;
 	queries_sent=0;
@@ -950,6 +960,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&readonly_mutex, NULL);
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);
+	pthread_mutex_init(&AWS_Aurora_Info_mutex, NULL);
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_init(&lock, NULL);
 #else
@@ -967,10 +978,12 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
+	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
 	MyHostGroups=new PtrArray();
 	incoming_replication_hostgroups=NULL;
 	incoming_group_replication_hostgroups=NULL;
 	incoming_galera_hostgroups=NULL;
+	incoming_aws_aurora_hostgroups = NULL;
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
 	gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
@@ -1391,6 +1404,13 @@ bool MySQL_HostGroups_Manager::commit() {
 		generate_mysql_galera_hostgroups_table();
 	}
 
+	// AWS Aurora
+	if (incoming_aws_aurora_hostgroups) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_aws_aurora_hostgroups\n");
+		mydb->execute("DELETE FROM mysql_aws_aurora_hostgroups");
+		generate_mysql_aws_aurora_hostgroups_table();
+	}
+
 
 	if ( GloAdmin && GloAdmin->checksum_variables.checksum_mysql_servers ) {
 		uint64_t hash1=0, hash2=0;
@@ -1509,6 +1529,25 @@ bool MySQL_HostGroups_Manager::commit() {
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
 			char *query=(char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup";
+			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			if (resultset) {
+				if (resultset->rows_count) {
+					if (init == false) {
+						init = true;
+						myhash.Init(19,3);
+					}
+					uint64_t hash1_ = resultset->raw_checksum();
+					myhash.Update(&hash1_, sizeof(hash1_));
+				}
+				delete resultset;
+			}
+		}
+		{
+			char *error=NULL;
+			int cols=0;
+			int affected_rows=0;
+			SQLite3_result *resultset=NULL;
+			char *query=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
 			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 			if (resultset) {
 				if (resultset->rows_count) {
@@ -1775,12 +1814,25 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		mydb->execute_statement((char *)"SELECT * FROM mysql_servers", &error , &cols , &affected_rows , &resultset);
+		if (_onlyhg==NULL) {
+			mydb->execute_statement((char *)"SELECT hostgroup_id hid, hostname, port, gtid_port gtid, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM mysql_servers", &error , &cols , &affected_rows , &resultset);
+		} else {
+			int hidonly=*_onlyhg;
+			char *q1 = (char *)malloc(256);
+			sprintf(q1,"SELECT hostgroup_id hid, hostname, port, gtid_port gtid, weight, status, compression cmp, max_connections max_conns, max_replication_lag max_lag, use_ssl ssl, max_latency_ms max_lat, comment, mem_pointer FROM mysql_servers WHERE hostgroup_id=%d" , hidonly);
+			mydb->execute_statement(q1, &error , &cols , &affected_rows , &resultset);
+			free(q1);
+		}
 		if (error) {
 			proxy_error("Error on read from mysql_servers : %s\n", error);
 		} else {
 			if (resultset) {
-				proxy_info("Dumping mysql_servers\n");
+				if (_onlyhg==NULL) {
+					proxy_info("Dumping mysql_servers: ALL\n");
+				} else {
+					int hidonly=*_onlyhg;
+					proxy_info("Dumping mysql_servers: HG %d\n", hidonly);
+				}
 				resultset->dump_to_stderr();
 			}
 		}
@@ -1902,7 +1954,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port";
+		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->Group_Replication_Hosts_resultset) {
@@ -1997,7 +2049,7 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port";
+		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->Galera_Hosts_resultset) {
@@ -2065,6 +2117,19 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_galera_hostgroups() 
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	wrunlock();
+	return resultset;
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroups() {
+	wrlock();
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment FROM mysql_aws_aurora_hostgroups";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
@@ -2156,12 +2221,28 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
+MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
+#ifdef USE_MYSRVC_ARRAY
+#ifdef TEST_AURORA
+	unsigned long long a1 = array_mysrvc_total/10000;
+	array_mysrvc_total += l;
+	unsigned long long a2 = array_mysrvc_total/10000;
+	if (a2 > a1) {
+		fprintf(stderr, "Total: %llu, Candidates: %llu\n", array_mysrvc_total-l, array_mysrvc_cands);
+	}
+#endif // TEST_AURORA
+	MySrvC *mysrvcCandidates_static[32];
+	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
+	unsigned int num_candidates = 0;
+	if (l>32) {
+		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
+	}
+#endif // USE_MYSRVC_ARRAY
 	if (l) {
 		//int j=0;
 		for (j=0; j<l; j++) {
@@ -2173,10 +2254,31 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+								mysrvcCandidates[num_candidates]=mysrvc;
+								num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 							}
 						} else {
-							sum+=mysrvc->weight;
-							TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+							if (max_lag_ms >= 0) {
+								if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+									sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+									mysrvcCandidates[num_candidates]=mysrvc;
+									num_candidates++;
+#endif // USE_MYSRVC_ARRAY
+								} else {
+									sess->thread->status_variables.aws_aurora_replicas_skipped_during_query++;
+								}
+							} else {
+								sum+=mysrvc->weight;
+								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+								mysrvcCandidates[num_candidates]=mysrvc;
+								num_candidates++;
+#endif // USE_MYSRVC_ARRAY
+							}
 						}
 					}
 				}
@@ -2212,10 +2314,29 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+											mysrvcCandidates[num_candidates]=mysrvc;
+											num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 										}
 									} else {
-										sum+=mysrvc->weight;
-										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+										if (max_lag_ms >= 0) {
+											if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+												sum+=mysrvc->weight;
+												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+												mysrvcCandidates[num_candidates]=mysrvc;
+												num_candidates++;
+#endif // USE_MYSRVC_ARRAY
+											}
+										} else {
+											sum+=mysrvc->weight;
+											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+											mysrvcCandidates[num_candidates]=mysrvc;
+											num_candidates++;
+#endif // USE_MYSRVC_ARRAY
+										}
 									}
 								}
 							}
@@ -2248,10 +2369,29 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+									mysrvcCandidates[num_candidates]=mysrvc;
+									num_candidates++;
+#endif // USE_MYSRVC_ARRAY
 								}
 							} else {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+								if (max_lag_ms >= 0) {
+									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+										sum+=mysrvc->weight;
+										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+										mysrvcCandidates[num_candidates]=mysrvc;
+										num_candidates++;
+#endif // USE_MYSRVC_ARRAY
+									}
+								} else {
+									sum+=mysrvc->weight;
+									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+									mysrvcCandidates[num_candidates]=mysrvc;
+									num_candidates++;
+#endif // USE_MYSRVC_ARRAY
+								}
 							}
 						}
 					}
@@ -2260,6 +2400,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 		}
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+#ifdef USE_MYSRVC_ARRAY
+			if (l>32) {
+				free(mysrvcCandidates);
+			}
+			array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
@@ -2267,32 +2413,117 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 		unsigned int New_TotalUsedConn=0;
 
 		// we will now scan again to ignore overloaded servers
+#ifdef USE_MYSRVC_ARRAY
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+#else
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+#endif // USE_MYSRVC_ARRAY
 				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
+#ifdef USE_MYSRVC_ARRAY
+#else
+
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+#endif // USE_MYSRVC_ARRAY
 						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+
+#ifdef USE_MYSRVC_ARRAY
+							New_sum+=mysrvc->weight;
+							New_TotalUsedConn+=len;
+#else
 							if (gtid_trxid) {
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									New_sum+=mysrvc->weight;
 									New_TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								}
 							} else {
-								New_sum+=mysrvc->weight;
-								New_TotalUsedConn+=len;
+								if (max_lag_ms >= 0) {
+									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+										New_sum+=mysrvc->weight;
+										New_TotalUsedConn+=len;
+									}
+								} else {
+									New_sum+=mysrvc->weight;
+									New_TotalUsedConn+=len;
+								}
 							}
+#endif // USE_MYSRVC_ARRAY
+#ifdef USE_MYSRVC_ARRAY
+						} else {
+							// remove the candidate
+							if (j+1 < num_candidates) {
+								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+							}
+							j--;
+							num_candidates--;
+#endif // USE_MYSRVC_ARRAY
 						}
+#ifdef USE_MYSRVC_ARRAY
+#else
+					}
+				}
+			}
+#endif // USE_MYSRVC_ARRAY
+		}
+
+
+		if (New_sum==0) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+#ifdef USE_MYSRVC_ARRAY
+			if (l>32) {
+				free(mysrvcCandidates);
+			}
+			array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
+			return NULL; // if we reach here, we couldn't find any target
+		}
+
+#ifdef USE_MYSRVC_ARRAY
+		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
+		if (sess->thread->variables.min_num_servers_lantency_awareness) {
+			if (num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+				unsigned int servers_with_latency = 0;
+				unsigned int total_latency_us = 0;
+				// scan and verify that all servers have some latency
+				for (j=0; j<num_candidates; j++) {
+					mysrvc = mysrvcCandidates[j];
+					if (mysrvc->current_latency_us) {
+						servers_with_latency++;
+						total_latency_us += mysrvc->current_latency_us;
+					}
+				}
+				if (servers_with_latency == num_candidates) {
+					// all servers have some latency.
+					// That is good. If any server have no latency, something is wrong
+					// and we will skip this algorithm
+					sess->thread->status_variables.ConnPool_get_conn_latency_awareness++;
+					unsigned int avg_latency_us = 0;
+					avg_latency_us = total_latency_us/num_candidates;
+					for (j=0; j<num_candidates; j++) {
+						mysrvc = mysrvcCandidates[j];
+						if (mysrvc->current_latency_us > avg_latency_us) {
+							// remove the candidate
+							if (j+1 < num_candidates) {
+								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+							}
+							j--;
+							num_candidates--;
+						}
+					}
+					// we scan again to adjust weight
+					New_sum = 0;
+					for (j=0; j<num_candidates; j++) {
+						mysrvc = mysrvcCandidates[j];
+						New_sum+=mysrvc->weight;
 					}
 				}
 			}
 		}
+#endif // USE_MYSRVC_ARRAY
 
-		if (New_sum==0) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
-			return NULL; // if we reach here, we couldn't find any target
-		}
 
 		unsigned int k;
 		if (New_sum > 32768) {
@@ -2300,9 +2531,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 		} else {
 			k=fastrand()%New_sum;
 		}
-  	k++;
+		k++;
 		New_sum=0;
 
+#ifdef USE_MYSRVC_ARRAY
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+#else
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
@@ -2310,25 +2545,51 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid) {
 				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+#endif // USE_MYSRVC_ARRAY
+#ifdef USE_MYSRVC_ARRAY
+							New_sum+=mysrvc->weight;
+#else
 							if (gtid_trxid) {
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									New_sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+									//TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length(); // this line is a bug
 								}
 							} else {
-								New_sum+=mysrvc->weight;
+								if (max_lag_ms >= 0) {
+									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+										New_sum+=mysrvc->weight;
+									}
+								} else {
+									New_sum+=mysrvc->weight;
+								}
 							}
+#endif // USE_MYSRVC_ARRAY
 							if (k<=New_sum) {
 								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+#ifdef USE_MYSRVC_ARRAY
+								if (l>32) {
+									free(mysrvcCandidates);
+								}
+								array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
 								return mysrvc;
 							}
+#ifdef USE_MYSRVC_ARRAY
+#else
 						}
 					}
 				}
 			}
+#endif // USE_MYSRVC_ARRAY
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
+#ifdef USE_MYSRVC_ARRAY
+	if (l>32) {
+		free(mysrvcCandidates);
+	}
+	array_mysrvc_cands += num_candidates;
+#endif // USE_MYSRVC_ARRAY
 	return NULL; // if we reach here, we couldn't find any target
 }
 
@@ -2413,12 +2674,16 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	return NULL; // never reach here
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
-	MySrvC *mysrvc=myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid);
+	MySrvC *mysrvc = NULL;
+#ifdef TEST_AURORA
+	for (int i=0; i<10; i++)
+#endif // TEST_AURORA
+	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {
@@ -2642,6 +2907,14 @@ void MySQL_HostGroups_Manager::set_incoming_galera_hostgroups(SQLite3_result *s)
 		incoming_galera_hostgroups = NULL;
 	}
 	incoming_galera_hostgroups=s;
+}
+
+void MySQL_HostGroups_Manager::set_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
+	if (incoming_aws_aurora_hostgroups) {
+		delete incoming_aws_aurora_hostgroups;
+		incoming_aws_aurora_hostgroups = NULL;
+	}
+	incoming_aws_aurora_hostgroups=s;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
@@ -4125,6 +4398,8 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 }
 
 void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
+	std::mutex local_mutex;
+	std::lock_guard<std::mutex> lock(local_mutex);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -4224,6 +4499,9 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			mydb->execute(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
@@ -4799,3 +5077,652 @@ SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
 	pthread_mutex_unlock(&mysql_errors_mutex);
 	return result;
 }
+
+AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int ml, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
+	comment=NULL;
+	if (c) {
+		comment=strdup(c);
+	}
+	writer_hostgroup=w;
+	reader_hostgroup=r;
+	max_lag_ms=ml;
+	check_interval_ms=ci;
+	check_timeout_ms=ct;
+	writer_is_also_reader=wiar;
+	new_reader_weight=nrw;
+	active=_a;
+	__active=true;
+	//need_converge=true;
+	aurora_port = _port;
+	endpoint_address = strdup(_end_addr);
+}
+
+AWS_Aurora_Info::~AWS_Aurora_Info() {
+	if (comment) {
+		free(comment);
+		comment=NULL;
+	}
+	if (endpoint_address) {
+		free(endpoint_address);
+		endpoint_address=NULL;
+	}
+}
+
+bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int ml, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
+	bool ret=false;
+	__active=true;
+	if (reader_hostgroup!=r) {
+		reader_hostgroup=r;
+		ret=true;
+	}
+	if (max_lag_ms!=ml) {
+		max_lag_ms=ml;
+		ret=true;
+	}
+	if (check_interval_ms!=ci) {
+		check_interval_ms=ci;
+		ret=true;
+	}
+	if (check_timeout_ms!=ct) {
+		check_timeout_ms=ct;
+		ret=true;
+	}
+	if (writer_is_also_reader != wiar) {
+		writer_is_also_reader = wiar;
+		ret = true;
+	}
+	if (new_reader_weight != nrw) {
+		new_reader_weight = nrw;
+		ret = true;
+	}
+	if (active!=_a) {
+		active=_a;
+		ret=true;
+	}
+	if (aurora_port != _port) {
+		aurora_port = _port;
+		ret = true;
+	}
+	if (endpoint_address) {
+		if (_end_addr) {
+			if (strcmp(endpoint_address,_end_addr)) {
+				free(endpoint_address);
+				endpoint_address = strdup(_end_addr);
+				ret = true;
+			}
+		} else {
+			free(endpoint_address);
+			endpoint_address=NULL;
+			ret = true;
+		}
+	} else {
+		if (_end_addr) {
+			endpoint_address=strdup(_end_addr);
+			ret = true;
+		}
+	}
+	// for comment we don't change return value
+	if (comment) {
+		if (c) {
+			if (strcmp(comment,c)) {
+				free(comment);
+				comment=strdup(c);
+			}
+		} else {
+			free(comment);
+			comment=NULL;
+		}
+	} else {
+		if (c) {
+			comment=strdup(c);
+		}
+	}
+	return ret;
+}
+
+void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
+	if (incoming_aws_aurora_hostgroups==NULL) {
+		return;
+	}
+	int rc;
+	sqlite3_stmt *statement=NULL;
+	sqlite3 *mydb3=mydb->get_db();
+	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	assert(rc==SQLITE_OK);
+	proxy_info("New mysql_aws_aurora_hostgroups table\n");
+	pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+	for (std::map<int , AWS_Aurora_Info *>::iterator it1 = AWS_Aurora_Info_Map.begin() ; it1 != AWS_Aurora_Info_Map.end(); ++it1) {
+		AWS_Aurora_Info *info=NULL;
+		info=it1->second;
+		info->__active=false;
+	}
+	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_aurora_hostgroups->rows.begin() ; it != incoming_aws_aurora_hostgroups->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int writer_hostgroup=atoi(r->fields[0]);
+		int reader_hostgroup=atoi(r->fields[1]);
+		int active=atoi(r->fields[2]);
+		int aurora_port = atoi(r->fields[3]);
+		int max_lag_ms = atoi(r->fields[5]);
+		int check_interval_ms = atoi(r->fields[6]);
+		int check_timeout_ms = atoi(r->fields[7]);
+		int writer_is_also_reader = atoi(r->fields[8]);
+		int new_reader_weight = atoi(r->fields[9]);
+		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%d,\"%s\",%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,(active ? "on" : "off"),aurora_port,r->fields[4],max_lag_ms,check_interval_ms,check_timeout_ms,r->fields[10]);
+		rc=sqlite3_bind_int64(statement, 1, writer_hostgroup); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 2, reader_hostgroup); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 3, active); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 4, aurora_port); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 6, max_lag_ms); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 7, check_interval_ms); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 8, check_timeout_ms); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 9, writer_is_also_reader); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement, 10, new_reader_weight); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
+		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		std::map<int , AWS_Aurora_Info *>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(writer_hostgroup);
+		AWS_Aurora_Info *info=NULL;
+		if (it2!=AWS_Aurora_Info_Map.end()) {
+			info=it2->second;
+			bool changed=false;
+			changed=info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, r->fields[10]);
+			if (changed) {
+				//info->need_converge=true;
+			}
+		} else {
+			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, r->fields[10]);
+			//info->need_converge=true;
+			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, AWS_Aurora_Info *>(writer_hostgroup,info));
+		}
+	}
+	sqlite3_finalize(statement);
+	delete incoming_aws_aurora_hostgroups;
+	incoming_aws_aurora_hostgroups=NULL;
+
+	// remove missing ones
+	for (auto it3 = AWS_Aurora_Info_Map.begin(); it3 != AWS_Aurora_Info_Map.end(); ) {
+		AWS_Aurora_Info *info=it3->second;
+		if (info->__active==false) {
+			delete info;
+			it3 = AWS_Aurora_Info_Map.erase(it3);
+		} else {
+			it3++;
+		}
+	}
+	// TODO: it is now time to compute all the changes
+
+
+	// it is now time to build a new structure in Monitor
+	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	{
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl , max_lag_ms , check_interval_ms , check_timeout_ms FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
+		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		if (resultset) {
+			if (GloMyMon->AWS_Aurora_Hosts_resultset) {
+				delete GloMyMon->AWS_Aurora_Hosts_resultset;
+			}
+			GloMyMon->AWS_Aurora_Hosts_resultset=resultset;
+			GloMyMon->AWS_Aurora_Hosts_resultset_checksum=resultset->raw_checksum();
+		}
+	}
+	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+
+	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+}
+
+
+
+//void MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, float current_replication_lag, bool enable, bool verbose) {
+// this function returns false is the server is in the wrong HG
+bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *_server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose) {
+	bool ret = false; // return false by default
+	bool reader_found_in_whg = false;
+	if (is_writer) {
+		// if the server is a writer, we will set ret back to true once found
+		ret = false;
+	}
+	unsigned port = 3306;
+	char *endpoint_address = strdup((char *)"");
+	{
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		std::map<int , AWS_Aurora_Info *>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(_whid);
+		AWS_Aurora_Info *info=NULL;
+		if (it2!=AWS_Aurora_Info_Map.end()) {
+			info=it2->second;
+			if (info->endpoint_address) {
+				free(endpoint_address);
+				endpoint_address = strdup(info->endpoint_address);
+			}
+			port = info->aurora_port;
+		}
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
+	char *address = (char *)malloc(strlen(_server_id)+strlen(endpoint_address)+1);
+	sprintf(address,"%s%s",_server_id,endpoint_address);
+	GloAdmin->mysql_servers_wrlock();
+	wrlock();
+	int i,j;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (_whid!=(int)myhgc->hid && _rhid!=(int)myhgc->hid) continue;
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+				// we found the server
+				if (enable==false) {
+					if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
+						if (verbose) {
+							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
+						}
+						mysrvc->status = MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+					}
+				} else {
+					if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+						if (verbose) {
+							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
+						}
+						mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+					}
+				}
+				mysrvc->aws_aurora_current_lag_us = current_replication_lag_ms * 1000;
+				if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE || mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+					// we perform check only if ONLINE or lagging
+					if (ret) {
+						if (_whid==(int)myhgc->hid && is_writer==false) {
+							// the server should be a reader
+							// but it is in the writer hostgroup
+							ret = false;
+							reader_found_in_whg == true;
+						}
+					} else {
+						if (is_writer==true) {
+							if (_whid==(int)myhgc->hid) {
+								// the server should be a writer
+								// and we found it in the writer hostgroup
+								ret = true;
+							}
+						} else {
+							if (_rhid==(int)myhgc->hid) {
+								// the server should be a reader
+								// and we found it in the reader hostgroup
+								ret = true;
+							}
+						}
+					}
+				}
+				//goto __exit_aws_aurora_replication_lag_action;
+			}
+		}
+	}
+//__exit_aws_aurora_replication_lag_action:
+	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
+	if (ret == true) {
+		if (reader_found_in_whg == true) {
+			ret = false;
+		}
+	}
+	free(address);
+	free(endpoint_address);
+	return ret;
+}
+
+// FIXME: complete this!!
+void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool verbose) {
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=NULL;
+	char *q=NULL;
+	char *error=NULL;
+	//q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3";
+
+	int writer_is_also_reader=0;
+	int new_reader_weight = 0;
+	bool found_writer=false;
+	bool found_reader=false;
+	int _writer_hostgroup = _whid;
+	int aurora_port = 3306;
+	char *endpoint_address = strdup((char *)"");
+	int read_HG=-1;
+	{
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		std::map<int , AWS_Aurora_Info *>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(_writer_hostgroup);
+		AWS_Aurora_Info *info=NULL;
+		if (it2!=AWS_Aurora_Info_Map.end()) {
+			info=it2->second;
+			writer_is_also_reader=info->writer_is_also_reader;
+			new_reader_weight = info->new_reader_weight;
+			read_HG = info->reader_hostgroup;
+			if (info->endpoint_address) {
+				free(endpoint_address);
+				endpoint_address = strdup(info->endpoint_address);
+			}
+			aurora_port = info->aurora_port;
+		}
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
+
+	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(endpoint_address)+1024*1024);
+	sprintf(query, q, _server_id, endpoint_address, aurora_port);
+	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+	if (error) {
+		free(error);
+		error=NULL;
+	}
+	//free(query);
+
+	if (resultset) {
+/*
+		// let's get info about this cluster
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		std::map<int , AWS_Aurora_Info *>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(_writer_hostgroup);
+		AWS_Aurora_Info *info=NULL;
+		if (it2!=AWS_Aurora_Info_Map.end()) {
+			info=it2->second;
+			writer_is_also_reader=info->writer_is_also_reader;
+			new_reader_weight = info->new_reader_weight;
+			read_HG = info->reader_hostgroup;
+			//need_converge=info->need_converge;
+			//info->need_converge=false;
+			//max_writers = info->max_writers;
+		}
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+*/
+		if (resultset->rows_count) {
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				int hostgroup=atoi(r->fields[0]);
+				if (hostgroup==_writer_hostgroup) {
+					found_writer=true;
+				}
+				if (read_HG>=0) {
+					if (hostgroup==read_HG) {
+						found_reader=true;
+					}
+				}
+			}
+		}
+/*
+		if (need_converge == false) {
+			SQLite3_result *resultset2=NULL;
+			q = (char *)"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
+			query=(char *)malloc(strlen(q)+32);
+			sprintf(query,q,_writer_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count) {
+					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int nwriters = atoi(r->fields[0]);
+						if (nwriters > max_writers) {
+							proxy_warning("Galera: too many writers in HG %d. Max=%d, current=%d\n", _writer_hostgroup, max_writers, nwriters);
+							need_converge = true;
+						}
+					}
+				}
+				delete resultset2;
+			}
+			free(query);
+		}
+*/
+//		if (need_converge==false) {
+			if (found_writer) { // maybe no-op
+				if (
+					(writer_is_also_reader==0 && found_reader==false)
+					||
+					(writer_is_also_reader > 0 && found_reader==true)
+				) { // either both true or both false
+					delete resultset;
+					resultset=NULL;
+				}
+			}
+//		}
+	}
+
+	if (resultset) {
+		// If we reach there, there is some action to perform.
+		// This should be the case most of the time,
+		// because the calling function knows if an action is required.
+		if (resultset->rows_count) {
+			//need_converge=false;
+
+			GloAdmin->mysql_servers_wrlock();
+			mydb->execute("DELETE FROM mysql_servers_incoming");
+			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id<>%d";
+			sprintf(query,q,_writer_hostgroup);	
+			mydb->execute(query);
+			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
+			sprintf(query, q, _writer_hostgroup, _server_id, endpoint_address, aurora_port);
+			mydb->execute(query);
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
+			sprintf(query, q, _writer_hostgroup, _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query, q, _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query, q, _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+			mydb->execute(query);
+
+			// we need to move the old writer into the reader HG
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE status=3 AND hostgroup_id=%d";
+			sprintf(query,q,_rhid);
+			mydb->execute(query);
+			q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, %d, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
+			sprintf(query,q,_rhid, new_reader_weight, _whid);
+			mydb->execute(query);
+
+			//free(query);
+			if (writer_is_also_reader && read_HG>=0) {
+				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
+				sprintf(query, q, read_HG, _writer_hostgroup, _server_id, endpoint_address, aurora_port);
+				mydb->execute(query);
+				q = (char *)"UPDATE mysql_servers_incoming SET weight=%d WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
+				sprintf(query, q, new_reader_weight, read_HG, _server_id, endpoint_address, aurora_port);
+			}
+			uint64_t checksum_current = 0;
+			uint64_t checksum_incoming = 0;
+			{
+				int cols=0;
+				int affected_rows=0;
+				SQLite3_result *resultset_servers=NULL;
+				char *query=NULL;
+				char *q1 = NULL;
+				char *q2 = NULL;
+				char *error=NULL;
+				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers_incoming.comment FROM mysql_servers_incoming JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				query = (char *)malloc(strlen(q2)+128);
+				sprintf(query,q1,_writer_hostgroup);
+				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+				if (error == NULL) {
+					if (resultset_servers) {
+						checksum_current = resultset_servers->raw_checksum();
+					}
+				}
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = NULL;
+				}
+				sprintf(query,q2,_writer_hostgroup);
+				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+				if (error == NULL) {
+					if (resultset_servers) {
+						checksum_incoming = resultset_servers->raw_checksum();
+					}
+				}
+				if (resultset_servers) {
+					delete resultset_servers;
+					resultset_servers = NULL;
+				}
+				free(query);
+			}
+			if (checksum_incoming!=checksum_current) {
+				proxy_warning("AWS Aurora: setting host %s%s:%d as writer\n", _server_id, endpoint_address, aurora_port);
+				commit();
+				wrlock();
+/*
+				SQLite3_result *resultset2=NULL;
+				q=(char *)"SELECT writer_hostgroup, reader_hostgroup FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=%d";
+				sprintf(query,q,_writer_hostgroup);
+				mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+				if (resultset2) {
+					if (resultset2->rows_count) {
+						for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+							SQLite3_row *r=*it;
+							int writer_hostgroup=atoi(r->fields[0]);
+							int reader_hostgroup=atoi(r->fields[1]);
+*/
+							q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
+							sprintf(query,q,_whid,_rhid);
+							mydb->execute(query);
+							generate_mysql_servers_table(&_whid);
+							generate_mysql_servers_table(&_rhid);
+/*
+						}
+					}
+					delete resultset2;
+					resultset2=NULL;
+				}
+*/
+				wrunlock();
+			} else {
+				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+					proxy_warning("AWS Aurora: skipping setting node %s%s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+				}
+			}
+			GloAdmin->mysql_servers_wrunlock();
+			free(query);
+			query = NULL;
+		}
+	}
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+	if (query) {
+		free(query);
+	}
+	free(endpoint_address);
+}
+
+void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id) {
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *query=NULL;
+	char *q=NULL;
+	char *error=NULL;
+	int _writer_hostgroup = _whid;
+	int aurora_port = 3306;
+	char *endpoint_address = strdup((char *)"");
+	{
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		std::map<int , AWS_Aurora_Info *>::iterator it2;
+		it2 = AWS_Aurora_Info_Map.find(_writer_hostgroup);
+		AWS_Aurora_Info *info=NULL;
+		if (it2!=AWS_Aurora_Info_Map.end()) {
+			info=it2->second;
+			if (info->endpoint_address) {
+				free(endpoint_address);
+				endpoint_address = strdup(info->endpoint_address);
+			}
+			aurora_port = info->aurora_port;
+		}
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3";
+	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(endpoint_address)+32);
+	sprintf(query, q, _server_id, endpoint_address, aurora_port);
+	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+	if (error) {
+		free(error);
+		error=NULL;
+	}
+	free(query);
+	if (resultset) { // we lock only if needed
+		if (resultset->rows_count) {
+			proxy_warning("AWS Aurora: setting host %s%s:%d (part of cluster with writer_hostgroup=%d) in a reader, moving from writer_hostgroup %d to reader_hostgroup %d\n", _server_id, endpoint_address, aurora_port, _whid, _whid, _rhid);
+			GloAdmin->mysql_servers_wrlock();
+			mydb->execute("DELETE FROM mysql_servers_incoming");
+			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
+			query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(endpoint_address)+512);
+			sprintf(query, q, _rhid, _server_id, endpoint_address, aurora_port, _rhid);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query, q, _server_id, endpoint_address, aurora_port, _rhid);
+			mydb->execute(query);
+			//free(query);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
+			sprintf(query, q, _server_id, endpoint_address, aurora_port, _rhid);
+			mydb->execute(query);
+			//free(query);
+			//converge_galera_config(_writer_hostgroup);
+			commit();
+			wrlock();
+/*
+			SQLite3_result *resultset2=NULL;
+			q=(char *)"SELECT writer_hostgroup, reader_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
+			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+			sprintf(query,q,_writer_hostgroup);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count) {
+					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int writer_hostgroup=atoi(r->fields[0]);
+						int backup_writer_hostgroup=atoi(r->fields[1]);
+						int reader_hostgroup=atoi(r->fields[2]);
+						int offline_hostgroup=atoi(r->fields[3]);
+*/
+						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
+						sprintf(query,q,_whid,_rhid);
+						mydb->execute(query);
+						generate_mysql_servers_table(&_whid);
+						generate_mysql_servers_table(&_rhid);
+/*
+						generate_mysql_servers_table(&writer_hostgroup);
+						generate_mysql_servers_table(&backup_writer_hostgroup);
+						generate_mysql_servers_table(&reader_hostgroup);
+						generate_mysql_servers_table(&offline_hostgroup);
+					}
+				}
+				delete resultset2;
+				resultset2=NULL;
+			}
+*/
+			wrunlock();
+			GloAdmin->mysql_servers_wrunlock();
+			free(query);
+		}
+	}
+	if (resultset) {
+		delete resultset;
+		resultset=NULL;
+	}
+	free(endpoint_address);
+}
+
+

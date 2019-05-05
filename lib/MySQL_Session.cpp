@@ -2594,6 +2594,9 @@ __get_pkts_from_client:
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (qpo->max_lag_ms >= 0) {
+										thread->status_variables.queries_with_max_lag_ms++;
+									}
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 										thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
@@ -3307,7 +3310,13 @@ handler_again:
 								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
 							}
 							bool retry_conn=false;
-							proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+							if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+								thread->status_variables.backend_lagging_during_query++;
+								proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+							} else {
+								thread->status_variables.backend_offline_during_query++;
+								proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+							}
 							if (myds->query_retries_on_failure > 0) {
 								myds->query_retries_on_failure--;
 								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -3858,8 +3867,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		(handshake_response_return == true) 
 		&&
 		(
-			//(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
+#if defined(TEST_AURORA) || defined(TEST_GALERA)
+			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
+#else
 			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) )
+#endif // TEST_AURORA || TEST_GALERA
 			||
 			(default_hostgroup == 0 && session_type == PROXYSQL_SESSION_CLICKHOUSE)
 			||
@@ -3903,8 +3915,12 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			//if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				client_authenticated=true;
 				switch (session_type) {
-					case PROXYSQL_SESSION_MYSQL:
 					case PROXYSQL_SESSION_SQLITE:
+#if defined(TEST_AURORA) || defined(TEST_GALERA)
+						free_users=1;
+						break;
+#endif // TEST_AURORA || TEST_GALERA
+					case PROXYSQL_SESSION_MYSQL:
 						if (ldap_ctx==NULL) {
 							free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 						} else {
@@ -4774,6 +4790,19 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		MySQL_Backend * _gtid_from_backend = NULL;
 		char uuid[64];
 		uint64_t trxid = 0;
+		unsigned long long now_us = 0;
+		if (qpo->max_lag_ms >= 0) {
+			if (qpo->max_lag_ms > 360000) { // this is an absolute time, we convert it to relative
+				if (now_us == 0) {
+					now_us = realtime_time();
+				}
+				long long now_ms = now_us/1000;
+				qpo->max_lag_ms -= now_ms;
+				if (qpo->max_lag_ms < 0) {
+					qpo->max_lag_ms = -1; // time expired
+				}
+			}
+		}
 		if (session_fast_forward == false) {
 			if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
@@ -4795,16 +4824,16 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					}
 				}
 				uuid[n]='\0';
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
 			} else {
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms);
 			}
 		}
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid, -1);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, (int)qpo->max_lag_ms);
 			}
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
@@ -4814,6 +4843,15 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			thread->status_variables.ConnPool_get_conn_success++;
 		} else {
 			thread->status_variables.ConnPool_get_conn_failure++;
+		}
+		if (qpo->max_lag_ms >= 0) {
+			if (qpo->max_lag_ms <= 360000) { // this is a relative time , we convert it to absolute
+				if (now_us == 0) {
+					now_us = realtime_time();
+				}
+				long long now_ms = now_us/1000;
+				qpo->max_lag_ms += now_ms;
+			}
 		}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
 	if (mybe->server_myds->myconn==NULL) {

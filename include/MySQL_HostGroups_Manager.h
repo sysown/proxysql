@@ -36,6 +36,9 @@
 
 #define MYHGM_MYSQL_GALERA_HOSTGROUPS "CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1,2)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
 
+#define MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , endpoint_address VARCHAR NOT NULL DEFAULT '' , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
+
+
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
 class MySrvConnList;
@@ -321,6 +324,7 @@ class MySrvC {	// MySQL Server Container
 	enum MySerStatus status;
 	unsigned int compression;
 	unsigned int max_connections;
+	unsigned int aws_aurora_current_lag_us;
 	unsigned int max_replication_lag;
 	unsigned int max_connections_used; // The maximum number of connections that has been opened
 	unsigned int connect_OK;
@@ -380,7 +384,7 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
-	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid);
+	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
 };
 
 class Group_Replication_Info {
@@ -427,6 +431,27 @@ class Galera_Info {
 	~Galera_Info();
 };
 
+class AWS_Aurora_Info {
+	public:
+	int writer_hostgroup;
+	int reader_hostgroup;
+	int aurora_port;
+	int max_lag_ms;
+	int check_interval_ms;
+	int check_timeout_ms;
+	int writer_is_also_reader;
+	int new_reader_weight;
+	// TODO
+	// add intermediary status value, for example the last check time
+	char * endpoint_address;
+	char * comment;
+	bool active;
+	bool __active;
+	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int ml, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	bool update(int r, int _port, char *_end_addr, int ml, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	~AWS_Aurora_Info();
+};
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -459,6 +484,12 @@ class MySQL_HostGroups_Manager {
 
 	pthread_mutex_t Galera_Info_mutex;
 	std::map<int , Galera_Info *> Galera_Info_Map;
+
+	void generate_mysql_aws_aurora_hostgroups_table();
+	SQLite3_result *incoming_aws_aurora_hostgroups;
+
+	pthread_mutex_t AWS_Aurora_Info_mutex;
+	std::map<int , AWS_Aurora_Info *> AWS_Aurora_Info_Map;
 
 	std::thread *HGCU_thread;
 
@@ -523,16 +554,18 @@ class MySQL_HostGroups_Manager {
 	void set_incoming_replication_hostgroups(SQLite3_result *);
 	void set_incoming_group_replication_hostgroups(SQLite3_result *);
 	void set_incoming_galera_hostgroups(SQLite3_result *);
+	void set_incoming_aws_aurora_hostgroups(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
 	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
 	SQLite3_result *dump_table_mysql_galera_hostgroups();
+	SQLite3_result *dump_table_mysql_aws_aurora_hostgroups();
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
@@ -560,6 +593,15 @@ class MySQL_HostGroups_Manager {
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 	void converge_galera_config(int _writer_hostgroup);
+
+	// FIXME : add action functions for AWS Aurora
+	//void aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, float current_replication_lag, bool enable, bool verbose=true);
+	//bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, unsigned int current_replication_lag_us, bool enable, bool is_writer, bool verbose=true);
+	//void update_aws_aurora_set_writer(int _whid, int _rhid, char *address, unsigned int port, bool verbose=true);
+	//void update_aws_aurora_set_reader(int _whid, int _rhid, char *_hostname, int _port);
+	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
+	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
+	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();

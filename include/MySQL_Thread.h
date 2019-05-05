@@ -227,6 +227,7 @@ class MySQL_Thread
 		unsigned long long queries;
 		unsigned long long queries_slow;
 		unsigned long long queries_gtid;
+		unsigned long long queries_with_max_lag_ms;
 		unsigned long long queries_backends_bytes_sent;
 		unsigned long long queries_backends_bytes_recv;
 		unsigned long long queries_frontends_bytes_sent;
@@ -239,18 +240,23 @@ class MySQL_Thread
 		unsigned long long ConnPool_get_conn_immediate;
 		unsigned long long ConnPool_get_conn_success;
 		unsigned long long ConnPool_get_conn_failure;
+		unsigned long long ConnPool_get_conn_latency_awareness;
 		unsigned long long gtid_binlog_collected;
 		unsigned long long gtid_session_collected;
 		unsigned long long generated_pkt_err;
 		unsigned long long max_connect_timeout_err;
+		unsigned long long backend_lagging_during_query;
+		unsigned long long backend_offline_during_query;
 		unsigned long long unexpected_com_quit;
 		unsigned long long unexpected_packet;
 		unsigned long long killed_connections;
 		unsigned long long killed_queries;
+		unsigned long long aws_aurora_replicas_skipped_during_query;
 		unsigned int active_transactions;
 	} status_variables;
 
 	struct {
+		int min_num_servers_lantency_awareness;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
@@ -274,7 +280,7 @@ class MySQL_Thread
   void unregister_session_connection_handler(int idx, bool _new=false);
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
 	void Get_Memory_Stats();
-	MySQL_Connection * get_MyConn_local(unsigned int, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid);
+	MySQL_Connection * get_MyConn_local(unsigned int, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 	void push_MyConn_local(MySQL_Connection *);
 	void return_local_connections();
 	void Scan_Sessions_to_Kill(PtrArray *mysess);
@@ -347,6 +353,7 @@ class MySQL_Threads_Handler
 		int monitor_groupreplication_healthcheck_timeout;
 		int monitor_galera_healthcheck_interval;
 		int monitor_galera_healthcheck_timeout;
+		int monitor_galera_healthcheck_max_timeout_count;
 		int monitor_query_interval;
 		int monitor_query_timeout;
 		int monitor_slave_lag_when_null;
@@ -442,6 +449,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_key;
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
+		int min_num_servers_lantency_awareness;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
@@ -512,10 +520,15 @@ class MySQL_Threads_Handler
 	unsigned long long get_ConnPool_get_conn_immediate();
 	unsigned long long get_ConnPool_get_conn_success();
 	unsigned long long get_ConnPool_get_conn_failure();
+	unsigned long long get_ConnPool_get_conn_latency_awareness();
 	unsigned long long get_generated_pkt_err();
 	unsigned long long get_max_connect_timeout();
 	unsigned long long get_unexpected_com_quit();
 	unsigned long long get_unexpected_packet();
+	unsigned long long get_aws_aurora_replicas_skipped_during_query();
+	unsigned long long get_backend_lagging_during_query();
+	unsigned long long get_backend_offline_during_query();
+	unsigned long long get_queries_with_max_lag_ms();
 	unsigned long long get_killed_connections();
 	unsigned long long get_killed_queries();
 	iface_info *MLM_find_iface_from_fd(int fd) {

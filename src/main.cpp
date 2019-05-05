@@ -1384,6 +1384,8 @@ bool ProxySQL_daemonize_phase3() {
 int main(int argc, const char * argv[]) {
 
 	{
+		MYSQL *my = mysql_init(NULL);
+		mysql_close(my);
 //		cpu_timer t;
 		ProxySQL_Main_init();
 #ifdef DEBUG
@@ -1672,7 +1674,9 @@ finish:
 
 #ifdef RUNNING_ON_VALGRIND
 	if (RUNNING_ON_VALGRIND==0) {
-		dlclose(__mysql_ldap_auth);
+		if (__mysql_ldap_auth) {
+			dlclose(__mysql_ldap_auth);
+		}
 	}
 #endif
 	return 0;

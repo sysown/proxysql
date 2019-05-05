@@ -72,8 +72,9 @@ class Query_Processor_Output {
 	int sticky_conn;
 	int multiplex;
 	int gtid_from_hostgroup;
+	long long max_lag_ms;
 	int log;
-  char *comment; // #643
+	char *comment; // #643
 	std::string *new_query;
 	void * operator new(size_t size) {
 		return l_alloc(size);
@@ -104,6 +105,7 @@ class Query_Processor_Output {
 		sticky_conn=-1;
 		multiplex=-1;
 		gtid_from_hostgroup=-1;
+		max_lag_ms=-1;
 		log=-1;
 		new_query=NULL;
 		error_msg=NULL;

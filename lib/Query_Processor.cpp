@@ -1946,6 +1946,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					qpo->mirror_hostgroup=t;
 				}
 			}
+			if (!strcasecmp(key,"max_lag_ms")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					int t=atoi(value);
+					qpo->max_lag_ms = t;
+				}
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
