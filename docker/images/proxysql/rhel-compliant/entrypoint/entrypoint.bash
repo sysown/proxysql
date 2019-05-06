@@ -22,7 +22,12 @@ else
 fi
 ${MAKE} cleanbuild
 ${MAKE} ${MAKEOPT} "${deps_target}"
-${MAKE} ${MAKEOPT} "${build_target}"
+
+if [[ -z ${build_target} ]] ; then
+  ${MAKE} ${MAKEOPT}
+else
+  ${MAKE} ${MAKEOPT} "${build_target}"
+fi
 
 # Prepare package files and build RPM
 echo "==> Packaging"
