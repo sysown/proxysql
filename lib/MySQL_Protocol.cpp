@@ -765,9 +765,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 	memcpy(_ptr+l,&charset,sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l,&column_length,sizeof(uint32_t)); l+=sizeof(uint32_t);
 	_ptr[l]=type; l++;
-	uint16_t flags_ = flags;
-	flags_ = flags_ & ~NUM_FLAG;
-	memcpy(_ptr+l,&flags_,sizeof(uint16_t)); l+=sizeof(uint16_t);
+	memcpy(_ptr+l,&flags,sizeof(uint16_t)); l+=sizeof(uint16_t);
 	_ptr[l]=decimals; l++;
 	_ptr[l]=0x00; l++;
 	_ptr[l]=0x00; l++;
