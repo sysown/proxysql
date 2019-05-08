@@ -4195,7 +4195,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 	sprintf(query,q,_hostname,_port);
 
@@ -4334,7 +4334,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4414,7 +4414,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
   mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
