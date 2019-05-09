@@ -8186,7 +8186,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (resultset) delete resultset;
 	resultset=NULL;
 
-#ifdef AURORA_TEST // temporary enabled only for testing purpose
+#ifdef TEST_AURORA // temporary enabled only for testing purpose
 	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a LEFT JOIN mysql_aws_aurora_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL";
 #else
 	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a WHERE 1=0";
