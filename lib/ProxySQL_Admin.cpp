@@ -81,6 +81,12 @@ int sqlite3_json_init(
         } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
+typedef struct _arg_mysql_adm_t {
+	struct sockaddr * addr;
+	socklen_t addr_size;
+	int client_t;
+} arg_mysql_adm;
+
 void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
 	unsigned char ch;
 	size_t i, j;
@@ -3389,7 +3395,11 @@ void *child_mysql(void *arg) {
 		}
 	}
 
-	int client = *(int *)arg;
+	arg_mysql_adm *myarg = (arg_mysql_adm *)arg;
+	int client = myarg->client_t;
+
+	//struct sockaddr *addr = arg->addr;
+	//socklen_t addr_size;
 
 	GloMTH->wrlock();
 	{
@@ -3413,9 +3423,34 @@ void *child_mysql(void *arg) {
 	sess->handler_function=admin_session_handler;
 	MySQL_Data_Stream *myds=sess->client_myds;
 
+	sess->client_myds->client_addrlen=myarg->addr_size;
+	sess->client_myds->client_addr=myarg->addr;
+
+	switch (sess->client_myds->client_addr->sa_family) {
+		case AF_INET: {
+			struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
+			char buf[INET_ADDRSTRLEN];
+			inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+			sess->client_myds->addr.addr = strdup(buf);
+			sess->client_myds->addr.port = htons(ipv4->sin_port);
+			break;
+		}
+		case AF_INET6: {
+			struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
+			char buf[INET6_ADDRSTRLEN];
+			inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+			sess->client_myds->addr.addr = strdup(buf);
+			sess->client_myds->addr.port = htons(ipv6->sin6_port);
+			break;
+		}
+		default:
+			sess->client_myds->addr.addr = strdup("localhost");
+			break;
+	}
 	fds[0].fd=client;
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
+	//free(arg->addr); // do not free
 	free(arg);
 	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id);
 
@@ -3504,7 +3539,6 @@ static void * admin_main_loop(void *arg)
 {
 	int i;
 	int version=0;
-	struct sockaddr_in addr;
 	struct pollfd *fds=((struct _main_args *)arg)->fds;
 	int nfds=((struct _main_args *)arg)->nfds;
 	int *callback_func=((struct _main_args *)arg)->callback_func;
@@ -3514,7 +3548,6 @@ static void * admin_main_loop(void *arg)
 	pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  //pthread_attr_setstacksize (&attr, mystacksize);
 
 	if(GloVars.global.nostart) {
 		nostart_=true;
@@ -3523,9 +3556,9 @@ static void * admin_main_loop(void *arg)
 	__sync_fetch_and_add(&load_main_,1);
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
-		int *client;
+		//int *client;
 		int client_t;
-		socklen_t addr_size = sizeof(addr);
+		//socklen_t addr_size = sizeof(addr);
 		pthread_t child;
 		size_t stacks;
 		unsigned long long curtime=monotonic_time();
@@ -3549,14 +3582,23 @@ static void * admin_main_loop(void *arg)
 		}
 		for (i=1;i<nfds;i++) {
 			if (fds[i].revents==POLLIN) {
-				client_t = accept(fds[i].fd, (struct sockaddr*)&addr, &addr_size);
+				arg_mysql_adm *passarg = (arg_mysql_adm *)malloc(sizeof(arg_mysql_adm));
+				union {
+					struct sockaddr_in in;
+					struct sockaddr_in6 in6;
+				} custom_sockaddr;
+				passarg->addr=(struct sockaddr *)malloc(sizeof(custom_sockaddr));
+				passarg->addr_size = sizeof(custom_sockaddr);
+				memset(passarg->addr, 0, sizeof(custom_sockaddr));
+				passarg->client_t = accept(fds[i].fd, (struct sockaddr*)passarg->addr, &passarg->addr_size);
 //		printf("Connected: %s:%d  sock=%d\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port), client_t);
 				pthread_attr_getstacksize (&attr, &stacks);
 //		printf("Default stack size = %d\n", stacks);
 				pthread_mutex_lock (&sock_mutex);
-				client=(int *)malloc(sizeof(int));
-				*client= client_t;
-				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
+				//client=(int *)malloc(sizeof(int));
+				//*client= client_t;
+				//if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
+				if ( pthread_create(&child, &attr, child_func[callback_func[i]], passarg) != 0 ) {
 					perror("pthread_create");
 					proxy_error("Thread creation\n");
 					assert(0);

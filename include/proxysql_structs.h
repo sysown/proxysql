@@ -11,7 +11,22 @@
 #define PROXYSQL_ENUMS
 
 enum log_event_type {
-	PROXYSQL_QUERY
+	PROXYSQL_QUERY,
+	PROXYSQL_MYSQL_AUTH_OK,
+	PROXYSQL_MYSQL_AUTH_ERR,
+	PROXYSQL_MYSQL_AUTH_CLOSE,
+	PROXYSQL_MYSQL_AUTH_QUIT,
+	PROXYSQL_MYSQL_CHANGE_USER_OK,
+	PROXYSQL_MYSQL_CHANGE_USER_ERR,
+	PROXYSQL_MYSQL_INITDB,
+	PROXYSQL_ADMIN_AUTH_OK,
+	PROXYSQL_ADMIN_AUTH_ERR,
+	PROXYSQL_ADMIN_AUTH_CLOSE,
+	PROXYSQL_ADMIN_AUTH_QUIT,
+	PROXYSQL_SQLITE_AUTH_OK,
+	PROXYSQL_SQLITE_AUTH_ERR,
+	PROXYSQL_SQLITE_AUTH_CLOSE,
+	PROXYSQL_SQLITE_AUTH_QUIT
 };
 
 enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
@@ -671,6 +686,10 @@ __thread char * mysql_thread___ssl_p2s_cipher;
 __thread char * mysql_thread___eventslog_filename;
 __thread int mysql_thread___eventslog_filesize;
 
+/* variables used by audit log */
+__thread char * mysql_thread___auditlog_filename;
+__thread int mysql_thread___auditlog_filesize;
+
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_enabled;
 __thread int mysql_thread___monitor_history;
@@ -795,6 +814,10 @@ extern __thread char * mysql_thread___ssl_p2s_cipher;
 /* variables used by events log */
 extern __thread char * mysql_thread___eventslog_filename;
 extern __thread int mysql_thread___eventslog_filesize;
+
+/* variables used by audit log */
+extern __thread char * mysql_thread___auditlog_filename;
+extern __thread int mysql_thread___auditlog_filesize;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_enabled;

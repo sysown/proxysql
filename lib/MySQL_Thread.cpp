@@ -220,6 +220,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server_max",
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
+	(char *)"auditlog_filename",
+	(char *)"auditlog_filesize",
 	(char *)"default_charset",
 	(char *)"free_connections_pct",
 #ifdef IDLE_THREADS
@@ -428,6 +430,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
+	variables.auditlog_filename=strdup((char *)"");
+	variables.auditlog_filesize=100*1024*1024;
 	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
 	// major upgrade in 2.0.0
 	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
@@ -618,6 +622,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	}
 	if (!strcmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
+	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
@@ -753,6 +758,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		if (!strcmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	}
 	if (!strcmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
+	if (!strcmp(name,"auditlog_filesize")) return (int)variables.auditlog_filesize;
 	if (!strcmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
 	if (!strcmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
 	if (!strcmp(name,"wait_timeout")) return (int)variables.wait_timeout;
@@ -846,6 +852,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		return strdup(variables.default_time_zone);
 	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
+	if (!strcasecmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
@@ -1052,6 +1059,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"eventslog_filesize")) {
 		sprintf(intbuf,"%d",variables.eventslog_filesize);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"auditlog_filesize")) {
+		sprintf(intbuf,"%d",variables.auditlog_filesize);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"max_allowed_packet")) {
@@ -1926,6 +1937,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"auditlog_filesize")) {
+		int intv=atoi(value);
+		if (intv >= 1024*1024 && intv <= 1*1024*1024*1024) {
+			variables.auditlog_filesize=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"default_schema")) {
 		if (vallen) {
 			free(variables.default_schema);
@@ -2063,6 +2083,30 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
+	if (!strcasecmp(name,"auditlog_filename")) {
+                if (value[strlen(value) - 1] == '/') {
+                        proxy_error("%s is an invalid value for auditlog_filename, please specify a filename not just the path\n", value);
+			return false;
+		} else if (value[0] == '/') {
+			char *full_path = strdup(value);
+                        char *eval_dirname = dirname(full_path);
+                        DIR* eventlog_dir = opendir(eval_dirname);
+			free(full_path);
+                        if (eventlog_dir) {
+				closedir(eventlog_dir);
+				free(variables.auditlog_filename);
+				variables.auditlog_filename=strdup(value);
+                                return true;
+			} else {
+				proxy_error("%s is an invalid value for auditlog_filename path, the directory cannot be accessed\n", eval_dirname);
+				return false;
+			}
+		} else {
+			free(variables.auditlog_filename);
+			variables.auditlog_filename=strdup(value);
+			return true;
+		}
+	}
 	if (!strcasecmp(name,"eventslog_filename")) {
                 if (value[strlen(value) - 1] == '/') {
                         proxy_error("%s is an invalid value for eventslog_filename, please specify a filename not just the path\n", value);
@@ -2581,6 +2625,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.default_sql_mode) free(variables.default_sql_mode);
 	if (variables.default_time_zone) free(variables.default_time_zone);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
+	if (variables.auditlog_filename) free(variables.auditlog_filename);
 	if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
 	if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
 	if (variables.ssl_p2s_key) free(variables.ssl_p2s_key);
@@ -2698,6 +2743,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_sql_mode) { free(mysql_thread___default_sql_mode); mysql_thread___default_sql_mode=NULL; }
 	if (mysql_thread___default_time_zone) { free(mysql_thread___default_time_zone); mysql_thread___default_time_zone=NULL; }
 	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
+	if (mysql_thread___auditlog_filename) { free(mysql_thread___auditlog_filename); mysql_thread___auditlog_filename=NULL; }
 	if (mysql_thread___ssl_p2s_ca) { free(mysql_thread___ssl_p2s_ca); mysql_thread___ssl_p2s_ca=NULL; }
 	if (mysql_thread___ssl_p2s_cert) { free(mysql_thread___ssl_p2s_cert); mysql_thread___ssl_p2s_cert=NULL; }
 	if (mysql_thread___ssl_p2s_key) { free(mysql_thread___ssl_p2s_key); mysql_thread___ssl_p2s_key=NULL; }
@@ -3803,7 +3849,11 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
 	mysql_thread___eventslog_filesize=GloMTH->get_variable_int((char *)"eventslog_filesize");
 	mysql_thread___eventslog_filename=GloMTH->get_variable_string((char *)"eventslog_filename");
-	GloMyLogger->set_base_filename(); // both filename and filesize are set here
+	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
+	mysql_thread___auditlog_filesize=GloMTH->get_variable_int((char *)"auditlog_filesize");
+	mysql_thread___auditlog_filename=GloMTH->get_variable_string((char *)"auditlog_filename");
+	GloMyLogger->events_set_base_filename(); // both filename and filesize are set here
+	GloMyLogger->audit_set_base_filename(); // both filename and filesize are set here
 	if (mysql_thread___default_schema) free(mysql_thread___default_schema);
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
@@ -3869,6 +3919,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___ldap_user_variable=NULL;
 	mysql_thread___add_ldap_user_comment=NULL;
 	mysql_thread___eventslog_filename=NULL;
+	mysql_thread___auditlog_filename=NULL;
 
 	// SSL proxy to server
 	mysql_thread___ssl_p2s_ca=NULL;
@@ -3942,9 +3993,9 @@ void MySQL_Thread::unregister_session_connection_handler(int idx, bool _new) {
 void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n) {
 	int c;
 	union {
-        	struct sockaddr_in in;
-                struct sockaddr_in6 in6;
-        } custom_sockaddr;
+		struct sockaddr_in in;
+		struct sockaddr_in6 in6;
+	} custom_sockaddr;
 	struct sockaddr *addr=(struct sockaddr *)malloc(sizeof(custom_sockaddr));
 	socklen_t addrlen=sizeof(custom_sockaddr);
 	memset(addr, 0, sizeof(custom_sockaddr));
@@ -3970,27 +4021,27 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		sess->client_myds->client_addrlen=addrlen;
 		sess->client_myds->client_addr=addr;
 
-                switch (sess->client_myds->client_addr->sa_family) {
-                        case AF_INET: {
-                                struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
-                                char buf[INET_ADDRSTRLEN];
-	                        inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-		                sess->client_myds->addr.addr = strdup(buf);
-			        sess->client_myds->addr.port = htons(ipv4->sin_port);
-                                break;
-                                }
-                        case AF_INET6: {
-                                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
-                                char buf[INET6_ADDRSTRLEN];
-	                        inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-		                sess->client_myds->addr.addr = strdup(buf);
-			        sess->client_myds->addr.port = htons(ipv6->sin6_port);
-                                break;
-                        }
-                        default:
-                                sess->client_myds->addr.addr = strdup("localhost");
-                                break;
-                }
+		switch (sess->client_myds->client_addr->sa_family) {
+			case AF_INET: {
+				struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
+				char buf[INET_ADDRSTRLEN];
+				inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+				sess->client_myds->addr.addr = strdup(buf);
+				sess->client_myds->addr.port = htons(ipv4->sin_port);
+				break;
+			}
+			case AF_INET6: {
+				struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
+				char buf[INET6_ADDRSTRLEN];
+				inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+				sess->client_myds->addr.addr = strdup(buf);
+				sess->client_myds->addr.port = htons(ipv6->sin6_port);
+				break;
+			}
+			default:
+				sess->client_myds->addr.addr = strdup("localhost");
+				break;
+		}
 
 		iface_info *ifi=NULL;
 		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd); // here we try to get the info about the proxy bind address
