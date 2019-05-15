@@ -513,6 +513,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 		if ((*myds)->myconn->options.no_backslash_escapes) {
 			internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
+		(*myds)->pkt_sid=sequence_id;
 	}
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t));
@@ -536,6 +537,9 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
 #endif
+	if (*myds) {
+		(*myds)->pkt_sid=sequence_id;
+	}
 	return true;
 }
 
@@ -585,6 +589,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 			if ((*myds)->sess)
 				if ((*myds)->sess->thread)
 					(*myds)->sess->thread->status_variables.generated_pkt_err++;
+	if (*myds) {
+		(*myds)->pkt_sid=sequence_id;
+	}
 	return true;
 }
 
@@ -653,6 +660,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
 #endif
+	if (*myds) {
+		(*myds)->pkt_sid=sequence_id;
+	}
 	return true;
 }
 
@@ -2092,7 +2102,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 
 MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
-	reset_pid = true;
+	//reset_pid = true;
 }
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	transfer_started=false;
@@ -2110,15 +2120,15 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	if (myprot) { // if myprot = NULL , this is a mirror
 		myds=myprot->get_myds();
 	}
-	if (reset_pid==true) {
+	//if (reset_pid==true) {
 	sid=0;
 	//PSarrayOUT = NULL;
 	if (myprot) { // if myprot = NULL , this is a mirror
 		sid=myds->pkt_sid+1;
 		//PSarrayOUT = new PtrSizeArray(8);
 	}
-	}
-	reset_pid=true;
+	//}
+	//reset_pid=true;
 	result=_res;
 	resultset_size=0;
 	num_rows=0;
