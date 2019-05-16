@@ -113,7 +113,7 @@ class MySQL_Event {
 		schemaname=read_string(f,schemaname_len);
 		read_encoded_length((uint64_t *)&client_len,f);
 		client=read_string(f,client_len);
-		cout << "ProxySQL LOG QUERY: thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=" << schemaname << "\" client=\"" << client << "\"";
+		cout << "ProxySQL LOG QUERY: thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=\"" << schemaname << "\" client=\"" << client << "\"";
 		read_encoded_length((uint64_t *)&hid,f);
 		if (hid==UINT64_MAX) {
 			cout << " HID=NULL ";
