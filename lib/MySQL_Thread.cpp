@@ -2714,10 +2714,7 @@ MySQL_Thread::~MySQL_Thread() {
 #endif // IDLE_THREADS
 
 	if (cached_connections) {
-		while(cached_connections->len) {
-			MySQL_Connection *c=(MySQL_Connection *)cached_connections->remove_index_fast(0);
-				delete c;
-			}
+		return_local_connections();
 		delete cached_connections;
 	}
 
