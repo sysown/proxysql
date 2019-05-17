@@ -4538,7 +4538,6 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 void MySQL_Threads_Handler::Get_Memory_Stats() {
 	unsigned int i;
 	unsigned int j;
-	MySQL_Thread *thr=NULL;
 	j=num_threads;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
@@ -4546,17 +4545,17 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 	}
 #endif // IDLE_THREADS
 	for (i=0;i<j;i++) {
-		if (i<num_threads) {
+		MySQL_Thread *thr=NULL;
+		if (i<num_threads && mysql_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
-			if (thr==NULL) return; // quick exit, at least one thread is not ready
 #ifdef IDLE_THREADS
 		} else {
-			if (GloVars.global.idle_threads) {
+			if (GloVars.global.idle_threads && mysql_threads_idles) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-				if (thr==NULL) return; // quick exit, at least one thread is not ready
 			}
 #endif // IDLE_THREADS
 		}
+		if (thr==NULL) return; // quick exit, at least one thread is not ready
 		pthread_mutex_lock(&thr->thread_mutex);
 		thr->Get_Memory_Stats();
 		pthread_mutex_unlock(&thr->thread_mutex);
