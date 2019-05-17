@@ -1041,7 +1041,7 @@ void * monitor_replication_lag_thread(void *arg) {
 		if (l) {
 			use_percona_heartbeat = true;
 			char *base_query = (char *)"SELECT MIN(ROUND(TIMESTAMPDIFF(MICROSECOND, ts, SYSDATE(6))/1000000)) AS Seconds_Behind_Master FROM %s";
-			char *replication_query = (char *)malloc(strlen(base_query)+l);
+			char *replication_query = (char *)malloc(strlen(base_query)+l+1);
 			sprintf(replication_query,base_query,percona_heartbeat_table);
 			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,replication_query);
 			free(replication_query);

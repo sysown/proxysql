@@ -2075,7 +2075,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename
 	tn[j]=0;
 	SQLite3_result *resultset=NULL;
 	char *q1=(char *)"PRAGMA table_info(%s)";
-	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
+	char *q2=(char *)malloc(strlen(q1)+strlen(tn)+1);
 	sprintf(q2,q1,tn);
 	int affected_rows;
 	int cols;
@@ -2146,7 +2146,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	tn[j]=0;
 	SQLite3_result *resultset=NULL;
 	char *q1=(char *)"PRAGMA table_info(%s)";
-	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
+	char *q2=(char *)malloc(strlen(q1)+strlen(tn)+1);
 	sprintf(q2,q1,tn);
 	int affected_rows;
 	int cols;
@@ -7160,7 +7160,7 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 			}
 		}
 		//fprintf(stderr,"%s = %s\n", n, value_string.c_str());
-		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
+		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str())+1);
 		sprintf(query,q, prefix, n, value_string.c_str());
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
