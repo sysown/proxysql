@@ -518,7 +518,12 @@ void MySQL_Connection::set_names_cont(short event) {
 
 void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 	query.length=length;
-	query.ptr=stmt;
+	if (query.ptr) {
+		free(query.ptr);
+	}
+	query.ptr=(char*)malloc(sizeof(char) * length + 1);
+	memcpy(query.ptr, stmt, length);
+	query.ptr[length] = '\0';
 	if (length > largest_query_length) {
 		largest_query_length=length;
 	}
@@ -1504,6 +1509,7 @@ void MySQL_Connection::async_free_result() {
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
 	if (query.ptr) {
+		free(query.ptr);
 		query.ptr=NULL;
 		query.length=0;
 	}
