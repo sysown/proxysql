@@ -4586,7 +4586,6 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	unsigned int i;
 	unsigned int i2;
 //	signal_all_threads(1);
-	MySQL_Thread *thr=NULL;
 	i2=num_threads;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
@@ -4595,17 +4594,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 #endif // IDLE_THREADS
 
 	for (i=0;i<i2;i++) {
-		if (i<num_threads) {
+		MySQL_Thread *thr=NULL;
+		if (i<num_threads && mysql_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
-			pthread_mutex_lock(&thr->thread_mutex);
 #ifdef IDLE_THREADS
 		} else {
-			if (mysql_thread___session_idle_show_processlist) {
+			if (mysql_thread___session_idle_show_processlist && mysql_threads_idles) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-				pthread_mutex_lock(&thr->thread_mutex);
 			}
 #endif // IDLE_THREADS
 		}
+		if (thr==NULL) break; // quick exit, at least one thread is not ready
+		pthread_mutex_lock(&thr->thread_mutex);
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
