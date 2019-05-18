@@ -3552,7 +3552,7 @@ handler_again:
 										if (myconn->MyRS_reuse) {
 											delete myconn->MyRS_reuse;
 										}
-										myconn->MyRS->reset_pid = false;
+										//myconn->MyRS->reset_pid = false;
 										myconn->MyRS_reuse = myconn->MyRS;
 										myconn->MyRS=NULL;
 									}

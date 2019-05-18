@@ -3748,7 +3748,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 				max_lag_ms = atoi(r->fields[5]);
 			}
 			if (check_interval_ms == 0) {
-				check_interval_ms = atoi(r->fields[5]);
+				check_interval_ms = atoi(r->fields[6]);
 			}
 			if (check_timeout_ms == 0) {
 				check_timeout_ms = atoi(r->fields[7]);

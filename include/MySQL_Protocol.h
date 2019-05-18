@@ -11,7 +11,7 @@ class MySQL_ResultSet {
 	public:
 	bool transfer_started;
 	bool resultset_completed;
-	bool reset_pid;
+	//bool reset_pid;
 	uint8_t sid;
 	MySQL_Data_Stream *myds;
 	MySQL_Protocol *myprot;
