@@ -2985,6 +2985,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					char buff[32];
 					sprintf(buff,"%p",conn);
 					j["address"] = buff;
+					uint64_t age_ms = (curtime - conn->creation_time)/1000;
+					j["age_ms"] = age_ms;
 					j["bytes_recv"] = conn->bytes_info.bytes_recv;
 					j["bytes_sent"] = conn->bytes_info.bytes_sent;
 					j["myconnpoll_get"] = conn->statuses.myconnpoll_get;

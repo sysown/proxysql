@@ -707,6 +707,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	char buff[32];
 	sprintf(buff,"%p",this);
 	j["address"] = buff;
+	uint64_t age_ms = (thread->curtime - start_time)/1000;
+	j["age_ms"] = age_ms;
 	j["autocommit"] = autocommit;
 	j["thread_session_id"] = thread_session_id;
 	j["current_hostgroup"] = current_hostgroup;
