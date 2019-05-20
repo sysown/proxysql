@@ -379,7 +379,17 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				// Last char process
 				if(len == i + 1)
 				{
+					char *_p = p_r_t;
+					_p-=3;
 					p_r = p_r_t;
+					if ( _p >= r && *(_p+2) == '-') {
+						if  (
+							( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
+							( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
+						) {
+							p_r--;
+						}
+					}
 					*p_r++ = '?';
 					flag = 0;
 					break;
@@ -404,13 +414,23 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				// satisfied closing string - swap string to ?
 				if(*s == qutr_char && (len == i+1 || *(s + SIZECHAR) != qutr_char))
 				{
-						p_r = p_r_t;
-						*p_r++ = '?';
-						flag = 0;
-						if(i < len)
-							s++;
-						i++;
-						continue;
+					char *_p = p_r_t;
+					_p-=3;
+					p_r = p_r_t;
+					if ( _p >= r && *(_p+2) == '-') {
+						if  (
+							( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
+							( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
+						) {
+							p_r--;
+						}
+					}
+					*p_r++ = '?';
+					flag = 0;
+					if(i < len)
+						s++;
+					i++;
+					continue;
 				}
 			}
 
@@ -422,6 +442,16 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				// last single char
 				if(p_r_t == p_r)
 				{
+					char *_p = p_r_t;
+					_p-=3;
+					if ( _p >= r && *(_p+2) == '-') {
+						if  (
+							( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
+							( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
+						) {
+							p_r--;
+						}
+					}
 					*p_r++ = '?';
 					i++;
 					continue;
@@ -432,7 +462,17 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				{
 					if(is_digit_string(p_r_t, p_r))
 					{
+						char *_p = p_r_t;
+						_p-=3;
 						p_r = p_r_t;
+						if ( _p >= r && *(_p+2) == '-') {
+							if  (
+								( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
+								( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
+							) {
+								p_r--;
+							}
+						}
 						*p_r++ = '?';
 						if(len == i+1)
 						{
