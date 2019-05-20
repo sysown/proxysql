@@ -382,7 +382,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					char *_p = p_r_t;
 					_p-=3;
 					p_r = p_r_t;
-					if ( _p >= r && *(_p+2) == '-') {
+					if ( _p >= r && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 						if  (
 							( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
 							( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
@@ -417,7 +417,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					char *_p = p_r_t;
 					_p-=3;
 					p_r = p_r_t;
-					if ( _p >= r && *(_p+2) == '-') {
+					if ( _p >= r && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 						if  (
 							( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
 							( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
@@ -444,7 +444,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				{
 					char *_p = p_r_t;
 					_p-=3;
-					if ( _p >= r && *(_p+2) == '-') {
+					if ( _p >= r && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 						if  (
 							( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
 							( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
@@ -465,7 +465,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						char *_p = p_r_t;
 						_p-=3;
 						p_r = p_r_t;
-						if ( _p >= r && *(_p+2) == '-') {
+						if ( _p >= r && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 							if  (
 								( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
 								( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
