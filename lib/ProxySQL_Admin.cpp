@@ -3471,6 +3471,7 @@ void *child_mysql(void *arg) {
 				goto __exit_child_mysql;
 			}
 		}
+		mysql_thr->curtime = monotonic_time();
 		myds->revents=fds[0].revents;
 		myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
