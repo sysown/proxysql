@@ -1898,7 +1898,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	switch (async_state_machine) {
 		case ASYNC_QUERY_END:
 			processing_multi_statement=false;	// no matter if we are processing a multi statement or not, we reached the end
-			return 0;
+			//return 0; <= bug. Do not return here, because we need to reach the if (async_state_machine==ASYNC_QUERY_END) few lines below
 			break;
 		case ASYNC_IDLE:
 			set_query(stmt,length);
