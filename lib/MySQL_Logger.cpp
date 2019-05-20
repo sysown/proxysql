@@ -38,11 +38,11 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	et=_et;
 	hid=UINT64_MAX;
 	server=NULL;
-	err = NULL;
+	extra_info = NULL;
 }
 
-void MySQL_Event::set_error(char *_err) {
-	err = _err;
+void MySQL_Event::set_extra_info(char *_err) {
+	extra_info = _err;
 }
 
 void MySQL_Event::set_query(const char *ptr, int len) {
@@ -66,6 +66,7 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 		case PROXYSQL_MYSQL_AUTH_ERR:
 		case PROXYSQL_MYSQL_AUTH_CLOSE:
 		case PROXYSQL_MYSQL_AUTH_QUIT:
+		case PROXYSQL_MYSQL_INITDB:
 		case PROXYSQL_ADMIN_AUTH_OK:
 		case PROXYSQL_ADMIN_AUTH_ERR:
 		case PROXYSQL_ADMIN_AUTH_CLOSE:
@@ -83,16 +84,18 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 }
 
 void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
-	json j;	
+	json j;
 	j["timestamp"] = start_time/1000;
-	time_t timer=start_time/1000/1000;
-	struct tm* tm_info;
-	tm_info = localtime(&timer);
-	char buffer1[64];
-	char buffer2[64];
-	strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
-	sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
-	j["time"] = buffer2;
+	{
+		time_t timer=start_time/1000/1000;
+		struct tm* tm_info;
+		tm_info = localtime(&timer);
+		char buffer1[64];
+		char buffer2[64];
+		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
+		sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
+		j["time"] = buffer2;
+	}
 	j["thread_id"] = thread_id;
 	if (username) {
 		j["username"] = username;
@@ -112,8 +115,8 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 	if (server) {
 		j["server_addr"] = server;
 	}
-	if (err) {
-		j["error"] = err;
+	if (extra_info) {
+		j["extra_info"] = extra_info;
 	}
 	switch (et) {
 		case PROXYSQL_MYSQL_AUTH_OK:
@@ -127,6 +130,9 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 			break;
 		case PROXYSQL_MYSQL_AUTH_QUIT:
 			j["event"]="MySQL_Client_Quit";
+			break;
+		case PROXYSQL_MYSQL_INITDB:
+			j["event"]="MySQL_Client_Init_DB";
 			break;
 		case PROXYSQL_ADMIN_AUTH_OK:
 			j["event"]="Admin_Connect_OK";
@@ -151,6 +157,34 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 			break;
 		case PROXYSQL_SQLITE_AUTH_QUIT:
 			j["event"]="SQLite3_Quit";
+			break;
+		default:
+			break;
+	}
+	switch (et) {
+		case PROXYSQL_MYSQL_AUTH_CLOSE:
+		case PROXYSQL_ADMIN_AUTH_CLOSE:
+		case PROXYSQL_SQLITE_AUTH_CLOSE:
+			{
+				uint64_t curtime_real=realtime_time();
+				uint64_t curtime_mono=sess->thread->curtime;
+				uint64_t timediff = curtime_mono - sess->start_time;
+				uint64_t orig_time = curtime_real - timediff;
+				time_t timer= (orig_time)/1000/1000;
+				struct tm* tm_info;
+				tm_info = localtime(&timer);
+				char buffer1[64];
+				char buffer2[64];
+				strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
+				sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
+				j["creation_time"] = buffer2;
+				//unsigned long long life = sess->thread->curtime - sess->start_time;
+				//life/=1000;
+				float f = timediff;
+				f /= 1000;
+				sprintf(buffer1, "%.3fms", f);
+				j["duration"] = buffer1;
+			}
 			break;
 		default:
 			break;
@@ -521,37 +555,74 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 }
 
-void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *err) {
+void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
 	if (audit.logfile==NULL) return;
 
-	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+	if (sess == NULL) return;
+	if (sess->client_myds == NULL)  return; 
 
+	MySQL_Connection_userinfo *ui= NULL;
 	if (sess) {
-		// to reduce complexing in the calling function, we do some changes here
-		if (_et == PROXYSQL_MYSQL_AUTH_OK) {
-			switch (sess->session_type) {
-				case PROXYSQL_SESSION_ADMIN:
-				case PROXYSQL_SESSION_STATS:
-					_et = PROXYSQL_ADMIN_AUTH_OK;
-					break;
-				case PROXYSQL_SESSION_SQLITE:
-					_et = PROXYSQL_SQLITE_AUTH_OK;
-				default:
-					break;
+		if (sess->client_myds) {
+			if (sess->client_myds->myconn) {
+				ui = sess->client_myds->myconn->userinfo;
 			}
 		}
-		if (_et == PROXYSQL_MYSQL_AUTH_ERR) {
-			switch (sess->session_type) {
-				case PROXYSQL_SESSION_ADMIN:
-				case PROXYSQL_SESSION_STATS:
-					_et = PROXYSQL_ADMIN_AUTH_ERR;
-					break;
-				case PROXYSQL_SESSION_SQLITE:
-					_et = PROXYSQL_SQLITE_AUTH_ERR;
-				default:
-					break;
-			}
+	}
+	if (sess) {
+		// to reduce complexing in the calling function, we do some changes here
+		switch (_et) {
+			case PROXYSQL_MYSQL_AUTH_OK:
+				switch (sess->session_type) {
+					case PROXYSQL_SESSION_ADMIN:
+					case PROXYSQL_SESSION_STATS:
+						_et = PROXYSQL_ADMIN_AUTH_OK;
+						break;
+					case PROXYSQL_SESSION_SQLITE:
+						_et = PROXYSQL_SQLITE_AUTH_OK;
+					default:
+						break;
+				}
+				break;
+			case PROXYSQL_MYSQL_AUTH_ERR:
+				switch (sess->session_type) {
+					case PROXYSQL_SESSION_ADMIN:
+					case PROXYSQL_SESSION_STATS:
+						_et = PROXYSQL_ADMIN_AUTH_ERR;
+						break;
+					case PROXYSQL_SESSION_SQLITE:
+						_et = PROXYSQL_SQLITE_AUTH_ERR;
+					default:
+						break;
+				}
+				break;
+			case PROXYSQL_MYSQL_AUTH_QUIT:
+				switch (sess->session_type) {
+					case PROXYSQL_SESSION_ADMIN:
+					case PROXYSQL_SESSION_STATS:
+						_et = PROXYSQL_ADMIN_AUTH_QUIT;
+						break;
+					case PROXYSQL_SESSION_SQLITE:
+						_et = PROXYSQL_SQLITE_AUTH_QUIT;
+					default:
+						break;
+				}
+				break;
+			case PROXYSQL_MYSQL_AUTH_CLOSE:
+				switch (sess->session_type) {
+					case PROXYSQL_SESSION_ADMIN:
+					case PROXYSQL_SESSION_STATS:
+						_et = PROXYSQL_ADMIN_AUTH_CLOSE;
+						break;
+					case PROXYSQL_SESSION_SQLITE:
+						_et = PROXYSQL_SQLITE_AUTH_CLOSE;
+					default:
+						break;
+				}
+				break;
+			default:
+				break;
 		}
 	}
 
@@ -609,6 +680,10 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 		int hid=-1;
 		hid=myds->myconn->parent->myhgc->hid;
 //		me.set_server(hid,sa,sl);
+	}
+
+	if (xi) {
+		me.set_extra_info(xi);
 	}
 
 	wrlock();

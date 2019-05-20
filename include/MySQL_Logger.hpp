@@ -25,7 +25,7 @@ class MySQL_Event {
 	unsigned char buf[10];
 	enum log_event_type et;
 	uint64_t hid;
-	char *err;
+	char *extra_info;
 	public:
 	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f, MySQL_Session *sess);
@@ -33,7 +33,7 @@ class MySQL_Event {
 	void write_auth(std::fstream *f, MySQL_Session *sess);
 	void set_query(const char *ptr, int len);
 	void set_server(int _hid, const char *ptr, int len);
-	void set_error(char *);
+	void set_extra_info(char *);
 };
 
 class MySQL_Logger {

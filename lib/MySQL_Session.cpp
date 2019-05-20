@@ -2881,6 +2881,7 @@ __get_pkts_from_client:
 //								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+								GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL);
 								l_free(pkt.size,pkt.ptr);
 								handler_ret = -1;
 								return handler_ret;
@@ -2967,6 +2968,7 @@ __get_pkts_from_client:
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						if (c==_MYSQL_COM_QUIT) {
 							proxy_error("Unexpected COM_QUIT from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+							GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL);
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 							l_free(pkt.size,pkt.ptr);
 							if (thread) {
@@ -4237,6 +4239,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);
@@ -4278,6 +4281,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		l_free(pkt->size,pkt->ptr);

@@ -2647,6 +2647,11 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_sessions) {
 		while(mysql_sessions->len) {
 			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->remove_index_fast(0);
+				if (sess->session_type == PROXYSQL_SESSION_ADMIN || sess->session_type == PROXYSQL_SESSION_STATS) {
+					char _buf[1024];
+					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
+				}
 				delete sess;
 			}
 		delete mysql_sessions;
@@ -3712,6 +3717,9 @@ void MySQL_Thread::process_all_sessions() {
 			sess->active_transactions = -1;
 		}
 		if (sess->healthy==0) {
+			char _buf[1024];
+			sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+			GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 			unregister_session(n);
 			n--;
 			delete sess;
@@ -3721,6 +3729,9 @@ void MySQL_Thread::process_all_sessions() {
 					rc=sess->handler();
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc==-1 || sess->killed==true) {
+						char _buf[1024];
+						sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 						unregister_session(n);
 						n--;
 						delete sess;
@@ -3730,6 +3741,9 @@ void MySQL_Thread::process_all_sessions() {
 				if (sess->killed==true) {
 					// this is a special cause, if killed the session needs to be executed no matter if paused
 					sess->handler();
+					char _buf[1024];
+					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 					unregister_session(n);
 					n--;
 					delete sess;

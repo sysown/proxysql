@@ -3423,6 +3423,8 @@ void *child_mysql(void *arg) {
 	sess->handler_function=admin_session_handler;
 	MySQL_Data_Stream *myds=sess->client_myds;
 
+	sess->start_time=mysql_thr->curtime;
+
 	sess->client_myds->client_addrlen=myarg->addr_size;
 	sess->client_myds->client_addr=myarg->addr;
 
