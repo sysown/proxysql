@@ -704,6 +704,9 @@ __ret_autocommit_OK:
 }
 
 void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
+	char buff[32];
+	sprintf(buff,"%p",this);
+	j["address"] = buff;
 	j["autocommit"] = autocommit;
 	j["thread_session_id"] = thread_session_id;
 	j["current_hostgroup"] = current_hostgroup;
@@ -712,7 +715,9 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["last_insert_id"] = last_insert_id;
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
+#ifdef DEBUG
 	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
+#endif
 	j["client"]["stream"]["pkts_recv"] = client_myds->pkts_recv;
 	j["client"]["stream"]["pkts_sent"] = client_myds->pkts_sent;
 	j["client"]["stream"]["bytes_recv"] = client_myds->bytes_info.bytes_recv;
@@ -740,6 +745,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 		j["backends"][i]["hostgroup_id"] = i;
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
+			sprintf(buff,"%p",_myds);
+			j["backends"][i]["stream"]["address"] = buff;
 			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
 			j["backends"][i]["stream"]["myconnpoll_get"] = _myds->statuses.myconnpoll_get;
 			j["backends"][i]["stream"]["myconnpoll_put"] = _myds->statuses.myconnpoll_put;
@@ -751,6 +758,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["backends"][i]["stream"]["bytes_sent"] = _myds->bytes_info.bytes_sent;
 			if (_myds->myconn) {
 				MySQL_Connection * _myconn = _myds->myconn;
+				sprintf(buff,"%p",_myconn);
+				j["backends"][i]["conn"]["address"] = buff;
 				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
 				j["backends"][i]["conn"]["bytes_sent"] = _myconn->bytes_info.bytes_sent;
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
@@ -774,8 +783,10 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
-				if (_myconn->mysql) {
+				if (_myconn->mysql && _myconn->ret_mysql) {
 					MYSQL * _my = _myconn->mysql;
+					sprintf(buff,"%p",_my);
+					j["backends"][i]["conn"]["mysql"]["address"] = buff;
 					j["backends"][i]["conn"]["mysql"]["host"] = ( _my->host ? _my->host : "" );
 					j["backends"][i]["conn"]["mysql"]["host_info"] = ( _my->host_info ? _my->host_info : "" );
 					j["backends"][i]["conn"]["mysql"]["port"] = _my->port;
@@ -785,6 +796,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 					j["backends"][i]["conn"]["mysql"]["db"] = (_my->db ? _my->db : "");
 					j["backends"][i]["conn"]["mysql"]["affected_rows"] = _my->affected_rows;
 					j["backends"][i]["conn"]["mysql"]["insert_id"] = _my->insert_id;
+					j["backends"][i]["conn"]["mysql"]["thread_id"] = _my->thread_id;
 					j["backends"][i]["conn"]["mysql"]["server_status"] = _my->server_status;
 					j["backends"][i]["conn"]["mysql"]["charset"] = _my->charset->nr;
 					//j["backends"][i]["conn"]["mysql"][""] = _my->;
