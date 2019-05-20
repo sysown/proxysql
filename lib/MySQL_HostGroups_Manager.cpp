@@ -2982,6 +2982,11 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 				pta[10]=strdup(buf);
 				{
 					json j;
+					char buff[32];
+					sprintf(buff,"%p",conn);
+					j["address"] = buff;
+					uint64_t age_ms = (curtime - conn->creation_time)/1000;
+					j["age_ms"] = age_ms;
 					j["bytes_recv"] = conn->bytes_info.bytes_recv;
 					j["bytes_sent"] = conn->bytes_info.bytes_sent;
 					j["myconnpoll_get"] = conn->statuses.myconnpoll_get;
@@ -2993,6 +2998,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 				{
 					MYSQL *_my = conn->mysql;
 					json j;
+					char buff[32];
+					sprintf(buff,"%p",_my);
+					j["address"] = buff;
 					j["host"] = _my->host;
 					j["host_info"] = _my->host_info;
 					j["port"] = _my->port;
@@ -3002,6 +3010,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["db"] = (_my->db ? _my->db : "");
 					j["affected_rows"] = _my->affected_rows;
 					j["insert_id"] = _my->insert_id;
+					j["thread_id"] = _my->thread_id;
 					j["server_status"] = _my->server_status;
 					j["charset"] = _my->charset->nr;
 					j["options"]["charset_name"] = _my->options.charset_name;
