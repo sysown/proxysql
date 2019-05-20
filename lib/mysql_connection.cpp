@@ -254,9 +254,20 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 	if (mysql) {
 		// always decrease the counter
-		if (ret_mysql)
+		if (ret_mysql) {
 			__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
-		async_free_result();
+			if (query.stmt_result) {
+				if (query.stmt_result->handle) {
+					query.stmt_result->handle->status = MYSQL_STATUS_READY; // avoid calling mthd_my_skip_result()
+				}
+			}
+			if (mysql_result) {
+				if (mysql_result->handle) {
+					mysql_result->handle->status = MYSQL_STATUS_READY; // avoid calling mthd_my_skip_result()
+				}
+			}
+			async_free_result();
+		}
 		close_mysql(); // this take care of closing mysql connection
 		mysql=NULL;
 	}
@@ -1851,7 +1862,7 @@ void MySQL_Connection::optimize() {
 // if avoids that a QUIT command stops forever
 // FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if ((send_quit) && (mysql->net.pvio)) {
+	if ((send_quit) && (mysql->net.pvio) && ret_mysql) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;
