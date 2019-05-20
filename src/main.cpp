@@ -1107,7 +1107,8 @@ void ProxySQL_Main_init_phase2___not_started() {
 
 	{
 		cpu_timer t;
-		GloMyLogger->set_datadir(GloVars.datadir);
+		GloMyLogger->events_set_datadir(GloVars.datadir);
+		GloMyLogger->audit_set_datadir(GloVars.datadir);
 #ifdef DEBUG
 		std::cerr << "Main phase3 : GloMyLogger initialized in ";
 #endif
@@ -1130,7 +1131,8 @@ void ProxySQL_Main_init_phase3___start_all() {
 
 	{
 		cpu_timer t;
-		GloMyLogger->set_datadir(GloVars.datadir);
+		GloMyLogger->events_set_datadir(GloVars.datadir);
+		GloMyLogger->audit_set_datadir(GloVars.datadir);
 #ifdef DEBUG
 		std::cerr << "Main phase3 : GloMyLogger initialized in ";
 #endif
