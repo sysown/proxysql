@@ -707,8 +707,13 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	char buff[32];
 	sprintf(buff,"%p",this);
 	j["address"] = buff;
+	if (thread) {
+		sprintf(buff,"%p",thread);
+		j["thread"] = buff;
+	}
 	uint64_t age_ms = (thread->curtime - start_time)/1000;
 	j["age_ms"] = age_ms;
+	j["status"] = status;
 	j["autocommit"] = autocommit;
 	j["thread_session_id"] = thread_session_id;
 	j["current_hostgroup"] = current_hostgroup;
@@ -729,6 +734,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["client"]["proxy_addr"]["address"] = ( client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "" );
 	j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
 	j["client"]["encrypted"] = client_myds->encrypted;
+	j["client"]["DSS"] = client_myds->DSS;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["transaction_persistent"] = transaction_persistent;
 	j["conn"]["sql_mode"] = ( client_myds->myconn->options.sql_mode ? client_myds->myconn->options.sql_mode : "") ;
@@ -758,6 +764,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			*/
 			j["backends"][i]["stream"]["bytes_recv"] = _myds->bytes_info.bytes_recv;
 			j["backends"][i]["stream"]["bytes_sent"] = _myds->bytes_info.bytes_sent;
+			j["backends"][i]["stream"]["DSS"] = _myds->DSS;
 			if (_myds->myconn) {
 				MySQL_Connection * _myconn = _myds->myconn;
 				sprintf(buff,"%p",_myconn);
