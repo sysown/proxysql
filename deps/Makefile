@@ -3,10 +3,10 @@
 PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
 MYCFLAGS=-O0
-MYJEOPT=--enable-xmalloc --enable-munmap --enable-prof --enable-fill --enable-debug
+MYJEOPT=--enable-xmalloc --enable-prof --enable-fill --enable-debug
 else
 MYCFLAGS=-O2
-MYJEOPT=--enable-xmalloc --enable-munmap --enable-prof
+MYJEOPT=--enable-xmalloc --enable-prof
 endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
