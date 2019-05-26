@@ -1535,6 +1535,7 @@ int MySQL_Connection::async_set_autocommit(short event, bool ac) {
 		case ASYNC_SET_AUTOCOMMIT_FAILED:
 			return -1;
 			break;
+		case ASYNC_QUERY_END:
 		case ASYNC_IDLE:
 			set_autocommit(ac);
 			async_state_machine=ASYNC_SET_AUTOCOMMIT_START;
