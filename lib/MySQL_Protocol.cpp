@@ -765,9 +765,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 	memcpy(_ptr+l,&charset,sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l,&column_length,sizeof(uint32_t)); l+=sizeof(uint32_t);
 	_ptr[l]=type; l++;
-	uint16_t flags_ = flags;
-	flags_ = flags_ & ~NUM_FLAG;
-	memcpy(_ptr+l,&flags_,sizeof(uint16_t)); l+=sizeof(uint16_t);
+	memcpy(_ptr+l,&flags,sizeof(uint16_t)); l+=sizeof(uint16_t);
 	_ptr[l]=decimals; l++;
 	_ptr[l]=0x00; l++;
 	_ptr[l]=0x00; l++;
@@ -1069,6 +1067,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	if (mysql_thread___have_compress) {
 		mysql_thread___server_capabilities |= CLIENT_COMPRESS; // FIXME: shouldn't be here
 	}
+	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)); l+=sizeof(mysql_thread___server_capabilities);
   memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
@@ -1719,15 +1718,20 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						memcpy(binds[i].buffer,&ts,sizeof(MYSQL_TIME));
 					}
 					break;
+				case MYSQL_TYPE_DECIMAL:
+				case MYSQL_TYPE_VARCHAR:
+				case MYSQL_TYPE_BIT:
+				case MYSQL_TYPE_JSON:
+				case MYSQL_TYPE_NEWDECIMAL:
+				case MYSQL_TYPE_ENUM:
+				case MYSQL_TYPE_SET:
 				case MYSQL_TYPE_TINY_BLOB:
 				case MYSQL_TYPE_MEDIUM_BLOB:
 				case MYSQL_TYPE_LONG_BLOB:
 				case MYSQL_TYPE_BLOB:
-				case MYSQL_TYPE_VARCHAR:
 				case MYSQL_TYPE_VAR_STRING:
 				case MYSQL_TYPE_STRING:
-				case MYSQL_TYPE_DECIMAL:
-				case MYSQL_TYPE_NEWDECIMAL:
+				case MYSQL_TYPE_GEOMETRY:
 					{
 						uint8_t l=0;
 						uint64_t len;
@@ -1742,6 +1746,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					}
 					break;
 				default:
+					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
+							"of query %s from user %s with default schema %s\n",
+							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
 					assert(0);
 					break;
 			}
@@ -1792,7 +1799,7 @@ bool MySQL_Protocol::generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt) {
 	}
 
 	char *qt = (char *)"SELECT * FROM %s WHERE 1=0";
-	q = (char *)malloc(strlen(qt)+strlen(tablename));
+	q = (char *)malloc(strlen(qt)+strlen(tablename)+1);
 	sprintf(q,qt,tablename);
 	l_free(pkt->size, pkt->ptr);
 	pkt->size = strlen(q)+5;

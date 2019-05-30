@@ -2311,10 +2311,7 @@ MySQL_Thread::~MySQL_Thread() {
 #endif // IDLE_THREADS
 
 	if (cached_connections) {
-		while(cached_connections->len) {
-			MySQL_Connection *c=(MySQL_Connection *)cached_connections->remove_index_fast(0);
-				delete c;
-			}
+		return_local_connections();
 		delete cached_connections;
 	}
 
@@ -3896,7 +3893,6 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 	unsigned int i;
 	unsigned int j;
 	signal_all_threads(1);
-	MySQL_Thread *thr=NULL;
 	j=num_threads;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
@@ -3904,15 +3900,17 @@ void MySQL_Threads_Handler::Get_Memory_Stats() {
 	}
 #endif /* IDLE_THREADS */
 	for (i=0;i<j;i++) {
-		if (i<num_threads) {
+		MySQL_Thread *thr=NULL;
+		if (i<num_threads && mysql_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
 #ifdef IDLE_THREADS
 		} else {
-			if (GloVars.global.idle_threads) {
+			if (GloVars.global.idle_threads && mysql_threads_idles) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
 #endif /* IDLE_THREADS */
 		}
+		if (thr==NULL) return; // quick exit, at least one thread is not ready
 		pthread_mutex_lock(&thr->thread_mutex);
 		thr->Get_Memory_Stats();
 		pthread_mutex_unlock(&thr->thread_mutex);
@@ -3941,7 +3939,6 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 	unsigned int i;
 	unsigned int i2;
 	signal_all_threads(1);
-	MySQL_Thread *thr=NULL;
 	i2=num_threads;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
@@ -3950,17 +3947,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 #endif // IDLE_THREADS
 
 	for (i=0;i<i2;i++) {
-		if (i<num_threads) {
+		MySQL_Thread *thr=NULL;
+		if (i<num_threads && mysql_threads) {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
-			pthread_mutex_lock(&thr->thread_mutex);
 #ifdef IDLE_THREADS
 		} else {
-			if (mysql_thread___session_idle_show_processlist) {
+			if (mysql_thread___session_idle_show_processlist && mysql_threads_idles) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
-				pthread_mutex_lock(&thr->thread_mutex);
 			}
 #endif // IDLE_THREADS
 		}
+		if (thr==NULL) break; // quick exit, at least one thread is not ready
+		pthread_mutex_lock(&thr->thread_mutex);
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
 			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
@@ -4182,6 +4180,7 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	if (mysql_threads==0) return;
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+		if (thr==NULL) return; // quick exit, at least one thread is not ready
 		int fd=thr->pipefd[1];
 		if (write(fd,&c,1)==-1) {
 			proxy_error("Error during write in signal_all_threads()\n");
@@ -4191,6 +4190,7 @@ void MySQL_Threads_Handler::signal_all_threads(unsigned char _c) {
 	if (GloVars.global.idle_threads)
 	for (i=0;i<num_threads;i++) {
 		MySQL_Thread *thr=(MySQL_Thread *)mysql_threads_idles[i].worker;
+		if (thr==NULL) return; // quick exit, at least one thread is not ready
 		int fd=thr->pipefd[1];
 		if (write(fd,&c,1)==-1) {
 			proxy_error("Error during write in signal_all_threads()\n");

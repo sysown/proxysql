@@ -479,7 +479,7 @@ int MySQL_Data_Stream::buffer2array() {
 	}
 	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
 		if (myconn->get_status_compression()==true) {
-			Bytef *dest;
+			Bytef *dest = NULL;
 			uLongf destLen;
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied the whole compressed packet\n");
 			unsigned int progress=0;

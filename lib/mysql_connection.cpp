@@ -35,6 +35,7 @@ static char * session_vars[]= {
 	(char *)"UNIQUE_CHECKS",
 	(char *)"AUTO_INCREMENT_INCREMENT",
 	(char *)"AUTO_INCREMENT_OFFSET",
+	(char *)"TIMESTAMP",
 	(char *)"GROUP_CONCAT_MAX_LEN"
 };
 
@@ -517,7 +518,12 @@ void MySQL_Connection::set_names_cont(short event) {
 
 void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 	query.length=length;
-	query.ptr=stmt;
+	if (query.ptr) {
+		free(query.ptr);
+	}
+	query.ptr=(char*)malloc(sizeof(char) * length + 1);
+	memcpy(query.ptr, stmt, length);
+	query.ptr[length] = '\0';
 	if (length > largest_query_length) {
 		largest_query_length=length;
 	}
@@ -1503,6 +1509,7 @@ void MySQL_Connection::async_free_result() {
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
 	if (query.ptr) {
+		free(query.ptr);
 		query.ptr=NULL;
 		query.length=0;
 	}
@@ -1584,27 +1591,37 @@ bool MySQL_Connection::MultiplexDisabled() {
 
 bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) {
     if (query_digest_text==NULL) return true;
-    
-    char *query_digest_text_filter_select;
+
+    char *query_digest_text_filter_select = NULL;
     unsigned long query_digest_text_len=strlen(query_digest_text);
     if (strncasecmp(query_digest_text,"SELECT ",strlen("SELECT "))==0){
         query_digest_text_filter_select=(char*)malloc(query_digest_text_len-7+1);
         memcpy(query_digest_text_filter_select,&query_digest_text[7],query_digest_text_len-7);
         query_digest_text_filter_select[query_digest_text_len-7]='\0';
+    } else {
+        return false;
     }
     //filter @@session. and @@
-    char *match=NULL;
-    while ((match = strcasestr(query_digest_text_filter_select,"@@session."))) {
-        *match = '\0';
-        strcat(query_digest_text_filter_select, match+strlen("@@session."));
+    char* match = query_digest_text_filter_select;
+    char* p;
+    while ((match = strcasestr(match, "@@session."))) {
+        p = match + strlen("@@session.");
+        memmove(match, p, query_digest_text_len-7+1 - (p - query_digest_text_filter_select));
+        match = p;
     }
-    while ((match = strcasestr(query_digest_text_filter_select,"@@"))) {
-        *match = '\0';
-        strcat(query_digest_text_filter_select, match+strlen("@@"));
+    match = query_digest_text_filter_select;
+    while ((match = strcasestr(match, "@@"))) {
+        p = match + strlen("@@");
+        memmove(match, p, query_digest_text_len-7+1 - (p - query_digest_text_filter_select));
+        match = p;
     }
-    
+
     std::vector<char*>query_digest_text_filter_select_v;
-    char* query_digest_text_filter_select_tok=strtok(query_digest_text_filter_select, ",");
+    char* query_digest_text_filter_select_tok = NULL;
+    char* saveptr;
+    if (query_digest_text_filter_select) {
+        query_digest_text_filter_select_tok = strtok_r(query_digest_text_filter_select, ",", &saveptr);
+    }
     while(query_digest_text_filter_select_tok){
         //filter "as"/space/alias,such as select @@version as a, @@version b
         while (1){
@@ -1622,21 +1639,21 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
         }else{
             query_digest_text_filter_select_v.push_back(query_digest_text_filter_select_tok);
         }
-        query_digest_text_filter_select_tok=strtok(NULL, ",");
+        query_digest_text_filter_select_tok=strtok_r(NULL, ",", &saveptr);
     }
-    
+
     std::vector<char*>keep_multiplexing_variables_v;
     char* keep_multiplexing_variables_tmp;
     unsigned long keep_multiplexing_variables_len=strlen(mysql_thread___keep_multiplexing_variables);
     keep_multiplexing_variables_tmp=(char*)malloc(keep_multiplexing_variables_len+1);
     memcpy(keep_multiplexing_variables_tmp, mysql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
     keep_multiplexing_variables_tmp[keep_multiplexing_variables_len]='\0';
-    char* keep_multiplexing_variables_tok=strtok(keep_multiplexing_variables_tmp, " ,");
+    char* keep_multiplexing_variables_tok=strtok_r(keep_multiplexing_variables_tmp, " ,", &saveptr);
     while (keep_multiplexing_variables_tok){
         keep_multiplexing_variables_v.push_back(keep_multiplexing_variables_tok);
-        keep_multiplexing_variables_tok=strtok(NULL, " ,");
+        keep_multiplexing_variables_tok=strtok_r(NULL, " ,", &saveptr);
     }
-    
+
     for (std::vector<char*>::iterator it=query_digest_text_filter_select_v.begin();it!=query_digest_text_filter_select_v.end();it++){
         bool is_match=false;
         for (std::vector<char*>::iterator it1=keep_multiplexing_variables_v.begin();it1!=keep_multiplexing_variables_v.end();it1++){

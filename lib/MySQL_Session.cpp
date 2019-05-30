@@ -829,11 +829,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			char *errmsg = NULL;
 			if (collation_specified) {
 				m=(char *)"Unknown character set '%s' or collation '%s'";
-				errmsg=(char *)malloc(strlen(csname)+strlen(collation_name)+strlen(m));
+				errmsg=(char *)malloc(strlen(csname)+strlen(collation_name)+strlen(m)+1);
 				sprintf(errmsg,m,csname,collation_name);
 			} else {
 				m=(char *)"Unknown character set: '%s'";
-				errmsg=(char *)malloc(strlen(csname)+strlen(m));
+				errmsg=(char *)malloc(strlen(csname)+strlen(m)+1);
 				sprintf(errmsg,m,csname);
 			}
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg);
@@ -1462,7 +1462,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 	unsigned long query_length=0;
 	if (myconn->async_state_machine==ASYNC_IDLE) {
 		char *q=(char *)"SET SQL_MODE='%s'";
-		query=(char *)malloc(strlen(q)+strlen(myconn->options.sql_mode));
+		query=(char *)malloc(strlen(q)+strlen(myconn->options.sql_mode)+1);
 		sprintf(query,q,myconn->options.sql_mode);
 		query_length=strlen(query);
 	}
@@ -1530,7 +1530,7 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 	unsigned long query_length=0;
 	if (myconn->async_state_machine==ASYNC_IDLE) {
 		char *q=(char *)"SET TIME_ZONE='%s'";
-		query=(char *)malloc(strlen(q)+strlen(myconn->options.time_zone));
+		query=(char *)malloc(strlen(q)+strlen(myconn->options.time_zone)+1);
 		sprintf(query,q,myconn->options.time_zone);
 		query_length=strlen(query);
 	}
@@ -3439,7 +3439,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
 					} else {
 						char *a=(char *)"User '%s' can only connect locally";
-						char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username));
+						char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username)+1);
 						sprintf(b,a,client_myds->myconn->userinfo->username);
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1040,(char *)"42000", b);
 						free(b);
@@ -3858,11 +3858,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							char *errmsg = NULL;
 							if (s3.length()) {
 								m=(char *)"Unknown character set '%s' or collation '%s'";
-								errmsg=(char *)malloc(s2.length() + s3.length() + strlen(m));
+								errmsg=(char *)malloc(s2.length() + s3.length() + strlen(m) + 1);
 								sprintf(errmsg,m,s2.c_str(), s3.c_str());
 							} else {
 								m=(char *)"Unknown character set: '%s'";
-								errmsg=(char *)malloc(s2.length()+strlen(m));
+								errmsg=(char *)malloc(s2.length()+strlen(m)+1);
 								sprintf(errmsg,m,s2.c_str());
 							}
 							client_myds->DSS=STATE_QUERY_SENT_NET;
