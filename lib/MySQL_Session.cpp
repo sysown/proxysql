@@ -598,10 +598,9 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 }
 
 
-// FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	size_t sal=strlen("set autocommit");
-	char * _ptr = (char *)pkt->ptr;
+	char * _ptr = NULL;
 	if ( pkt->size >= 7+sal) {
 		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,strlen((char *)"SET @@session.autocommit"))==0) {
 			memmove(_ptr+9, _ptr+19, pkt->size - 19);
@@ -609,8 +608,14 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 		}
 		if (strncasecmp((char *)"set autocommit",(char *)pkt->ptr+5,sal)==0) {
 			void *p = NULL;
-			for (int i=5+sal; i < (int)pkt->size; i++) {
-				*((char *)pkt->ptr+i) = tolower(*((char *)pkt->ptr+i));
+			// make a copy
+			PtrSize_t _new_pkt;
+			_new_pkt.size = pkt->size;
+			_new_pkt.ptr = malloc(_new_pkt.size);
+			memcpy(_new_pkt.ptr, pkt->ptr, _new_pkt.size);
+			_ptr = (char *)_new_pkt.ptr;
+			for (int i=5+sal; i < (int)_new_pkt.size; i++) {
+				*((char *)_new_pkt.ptr+i) = tolower(*((char *)_new_pkt.ptr+i));
 			}
 			p = memmem(_ptr+5+sal, pkt->size-5-sal, (void *)"false", 5);
 			if (p) {
@@ -628,18 +633,26 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 			if (p) {
 				memcpy(p,(void *)"1 ",2);
 			}
-			__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
 			unsigned int i;
 			bool eq=false;
 			int fd=-1; // first digit
-			for (i=5+sal;i<pkt->size;i++) {
-				char c=((char *)pkt->ptr)[i];
-				if (c!='0' && c!='1' && c!=' ' && c!='=' && c!='/') return false; // found a not valid char
+			for (i=5+sal;i<_new_pkt.size;i++) {
+				char c=((char *)_new_pkt.ptr)[i];
+				if (c!='0' && c!='1' && c!=' ' && c!='=' && c!='/') {
+					free(_new_pkt.ptr);
+					return false; // found a not valid char
+				}
 				if (eq==false) {
-					if (c!=' ' && c!='=') return false; // found a not valid char
+					if (c!=' ' && c!='=') {
+						free(_new_pkt.ptr);
+						return false; // found a not valid char
+					}
 					if (c=='=') eq=true;
 				} else {
-					if (c!='0' && c!='1' && c!=' ' && c!='/') return false; // found a not valid char
+					if (c!='0' && c!='1' && c!=' ' && c!='/') {
+						free(_new_pkt.ptr);
+						return false; // found a not valid char
+					}
 					if (fd==-1) {
 						if (c=='0' || c=='1') { // found first digit
 							if (c=='0')
@@ -649,6 +662,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 						}
 					} else {
 						if (c=='0' || c=='1') { // found second digit
+							free(_new_pkt.ptr);
 							return false;
 						} else {
 							if (c=='/' || c==' ') {
@@ -659,6 +673,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 				}
 			}
 			if (fd >= 0) { // we can set autocommit
+				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
 				// we immediately process the number of transactions
 				unsigned int nTrx=NumActiveTransactions();
 				if (fd==1 && autocommit==true) {
@@ -696,8 +711,10 @@ __ret_autocommit_OK:
 				status=WAITING_CLIENT_DATA;
 				l_free(pkt->size,pkt->ptr);
 				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
+				free(_new_pkt.ptr);
 				return true;
 			}
+			free(_new_pkt.ptr);
 		}
 	}
 	return false;
@@ -4442,6 +4459,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse();
+				bool exit_after_SetParse = false;
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
 					std::string var = it->first;
 					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
@@ -4465,7 +4483,53 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 							client_myds->myconn->options.sql_mode=strdup(value1.c_str());
 							if (strcasestr(value1.c_str(), (char *)"NO_BACKSLASH_ESCAPES")) {
-								goto __exit_set_destination_hostgroup;
+								//goto __exit_set_destination_hostgroup;
+								exit_after_SetParse = true;
+							}
+						}
+					} else if (var == "autocommit") {
+						std::string value1 = *values;
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET Time Zone value %s\n", value1.c_str());
+						int __tmp_autocommit = -1;
+						if (
+							(strcasecmp(value1.c_str(),(char *)"0")==0) ||
+							(strcasecmp(value1.c_str(),(char *)"false")==0) ||
+							(strcasecmp(value1.c_str(),(char *)"off")==0)
+						) {
+							__tmp_autocommit = 0;
+						} else {
+							if (
+								(strcasecmp(value1.c_str(),(char *)"1")==0) ||
+								(strcasecmp(value1.c_str(),(char *)"true")==0) ||
+								(strcasecmp(value1.c_str(),(char *)"on")==0)
+							) {
+								__tmp_autocommit = 1;
+							}
+						}
+						if (__tmp_autocommit >= 0) {
+							int fd = __tmp_autocommit;
+							__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
+							// we immediately process the number of transactions
+							unsigned int nTrx=NumActiveTransactions();
+							if (fd==1 && autocommit==true) {
+								// nothing to do, return OK
+							}
+							if (fd==1 && autocommit==false) {
+								if (nTrx) {
+									// there is an active transaction, we need to forward it
+									// because this can potentially close the transaction
+									autocommit=true;
+									autocommit_on_hostgroup=FindOneActiveTransaction();
+									exit_after_SetParse = true;
+								} else {
+									// as there is no active transaction, we do no need to forward it
+									// just change internal state
+									autocommit=true;
+								}
+							}
+
+							if (fd==0) {
+								autocommit=false;	// we set it, no matter if already set or not
 							}
 						}
 					} else if (var == "time_zone") {
@@ -4517,7 +4581,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 					}
 				}
-
+				if (exit_after_SetParse) {
+					goto __exit_set_destination_hostgroup;
+				}
 				// parseSetCommand wasn't able to parse anything...
 				if (set.size() == 0) {
 					// try case listed in #1373
