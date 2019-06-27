@@ -745,12 +745,12 @@ void * monitor_ping_thread(void *arg) {
 		//GloMyMon->My_Conn_Pool->conn_register(mmsd);
 	}
 
-	mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 	mmsd->t1=monotonic_time();
 	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
 	mmsd->interr=0; // reset the value
 	mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout during ping");
@@ -1014,7 +1014,6 @@ void * monitor_read_only_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
-
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
