@@ -745,6 +745,7 @@ void * monitor_ping_thread(void *arg) {
 		//GloMyMon->My_Conn_Pool->conn_register(mmsd);
 	}
 
+	mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 	mmsd->t1=monotonic_time();
 	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
 	mmsd->interr=0; // reset the value
@@ -761,7 +762,6 @@ void * monitor_ping_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_ping_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
-		usleep(10000);
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
@@ -867,6 +867,7 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 	t1=monotonic_time();
 	async_exit_status=mysql_query_start(&interr,mysql,query);
 	while (async_exit_status) {
+		async_exit_status=wait_for_mysql(mysql, async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mysql_error_msg=strdup("timeout");
@@ -878,7 +879,6 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 		if ((async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			async_exit_status=mysql_query_cont(&interr, mysql, async_exit_status);
 		}
-		usleep(10000);
 	}
 	if (interr) { // SET failed
 		ret=false;
@@ -973,6 +973,7 @@ void * monitor_read_only_thread(void *arg) {
 		}
 	}
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -991,7 +992,6 @@ void * monitor_read_only_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
-		usleep(10000);
 	}
 	if (mmsd->interr) {
 		// error during query
@@ -1000,6 +1000,7 @@ void * monitor_read_only_thread(void *arg) {
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -1014,7 +1015,6 @@ void * monitor_read_only_thread(void *arg) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
 
-		usleep(10000);
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
@@ -1204,6 +1204,7 @@ void * monitor_group_replication_thread(void *arg) {
 	mmsd->interr=0; // reset the value
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status");
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -1222,7 +1223,6 @@ void * monitor_group_replication_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
-		usleep(10000);
 	}
 	if (mmsd->interr) {
 		// error during query
@@ -1231,6 +1231,7 @@ void * monitor_group_replication_thread(void *arg) {
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -1243,8 +1244,6 @@ void * monitor_group_replication_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
-
-		usleep(10000);
 	}
 	if (mmsd->interr) { // group replication check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
@@ -1533,7 +1532,7 @@ void * monitor_galera_thread(void *arg) {
 
 	mmsd->t1=monotonic_time();
 	while (mmsd->async_exit_status) {
-		//mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
@@ -1547,11 +1546,10 @@ void * monitor_galera_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
-
-		usleep(10000);
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -1564,8 +1562,6 @@ void * monitor_galera_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
-
-		usleep(10000);
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
@@ -1889,6 +1885,7 @@ void * monitor_replication_lag_thread(void *arg) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
 	}
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -1900,10 +1897,10 @@ void * monitor_replication_lag_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
-		usleep(10000);
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -1915,8 +1912,6 @@ void * monitor_replication_lag_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
-
-		usleep(10000);
 	}
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
@@ -3913,6 +3908,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS ORDER BY SERVER_ID");
 #endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -3925,11 +3921,10 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
-
-		usleep(10000);
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -3942,8 +3937,6 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
-
-		usleep(10000);
 	}
 	if (mmsd->interr) { // check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
@@ -4328,6 +4321,7 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS ORDER BY SERVER_ID");
 #endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -4340,10 +4334,10 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
 		}
-		usleep(10000);
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
+		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
@@ -4356,8 +4350,6 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
 			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
 		}
-
-		usleep(10000);
 	}
 	if (mmsd->interr) { // check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
