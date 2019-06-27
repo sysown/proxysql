@@ -1516,7 +1516,11 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_threads_min")) {
 			int intv=atoi(value);
+#ifdef DEBUG
+			if (true) {
+#else
 			if (intv >= 2 && intv <= 16) {
+#endif
 				variables.monitor_threads_min = intv;
 				return true;
 			} else {
@@ -1525,7 +1529,11 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (!strcasecmp(name,"monitor_threads_max")) {
 			int intv=atoi(value);
+#ifdef DEBUG
+			if (true) {
+#else
 			if (intv >= 4 && intv <= 256) {
+#endif
 				variables.monitor_threads_max = intv;
 				return true;
 			} else {
