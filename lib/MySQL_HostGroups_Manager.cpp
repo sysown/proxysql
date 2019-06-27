@@ -969,7 +969,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	admindb=NULL;	// initialized only if needed
 	mydb=new SQLite3DB();
 #ifdef DEBUG
-	mydb->open((char *)"/tmp/proxysql/inmemory.db", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	mydb->open((char *)"file:mem_mydb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #else
 	mydb->open((char *)"file:mem_mydb?mode=memory", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 #endif /* DEBUG */
