@@ -18,7 +18,7 @@ else
 	DISTRO := Unknown
 endif
 
-NPROCS := 4
+NPROCS := 1
 OS := $(shell uname -s)
 ifeq ($(OS),Linux)
 	NPROCS := $(shell nproc)
