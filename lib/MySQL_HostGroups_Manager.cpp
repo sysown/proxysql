@@ -957,6 +957,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.access_denied_wrong_password=0;
 	status.access_denied_max_connections=0;
 	status.access_denied_max_user_connections=0;
+	status.select_for_update_or_equivalent=0;
 	pthread_mutex_init(&readonly_mutex, NULL);
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);

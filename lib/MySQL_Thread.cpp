@@ -4330,6 +4330,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Queries that are SELECT for update or equivalent
+		pta[0]=(char *)"Selects_for_update__autocommit0";
+		sprintf(buf,"%llu",MyHGM->status.select_for_update_or_equivalent);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Slow queries
 		pta[0]=(char *)"Slow_queries";
 		sprintf(buf,"%llu",get_slow_queries());

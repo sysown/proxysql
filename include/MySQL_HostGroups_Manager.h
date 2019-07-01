@@ -540,6 +540,7 @@ class MySQL_HostGroups_Manager {
 		unsigned long long access_denied_wrong_password;
 		unsigned long long access_denied_max_connections;
 		unsigned long long access_denied_max_user_connections;
+		unsigned long long select_for_update_or_equivalent;
 	} status;
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();

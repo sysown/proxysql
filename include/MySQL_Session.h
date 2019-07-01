@@ -46,6 +46,8 @@ class Query_Info {
 
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
+	bool bool_is_select_NOT_for_update;
+	bool bool_is_select_NOT_for_update_computed;
 
 	Query_Info();
 	~Query_Info();

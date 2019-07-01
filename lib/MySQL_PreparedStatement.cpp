@@ -163,18 +163,87 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 	   // Query_Info::is_select_NOT_for_update()
 		if (ql >= 7) {
 			if (strncasecmp(q, (char *)"SELECT ", 7) == 0) {  // is a SELECT
-				is_select_NOT_for_update = true;
 				if (ql >= 17) {
-					char *p = (char *)q;
+					char *p = q;
 					p += ql - 11;
-					if (strncasecmp(p, " FOR UPDATE", 11) ==
-					    0) {  // is a SELECT FOR UPDATE
-						is_select_NOT_for_update = false;
+					if (strncasecmp(p, " FOR UPDATE", 11) == 0) {  // is a SELECT FOR UPDATE
+						__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+						goto __exit_MySQL_STMT_Global_info___search_select;
+					}
+					p = q;
+					p += ql-10;
+					if (strncasecmp(p, " FOR SHARE", 10) == 0) {  // is a SELECT FOR SHARE
+						__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+						goto __exit_MySQL_STMT_Global_info___search_select;
+					}
+					if (ql >= 25) {
+						p = q;
+						p += ql-19;
+						if (strncasecmp(p, " LOCK IN SHARE MODE", 19) == 0) {  // is a SELECT LOCK IN SHARE MODE
+							__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+							goto __exit_MySQL_STMT_Global_info___search_select;
+						}
+						p = q;
+						p += ql-7;
+						if (strncasecmp(p," NOWAIT",7)==0) {
+							// let simplify. If NOWAIT is used, we assume FOR UPDATE|SHARE is used
+							__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+							goto __exit_MySQL_STMT_Global_info___search_select;
+/*
+							if (strcasestr(q," FOR UPDATE ")) {
+								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								goto __exit_MySQL_STMT_Global_info___search_select;
+							}
+							if (strcasestr(q," FOR SHARE ")) {
+								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								goto __exit_MySQL_STMT_Global_info___search_select;
+							}
+*/
+						}
+						p = q;
+						p += ql-12;
+						if (strncasecmp(p," SKIP LOCKED",12)==0) {
+							// let simplify. If SKIP LOCKED is used, we assume FOR UPDATE|SHARE is used
+							__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+							goto __exit_MySQL_STMT_Global_info___search_select;
+/*
+							if (strcasestr(q," FOR UPDATE ")==NULL) {
+								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								goto __exit_MySQL_STMT_Global_info___search_select;
+							}
+							if (strcasestr(q," FOR SHARE ")==NULL) {
+								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								goto __exit_MySQL_STMT_Global_info___search_select;
+							}
+*/
+						}
+						p=q;
+						char buf[129];
+						if (ql>=128) { // for long query, just check the last 128 bytes
+							p+=ql-128;
+							memcpy(buf,p,128);
+							buf[128]=0;
+						} else {
+							memcpy(buf,p,ql);
+							buf[ql]=0;
+						}
+						if (strcasestr(buf," FOR ")) {
+							if (strcasestr(buf," FOR UPDATE ")) {
+								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								goto __exit_MySQL_STMT_Global_info___search_select;
+							}
+							if (strcasestr(buf," FOR SHARE ")) {
+								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								goto __exit_MySQL_STMT_Global_info___search_select;
+							}
+						}
 					}
 				}
+				is_select_NOT_for_update = true;
 			}
 		}
 	}
+__exit_MySQL_STMT_Global_info___search_select:
 
 	// set default properties:
 	properties.cache_ttl = -1;

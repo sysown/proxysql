@@ -161,6 +161,8 @@ Query_Info::Query_Info() {
 	QueryParserArgs.digest_text=NULL;
 	QueryParserArgs.first_comment=NULL;
 	stmt_info=NULL;
+	bool_is_select_NOT_for_update=false;
+	bool_is_select_NOT_for_update_computed=false;
 }
 
 Query_Info::~Query_Info() {
@@ -185,6 +187,8 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 		if (mysql_thread___commands_stats)
 			query_parser_command_type();
 	}
+	bool_is_select_NOT_for_update=false;
+	bool_is_select_NOT_for_update_computed=false;
 }
 
 void Query_Info::end() {
@@ -215,6 +219,8 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	QueryLength=(mysql_header ? len-5 : len);
 	QueryPointer=(mysql_header ? _p+5 : _p);
 	MyComQueryCmd = MYSQL_COM_QUERY__UNINITIALIZED;
+	bool_is_select_NOT_for_update=false;
+	bool_is_select_NOT_for_update_computed=false;
 }
 
 void Query_Info::query_parser_init() {
@@ -251,24 +257,104 @@ bool Query_Info::is_select_NOT_for_update() {
 	if (stmt_info) { // we are processing a prepared statement. We already have the information
 		return stmt_info->is_select_NOT_for_update;
 	}
-	// to avoid an expensive strlen() on the digest_text, we consider only the real query
 	if (QueryPointer==NULL) {
 		return false;
 	}
+	if (bool_is_select_NOT_for_update_computed) {
+		return bool_is_select_NOT_for_update;
+	}
+	bool_is_select_NOT_for_update_computed=true;
 	if (QueryLength<7) {
 		return false;
 	}
-	if (strncasecmp((char *)QueryPointer,(char *)"SELECT ",7)) {
+	char *QP = (char *)QueryPointer;
+	size_t ql = QueryLength;
+	// we try to use the digest, if avaiable
+	if (QueryParserArgs.digest_text) {
+		QP = QueryParserArgs.digest_text;
+		ql = strlen(QP);
+	}
+	if (strncasecmp(QP,(char *)"SELECT ",7)) {
 		return false;
 	}
 	// if we arrive till here, it is a SELECT
-	if (QueryLength>=17) {
-		char *p=(char *)QueryPointer;
-		p+=QueryLength-11;
+	if (ql>=17) {
+		char *p=QP;
+		p+=ql-11;
 		if (strncasecmp(p," FOR UPDATE",11)==0) {
+			__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
 			return false;
 		}
+		p=QP;
+		p+=ql-10;
+		if (strncasecmp(p," FOR SHARE",10)==0) {
+			__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+			return false;
+		}
+		if (ql>=25) {
+			char *p=QP;
+			p+=ql-19;
+			if (strncasecmp(p," LOCK IN SHARE MODE",19)==0) {
+				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+				return false;
+			}
+			p=QP;
+			p+=ql-7;
+			if (strncasecmp(p," NOWAIT",7)==0) {
+				// let simplify. If NOWAIT is used, we assume FOR UPDATE|SHARE is used
+				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+				return false;
+/*
+				if (strcasestr(QP," FOR UPDATE ")==NULL) {
+					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+					return false;
+				}
+				if (strcasestr(QP," FOR SHARE ")==NULL) {
+					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+					return false;
+				}
+*/
+			}
+			p=QP;
+			p+=ql-12;
+			if (strncasecmp(p," SKIP LOCKED",12)==0) {
+				// let simplify. If SKIP LOCKED is used, we assume FOR UPDATE|SHARE is used
+				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+				return false;
+/*
+				if (strcasestr(QP," FOR UPDATE ")) {
+					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+					return false;
+				}
+				if (strcasestr(QP," FOR SHARE ")) {
+					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+					return false;
+				}
+*/
+			}
+			p=QP;
+			char buf[129];
+			if (ql>=128) { // for long query, just check the last 128 bytes
+				p+=ql-128;
+				memcpy(buf,p,128);
+				buf[128]=0;
+			} else {
+				memcpy(buf,p,ql);
+				buf[ql]=0;
+			}
+			if (strcasestr(buf," FOR ")) {
+				if (strcasestr(buf," FOR UPDATE ")) {
+					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+					return false;
+				}
+				if (strcasestr(buf," FOR SHARE ")) {
+					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+					return false;
+				}
+			}
+		}
 	}
+	bool_is_select_NOT_for_update=true;
 	return true;
 }
 
