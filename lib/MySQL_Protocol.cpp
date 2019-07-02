@@ -25,6 +25,8 @@ typedef uint8_t uchar;
 #define CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA 0x00200000
 #endif
 
+extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
+
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
 
@@ -1629,6 +1631,15 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 __do_auth:
 
+	{
+		// reject connections from unknown charsets
+		const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(charset);
+		if (!c) {
+			proxy_error("Client %s:%d is trying to use unknown charset %d. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port, charset);
+			ret = false;
+			goto __exit_do_auth;
+		}
+	}
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 #ifdef PROXYSQLCLICKHOUSE
 		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
@@ -1786,6 +1797,8 @@ __do_auth:
 			}
 		}
 	}
+
+__exit_do_auth:
 
 	if (_ret_use_ssl==true) {
 		(*myds)->sess->use_ssl = true;
