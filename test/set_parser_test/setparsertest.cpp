@@ -146,6 +146,9 @@ static Test multiple[] = {
   { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
   Expected("wait_timeout", {"2147483"}) } },
   { "set autocommit=1, sql_mode = concat(@@sql_mode,',STRICT_TRANS_TABLES')", { Expected("autocommit", {"1"}), Expected("sql_mode",  {"concat(@@sql_mode,',STRICT_TRANS_TABLES')"}) } },
+  { "SET NAMES utf8, @@SESSION.sql_mode = CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 3600",
+  { Expected("names", {"utf8"}), Expected("sql_mode",  {"CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
+  Expected("wait_timeout", {"3600"}) } },
 };
 
 TEST(TestParse, MULTIPLE) {
