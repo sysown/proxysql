@@ -640,8 +640,8 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	cl=strlen(ca);
 
-	char *un = "";
-	char *sn = "";
+	char *un = (char *)"";
+	char *sn = (char *)"";
 	if (ui) {
 		if (ui->username) {
 			un = ui->username;
