@@ -144,7 +144,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	}
 
 	if (opt->isSet("-V")) {
-		fprintf(stderr,"ProxySQL version %s, codename %s\n", PROXYSQL_VERSION, PROXYSQL_CODENAME);
+		fprintf(stdout,"ProxySQL version %s, codename %s\n", PROXYSQL_VERSION, PROXYSQL_CODENAME);
 		exit(EXIT_SUCCESS);
 	}
 
