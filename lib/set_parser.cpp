@@ -58,7 +58,7 @@ std::map<std::string,std::vector<string>> SetParser::parse() {
       }
     } else if (value4 != "") {
       // VARIABLE
-		value5.erase(value5.find_last_not_of(" \n\r\t\,")+1);
+		value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
       key = value4;
       op.push_back(value5);
     }
