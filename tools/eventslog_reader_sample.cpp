@@ -7,12 +7,30 @@
 #endif /* __STDC_LIMIT_MACROS */
 #include <stdint.h>
 #include <string.h>
+#include <assert.h>
 using namespace std;
 
 #define CPY1(x) *((uint8_t *)x)
 
 enum log_event_type {
-	PROXYSQL_QUERY
+	PROXYSQL_COM_QUERY,
+	PROXYSQL_MYSQL_AUTH_OK,
+	PROXYSQL_MYSQL_AUTH_ERR,
+	PROXYSQL_MYSQL_AUTH_CLOSE,
+	PROXYSQL_MYSQL_AUTH_QUIT,
+	PROXYSQL_MYSQL_CHANGE_USER_OK,
+	PROXYSQL_MYSQL_CHANGE_USER_ERR,
+	PROXYSQL_MYSQL_INITDB,
+	PROXYSQL_ADMIN_AUTH_OK,
+	PROXYSQL_ADMIN_AUTH_ERR,
+	PROXYSQL_ADMIN_AUTH_CLOSE,
+	PROXYSQL_ADMIN_AUTH_QUIT,
+	PROXYSQL_SQLITE_AUTH_OK,
+	PROXYSQL_SQLITE_AUTH_ERR,
+	PROXYSQL_SQLITE_AUTH_CLOSE,
+	PROXYSQL_SQLITE_AUTH_QUIT,
+	PROXYSQL_COM_STMT_EXECUTE,
+	PROXYSQL_COM_STMT_PREPARE
 };
 
 typedef union _4bytes_t {
@@ -89,6 +107,8 @@ class MySQL_Event {
 	size_t client_len;
 	uint64_t total_length;
 	uint64_t hid;
+	uint64_t affected_rows;
+	uint64_t rows_sent;
 	log_event_type et;
 	public:
 	MySQL_Event() {
@@ -97,7 +117,9 @@ class MySQL_Event {
 	void read(std::fstream *f) {
 		f->read((char *)&et,1);
 		switch (et) {
-			case PROXYSQL_QUERY:
+			case PROXYSQL_COM_QUERY:
+			case PROXYSQL_COM_STMT_EXECUTE:
+			case PROXYSQL_COM_STMT_PREPARE:
 				read_query(f);
 				break;
 			default:
@@ -113,7 +135,22 @@ class MySQL_Event {
 		schemaname=read_string(f,schemaname_len);
 		read_encoded_length((uint64_t *)&client_len,f);
 		client=read_string(f,client_len);
-		cout << "ProxySQL LOG QUERY: thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=\"" << schemaname << "\" client=\"" << client << "\"";
+		cout << "ProxySQL LOG ";
+		switch (et) {
+			case PROXYSQL_COM_STMT_EXECUTE:
+				cout << "COM_STMT_EXECUTE";
+				break;
+			case PROXYSQL_COM_STMT_PREPARE:
+				cout << "COM_STMT_PREPARE";
+				break;
+			case PROXYSQL_COM_QUERY:
+				cout << "COM_QUERY";
+				break;
+			default:
+				assert(0); // not supported
+				break;
+		}
+		cout << ": thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=\"" << schemaname << "\" client=\"" << client << "\"";
 		read_encoded_length((uint64_t *)&hid,f);
 		if (hid==UINT64_MAX) {
 			cout << " HID=NULL ";
@@ -124,6 +161,8 @@ class MySQL_Event {
 		}
 		read_encoded_length((uint64_t *)&start_time,f);
 		read_encoded_length((uint64_t *)&end_time,f);
+		read_encoded_length((uint64_t *)&affected_rows,f);
+		read_encoded_length((uint64_t *)&rows_sent,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
 		char digest_hex[20];
 		sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
@@ -136,14 +175,16 @@ class MySQL_Event {
 		timer=start_time/1000/1000;
     tm_info = localtime(&timer);
     strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
-		sprintf(buffer2,"%6u", (unsigned)(start_time%1000000));
+		sprintf(buffer2,"%06u", (unsigned)(start_time%1000000));
 		cout << " starttime=\"" << buffer << "." << buffer2 << "\"";
 		timer=end_time/1000/1000;
     tm_info = localtime(&timer);
     strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
-		sprintf(buffer2,"%6u", (unsigned)(end_time%1000000));
+		sprintf(buffer2,"%06u", (unsigned)(end_time%1000000));
 		cout << " endtime=\"" << buffer << "." << buffer2 << "\"";
 		cout << " duration=" << (end_time-start_time) << "us";
+		cout << " rows_affected=" << affected_rows;
+		cout << " rows_sent=" << rows_sent;
 		cout << " digest=\"" << digest_hex << "\"" << endl << query_ptr << endl;
 	}
 	~MySQL_Event() {

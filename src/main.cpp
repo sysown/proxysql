@@ -816,6 +816,7 @@ void ProxySQL_Main_init_main_modules() {
 	_tmp_GloMTH=new MySQL_Threads_Handler();
 	GloMTH = _tmp_GloMTH;
 	GloMyLogger = new MySQL_Logger();
+	GloMyLogger->print_version();
 	GloMyStmt=new MySQL_STMT_Manager_v14();
 }
 

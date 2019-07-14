@@ -631,6 +631,10 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			default:
 				break;
 		}
+		if (sess->session_type == PROXYSQL_SESSION_MYSQL) {
+			sess->CurrentQuery.have_affected_rows = true;
+			sess->CurrentQuery.affected_rows = affected_rows;
+		}
 	}
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.no_backslash_escapes) {
@@ -2273,7 +2277,7 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 // it assumes that the MYSQL_ROW is an format ready to be sent to the client
 unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 	unsigned long length=row->length;
-
+	num_rows++;
 	uint8_t pkt_sid=sid;
 	if (length < (0xFFFFFF+sizeof(mysql_hdr))) {
 		mysql_hdr myhdr;
