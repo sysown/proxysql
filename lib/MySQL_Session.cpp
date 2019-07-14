@@ -3631,7 +3631,7 @@ handler_again:
 								case PROCESSING_STMT_EXECUTE:
 									{
 										char sqlstate[10];
-										if (myconn->mysql) {
+										if (myconn && myconn->mysql) {
 											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 										} else {
