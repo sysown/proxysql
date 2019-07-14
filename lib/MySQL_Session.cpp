@@ -686,7 +686,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	size_t sal=strlen("set autocommit");
-	char * _ptr = NULL;
+	char * _ptr = (char *)pkt->ptr;
 	if ( pkt->size >= 7+sal) {
 		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,strlen((char *)"SET @@session.autocommit"))==0) {
 			memmove(_ptr+9, _ptr+19, pkt->size - 19);
