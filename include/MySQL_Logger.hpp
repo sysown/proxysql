@@ -66,8 +66,6 @@ class MySQL_Logger {
 #else
 	rwlock_t rwlock;
 #endif
-	void wrlock();
-	void wrunlock();
 	void events_close_log_unlocked();
 	void events_open_log_unlocked();
 	void audit_close_log_unlocked();
@@ -88,6 +86,8 @@ class MySQL_Logger {
 	void log_request(MySQL_Session *, MySQL_Data_Stream *);
 	void log_audit_entry(log_event_type, MySQL_Session *, MySQL_Data_Stream *, char *e = NULL);
 	void flush();
+	void wrlock();
+	void wrunlock();
 };
 
 

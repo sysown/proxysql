@@ -14,6 +14,7 @@ using json = nlohmann::json;
 #endif /* DEBUG */
 #define PROXYSQL_MYSQL_LOGGER_VERSION "2.0.0714" DEB
 
+extern MySQL_Logger *GloMyLogger;
 
 static uint8_t mysql_encode_length(uint64_t len, unsigned char *hd) {
 	if (len < 251) return 1;
@@ -225,6 +226,9 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 		}
 		j["ssl"] = sess->client_myds->encrypted;
 	}
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	GloMyLogger->wrlock();
 	*f << j.dump() << std::endl;
 }
 
@@ -252,6 +256,10 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	total_bytes+=mysql_encode_length(query_digest,NULL);
 
 	total_bytes+=mysql_encode_length(query_len,NULL)+query_len;
+
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	GloMyLogger->wrlock();
 
 	// write total length , fixed size
 	f->write((const char *)&total_bytes,sizeof(uint64_t));
@@ -389,6 +397,11 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	char digest_hex[20];
 	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
+
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	GloMyLogger->wrlock();
+
 	*f << j.dump() << std::endl;
 	return total_bytes; // always 0
 }
@@ -690,7 +703,9 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		me.set_server(hid,sa,sl);
 	}
 
-	wrlock();
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	//wrlock();
 
 	me.write(events.logfile, sess);
 
@@ -840,7 +855,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 		me.set_extra_info(xi);
 	}
 
-	wrlock();
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	//wrlock();
 
 	me.write(audit.logfile, sess);
 
