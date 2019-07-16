@@ -405,6 +405,7 @@ MySQL_Session::MySQL_Session() {
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
+	locked_on_hostgroup=-1;
 	next_query_flagIN=-1;
 	mirror_hostgroup=-1;
 	mirror_flagOUT=-1;
@@ -441,6 +442,7 @@ void MySQL_Session::reset() {
 	autocommit_on_hostgroup=-1;
 	current_hostgroup=-1;
 	default_hostgroup=-1;
+	locked_on_hostgroup=-1;
 	if (sess_STMTs_meta) {
 		delete sess_STMTs_meta;
 		sess_STMTs_meta=NULL;
@@ -821,6 +823,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["thread_session_id"] = thread_session_id;
 	j["current_hostgroup"] = current_hostgroup;
 	j["default_hostgroup"] = default_hostgroup;
+	j["locked_on_hostgroup"] = locked_on_hostgroup;
 	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
 	j["last_insert_id"] = last_insert_id;
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
@@ -2658,7 +2661,11 @@ __get_pkts_from_client:
 					case STATE_SLEEP:	// only this section can be executed ALSO by mirror
 						command_counters->incr(thread->curtime/1000000);
 						if (transaction_persistent_hostgroup==-1) {
-							current_hostgroup=default_hostgroup;
+							if (locked_on_hostgroup==-1) {
+								current_hostgroup = default_hostgroup;
+							} else {
+								current_hostgroup = locked_on_hostgroup;
+							}
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n");
 						if (session_fast_forward==true) { // if it is fast forward
@@ -2743,6 +2750,13 @@ __get_pkts_from_client:
 									}
 
 									if (autocommit_on_hostgroup>=0) {
+									}
+									if (locked_on_hostgroup >= 0) {
+										if (current_hostgroup != locked_on_hostgroup) {
+											// FIXME : handle this
+											// FIXME : should be a simple return error to client
+											break;
+										}
 									}
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
@@ -4788,6 +4802,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								// this seems to be the right backend
 								qpo->destination_hostgroup = last_HG_affected_rows;
 								current_hostgroup = qpo->destination_hostgroup;
+								if (locked_on_hostgroup >= 0) {
+									if (current_hostgroup != locked_on_hostgroup) {
+										// FIXME : handle this
+									}
+								}
 								return false; // execute it on backend!
 							}
 						}
@@ -4892,6 +4911,16 @@ __exit_set_destination_hostgroup:
 	if ( qpo->destination_hostgroup >= 0 ) {
 		if (transaction_persistent_hostgroup == -1) {
 			current_hostgroup=qpo->destination_hostgroup;
+		}
+	}
+	if (locked_on_hostgroup >= 0) {
+		if (current_hostgroup != locked_on_hostgroup) {
+			// FIXME : handle this
+			client_myds->DSS=STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",);
+			l_free(pkt->size,pkt->ptr);
+			RequestEnd(NULL);
+			return true;
 		}
 	}
 	return false;

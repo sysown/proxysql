@@ -159,6 +159,7 @@ class MySQL_Session
 	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
+	int locked_on_hostgroup;
 	int next_query_flagIN;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
