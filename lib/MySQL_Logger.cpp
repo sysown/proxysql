@@ -7,6 +7,15 @@
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 
+#ifdef DEBUG
+#define DEB "_DEBUG"
+#else
+#define DEB ""
+#endif /* DEBUG */
+#define PROXYSQL_MYSQL_LOGGER_VERSION "2.0.0714" DEB
+
+extern MySQL_Logger *GloMyLogger;
+
 static uint8_t mysql_encode_length(uint64_t len, unsigned char *hd) {
 	if (len < 251) return 1;
 	if (len < 65536) { if (hd) { *hd=0xfc; }; return 3; }
@@ -39,6 +48,20 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	hid=UINT64_MAX;
 	server=NULL;
 	extra_info = NULL;
+	have_affected_rows=false;
+	affected_rows=0;
+	have_rows_sent=false;
+	rows_sent=0;
+}
+
+void MySQL_Event::set_affected_rows(uint64_t ar) {
+	have_affected_rows=true;
+	affected_rows=ar;
+}
+
+void MySQL_Event::set_rows_sent(uint64_t rs) {
+	have_rows_sent=true;
+	rows_sent=rs;
 }
 
 void MySQL_Event::set_extra_info(char *_err) {
@@ -59,8 +82,14 @@ void MySQL_Event::set_server(int _hid, const char *ptr, int len) {
 uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 	uint64_t total_bytes=0;
 	switch (et) {
-		case PROXYSQL_QUERY:
-			total_bytes=write_query(f);
+		case PROXYSQL_COM_QUERY:
+		case PROXYSQL_COM_STMT_EXECUTE:
+		case PROXYSQL_COM_STMT_PREPARE:
+			if (mysql_thread___eventslog_format==1) { // format 1 , binary
+				total_bytes=write_query_format_1(f);
+			} else { // format 2 , json
+				total_bytes=write_query_format_2_json(f);
+			}
 			break;
 		case PROXYSQL_MYSQL_AUTH_OK:
 		case PROXYSQL_MYSQL_AUTH_ERR:
@@ -197,10 +226,13 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 		}
 		j["ssl"] = sess->client_myds->encrypted;
 	}
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	GloMyLogger->wrlock();
 	*f << j.dump() << std::endl;
 }
 
-uint64_t MySQL_Event::write_query(std::fstream *f) {
+uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	uint64_t total_bytes=0;
 	total_bytes+=1; // et
 	total_bytes+=mysql_encode_length(thread_id, NULL);
@@ -218,9 +250,16 @@ uint64_t MySQL_Event::write_query(std::fstream *f) {
 
 	total_bytes+=mysql_encode_length(start_time,NULL);
 	total_bytes+=mysql_encode_length(end_time,NULL);
+	total_bytes+=mysql_encode_length(affected_rows,NULL);
+	total_bytes+=mysql_encode_length(rows_sent,NULL);
+
 	total_bytes+=mysql_encode_length(query_digest,NULL);
 
 	total_bytes+=mysql_encode_length(query_len,NULL)+query_len;
+
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	GloMyLogger->wrlock();
 
 	// write total length , fixed size
 	f->write((const char *)&total_bytes,sizeof(uint64_t));
@@ -267,6 +306,14 @@ uint64_t MySQL_Event::write_query(std::fstream *f) {
 	write_encoded_length(buf,end_time,len,buf[0]);
 	f->write((char *)buf,len);
 
+	len=mysql_encode_length(affected_rows,buf);
+	write_encoded_length(buf,affected_rows,len,buf[0]);
+	f->write((char *)buf,len);
+
+	len=mysql_encode_length(rows_sent,buf);
+	write_encoded_length(buf,rows_sent,len,buf[0]);
+	f->write((char *)buf,len);
+
 	len=mysql_encode_length(query_digest,buf);
 	write_encoded_length(buf,query_digest,len,buf[0]);
 	f->write((char *)buf,len);
@@ -279,6 +326,84 @@ uint64_t MySQL_Event::write_query(std::fstream *f) {
 	}
 
 	return total_bytes;
+}
+
+uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
+	json j;
+	uint64_t total_bytes=0;
+	if (hid!=UINT64_MAX) {
+		j["hostgroup_id"] = hid;
+	} else {
+		j["hostgroup_id"] = -1;
+	}
+	j["thread_id"] = thread_id;
+	switch (et) {
+		case PROXYSQL_COM_STMT_EXECUTE:
+			j["event"]="COM_STMT_EXECUTE";
+			break;
+		case PROXYSQL_COM_STMT_PREPARE:
+			j["event"]="COM_STMT_PREPARE";
+			break;
+		default:
+			j["event"]="COM_QUERY";
+			break;
+	}
+	if (username) {
+		j["username"] = username;
+	} else {
+		j["username"] = "";
+	}
+	if (schemaname) {
+		j["schemaname"] = schemaname;
+	} else {
+		j["schemaname"] = "";
+	}
+	if (client) {
+		j["client"] = client;
+	} else {
+		j["client"] = "";
+	}
+	if (hid!=UINT64_MAX) {
+		if (server) {
+			j["server"] = server;
+		}
+	}
+	j["rows_affected"] = affected_rows;
+	j["rows_sent"] = rows_sent;
+	j["query"] = string(query_ptr,query_len);
+	j["starttime_timestamp_us"] = start_time;
+	{
+		time_t timer=start_time/1000/1000;
+		struct tm* tm_info;
+		tm_info = localtime(&timer);
+		char buffer1[64];
+		char buffer2[64];
+		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
+		sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
+		j["starttime"] = buffer2;
+	}
+	j["endtime_timestamp_us"] = end_time;
+	{
+		time_t timer=end_time/1000/1000;
+		struct tm* tm_info;
+		tm_info = localtime(&timer);
+		char buffer1[64];
+		char buffer2[64];
+		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
+		sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
+		j["endtime"] = buffer2;
+	}
+	j["duration_us"] = end_time-start_time;
+	char digest_hex[20];
+	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
+	j["digest"] = digest_hex;
+
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	GloMyLogger->wrlock();
+
+	*f << j.dump() << std::endl;
+	return total_bytes; // always 0
 }
 
 extern Query_Processor *GloQPro;
@@ -503,19 +628,61 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
-	MySQL_Event me(PROXYSQL_QUERY,
+	enum log_event_type let = PROXYSQL_COM_QUERY; // default
+	switch (sess->status) {
+		case PROCESSING_STMT_EXECUTE:
+			let = PROXYSQL_COM_STMT_EXECUTE;
+			break;
+		case PROCESSING_STMT_PREPARE:
+			let = PROXYSQL_COM_STMT_PREPARE;
+			break;
+		case WAITING_CLIENT_DATA:
+			{
+				unsigned char c=*((unsigned char *)sess->pktH->ptr+sizeof(mysql_hdr));
+				switch ((enum_mysql_command)c) {
+					case _MYSQL_COM_STMT_PREPARE:
+						// proxysql is responding to COM_STMT_PREPARE without
+						// preparing on any backend
+						let = PROXYSQL_COM_STMT_PREPARE;
+						break;
+					default:
+						break;
+				}
+			}
+			break;
+		default:
+			break;
+	}
+	MySQL_Event me(let,
 		sess->thread_session_id,ui->username,ui->schemaname,
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
 		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs),
 		ca, cl
 	);
-	char *c=(char *)sess->CurrentQuery.QueryPointer;
+	char *c = NULL;
+	int ql = 0;
+	switch (sess->status) {
+		case PROCESSING_STMT_EXECUTE:
+			c = (char *)sess->CurrentQuery.stmt_info->query;
+			ql = sess->CurrentQuery.stmt_info->query_length;
+			break;
+		case PROCESSING_STMT_PREPARE:
+		default:
+			c = (char *)sess->CurrentQuery.QueryPointer;
+			ql = sess->CurrentQuery.QueryLength;
+			break;
+	}
 	if (c) {
-		me.set_query(c,sess->CurrentQuery.QueryLength);
+		me.set_query(c,ql);
 	} else {
 		me.set_query("",0);
 	}
+
+	if (sess->CurrentQuery.have_affected_rows) {
+		me.set_affected_rows(sess->CurrentQuery.affected_rows);
+	}
+	me.set_rows_sent(sess->CurrentQuery.rows_sent);
 
 	int sl=0;
 	char *sa=(char *)""; // default
@@ -536,7 +703,9 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		me.set_server(hid,sa,sl);
 	}
 
-	wrlock();
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	//wrlock();
 
 	me.write(events.logfile, sess);
 
@@ -686,7 +855,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 		me.set_extra_info(xi);
 	}
 
-	wrlock();
+	// for performance reason, we are moving the write lock
+	// right before the write to disk
+	//wrlock();
 
 	me.write(audit.logfile, sess);
 
@@ -807,3 +978,8 @@ unsigned int MySQL_Logger::audit_find_next_id() {
 	}        
 	return 0;
 }
+
+void MySQL_Logger::print_version() {
+  fprintf(stderr,"Standard ProxySQL MySQL Logger rev. %s -- %s -- %s\n", PROXYSQL_MYSQL_LOGGER_VERSION, __FILE__, __TIMESTAMP__);
+};
+

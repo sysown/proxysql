@@ -443,6 +443,8 @@ class MySQL_Threads_Handler
 		int connpoll_reset_queue_length;
 		char *eventslog_filename;
 		int eventslog_filesize;
+		int eventslog_default_log;
+		int eventslog_format;
 		char *auditlog_filename;
 		int auditlog_filesize;
 		// SSL related, proxy to server

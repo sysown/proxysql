@@ -220,6 +220,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server_max",
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
+	(char *)"eventslog_default_log",
+	(char *)"eventslog_format",
 	(char *)"auditlog_filename",
 	(char *)"auditlog_filesize",
 	(char *)"default_charset",
@@ -430,6 +432,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
+	variables.eventslog_default_log=0;
+	variables.eventslog_format=1;
 	variables.auditlog_filename=strdup((char *)"");
 	variables.auditlog_filesize=100*1024*1024;
 	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
@@ -758,6 +762,8 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		if (!strcmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	}
 	if (!strcmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
+	if (!strcmp(name,"eventslog_default_log")) return (int)variables.eventslog_default_log;
+	if (!strcmp(name,"eventslog_format")) return (int)variables.eventslog_format;
 	if (!strcmp(name,"auditlog_filesize")) return (int)variables.auditlog_filesize;
 	if (!strcmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
 	if (!strcmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
@@ -1059,6 +1065,14 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"eventslog_filesize")) {
 		sprintf(intbuf,"%d",variables.eventslog_filesize);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"eventslog_default_log")) {
+		sprintf(intbuf,"%d",variables.eventslog_default_log);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"eventslog_format")) {
+		sprintf(intbuf,"%d",variables.eventslog_format);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"auditlog_filesize")) {
@@ -1932,6 +1946,31 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1024*1024 && intv <= 1*1024*1024*1024) {
 			variables.eventslog_filesize=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"eventslog_default_log")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1) {
+			variables.eventslog_default_log=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"eventslog_format")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 2) {
+			if (variables.eventslog_format!=intv) {
+				// if we are switching format, we need to switch file too
+				if (GloMyLogger) {
+					proxy_info("Switching query logging format from %d to %d\n", variables.eventslog_format , intv);
+					GloMyLogger->flush_log();
+				}
+				variables.eventslog_format=intv;
+			}
 			return true;
 		} else {
 			return false;
@@ -3859,6 +3898,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
 	mysql_thread___eventslog_filesize=GloMTH->get_variable_int((char *)"eventslog_filesize");
+	mysql_thread___eventslog_default_log=GloMTH->get_variable_int((char *)"eventslog_default_log");
+	mysql_thread___eventslog_format=GloMTH->get_variable_int((char *)"eventslog_format");
 	mysql_thread___eventslog_filename=GloMTH->get_variable_string((char *)"eventslog_filename");
 	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
 	mysql_thread___auditlog_filesize=GloMTH->get_variable_int((char *)"auditlog_filesize");

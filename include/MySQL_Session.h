@@ -48,6 +48,9 @@ class Query_Info {
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
 	bool bool_is_select_NOT_for_update;
 	bool bool_is_select_NOT_for_update_computed;
+	bool have_affected_rows;
+	uint64_t affected_rows;
+	uint64_t rows_sent;
 
 	Query_Info();
 	~Query_Info();
@@ -95,6 +98,7 @@ class MySQL_Session
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
 	void RequestEnd(MySQL_Data_Stream *);
+	void LogQuery(MySQL_Data_Stream *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
@@ -123,10 +127,6 @@ class MySQL_Session
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
 
-	//this pointer is always initialized inside handler().
-	// it is an attempt to start simplifying the complexing of handler()
-	PtrSize_t *pktH;
-
 
 	public:
 	void * operator new(size_t);
@@ -150,6 +150,10 @@ class MySQL_Session
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
 	char * default_schema;
+
+	//this pointer is always initialized inside handler().
+	// it is an attempt to start simplifying the complexing of handler()
+	PtrSize_t *pktH;
 
 	uint32_t thread_session_id;
 	unsigned long long last_insert_id;

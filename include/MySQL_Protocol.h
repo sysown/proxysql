@@ -18,7 +18,7 @@ class MySQL_ResultSet {
 	MYSQL *mysql;
 	MYSQL_RES *result;
 	unsigned int num_fields;
-	unsigned int num_rows;
+	unsigned long long num_rows;
 	unsigned long long resultset_size;
 	PtrSizeArray PSarrayOUT;
 	//PtrSizeArray *PSarrayOUT;

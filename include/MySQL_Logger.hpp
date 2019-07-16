@@ -26,14 +26,21 @@ class MySQL_Event {
 	enum log_event_type et;
 	uint64_t hid;
 	char *extra_info;
+	bool have_affected_rows;
+	bool have_rows_sent;
+	uint64_t affected_rows;
+	uint64_t rows_sent;
 	public:
 	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f, MySQL_Session *sess);
-	uint64_t write_query(std::fstream *f);
+	uint64_t write_query_format_1(std::fstream *f);
+	uint64_t write_query_format_2_json(std::fstream *f);
 	void write_auth(std::fstream *f, MySQL_Session *sess);
 	void set_query(const char *ptr, int len);
 	void set_server(int _hid, const char *ptr, int len);
 	void set_extra_info(char *);
+	void set_affected_rows(uint64_t ar);
+	void set_rows_sent(uint64_t rs);
 };
 
 class MySQL_Logger {
@@ -59,8 +66,6 @@ class MySQL_Logger {
 #else
 	rwlock_t rwlock;
 #endif
-	void wrlock();
-	void wrunlock();
 	void events_close_log_unlocked();
 	void events_open_log_unlocked();
 	void audit_close_log_unlocked();
@@ -70,6 +75,7 @@ class MySQL_Logger {
 	public:
 	MySQL_Logger();
 	~MySQL_Logger();
+	void print_version();
 	void flush_log();
 	void events_flush_log_unlocked();
 	void audit_flush_log_unlocked();
@@ -80,6 +86,8 @@ class MySQL_Logger {
 	void log_request(MySQL_Session *, MySQL_Data_Stream *);
 	void log_audit_entry(log_event_type, MySQL_Session *, MySQL_Data_Stream *, char *e = NULL);
 	void flush();
+	void wrlock();
+	void wrunlock();
 };
 
 

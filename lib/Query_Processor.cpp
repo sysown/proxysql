@@ -15,7 +15,7 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_PROCESSOR_VERSION "0.4.1031" DEB
+#define QUERY_PROCESSOR_VERSION "2.0.0712" DEB
 
 #define QP_RE_MOD_CASELESS 1
 #define QP_RE_MOD_GLOBAL 2
@@ -120,6 +120,8 @@ class QP_query_digest_stats {
 	unsigned long long sum_time;
 	unsigned long long min_time;
 	unsigned long long max_time;
+	unsigned long long rows_affected;
+	unsigned long long rows_sent;
 	int hid;
 	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
 		digest=d;
@@ -136,11 +138,15 @@ class QP_query_digest_stats {
 		sum_time=0;
 		min_time=0;
 		max_time=0;
+		rows_affected=0;
+		rows_sent=0;
 		hid=h;
 	}
-	void add_time(unsigned long long t, unsigned long long n) {
+	void add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs) {
 		count_star++;
 		sum_time+=t;
+		rows_affected+=ra;
+		rows_sent+=rs;
 		if (t < min_time || min_time==0) {
 			if (t) min_time = t;
 		}
@@ -172,7 +178,7 @@ class QP_query_digest_stats {
 	}
 	char **get_row(umap_query_digest_text *digest_text_umap) {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*12);
+		char **pta=(char **)malloc(sizeof(char *)*14);
 		assert(schemaname);
 		pta[0]=strdup(schemaname);
 		assert(username);
@@ -221,11 +227,15 @@ class QP_query_digest_stats {
 		pta[10]=strdup(buf);
 		sprintf(buf,"%d",hid);
 		pta[11]=strdup(buf);
+		sprintf(buf,"%llu",rows_affected);
+		pta[12]=strdup(buf);
+		sprintf(buf,"%llu",rows_sent);
+		pta[13]=strdup(buf);
 		return pta;
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<12;i++) {
+		for (i=0;i<14;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -864,7 +874,7 @@ unsigned long Query_Processor::get_query_digests_total_size() {
 
 SQLite3_result * Query_Processor::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
-	SQLite3_result *result=new SQLite3_result(12);
+	SQLite3_result *result=new SQLite3_result(14);
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
 #else
@@ -882,6 +892,8 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
+	result->add_column_definition(SQLITE_TEXT,"rows_affected");
+	result->add_column_definition(SQLITE_TEXT,"rows_sent");
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row(&digest_text_umap);
@@ -897,7 +909,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 }
 
 SQLite3_result * Query_Processor::get_query_digests_reset() {
-	SQLite3_result *result=new SQLite3_result(12);
+	SQLite3_result *result=new SQLite3_result(14);
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&digest_rwlock);
 #else
@@ -915,6 +927,8 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
+	result->add_column_definition(SQLITE_TEXT,"rows_affected");
+	result->add_column_definition(SQLITE_TEXT,"rows_sent");
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		char **pta=qds->get_row(&digest_text_umap);
@@ -1464,12 +1478,20 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 #endif
 	QP_query_digest_stats *qds;
 
+	unsigned long long rows_affected = 0;
+	unsigned long long rows_sent = 0;
+
+	if (sess) {
+		rows_affected = sess->CurrentQuery.affected_rows;
+		rows_sent = sess->CurrentQuery.rows_sent;
+	}
+
 	std::unordered_map<uint64_t, void *>::iterator it;
 	it=digest_umap.find(qp->digest_total);
 	if (it != digest_umap.end()) {
 		// found
 		qds=(QP_query_digest_stats *)it->second;
-		qds->add_time(t,n);
+		qds->add_time(t,n, rows_affected,rows_sent);
 	} else {
 		char *dt = NULL;
 		if (mysql_thread___query_digests_normalize_digest_text==false) {
@@ -1492,7 +1514,7 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 		} else {
 			qds=new QP_query_digest_stats(ui->username, ui->schemaname, _stmt_info->digest, dt, hid, ca);
 		}
-		qds->add_time(t,n);
+		qds->add_time(t,n, rows_affected,rows_sent);
 		digest_umap.insert(std::make_pair(qp->digest_total,(void *)qds));
 		if (mysql_thread___query_digests_normalize_digest_text==true) {
 			uint64_t dig = 0;
