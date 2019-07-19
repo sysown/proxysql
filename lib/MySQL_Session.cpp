@@ -422,6 +422,10 @@ MySQL_Session::MySQL_Session() {
 	with_gtid = false;
 	use_ssl = false;
 
+	//gtid_trxid = 0;
+	gtid_hid = -1;
+	memset(gtid_buf,0,sizeof(gtid_buf));
+
 	match_regexes=NULL;
 /*
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
@@ -464,6 +468,12 @@ void MySQL_Session::reset() {
 		mybes=NULL;
 	}
 	mybe=NULL;
+
+	with_gtid = false;
+
+	//gtid_trxid = 0;
+	gtid_hid = -1;
+	memset(gtid_buf,0,sizeof(gtid_buf));
 }
 
 MySQL_Session::~MySQL_Session() {
@@ -839,6 +849,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
 	j["last_insert_id"] = last_insert_id;
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
+	j["gtid"]["hid"] = gtid_hid;
+	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
 #ifdef DEBUG
 	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
@@ -860,6 +872,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["charset"] = client_myds->myconn->options.charset;
 	j["conn"]["sql_log_bin"] = client_myds->myconn->options.sql_log_bin;
 	j["conn"]["autocommit"] = client_myds->myconn->options.autocommit;
+	j["conn"]["client_flag"] = client_myds->myconn->options.client_flag;
 	j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
 	j["conn"]["status"]["compression"] = client_myds->myconn->get_status_compression();
 	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status_transaction();
@@ -869,6 +882,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 		_mybe=(MySQL_Backend *)mybes->index(k);
 		unsigned int i = _mybe->hostgroup_id;
 		j["backends"][i]["hostgroup_id"] = i;
+		j["backends"][i]["gtid"] = ( strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "" );
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
 			sprintf(buff,"%p",_myds);
@@ -887,6 +901,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				MySQL_Connection * _myconn = _myds->myconn;
 				sprintf(buff,"%p",_myconn);
 				j["backends"][i]["conn"]["address"] = buff;
+				j["backends"][i]["conn"]["auto_increment_delay_token"] = _myconn->auto_increment_delay_token;
 				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
 				j["backends"][i]["conn"]["bytes_sent"] = _myconn->bytes_info.bytes_sent;
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
@@ -3350,8 +3365,15 @@ handler_again:
 						(endt.tv_sec*1000000000+endt.tv_nsec) -
 						(begint.tv_sec*1000000000+begint.tv_nsec);
 				}
+				gtid_hid = -1;
 				if (rc==0) {
-					myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid);
+					if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
+						if (mysql_thread___client_session_track_gtid) {
+							gtid_hid = current_hostgroup;
+							memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+						}
+					}
+
 					// check if multiplexing needs to be disabled
 					char *qdt=CurrentQuery.get_digest_text();
 					if (qdt)

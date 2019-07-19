@@ -302,6 +302,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_version",
 	(char *)"keep_multiplexing_variables",
 	(char *)"kill_backend_connection_when_disconnect",
+	(char *)"client_session_track_gtid",
 	(char *)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_show_processlist",
@@ -461,6 +462,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
 	variables.kill_backend_connection_when_disconnect=true;
+	variables.client_session_track_gtid=true;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms=1000;
@@ -804,6 +806,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	if (!strcmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 	if (!strcmp(name,"query_cache_stores_empty_result")) return (int)variables.query_cache_stores_empty_result;
 	if (!strcmp(name,"kill_backend_connection_when_disconnect")) return (int)variables.kill_backend_connection_when_disconnect;
+	if (!strcmp(name,"client_session_track_gtid")) return (int)variables.client_session_track_gtid;
 	if (!strcmp(name,"sessions_sort")) return (int)variables.sessions_sort;
 #ifdef IDLE_THREADS
 	if (!strcmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
@@ -1269,6 +1272,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"kill_backend_connection_when_disconnect")) {
 		return strdup((variables.kill_backend_connection_when_disconnect ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"client_session_track_gtid")) {
+		return strdup((variables.client_session_track_gtid ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"sessions_sort")) {
 		return strdup((variables.sessions_sort ? "true" : "false"));
@@ -2497,6 +2503,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.kill_backend_connection_when_disconnect=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"client_session_track_gtid")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.client_session_track_gtid=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.client_session_track_gtid=false;
 			return true;
 		}
 		return false;
@@ -3934,6 +3951,7 @@ void MySQL_Thread::refresh_variables() {
 	variables.query_cache_stores_empty_result=(bool)GloMTH->get_variable_int((char *)"query_cache_stores_empty_result");
 	mysql_thread___hostgroup_manager_verbose = GloMTH->get_variable_int((char *)"hostgroup_manager_verbose");
 	mysql_thread___kill_backend_connection_when_disconnect=(bool)GloMTH->get_variable_int((char *)"kill_backend_connection_when_disconnect");
+	mysql_thread___client_session_track_gtid=(bool)GloMTH->get_variable_int((char *)"client_session_track_gtid");
 	mysql_thread___sessions_sort=(bool)GloMTH->get_variable_int((char *)"sessions_sort");
 #ifdef IDLE_THREADS
 	mysql_thread___session_idle_show_processlist=(bool)GloMTH->get_variable_int((char *)"session_idle_show_processlist");

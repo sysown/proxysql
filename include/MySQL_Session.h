@@ -190,6 +190,10 @@ class MySQL_Session
 
 	bool with_gtid;
 
+	char gtid_buf[128];
+	//uint64_t gtid_trxid;
+	int gtid_hid;
+
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
 

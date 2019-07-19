@@ -2614,37 +2614,60 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			// try to match schemaname AND username
 			char *schema = sess->client_myds->myconn->userinfo->schemaname;
 			char *username = sess->client_myds->myconn->userinfo->username;
+			MySQL_Connection * client_conn = sess->client_myds->myconn;
 			bool conn_found = false;
 			unsigned int k;
+			unsigned int options_matching_idx;
+			bool options_matching_found = false;
 			for (k = i; conn_found == false && k < l; k++) {
 				conn = (MySQL_Connection *)conns->index(k);
-				if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
-					conn_found = true;
-					i = k;
-				}
-			}
-			if (conn_found == false ) {
-				for (k = 0; conn_found == false && k < i; k++) {
-					conn = (MySQL_Connection *)conns->index(k);
+				if (conn->match_tracked_options(client_conn)) {
+					if (options_matching_found == false) {
+						options_matching_found = true;
+						options_matching_idx = k;
+					}
 					if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
 						conn_found = true;
 						i = k;
 					}
 				}
 			}
+			if (conn_found == false ) {
+				for (k = 0; conn_found == false && k < i; k++) {
+					conn = (MySQL_Connection *)conns->index(k);
+					if (conn->match_tracked_options(client_conn)) {
+						if (options_matching_found == false) {
+							options_matching_found = true;
+							options_matching_idx = k;
+						}
+						if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
+							conn_found = true;
+							i = k;
+						}
+					}
+				}
+			}
 			if (conn_found == true) {
 				conn=(MySQL_Connection *)conns->remove_index_fast(i);
 			} else {
-				// we may consider creating a new connection
-				unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-				unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-				if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
+				if (options_matching_found == false) {
+					// we must create a new connection
 					conn = new MySQL_Connection();
 					conn->parent=mysrvc;
 					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 				} else {
-					conn=(MySQL_Connection *)conns->remove_index_fast(i);
+					// we may consider creating a new connection
+					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+					unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+					if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
+						conn = new MySQL_Connection();
+						conn->parent=mysrvc;
+						__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+					} else {
+						conn=(MySQL_Connection *)conns->remove_index_fast(i);
+					}
 				}
 			}
 		} else {
@@ -3016,6 +3039,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["charset"] = _my->charset->nr;
 					j["options"]["charset_name"] = _my->options.charset_name;
 					j["options"]["use_ssl"] = _my->options.use_ssl;
+					j["client_flag"]["client_found_rows"] = (_my->client_flag & CLIENT_FOUND_ROWS);
+					j["client_flag"]["client_multi_statements"] = (_my->client_flag & CLIENT_MULTI_STATEMENTS);
 					j["net"]["last_errno"] = _my->net.last_errno;
 					j["net"]["fd"] = _my->net.fd;
 					j["net"]["max_packet_size"] = _my->net.max_packet_size;
