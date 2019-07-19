@@ -872,7 +872,9 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["charset"] = client_myds->myconn->options.charset;
 	j["conn"]["sql_log_bin"] = client_myds->myconn->options.sql_log_bin;
 	j["conn"]["autocommit"] = client_myds->myconn->options.autocommit;
-	j["conn"]["client_flag"] = client_myds->myconn->options.client_flag;
+	j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
+	j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+	j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
 	j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
 	j["conn"]["status"]["compression"] = client_myds->myconn->get_status_compression();
 	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status_transaction();
@@ -925,6 +927,9 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
+				j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
+				j["backends"][i]["conn"]["client_flag"]["client_found_rows"] = (_myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+				j["backends"][i]["conn"]["client_flag"]["client_multi_statements"] = (_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
 				if (_myconn->mysql && _myconn->ret_mysql) {
 					MYSQL * _my = _myconn->mysql;
 					sprintf(buff,"%p",_my);

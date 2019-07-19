@@ -452,8 +452,8 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 }
 
 bool MySQL_Connection::match_tracked_options(MySQL_Connection *c) {
-	uint16_t cf1 = options.client_flag; // own client flags
-	uint16_t cf2 = c->options.client_flag; // other client flags
+	uint32_t cf1 = options.client_flag; // own client flags
+	uint32_t cf2 = c->options.client_flag; // other client flags
 	if ((cf1 & CLIENT_FOUND_ROWS) == (cf2 & CLIENT_FOUND_ROWS)) {
 		if ((cf1 & CLIENT_MULTI_STATEMENTS) == (cf2 & CLIENT_MULTI_STATEMENTS)) {
 			if ((cf1 & CLIENT_IGNORE_SPACE) == (cf2 & CLIENT_IGNORE_SPACE)) {
@@ -494,7 +494,7 @@ void MySQL_Connection::connect_start() {
 		if (myds->sess) {
 			if (myds->sess->client_myds) {
 				if (myds->sess->client_myds->myconn) {
-					uint16_t orig_client_flags = myds->sess->client_myds->myconn->options.client_flag;
+					uint32_t orig_client_flags = myds->sess->client_myds->myconn->options.client_flag;
 					if (orig_client_flags & CLIENT_FOUND_ROWS) {
 						client_flags += CLIENT_FOUND_ROWS;
 					}
