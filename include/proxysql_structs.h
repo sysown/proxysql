@@ -668,11 +668,11 @@ __thread bool mysql_thread___query_digests_track_hostname;
 __thread int mysql_thread___query_digests_max_digest_length;
 __thread int mysql_thread___query_digests_max_query_length;
 __thread int mysql_thread___show_processlist_extended;
+__thread int mysql_thread___session_idle_ms;
+__thread int mysql_thread___hostgroup_manager_verbose;
 __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
-__thread bool mysql_thread___session_idle_ms;
-__thread int mysql_thread___hostgroup_manager_verbose;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
 
@@ -800,11 +800,11 @@ extern __thread bool mysql_thread___query_digests_track_hostname;
 extern __thread int mysql_thread___query_digests_max_digest_length;
 extern __thread int mysql_thread___query_digests_max_query_length;
 extern __thread int mysql_thread___show_processlist_extended;
+extern __thread int mysql_thread___session_idle_ms;
+extern __thread int mysql_thread___hostgroup_manager_verbose;
 extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
-extern __thread bool mysql_thread___session_idle_ms;
-extern __thread int mysql_thread___hostgroup_manager_verbose;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
 
