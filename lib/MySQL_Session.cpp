@@ -569,6 +569,9 @@ void MySQL_Session::writeout() {
 	bool disable_throttle = mysql_thread___throttle_max_bytes_per_second_to_client == 0;
 	int mwpl = mysql_thread___throttle_max_bytes_per_second_to_client; // max writes per call
 	mwpl = mwpl/tps;
+	if (session_type!=PROXYSQL_SESSION_MYSQL) {
+		disable_throttle = true;
+	}
 	if (client_myds) client_myds->array2buffer_full();
 	if (mybe && mybe->server_myds && mybe->server_myds->myds_type==MYDS_BACKEND) {
 		if (session_type==PROXYSQL_SESSION_MYSQL) {
