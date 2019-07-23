@@ -677,14 +677,14 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	if (client_session_track == true) {
 		_ptr[l]=0x00; l++;
 		if (gtid_len) {
-			unsigned char gtid_prefix_h1 = gtid_prefix+2;
+			unsigned char gtid_prefix_h1 = gtid_len+2;
 			unsigned char state_change_prefix = gtid_prefix_h1+2;
 			_ptr[l] = state_change_prefix; l++;
 			_ptr[l]=0x03; l++; // SESSION_TRACK_GTIDS
 			_ptr[l] = gtid_prefix_h1; l++;
 			_ptr[l]=0x00; l++;
 			// l+=write_encoded_length(_ptr+l, gtid_len, gtid_len_len, gtid_prefix); // overcomplicated
-			_ptr[l] = gtid_prefix; l++;
+			_ptr[l] = gtid_len; l++;
 			memcpy(_ptr+l, sess->gtid_buf, gtid_len);
 		}
 	}
