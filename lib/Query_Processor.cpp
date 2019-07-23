@@ -1332,7 +1332,7 @@ void Query_Processor::update_query_processor_stats() {
 	//
 	// It acquires a read lock to ensure that the rules table doesn't change
 	// Yet, because it has to update vales, it uses atomic operations
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Updating query rules statistics\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 8, "Updating query rules statistics\n");
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&rwlock);
 #else

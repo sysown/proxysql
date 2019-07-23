@@ -463,6 +463,10 @@ MySQL_Session::~MySQL_Session() {
 
 	reset(); // we moved this out to allow CHANGE_USER
 
+	if (locked_on_hostgroup >= 0) {
+		thread->status_variables.hostgroup_locked--;
+	}
+
 	if (client_myds) {
 		if (client_authenticated) {
 			switch (session_type) {
@@ -2704,6 +2708,7 @@ __get_pkts_from_client:
 								__sync_add_and_fetch(&thread->status_variables.queries,1);
 								if (session_type == PROXYSQL_SESSION_MYSQL) {
 									bool rc_break=false;
+									bool lock_hostgroup = false;
 									if (session_fast_forward==false) {
 										// Note: CurrentQuery sees the query as sent by the client.
 										// shortly after, the packets it used to contain the query will be deallocated
@@ -2736,7 +2741,7 @@ __get_pkts_from_client:
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
-									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
+									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (rc_break==true) {
 										if (mirror==false) {
 											break;
@@ -2751,10 +2756,31 @@ __get_pkts_from_client:
 
 									if (autocommit_on_hostgroup>=0) {
 									}
+									if (locked_on_hostgroup < 0) {
+										if (lock_hostgroup) {
+											// we are locking on hostgroup now
+											locked_on_hostgroup = current_hostgroup;
+										}
+									}
 									if (locked_on_hostgroup >= 0) {
 										if (current_hostgroup != locked_on_hostgroup) {
 											// FIXME : handle this
 											// FIXME : should be a simple return error to client
+											client_myds->DSS=STATE_QUERY_SENT_NET;
+											int l = CurrentQuery.QueryLength;
+											char *end = (char *)"";
+											if (l>256) {
+												l=253;
+												end = (char *)"...";
+											}
+											string nqn = string((char *)CurrentQuery.QueryPointer,l);
+											char *err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
+											char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
+											sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
+											RequestEnd(NULL);
+											free(buf);
+											l_free(pkt.size,pkt.ptr);
 											break;
 										}
 									}
@@ -2883,6 +2909,7 @@ __get_pkts_from_client:
 									thread->status_variables.queries++;
 									// if we reach here, we are not on MySQL module
 									bool rc_break=false;
+									bool lock_hostgroup = false;
 
 									// Note: CurrentQuery sees the query as sent by the client.
 									// shortly after, the packets it used to contain the query will be deallocated
@@ -2892,7 +2919,7 @@ __get_pkts_from_client:
 
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
-									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
+									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (rc_break==true) {
 										break;
 									}
@@ -4432,7 +4459,17 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
-bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool prepared) {
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, bool prepared) {
+/*
+	lock_hostgroup:
+		If this variable is set to true, this session will get lock to a
+		specific hostgroup, and also have multiplexing disabled.
+		It means that parsing the query wasn't completely possible (mostly
+		a SET statement) and proxysql won't be able to set the same variable
+		in another connection.
+		This algorithm will be become obsolete once we implement session
+		tracking for MySQL 5.7+
+*/
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	if (qpo->new_query) {
 		// the query was rewritten
@@ -4500,6 +4537,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		char *dig=CurrentQuery.QueryParserArgs.digest_text;
 		unsigned int nTrx=NumActiveTransactions();
 		if (strncasecmp(dig,(char *)"SET ",4)==0) {
+#ifdef DEBUG
+			{
+				string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nqn.c_str());
+			}
+#endif
 			int rc;
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
@@ -4546,6 +4589,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					} else {
 						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+						*lock_hostgroup = true;
 						return false;
 					}
 				}
@@ -4557,6 +4601,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				( strncasecmp(dig,(char *)"SET NAMES", strlen((char *)"SET NAMES")) == 0)
 			) {
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse();
 				bool exit_after_SetParse = false;
@@ -4567,11 +4612,33 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						// error not enough arguments
 						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+						*lock_hostgroup = true;
 						return false;
 					}
 					auto values = std::begin(it->second);
 					if (var == "sql_mode") {
 						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+							char *v1 = strdup(value1.c_str());
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Found @ in SQL_MODE . v1 = %s\n", v1);
+							char *v2 = NULL;
+							while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
+								// we found a @ . Maybe we need to lock hostgroup
+								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Found @ in SQL_MODE . v2 = %s\n", v2);
+								if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
+#ifdef DEBUG
+									string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+									proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+#endif
+									*lock_hostgroup = true;
+								}
+								if (strlen(v2) > 1) {
+									v1 = v2+1;
+								}
+							}
+							free(v1);
+						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SQL Mode value %s\n", value1.c_str());
 						uint32_t sql_mode_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 						if (client_myds->myconn->options.sql_mode_int != sql_mode_int) {
@@ -4589,6 +4656,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 					} else if (var == "autocommit") {
 						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+#ifdef DEBUG
+							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+#endif
+							*lock_hostgroup = true;
+						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET Time Zone value %s\n", value1.c_str());
 						int __tmp_autocommit = -1;
 						if (
@@ -4634,6 +4709,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 					} else if (var == "time_zone") {
 						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+#ifdef DEBUG
+							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+#endif
+							*lock_hostgroup = true;
+						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET Time Zone value %s\n", value1.c_str());
 						uint32_t time_zone_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 						if (client_myds->myconn->options.time_zone_int != time_zone_int) {
@@ -4647,6 +4730,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 					} else if (var == "names") {
 						std::string value1 = *values++;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+#ifdef DEBUG
+							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+#endif
+							*lock_hostgroup = true;
+						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET NAMES %s\n",  value1.c_str());
 						const MARIADB_CHARSET_INFO * c;
 						std::string value2;
@@ -4678,6 +4769,16 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						} else {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection charset to %d\n", c->nr);
 							client_myds->myconn->set_charset(c->nr);
+						}
+					} else {
+						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+#ifdef DEBUG
+							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+#endif
+							*lock_hostgroup = true;
 						}
 					}
 				}
@@ -4718,8 +4819,34 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								free(client_myds->myconn->options.sql_mode);
 							}
 							client_myds->myconn->options.sql_mode=strdup(s1.c_str());
+							std::size_t found_at = s1.find("@");
+							if (found_at != std::string::npos) {
+								char *v1 = strdup(s1.c_str());
+								char *v2 = NULL;
+								while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
+									// we found a @ . Maybe we need to lock hostgroup
+									if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
+#ifdef DEBUG
+										string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+										proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+#endif
+										*lock_hostgroup = true;
+									}
+									if (strlen(v2) > 1) {
+										v1 = v2+1;
+									}
+								}
+								free(v1);
+							}
 						}
 					} else {
+						if (memchr((const char *)CurrentQuery.QueryPointer, '@', CurrentQuery.QueryLength)) {
+#ifdef DEBUG
+							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+#endif
+							*lock_hostgroup = true;
+						}
 						int kq = 0;
 						kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"/*!40101 SET SQL_MODE=@OLD_SQL_MODE */" , CurrentQuery.QueryLength);
 						if (kq != 0) {
@@ -4743,6 +4870,18 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					l_free(pkt->size,pkt->ptr);
 					RequestEnd(NULL);
 					return true;
+				}
+			} else {
+				// we couldn't parse the query
+#ifdef DEBUG
+					string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+#endif
+				if (qpo->multiplex == -1) {
+					// we have no rule about this SET statement. We search for '@'
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Unable to parse SET query AND setting lock_hostgroup %s\n", nqn.c_str());
+					*lock_hostgroup = true;
+				} else {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Unable to parse SET query but NOT setting lock_hostgroup %s\n", nqn.c_str());
 				}
 			}
 		}
@@ -4917,7 +5056,9 @@ __exit_set_destination_hostgroup:
 		if (current_hostgroup != locked_on_hostgroup) {
 			// FIXME : handle this
 			client_myds->DSS=STATE_QUERY_SENT_NET;
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",);
+			char buf[140];
+			sprintf(buf,"ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d", locked_on_hostgroup, current_hostgroup);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",buf);
 			l_free(pkt->size,pkt->ptr);
 			RequestEnd(NULL);
 			return true;

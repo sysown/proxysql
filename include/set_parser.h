@@ -6,7 +6,7 @@
 
 class SetParser {
 	private:
-  std::string query;
+	std::string query;
 	public:
 	SetParser(std::string q);
 	std::map<std::string, std::vector<std::string>> parse();

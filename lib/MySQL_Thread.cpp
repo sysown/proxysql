@@ -3978,6 +3978,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.unexpected_packet = 0;
 	status_variables.killed_connections = 0;
 	status_variables.killed_queries = 0;
+	status_variables.hostgroup_locked = 0;
 	status_variables.aws_aurora_replicas_skipped_during_query = 0;
 
 	match_regexes=NULL;
@@ -4509,6 +4510,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Unexpected COM_QUIT
 		pta[0]=(char *)"mysql_unexpected_frontend_com_quit";
 		sprintf(buf,"%llu",get_unexpected_com_quit());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// locked connections
+		pta[0]=(char *)"Clients_Connections_hostgroup_locked";
+		sprintf(buf,"%llu",get_hostgroup_locked());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5534,6 +5541,19 @@ unsigned long long MySQL_Threads_Handler::get_max_connect_timeout() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.max_connect_timeout_err,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_hostgroup_locked() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.hostgroup_locked,0);
 		}
 	}
 	return q;

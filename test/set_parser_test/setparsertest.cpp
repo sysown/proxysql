@@ -90,6 +90,9 @@ static Test sql_mode[] = {
   { "SET @@sql_mode = REPLACE(REPLACE(REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')" , { Expected("sql_mode",  {"REPLACE(REPLACE(REPLACE(@@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')"}) } },
   { "SET @@sql_mode = REPLACE( REPLACE( REPLACE( @@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')" , { Expected("sql_mode",  {"REPLACE( REPLACE( REPLACE( @@sql_mode, 'ONLY_FULL_GROUP_BY,', ''),',ONLY_FULL_GROUP_BY', ''),'ONLY_FULL_GROUP_BY', '')"}) } },
 //	{ "SET @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')", { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')"}) } },
+  { "SET SQL_MODE=IFNULL(@@sql_mode,'')", { Expected("sql_mode", { "IFNULL(@@sql_mode,'')" } ) } },
+  { "SET SQL_MODE=IFNULL(@old_sql_mode,'')", { Expected("sql_mode", { "IFNULL(@old_sql_mode,'')" } ) } },
+  { "SET SQL_MODE=IFNULL(@OLD_SQL_MODE,'')", { Expected("sql_mode", { "IFNULL(@OLD_SQL_MODE,'')" } ) } },
 };
 
 void TestParse(const Test* tests, int ntests, const string& title) {
