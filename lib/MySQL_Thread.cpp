@@ -287,6 +287,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_query_timeout",
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_regex",
+	(char *)"set_query_lock_on_hostgroup",
 	(char *)"reset_connection_algorithm",
 	(char *)"auto_increment_delay_multiplex",
 	(char *)"long_query_time",
@@ -413,6 +414,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_query_timeout=24*3600*1000;
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
+	variables.set_query_lock_on_hostgroup=1;
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.long_query_time=1000;
@@ -714,6 +716,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		if (!strcmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
 #endif // IDLE_THREADS
 		if (!strcmp(name,"show_processlist_extended")) return (int)variables.show_processlist_extended;
+		if (!strcmp(name,"set_query_lock_on_hostgroup")) return (int)variables.set_query_lock_on_hostgroup;
 		if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
 		if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	}
@@ -1147,6 +1150,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_processor_regex")) {
 		sprintf(intbuf,"%d",variables.query_processor_regex);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"set_query_lock_on_hostgroup")) {
+		sprintf(intbuf,"%d",variables.set_query_lock_on_hostgroup);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"reset_connection_algorithm")) {
@@ -1768,6 +1775,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 1 && intv <= 2) {
 			variables.query_processor_regex=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"set_query_lock_on_hostgroup")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1) {
+			variables.set_query_lock_on_hostgroup=intv;
 			return true;
 		} else {
 			return false;
@@ -3780,6 +3796,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
 	mysql_thread___query_processor_iterations=GloMTH->get_variable_int((char *)"query_processor_iterations");
 	mysql_thread___query_processor_regex=GloMTH->get_variable_int((char *)"query_processor_regex");
+	mysql_thread___set_query_lock_on_hostgroup=GloMTH->get_variable_int((char *)"set_query_lock_on_hostgroup");
 	mysql_thread___reset_connection_algorithm=GloMTH->get_variable_int((char *)"reset_connection_algorithm");
 	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
 	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
@@ -3979,6 +3996,8 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.killed_connections = 0;
 	status_variables.killed_queries = 0;
 	status_variables.hostgroup_locked = 0;
+	status_variables.hostgroup_locked_set_cmds = 0;
+	status_variables.hostgroup_locked_queries = 0;
 	status_variables.aws_aurora_replicas_skipped_during_query = 0;
 
 	match_regexes=NULL;
@@ -4514,8 +4533,20 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		result->add_row(pta);
 	}
 	{	// locked connections
-		pta[0]=(char *)"Clients_Connections_hostgroup_locked";
+		pta[0]=(char *)"Client_Connections_hostgroup_locked";
 		sprintf(buf,"%llu",get_hostgroup_locked());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// locking SET
+		pta[0]=(char *)"hostgroup_locked_set_cmds";
+		sprintf(buf,"%llu",get_hostgroup_locked_set_cmds());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// locking queries
+		pta[0]=(char *)"hostgroup_locked_queries";
+		sprintf(buf,"%llu",get_hostgroup_locked_queries());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5554,6 +5585,32 @@ unsigned long long MySQL_Threads_Handler::get_hostgroup_locked() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.hostgroup_locked,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_hostgroup_locked_set_cmds() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.hostgroup_locked_set_cmds,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_hostgroup_locked_queries() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.hostgroup_locked_queries,0);
 		}
 	}
 	return q;

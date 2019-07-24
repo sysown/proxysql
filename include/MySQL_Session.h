@@ -234,6 +234,7 @@ class MySQL_Session
 	bool handle_command_query_kill(PtrSize_t *);
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
 	void generate_proxysql_internal_session_json(json &);
+	bool known_query_for_locked_on_hostgroup(uint64_t);
 };
 
 #define KILL_QUERY       1

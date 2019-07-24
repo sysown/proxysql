@@ -252,6 +252,8 @@ class MySQL_Thread
 		unsigned long long killed_connections;
 		unsigned long long killed_queries;
 		unsigned long long hostgroup_locked;
+		unsigned long long hostgroup_locked_set_cmds;
+		unsigned long long hostgroup_locked_queries;
 		unsigned long long aws_aurora_replicas_skipped_during_query;
 		unsigned int active_transactions;
 	} status_variables;
@@ -425,6 +427,7 @@ class MySQL_Threads_Handler
 		int default_query_timeout;
 		int query_processor_iterations;
 		int query_processor_regex;
+		int set_query_lock_on_hostgroup;
 		int reset_connection_algorithm;
 		int auto_increment_delay_multiplex;
 		int long_query_time;
@@ -529,6 +532,8 @@ class MySQL_Threads_Handler
 	unsigned long long get_unexpected_com_quit();
 	unsigned long long get_unexpected_packet();
 	unsigned long long get_hostgroup_locked();
+	unsigned long long get_hostgroup_locked_set_cmds();
+	unsigned long long get_hostgroup_locked_queries();
 	unsigned long long get_aws_aurora_replicas_skipped_during_query();
 	unsigned long long get_backend_lagging_during_query();
 	unsigned long long get_backend_offline_during_query();

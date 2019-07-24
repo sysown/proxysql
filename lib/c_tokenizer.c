@@ -509,6 +509,11 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		e--;
 		if (*e==' ') {
 			*e=0;
+			// maybe 2 trailing spaces . It happens with comments
+			e--;
+			if (*e==' ') {
+				*e=0;
+			}
 		}
 	}
 
