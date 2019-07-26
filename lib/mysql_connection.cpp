@@ -737,6 +737,7 @@ handler_again:
 		case ASYNC_CONNECT_SUCCESSFUL:
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
+			options.client_flag = mysql->client_flag;
 			//assert(mysql->net.vio->async_context);
 			//mysql->net.vio->async_context= mysql->options.extension->async_context;
 			//if (parent->use_ssl) {
