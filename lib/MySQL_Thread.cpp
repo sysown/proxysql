@@ -5363,7 +5363,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 //	MySQL_Connection *_candidate = NULL; // this will be used when we will pass optional parameters
 	for (i=0; i<cached_connections->len; i++) {
 		c=(MySQL_Connection *)cached_connections->index(i);
-		if (c->parent->myhgc->hid==_hid) {
+		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) {
 
 			if (gtid_uuid) {
 				// we first check if we already excluded this parent (MySQL Server)
