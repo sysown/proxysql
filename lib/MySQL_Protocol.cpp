@@ -505,7 +505,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 			case PROXYSQL_SESSION_SQLITE:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
-				internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 				break;
 			default:
 				break;
@@ -513,7 +513,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	}
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.no_backslash_escapes) {
-			internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+			internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
 		(*myds)->pkt_sid=sequence_id;
 	}
@@ -652,7 +652,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			case PROXYSQL_SESSION_SQLITE:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
-				internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 				break;
 			default:
 				break;
@@ -664,7 +664,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	}
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.no_backslash_escapes) {
-			internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+			internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
 	}
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t)); l+=sizeof(uint16_t);

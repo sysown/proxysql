@@ -456,8 +456,10 @@ bool MySQL_Connection::match_tracked_options(MySQL_Connection *c) {
 	uint32_t cf2 = c->options.client_flag; // other client flags
 	if ((cf1 & CLIENT_FOUND_ROWS) == (cf2 & CLIENT_FOUND_ROWS)) {
 		if ((cf1 & CLIENT_MULTI_STATEMENTS) == (cf2 & CLIENT_MULTI_STATEMENTS)) {
-			if ((cf1 & CLIENT_IGNORE_SPACE) == (cf2 & CLIENT_IGNORE_SPACE)) {
-				return true;
+			if ((cf1 & CLIENT_MULTI_RESULTS) == (cf2 & CLIENT_MULTI_RESULTS)) {
+				if ((cf1 & CLIENT_IGNORE_SPACE) == (cf2 & CLIENT_IGNORE_SPACE)) {
+					return true;
+				}
 			}
 		}
 	}
@@ -486,7 +488,7 @@ void MySQL_Connection::connect_start() {
 	//if (mysql_thread___client_found_rows)
 	//	client_flags += CLIENT_FOUND_ROWS;
 	if (parent->compression)
-		client_flags += CLIENT_COMPRESS;
+		client_flags |= CLIENT_COMPRESS;
 	//if (mysql_thread___client_multi_statements)
 	//	client_flags += CLIENT_MULTI_STATEMENTS;
 
@@ -496,13 +498,16 @@ void MySQL_Connection::connect_start() {
 				if (myds->sess->client_myds->myconn) {
 					uint32_t orig_client_flags = myds->sess->client_myds->myconn->options.client_flag;
 					if (orig_client_flags & CLIENT_FOUND_ROWS) {
-						client_flags += CLIENT_FOUND_ROWS;
+						client_flags |= CLIENT_FOUND_ROWS;
 					}
 					if (orig_client_flags & CLIENT_MULTI_STATEMENTS) {
-						client_flags += CLIENT_MULTI_STATEMENTS;
+						client_flags |= CLIENT_MULTI_STATEMENTS;
+					}
+					if (orig_client_flags & CLIENT_MULTI_RESULTS) {
+						client_flags |= CLIENT_MULTI_RESULTS;
 					}
 					if (orig_client_flags & CLIENT_IGNORE_SPACE) {
-						client_flags += CLIENT_IGNORE_SPACE;
+						client_flags |= CLIENT_IGNORE_SPACE;
 					}
 				}
 			}
