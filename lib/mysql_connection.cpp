@@ -451,6 +451,21 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
+bool MySQL_Connection::match_tracked_options(MySQL_Connection *c) {
+	uint32_t cf1 = options.client_flag; // own client flags
+	uint32_t cf2 = c->options.client_flag; // other client flags
+	if ((cf1 & CLIENT_FOUND_ROWS) == (cf2 & CLIENT_FOUND_ROWS)) {
+		if ((cf1 & CLIENT_MULTI_STATEMENTS) == (cf2 & CLIENT_MULTI_STATEMENTS)) {
+			if ((cf1 & CLIENT_MULTI_RESULTS) == (cf2 & CLIENT_MULTI_RESULTS)) {
+				if ((cf1 & CLIENT_IGNORE_SPACE) == (cf2 & CLIENT_IGNORE_SPACE)) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
 // non blocking API
 void MySQL_Connection::connect_start() {
 	PROXY_TRACE();
@@ -470,12 +485,35 @@ void MySQL_Connection::connect_start() {
 	}
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	unsigned long client_flags = 0;
-	if (mysql_thread___client_found_rows)
-		client_flags += CLIENT_FOUND_ROWS;
+	//if (mysql_thread___client_found_rows)
+	//	client_flags += CLIENT_FOUND_ROWS;
 	if (parent->compression)
-		client_flags += CLIENT_COMPRESS;
-	if (mysql_thread___client_multi_statements)
-		client_flags += CLIENT_MULTI_STATEMENTS;
+		client_flags |= CLIENT_COMPRESS;
+	//if (mysql_thread___client_multi_statements)
+	//	client_flags += CLIENT_MULTI_STATEMENTS;
+
+	if (myds) {
+		if (myds->sess) {
+			if (myds->sess->client_myds) {
+				if (myds->sess->client_myds->myconn) {
+					uint32_t orig_client_flags = myds->sess->client_myds->myconn->options.client_flag;
+					if (orig_client_flags & CLIENT_FOUND_ROWS) {
+						client_flags |= CLIENT_FOUND_ROWS;
+					}
+					if (orig_client_flags & CLIENT_MULTI_STATEMENTS) {
+						client_flags |= CLIENT_MULTI_STATEMENTS;
+					}
+					if (orig_client_flags & CLIENT_MULTI_RESULTS) {
+						client_flags |= CLIENT_MULTI_RESULTS;
+					}
+					if (orig_client_flags & CLIENT_IGNORE_SPACE) {
+						client_flags |= CLIENT_IGNORE_SPACE;
+					}
+				}
+			}
+		}
+	}
+
 	char *auth_password=NULL;
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
@@ -704,6 +742,7 @@ handler_again:
 		case ASYNC_CONNECT_SUCCESSFUL:
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
+			options.client_flag = mysql->client_flag;
 			//assert(mysql->net.vio->async_context);
 			//mysql->net.vio->async_context= mysql->options.extension->async_context;
 			//if (parent->use_ssl) {
@@ -1980,11 +2019,13 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 		const char *data;
 		size_t length;
 		if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
-			memcpy(buff,data,length);
-			buff[length]=0;
-			//fprintf(stderr,"GTID=%s\n",buff);
-			__sync_fetch_and_add(&myds->sess->thread->status_variables.gtid_session_collected,1);
-			ret = true;
+			if (memcmp(buff,data,length)) {
+				memcpy(buff,data,length);
+				buff[length]=0;
+				//fprintf(stderr,"GTID=%s\n",buff);
+				__sync_fetch_and_add(&myds->sess->thread->status_variables.gtid_session_collected,1);
+				ret = true;
+			}
 		}
 	}
 	return ret;

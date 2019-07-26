@@ -505,7 +505,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 			case PROXYSQL_SESSION_SQLITE:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
-				internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 				break;
 			default:
 				break;
@@ -513,7 +513,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	}
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.no_backslash_escapes) {
-			internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+			internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
 		(*myds)->pkt_sid=sequence_id;
 	}
@@ -609,14 +609,40 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	char msg_prefix;
 	uint8_t msg_len_len=mysql_encode_length(msg_len, &msg_prefix);
 
+	bool client_session_track=false;
+	//char gtid_buf[128];
+	char gtid_prefix;
+	uint8_t gtid_len=0;
+	uint8_t gtid_len_len=0;
+
 	mysql_hdr myhdr;
 	myhdr.pkt_id=sequence_id;
 	myhdr.pkt_length=1+affected_rows_len+last_insert_id_len+sizeof(uint16_t)+sizeof(uint16_t)+msg_len;
 	if (msg_len) myhdr.pkt_length+=msg_len_len;
-  unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
-  unsigned char *_ptr=(unsigned char *)l_alloc(size);
-  memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
-  int l=sizeof(mysql_hdr);
+
+	if (*myds && (*myds)->myconn) {
+		if ((*myds)->myconn->options.client_flag & CLIENT_SESSION_TRACKING) {
+			if (mysql_thread___client_session_track_gtid) {
+				if (sess) {
+					if (sess->gtid_hid >= 0) {
+						myhdr.pkt_length++;
+						client_session_track=true;
+						gtid_len = strlen(sess->gtid_buf);
+						gtid_len_len = mysql_encode_length(gtid_len, &gtid_prefix);
+						myhdr.pkt_length += gtid_len_len;
+						myhdr.pkt_length += gtid_len;
+						myhdr.pkt_length += 4; // headers related to GTID
+					}
+				}
+			}
+		}
+	}
+
+
+	unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+	unsigned char *_ptr=(unsigned char *)l_alloc(size);
+	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+	int l=sizeof(mysql_hdr);
 	_ptr[l]=0x00; l++;
 	l+=write_encoded_length(_ptr+l, affected_rows, affected_rows_len, affected_rows_prefix);
 	l+=write_encoded_length(_ptr+l, last_insert_id, last_insert_id_len, last_insert_id_prefix);
@@ -626,7 +652,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			case PROXYSQL_SESSION_SQLITE:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
-				internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 				break;
 			default:
 				break;
@@ -638,7 +664,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	}
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.no_backslash_escapes) {
-			internal_status += SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+			internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
 	}
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t)); l+=sizeof(uint16_t);
@@ -646,6 +672,21 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	if (msg && strlen(msg)) {
 		l+=write_encoded_length(_ptr+l, msg_len, msg_len_len, msg_prefix);
 		memcpy(_ptr+l, msg, msg_len);
+	}
+	l+=msg_len;
+	if (client_session_track == true) {
+		_ptr[l]=0x00; l++;
+		if (gtid_len) {
+			unsigned char gtid_prefix_h1 = gtid_len+2;
+			unsigned char state_change_prefix = gtid_prefix_h1+2;
+			_ptr[l] = state_change_prefix; l++;
+			_ptr[l]=0x03; l++; // SESSION_TRACK_GTIDS
+			_ptr[l] = gtid_prefix_h1; l++;
+			_ptr[l]=0x00; l++;
+			// l+=write_encoded_length(_ptr+l, gtid_len, gtid_len_len, gtid_prefix); // overcomplicated
+			_ptr[l] = gtid_len; l++;
+			memcpy(_ptr+l, sess->gtid_buf, gtid_len);
+		}
 	}
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
@@ -1163,7 +1204,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
   memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-  memcpy(_ptr+l,"\x0f\x80\x15",3); l+=3;
+  memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
 //#ifdef MARIADB_BASE_VERSION
