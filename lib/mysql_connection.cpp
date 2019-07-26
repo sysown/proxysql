@@ -206,6 +206,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.sql_mode_sent=false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
@@ -1983,6 +1984,8 @@ void MySQL_Connection::reset() {
 		if (options.sql_mode) {
 			free(options.sql_mode);
 			options.sql_mode = NULL;
+			options.sql_mode_sent = false;
+			
 		}
 		options.time_zone_int = 0;
 		if (options.time_zone) {
