@@ -101,8 +101,8 @@ class MySQL_Event {
 	uint64_t query_digest;
 	char *query_ptr;
 	size_t query_len;
-	char *server;
-	char *client;
+	char *server = NULL;
+	char *client = NULL;
 	size_t server_len;
 	size_t client_len;
 	uint64_t total_length;
@@ -191,6 +191,12 @@ class MySQL_Event {
 		free(username);
 		free(schemaname);
 		free(query_ptr);
+		if(client){
+		   free(client);
+		}
+                if(server){
+                    free(server);
+		}
 	}
 };
 
