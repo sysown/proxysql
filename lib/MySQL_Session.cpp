@@ -164,6 +164,7 @@ Query_Info::Query_Info() {
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
 	have_affected_rows=false;
+	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
 }
@@ -193,6 +194,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
 	have_affected_rows=false;
+	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
 }
@@ -228,6 +230,7 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
 	have_affected_rows=false;
+	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
 }
@@ -5344,7 +5347,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					now_us = realtime_time();
 				}
 				long long now_ms = now_us/1000;
-				qpo->max_lag_ms -= now_ms;
+				qpo->max_lag_ms = now_ms - qpo->max_lag_ms;
 				if (qpo->max_lag_ms < 0) {
 					qpo->max_lag_ms = -1; // time expired
 				}
@@ -5393,19 +5396,34 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms <= 360000) { // this is a relative time , we convert it to absolute
+				if (mc == NULL) {
+					if (CurrentQuery.waiting_since == 0) {
+						CurrentQuery.waiting_since = thread->curtime;
+						thread->status_variables.queries_with_max_lag_ms__delayed++;
+					}
+				}
 				if (now_us == 0) {
 					now_us = realtime_time();
 				}
 				long long now_ms = now_us/1000;
-				qpo->max_lag_ms += now_ms;
+				qpo->max_lag_ms = now_ms - qpo->max_lag_ms;
+			}
+		}
+		if (mc) {
+			if (CurrentQuery.waiting_since) {
+				unsigned long long waited = thread->curtime - CurrentQuery.waiting_since;
+				thread->status_variables.queries_with_max_lag_ms__total_wait_time_us += waited;
+				CurrentQuery.waiting_since = 0;
 			}
 		}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
 	if (mybe->server_myds->myconn==NULL) {
 		// we couldn't get a connection for whatever reason, ex: no backends, or too busy
 		if (thread->mypolls.poll_timeout==0) { // tune poll timeout
-			if (thread->mypolls.poll_timeout > (unsigned int)mysql_thread___poll_timeout_on_failure) {
-				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure;
+				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure * 1000;
+		} else {
+			if (thread->mypolls.poll_timeout > (unsigned int)mysql_thread___poll_timeout_on_failure * 1000) {
+				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure * 1000;
 			}
 		}
 		return;

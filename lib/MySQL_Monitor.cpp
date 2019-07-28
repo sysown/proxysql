@@ -3869,9 +3869,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			next_loop_at = t1 + check_interval_ms * 1000;
 			continue;
 		}
+#ifdef TEST_AURORA
 		if (rand() % 1000 == 0) { // suppress 99.9% of the output, too verbose
 			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG , hpa[cur_host_idx].host, hpa[cur_host_idx].port);
 		}
+#endif // TEST_AURORA
 		mmsd = NULL;
 		mmsd = new MySQL_Monitor_State_Data(hpa[cur_host_idx].host, hpa[cur_host_idx].port, NULL, hpa[cur_host_idx].use_ssl);
 		mmsd->writer_hostgroup = wHG;
@@ -3894,10 +3896,14 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			if (rc==false) {
 				unsigned long long now=monotonic_time();
 				char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
+				bool access_denied = false;
+				if (strncmp(mmsd->mysql_error_msg,(char *)"Access denied for user",strlen((char *)"Access denied for user"))==0) {
+					access_denied = true;
+				}
 				sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 				free(mmsd->mysql_error_msg);
 				mmsd->mysql_error_msg = new_error;
-				proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+				proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. %sError: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, (access_denied ? "" : "If the server is overload, increase mysql-monitor_connect_timeout. " ) , new_error);
 				goto __exit_monitor_aws_aurora_HG_thread;
 			}
 		}
@@ -3907,7 +3913,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 #ifdef TEST_AURORA
 	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID");
 #else
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS ORDER BY SERVER_ID");
+	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE REPLICA_LAG_IN_MILLISECONDS > 0 OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
 #endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);

@@ -4050,6 +4050,8 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.backend_lagging_during_query = 0;
 	status_variables.backend_offline_during_query = 0;
 	status_variables.queries_with_max_lag_ms = 0;
+	status_variables.queries_with_max_lag_ms__delayed = 0;
+	status_variables.queries_with_max_lag_ms__total_wait_time_us = 0;
 	status_variables.unexpected_com_quit = 0;
 	status_variables.unexpected_packet = 0;
 	status_variables.killed_connections = 0;
@@ -4582,6 +4584,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// queries_with_max_lag_ms
 		pta[0]=(char *)"queries_with_max_lag_ms";
 		sprintf(buf,"%llu",get_queries_with_max_lag_ms());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// queries_with_max_lag_ms__delayed
+		pta[0]=(char *)"queries_with_max_lag_ms__delayed";
+		sprintf(buf,"%llu",get_queries_with_max_lag_ms__delayed());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// queries_with_max_lag_ms__total_wait_time_us
+		pta[0]=(char *)"queries_with_max_lag_ms__total_wait_time_us";
+		sprintf(buf,"%llu",get_queries_with_max_lag_ms__total_wait_time_us());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5618,6 +5632,32 @@ unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__delayed() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms__delayed,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__total_wait_time_us() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms__total_wait_time_us,0);
 		}
 	}
 	return q;

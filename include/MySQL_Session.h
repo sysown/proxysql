@@ -51,6 +51,7 @@ class Query_Info {
 	bool have_affected_rows;
 	uint64_t affected_rows;
 	uint64_t rows_sent;
+	uint64_t waiting_since;
 
 	Query_Info();
 	~Query_Info();

@@ -8234,11 +8234,11 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (resultset) delete resultset;
 	resultset=NULL;
 
-#ifdef TEST_AURORA // temporary enabled only for testing purpose
+//#ifdef TEST_AURORA // temporary enabled only for testing purpose
 	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a LEFT JOIN mysql_aws_aurora_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL";
-#else
-	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a WHERE 1=0";
-#endif
+//#else
+//	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a WHERE 1=0";
+//#endif
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_aurora);
 	if (error) {
