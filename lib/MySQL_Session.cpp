@@ -1374,7 +1374,9 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	if (rc==0) {
 		myconn->async_state_machine=ASYNC_IDLE;
 		myconn->compute_unknown_transaction_status();
-		if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+		//if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+		// due to issue #2096 we disable the global check on mysql_thread___multiplexing
+		if ((myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->return_MySQL_Connection_To_Pool();
 		} else {
 			myds->destroy_MySQL_Connection_From_Pool(true);
