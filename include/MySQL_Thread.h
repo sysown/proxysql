@@ -228,6 +228,8 @@ class MySQL_Thread
 		unsigned long long queries_slow;
 		unsigned long long queries_gtid;
 		unsigned long long queries_with_max_lag_ms;
+		unsigned long long queries_with_max_lag_ms__delayed;
+		unsigned long long queries_with_max_lag_ms__total_wait_time_us;
 		unsigned long long queries_backends_bytes_sent;
 		unsigned long long queries_backends_bytes_recv;
 		unsigned long long queries_frontends_bytes_sent;
@@ -541,6 +543,8 @@ class MySQL_Threads_Handler
 	unsigned long long get_backend_lagging_during_query();
 	unsigned long long get_backend_offline_during_query();
 	unsigned long long get_queries_with_max_lag_ms();
+	unsigned long long get_queries_with_max_lag_ms__delayed();
+	unsigned long long get_queries_with_max_lag_ms__total_wait_time_us();
 	unsigned long long get_killed_connections();
 	unsigned long long get_killed_queries();
 	iface_info *MLM_find_iface_from_fd(int fd) {
