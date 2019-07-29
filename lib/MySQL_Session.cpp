@@ -896,6 +896,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
 	j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
 	j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
+	j["conn"]["client_flag"]["client_ps_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_PS_MULTI_RESULTS ? 1 : 0);
 	j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
 	j["conn"]["status"]["compression"] = client_myds->myconn->get_status_compression();
 	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status_transaction();

@@ -3042,6 +3042,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["client_flag"]["client_found_rows"] = (_my->client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
 					j["client_flag"]["client_multi_statements"] = (_my->client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
 					j["client_flag"]["client_multi_results"] = (_my->client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
+					j["client_flag"]["client_ps_multi_results"] = (_my->client_flag & CLIENT_PS_MULTI_RESULTS ? 1 : 0);
 					j["net"]["last_errno"] = _my->net.last_errno;
 					j["net"]["fd"] = _my->net.fd;
 					j["net"]["max_packet_size"] = _my->net.max_packet_size;

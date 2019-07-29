@@ -458,9 +458,11 @@ bool MySQL_Connection::match_tracked_options(MySQL_Connection *c) {
 	if ((cf1 & CLIENT_FOUND_ROWS) == (cf2 & CLIENT_FOUND_ROWS)) {
 		if ((cf1 & CLIENT_MULTI_STATEMENTS) == (cf2 & CLIENT_MULTI_STATEMENTS)) {
 			if ((cf1 & CLIENT_MULTI_RESULTS) == (cf2 & CLIENT_MULTI_RESULTS)) {
-				if ((cf1 & CLIENT_IGNORE_SPACE) == (cf2 & CLIENT_IGNORE_SPACE)) {
-					return true;
-				}
+  			if ((cf1 & CLIENT_PS_MULTI_RESULTS) == (cf2 & CLIENT_PS_MULTI_RESULTS)) {
+	  			if ((cf1 & CLIENT_IGNORE_SPACE) == (cf2 & CLIENT_IGNORE_SPACE)) {
+		  			return true;
+			  	}
+        }
 			}
 		}
 	}
@@ -506,6 +508,9 @@ void MySQL_Connection::connect_start() {
 					}
 					if (orig_client_flags & CLIENT_MULTI_RESULTS) {
 						client_flags |= CLIENT_MULTI_RESULTS;
+					}
+					if (orig_client_flags & CLIENT_PS_MULTI_RESULTS) {
+						client_flags |= CLIENT_PS_MULTI_RESULTS;
 					}
 					if (orig_client_flags & CLIENT_IGNORE_SPACE) {
 						client_flags |= CLIENT_IGNORE_SPACE;
