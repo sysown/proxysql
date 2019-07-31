@@ -1971,7 +1971,21 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 			if (!strcasecmp(key,"max_lag_ms")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
-					qpo->max_lag_ms = t;
+					if (t > 0 && t <= 600000) {
+						qpo->max_lag_ms = t;
+					}
+				}
+			}
+			if (!strcasecmp(key,"min_epoch_ms")) {
+				if (c >= '0' && c <= '9') { // it is a digit
+					unsigned long long now_us = realtime_time();
+					unsigned long long now_ms = now_us/1000;
+					long long now_ms_s = (long long)now_ms;
+					long long t=atoll(value);
+					long long diff = now_ms_s - t;
+					if (diff > 0 && diff <= 600000) {
+						qpo->max_lag_ms = diff;
+					}
 				}
 			}
 		}
