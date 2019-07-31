@@ -884,6 +884,15 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["client"]["proxy_addr"]["address"] = ( client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "" );
 	j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
 	j["client"]["encrypted"] = client_myds->encrypted;
+	if (client_myds->encrypted) {
+		const SSL_CIPHER *cipher = SSL_get_current_cipher(client_myds->ssl);
+		if (cipher) {
+			const char * name = SSL_CIPHER_get_name(cipher);
+			if (name) {
+				j["client"]["ssl_cipher"] = name;
+			}
+		}
+	}
 	j["client"]["DSS"] = client_myds->DSS;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["transaction_persistent"] = transaction_persistent;
