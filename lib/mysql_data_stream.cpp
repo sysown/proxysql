@@ -1382,3 +1382,12 @@ void MySQL_Data_Stream::destroy_queues() {
 	queue_destroy(queueIN);
 	queue_destroy(queueOUT);
 }
+
+void MySQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
+	MySQL_Connection *mc=myconn;
+	mc->last_time_used=sess->thread->curtime;
+	detach_connection();
+	unplug_backend();
+	mc->send_quit=sq;
+	MyHGM->destroy_MyConn_from_pool(mc);
+}
