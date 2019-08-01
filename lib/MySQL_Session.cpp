@@ -95,7 +95,6 @@ void * kill_query_thread(void *arg) {
 		goto __exit_kill_query_thread;
 	}
 	MYSQL *ret;
-	
 	if (ka->port) {
 		switch (ka->kill_type) {
 			case KILL_QUERY:
