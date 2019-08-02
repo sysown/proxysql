@@ -425,6 +425,7 @@ MySQL_Logger::MySQL_Logger() {
 	events.logfile=NULL;
 	events.log_file_id=0;
 	events.max_log_file_size=100*1024*1024;
+	audit.logfile=NULL;
 	audit.log_file_id=0;
 	audit.max_log_file_size=100*1024*1024;
 };
