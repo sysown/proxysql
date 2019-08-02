@@ -472,13 +472,34 @@ void ProxySQL_Main_init_SSL_module() {
 	OpenSSL_add_all_algorithms();
 	SSL_load_error_strings();
 	//ssl_method = (SSL_METHOD *)TLSv1_server_method();
-	ssl_method = (SSL_METHOD *)SSLv23_server_method();
+	//ssl_method = (SSL_METHOD *)SSLv23_server_method();
+	ssl_method = (SSL_METHOD *)TLS_server_method();
 	GloVars.global.ssl_ctx = SSL_CTX_new(ssl_method);
 	if (GloVars.global.ssl_ctx==NULL)	{
 		ERR_print_errors_fp(stderr);
 		proxy_error("Unable to initialize SSL. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
+	if (!SSL_CTX_set_min_proto_version(GloVars.global.ssl_ctx,TLS1_VERSION)) {
+		proxy_error("Unable to initialize SSL. SSL_set_min_proto_version failed. Shutting down...\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
+	}
+	//SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_SSLv3); // no necessary, because of previous SSL_CTX_set_min_proto_version
+#ifdef DEBUG
+	{
+		STACK_OF(SSL_CIPHER) *ciphers;
+		ciphers = SSL_CTX_get_ciphers(GloVars.global.ssl_ctx);
+		fprintf(stderr,"List of cipher avaiable:\n");
+		if (ciphers) {
+			int num = sk_SSL_CIPHER_num(ciphers);
+			char buf[130];
+			for(int i = 0; i < num; i++){
+				const SSL_CIPHER *cipher = sk_SSL_CIPHER_value(ciphers, i);
+				fprintf(stderr,"%s:  %s\n", SSL_CIPHER_get_name(cipher), SSL_CIPHER_description(cipher, buf, 128));
+			}
+		}
+	}
+#endif
 	BIO *bio_err;
 	X509 *x509 = NULL;
 	EVP_PKEY *pkey = NULL;
