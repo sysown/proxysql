@@ -312,6 +312,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"commands_stats",
 	(char *)"query_digests",
 	(char *)"query_digests_lowercase",
+	(char *)"query_digests_replace_null",
 	(char *)"query_digests_normalize_digest_text",
 	(char *)"query_digests_track_hostname",
 	(char *)"servers_stats",
@@ -456,6 +457,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.verbose_query_error = false;
 	variables.query_digests=true;
 	variables.query_digests_lowercase=false;
+	variables.query_digests_replace_null=false;
 	variables.query_digests_normalize_digest_text=false;
 	variables.query_digests_track_hostname=false;
 	variables.connpoll_reset_queue_length = 50;
@@ -744,6 +746,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		if (!strcmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
 		if (!strcmp(name,"query_digests")) return (int)variables.query_digests;
 		if (!strcmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+		if (!strcmp(name,"query_digests_replace_null")) return (int)variables.query_digests_replace_null;
 		if (!strcmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
 		if (!strcmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	}
@@ -801,6 +804,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	if (!strcmp(name,"commands_stats")) return (int)variables.commands_stats;
 	if (!strcmp(name,"query_digests")) return (int)variables.query_digests;
 	if (!strcmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
+	if (!strcmp(name,"query_digests_replace_null")) return (int)variables.query_digests_replace_null;
 	if (!strcmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
 	if (!strcmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
 	if (!strcmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
@@ -1261,6 +1265,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_digests_lowercase")) {
 		return strdup((variables.query_digests_lowercase ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"query_digests_replace_null")) {
+		return strdup((variables.query_digests_replace_null ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"query_digests_normalize_digest_text")) {
 		return strdup((variables.query_digests_normalize_digest_text ? "true" : "false"));
@@ -2419,6 +2426,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_digests_lowercase=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"query_digests_replace_null")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.query_digests_replace_null=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.query_digests_replace_null=false;
 			return true;
 		}
 		return false;
@@ -3960,6 +3978,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___commands_stats=(bool)GloMTH->get_variable_int((char *)"commands_stats");
 	mysql_thread___query_digests=(bool)GloMTH->get_variable_int((char *)"query_digests");
 	mysql_thread___query_digests_lowercase=(bool)GloMTH->get_variable_int((char *)"query_digests_lowercase");
+	mysql_thread___query_digests_replace_null=(bool)GloMTH->get_variable_int((char *)"query_digests_replace_null");
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");

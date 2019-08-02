@@ -11,6 +11,7 @@ extern __thread int mysql_thread___query_digests_max_query_length;
 #include <ctype.h>
 #define bool char
 extern __thread bool mysql_thread___query_digests_lowercase;
+extern __thread bool mysql_thread___query_digests_replace_null;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -207,7 +208,9 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	char fns=0;
 
 	bool lowercase=0;
+	bool replace_null=0;
 	lowercase=mysql_thread___query_digests_lowercase;
+	replace_null = mysql_thread___query_digests_replace_null;
 
 	while(i < len)
 	{
@@ -272,6 +275,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					i++;
 					continue;
 				}
+				if (replace_null) {
 				if (*s == 'n' || *s == 'N') { // we search for NULL , #2171
 					if (i && is_token_char(prev_char)) {
 						if (len>=4) {
@@ -298,6 +302,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							}
 						}
 					}
+				}
 				}
 			}
 		}

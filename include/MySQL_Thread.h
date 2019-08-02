@@ -396,6 +396,7 @@ class MySQL_Threads_Handler
 		bool commands_stats;
 		bool query_digests;
 		bool query_digests_lowercase;
+		bool query_digests_replace_null;
 		bool query_digests_normalize_digest_text;
 		bool query_digests_track_hostname;
 		bool default_reconnect;
