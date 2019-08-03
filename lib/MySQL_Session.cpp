@@ -4475,8 +4475,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 	if (v==1) { // disabled. MYSQL_OPTION_MULTI_STATEMENTS_OFF == 1
 		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0, setStatus );
+		client_myds->myconn->options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
 	} else { // enabled, MYSQL_OPTION_MULTI_STATEMENTS_ON == 0
 		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0, setStatus );
+		client_myds->myconn->options.client_flag |= CLIENT_MULTI_STATEMENTS;
 	}
 	client_myds->DSS=STATE_SLEEP;
 	l_free(pkt->size,pkt->ptr);
