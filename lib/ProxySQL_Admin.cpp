@@ -435,6 +435,74 @@ static ProxySQL_Admin *SPA=NULL;
 
 static void * (*child_func[3]) (void *arg);
 
+
+int ProxySQL_Test___GetDigestTable(bool reset) {
+	int r = 0;
+	if (!GloQPro) return 0;
+	SQLite3_result * resultset=NULL;
+	if (reset==true) {
+		resultset=GloQPro->get_query_digests_reset();
+	} else {
+		resultset=GloQPro->get_query_digests();
+	}
+	if (resultset==NULL) return 0;
+	r = resultset->rows_count;
+	delete resultset;
+	return r;
+}
+
+
+void ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
+	//unsigned long long queries=n;
+	//queries *= 1000;
+	MySQL_Session *sess = new MySQL_Session();
+
+	sess->client_myds = new MySQL_Data_Stream();
+	sess->client_myds->fd=0;
+	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
+	MySQL_Connection *myconn=new MySQL_Connection();
+	sess->client_myds->attach_connection(myconn);
+	myconn->set_is_client(); // this is used for prepared statements
+	unsigned long long cur = monotonic_time();
+	SQP_par_t qp;
+	qp.first_comment=NULL;
+	qp.query_prefix=NULL;
+	qp.digest_text = (char *)malloc(1024);
+	MySQL_Connection_userinfo ui;
+	char * username_buf = (char *)malloc(32);
+	char * schemaname_buf = (char *)malloc(32);
+	//ui.username = username_buf;
+	//ui.schemaname = schemaname_buf;
+	for (int i=0; i<n; i++) {
+		for (int j=0; j<10; j++) {
+			sprintf(qp.digest_text,"SELECT ? FROM table%d a JOIN table%d b WHERE a.id > ? AND a.c IN (?,?,?) ORDER BY k,l DESC LIMIT ?",i, j);
+			int digest_text_length = strlen(qp.digest_text);
+			qp.digest=SpookyHash::Hash64(qp.digest_text, digest_text_length, 0);
+			for (int k=0; k<10; k++) {
+				sprintf(username_buf,"user_%d",k%10);
+				for (int l=0; l<10; l++) {
+					sprintf(schemaname_buf,"shard_%d",l%10);
+					ui.set(username_buf, NULL, schemaname_buf, NULL);
+					int hg = 0;
+					uint64_t hash2;
+					SpookyHash myhash;
+					myhash.Init(19,3);
+					myhash.Update(ui.username,strlen(ui.username));
+					myhash.Update(&qp.digest,sizeof(qp.digest));
+					myhash.Update(ui.schemaname,strlen(ui.schemaname));
+					myhash.Update(&hg,sizeof(hg));
+					myhash.Final(&qp.digest_total,&hash2);
+					//update_query_digest(qp, sess->current_hostgroup, ui, t, sess->thread->curtime, NULL, sess);
+					GloQPro->update_query_digest(&qp,hg,&ui,fastrand(),0,NULL,sess);
+				}
+			}
+		}
+	}
+	delete sess;
+
+}
+
+
 typedef struct _main_args {
 	int nfds;
 	struct pollfd *fds;
@@ -2548,6 +2616,44 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 				run_query=false;
 				goto __run_query;
 			}
+		}
+	}
+	if (!strncasecmp("PROXYSQLTEST ", query_no_space, strlen("PROXYSQLTEST "))) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+			int test_n = 0;
+			int test_arg1 = 0;
+			int test_arg2 = 0;
+			int r1 = 0;
+			sscanf(query_no_space+strlen("PROXYSQLTEST "),"%d %d %d", &test_n, &test_arg1, &test_arg2);
+			if (test_n) {
+				switch (test_n) {
+					case 1:
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
+						ProxySQL_Test___GenerateRandomQueryInDigestTable(test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+						run_query=false;
+						break;
+					case 2:
+						r1 = ProxySQL_Test___GetDigestTable(false);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 3:
+						r1 = ProxySQL_Test___GetDigestTable(true);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					default:
+						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
+						run_query=false;
+						break;
+				}
+			} else {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
+			}
+			goto __run_query;
 		}
 	}
 	{
