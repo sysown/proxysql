@@ -3735,6 +3735,7 @@ handler_again:
 										// we intentionally killed the query
 										break;
 									}
+									break;
 								case 1290: // read-only
 								case 1047: // WSREP has not yet prepared node for application use
 								case 1053: // Server shutdown in progress
