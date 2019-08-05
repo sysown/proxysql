@@ -15,10 +15,22 @@
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define QUERY_PROCESSOR_VERSION "2.0.0712" DEB
+#define QUERY_PROCESSOR_VERSION "2.0.6.0805" DEB
 
 #define QP_RE_MOD_CASELESS 1
 #define QP_RE_MOD_GLOBAL 2
+
+// Optimization introduced in 2.0.6
+// to avoid a lot of unnecessary copy
+#define DIGEST_STATS_FAST_1
+#define DIGEST_STATS_FAST_MINSIZE	100000
+#define DIGEST_STATS_FAST_THREADS	4
+
+#ifdef DIGEST_STATS_FAST_1
+#include <thread>
+#include <future>
+extern MySQL_Threads_Handler *GloMTH;
+#endif
 
 class QP_rule_text_hitsonly {
 	public:
@@ -107,6 +119,48 @@ class QP_rule_text {
 	}
 };
 
+
+#ifdef DIGEST_STATS_FAST_1
+/* reverse:  reverse string s in place */
+void reverse(char s[]) {
+	int i, j;
+	char c;
+	int l = strlen(s);
+	for (i = 0, j = l-1; i<j; i++, j--) {
+		c = s[i];
+		s[i] = s[j];
+		s[j] = c;
+	}
+}
+
+/* itoa:  convert n to characters in s */
+void my_itoa(char s[], unsigned long long n)
+{
+	int i;
+     i = 0;
+     do {       /* generate digits in reverse order */
+         s[i++] = n % 10 + '0';   /* get next digit */
+     } while ((n /= 10) > 0);     /* delete it */
+     s[i] = '\0';
+     reverse(s);
+}
+
+
+typedef struct _query_digest_stats_pointers_t {
+	char *pta[14];
+	char digest[24];
+	char count_star[24];
+	char first_seen[24];
+	char last_seen[24];
+	char sum_time[24];
+	char min_time[24];
+	char max_time[24];
+	char hid[24];
+	char rows_affected[24];
+	char rows_sent[24];
+} query_digest_stats_pointers_t;
+#endif
+
 class QP_query_digest_stats {
 	public:
 	uint64_t digest;
@@ -114,6 +168,11 @@ class QP_query_digest_stats {
 	char *username;
 	char *schemaname;
 	char *client_address;
+#ifdef DIGEST_STATS_FAST_1
+	char username_buf[24];
+	char schemaname_buf[24];
+	char client_address_buf[24];
+#endif
 	time_t first_seen;
 	time_t last_seen;
 	unsigned int count_star;
@@ -129,9 +188,30 @@ class QP_query_digest_stats {
 		if (dt) {
 			digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
 		}
+#ifdef DIGEST_STATS_FAST_1
+		if (strlen(u) < sizeof(username_buf)) {
+			strcpy(username_buf,u);
+			username = username_buf;
+		} else {
+			username=strdup(u);
+		}
+		if (strlen(s) < sizeof(schemaname_buf)) {
+			strcpy(schemaname_buf,s);
+			schemaname = schemaname_buf;
+		} else {
+			schemaname=strdup(s);
+		}
+		if (strlen(ca) < sizeof(client_address_buf)) {
+			strcpy(client_address_buf,ca);
+			client_address = client_address_buf;
+		} else {
+			client_address=strdup(ca);
+		}
+#else
 		username=strdup(u);
 		schemaname=strdup(s);
 		client_address=strdup(ca);
+#endif
 		count_star=0;
 		first_seen=0;
 		last_seen=0;
@@ -164,61 +244,141 @@ class QP_query_digest_stats {
 			digest_text=NULL;
 		}
 		if (username) {
+#ifdef DIGEST_STATS_FAST_1
+			if (username == username_buf) {
+			} else {
+				free(username);
+			}
+#else
 			free(username);
+#endif
 			username=NULL;
 		}
 		if (schemaname) {
+#ifdef DIGEST_STATS_FAST_1
+			if (schemaname == schemaname_buf) {
+			} else {
+				free(schemaname);
+			}
+#else
 			free(schemaname);
+#endif
 			schemaname=NULL;
 		}
 		if (client_address) {
+#ifdef DIGEST_STATS_FAST_1
+			if (client_address == client_address_buf) {
+			} else {
+				free(client_address);
+			}
+#else
 			free(client_address);
+#endif
 			client_address=NULL;
 		}
 	}
+#ifdef DIGEST_STATS_FAST_1
+	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
+		char **pta=qdsp->pta;
+#else
 	char **get_row(umap_query_digest_text *digest_text_umap) {
 		char buf[128];
 		char **pta=(char **)malloc(sizeof(char *)*14);
+#endif
+
+#ifdef DIGEST_STATS_FAST_1
+		assert(schemaname);
+		pta[0]=schemaname;
+		assert(username);
+		pta[1]=username;
+		assert(client_address);
+		pta[2]=client_address;
+#else
 		assert(schemaname);
 		pta[0]=strdup(schemaname);
 		assert(username);
 		pta[1]=strdup(username);
-
 		assert(client_address);
 		pta[2]=strdup(client_address);
+#endif
 
+#ifdef DIGEST_STATS_FAST_1
+		sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
+		pta[3]=qdsp->digest;
+#else
 		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
 		pta[3]=strdup(buf);
+#endif
 
 		if (digest_text) {
+#ifdef DIGEST_STATS_FAST_1
+			pta[4]=digest_text;
+#else
 			pta[4]=strdup(digest_text);
+#endif
 		} else {
 			std::unordered_map<uint64_t, char *>::iterator it;
 			it=digest_text_umap->find(digest);
 			if (it != digest_text_umap->end()) {
+#ifdef DIGEST_STATS_FAST_1
+				pta[4] = it->second;
+#else
 				pta[4] = strdup(it->second);
+#endif
 			} else {
 				assert(0);
 			}
 		}
+
+#ifdef DIGEST_STATS_FAST_1
+		//sprintf(qdsp->count_star,"%u",count_star);
+		my_itoa(qdsp->count_star, count_star);
+		pta[5]=qdsp->count_star;
+#else
 		sprintf(buf,"%u",count_star);
 		pta[5]=strdup(buf);
+#endif
 
 		time_t __now;
-    time(&__now);
-
+		time(&__now);
 		unsigned long long curtime=monotonic_time();
-
 		time_t seen_time;
-
 		seen_time= __now - curtime/1000000 + first_seen/1000000;
+#ifdef DIGEST_STATS_FAST_1
+		//sprintf(qdsp->first_seen,"%ld", seen_time);
+		my_itoa(qdsp->first_seen, seen_time);
+		pta[6]=qdsp->first_seen;
+#else
 		sprintf(buf,"%ld", seen_time);
 		pta[6]=strdup(buf);
+#endif
 
 		seen_time= __now - curtime/1000000 + last_seen/1000000;
+#ifdef DIGEST_STATS_FAST_1
+		//sprintf(qdsp->last_seen,"%ld", seen_time);
+		my_itoa(qdsp->last_seen, seen_time);
+		pta[7]=qdsp->last_seen;
+		//sprintf(qdsp->sum_time,"%llu",sum_time);
+		my_itoa(qdsp->sum_time,sum_time);
+		pta[8]=qdsp->sum_time;
+		//sprintf(qdsp->min_time,"%llu",min_time);
+		my_itoa(qdsp->min_time,min_time);
+		pta[9]=qdsp->min_time;
+		//sprintf(qdsp->max_time,"%llu",max_time);
+		my_itoa(qdsp->max_time,max_time);
+		pta[10]=qdsp->max_time;
+		//sprintf(qdsp->hid,"%d",hid);
+		my_itoa(qdsp->hid,hid);
+		pta[11]=qdsp->hid;
+		//sprintf(qdsp->rows_affected,"%llu",rows_affected);
+		my_itoa(qdsp->rows_affected,rows_affected);
+		pta[12]=qdsp->rows_affected;
+		//sprintf(qdsp->rows_sent,"%llu",rows_sent);
+		my_itoa(qdsp->rows_sent,rows_sent);
+		pta[13]=qdsp->rows_sent;
+#else
 		sprintf(buf,"%ld", seen_time);
 		pta[7]=strdup(buf);
-
 		sprintf(buf,"%llu",sum_time);
 		pta[8]=strdup(buf);
 		sprintf(buf,"%llu",min_time);
@@ -231,8 +391,19 @@ class QP_query_digest_stats {
 		pta[12]=strdup(buf);
 		sprintf(buf,"%llu",rows_sent);
 		pta[13]=strdup(buf);
+#endif
 		return pta;
 	}
+/*
+	void free_row(query_digest_stats_pointers_t *qdsp) {
+		//free(qdsp->pta[0]);
+		//free(qdsp->pta[1]);
+		//free(qdsp->pta[2]);
+		//free(qdsp->pta[4]);
+	}
+*/
+#ifdef DIGEST_STATS_FAST_1
+#else
 	void free_row(char **pta) {
 		int i;
 		for (i=0;i<14;i++) {
@@ -241,6 +412,7 @@ class QP_query_digest_stats {
 		}
 		free(pta);
 	}
+#endif
 };
 
 
@@ -832,30 +1004,328 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 	return result;
 }
 
-unsigned long Query_Processor::get_query_digests_total_size() {
-	unsigned long ret=0;
+#ifdef DIGEST_STATS_FAST_1
+
+struct get_query_digests_parallel_args {
+	unsigned long long ret;
+	pthread_t thr;
+	umap_query_digest *gu;
+	umap_query_digest_text *gtu;
+	int m;
+	SQLite3_result *result;
+	QP_query_digest_stats **array_qds;
+	bool free_me;
+	bool defer_free;
+};
+
+/*
+	All operations are performed without taking an explicit lock because
+	the calling function already took the lock
+*/
+//unsigned long long iget_query_digests_total_size_parallel(umap_query_digest *gu, umap_query_digest_text *gtu, int *m_, unsigned long long *r2) {
+void * get_query_digests_total_size_parallel(void *_arg) {
+	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
+	unsigned long long i = 0;
+	unsigned long long m = arg->m;
+	unsigned long long ret = 0;
+	for (std::unordered_map<uint64_t, void *>::iterator it=arg->gu->begin(); it!=arg->gu->end(); ++it) {
+		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+			if (qds->username)
+				if (qds->username != qds->username_buf)
+					ret += strlen(qds->username) + 1;
+			if (qds->schemaname)
+				if (qds->schemaname != qds->schemaname_buf)
+					ret += strlen(qds->schemaname) + 1;
+			if (qds->client_address)
+				if (qds->client_address != qds->client_address_buf)
+					ret += strlen(qds->client_address) + 1;
+			if (qds->digest_text)
+				ret += strlen(qds->digest_text) + 1;
+		}
+		i++;
+	}
+	i = 0;
+	for (std::unordered_map<uint64_t, char *>::iterator it=arg->gtu->begin(); it!=arg->gtu->end(); ++it) {
+		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+			if (it->second) {
+				ret += strlen(it->second) + 1;
+			}
+		}
+		i++;
+	}
+	arg->ret = ret;
+	return NULL;
+}
+
+void * get_query_digests_parallel(void *_arg) {
+	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
+	unsigned long long i = 0;
+	unsigned long long m = arg->m;
+	unsigned long long ret = 0;
+	if (arg->free_me) {
+		if (arg->defer_free) {
+			size_t map_size = arg->gu->size();
+			arg->array_qds = (QP_query_digest_stats **)malloc(sizeof(QP_query_digest_stats *)*map_size);
+		}
+	}
+	for (std::unordered_map<uint64_t, void *>::iterator it=arg->gu->begin(); it!=arg->gu->end(); ++it) {
+		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+			query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+			char **pta=qds->get_row(arg->gtu, a);
+			arg->result->add_row(pta);
+			free(a);
+			if (arg->free_me) {
+				if (arg->defer_free) {
+					arg->array_qds[ret] = qds;
+					ret++;
+				} else {
+					delete qds;
+				}
+			}
+		}
+		i++;
+	}
+	if (arg->free_me) {
+		if (arg->defer_free) {
+			arg->ret = ret;
+		}
+	}
+/* benchmarks say this part if faster if single-threaded
+	if (arg->free_me) {
+		i = 0;
+		for (std::unordered_map<uint64_t, char *>::iterator it=arg->gtu->begin(); it!=arg->gtu->end(); ++it) {
+			if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+				free(it->second);
+			}
+		}
+	}
+*/
+	return NULL;
+}
+
+void * purge_query_digests_parallel(void *_arg) {
+	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
+	unsigned long long i = 0;
+	unsigned long long r = 0;
+	unsigned long long m = arg->m;
+	for (std::unordered_map<uint64_t, void *>::iterator it=arg->gu->begin(); it!=arg->gu->end(); ++it) {
+		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+			delete qds;
+			r++;
+		}
+		i++;
+	}
+	arg->ret = r;
+	i = 0;
+	for (std::unordered_map<uint64_t, char *>::iterator it=arg->gtu->begin(); it!=arg->gtu->end(); ++it) {
+		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+			free(it->second);
+		}
+	}
+	return NULL;
+}
+#endif
+
+unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool parallel, char **msg) {
+	unsigned long long ret = 0;
+	if (async_purge) {
+		ret = purge_query_digests_async(msg);
+	} else {
+		ret = purge_query_digests_sync(parallel);
+	}
+	return ret;
+}
+
+unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
+	unsigned long long ret = 0;
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
 #else
 	spin_rdlock(&digest_rwlock);
 #endif
+	unsigned long long curtime1=monotonic_time();
+	size_t map1_size = digest_umap.size();
+	size_t map2_size = digest_text_umap.size();
+	ret = map1_size + map2_size;
+	unsigned long long i = 0;
+	QP_query_digest_stats **array1 = (QP_query_digest_stats **)malloc(sizeof(QP_query_digest_stats *)*map1_size);
+	char **array2 = (char **)malloc(sizeof(char *)*map2_size);
+
+	i=0;
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-		ret += sizeof(QP_query_digest_stats);
-		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-		if (qds->username)
-			ret += strlen(qds->username) + 1;
-		if (qds->schemaname)
-			ret += strlen(qds->schemaname) + 1;
-		if (qds->client_address)
-			ret += strlen(qds->client_address) + 1;
-		if (qds->digest_text)
-			ret += strlen(qds->digest_text) + 1;
+		array1[i]=(QP_query_digest_stats *)it->second;
+		i++;
+		//delete qds;
 	}
+	i=0;
 	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
-		if (it->second) {
-			ret += strlen(it->second) + 1;
-		}
+		array2[i] = it->second;
+		//free(it->second);
+		i++;
 	}
+	digest_umap.erase(digest_umap.begin(),digest_umap.end());
+	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&digest_rwlock);
+#else
+	spin_rdunlock(&digest_rwlock);
+#endif
+	unsigned long long curtime2=monotonic_time();
+	curtime1 = curtime1/1000;
+	curtime2 = curtime2/1000;
+	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
+		proxy_info("Purging stats_mysql_query_digest: locked for %llums to remove %llu entries\n", curtime2-curtime1, map1_size);
+	}
+	char buf[128];
+	sprintf(buf, "Query digest map locked for %llums", curtime2-curtime1);
+	*msg = strdup(buf);
+	for (i=0; i<map1_size; i++) {
+		QP_query_digest_stats *qds = array1[i];
+		delete qds;
+	}
+	for (i=0; i<map2_size; i++) {
+		char *p = array2[i];
+		free(p);
+	}
+	free(array1);
+	free(array2);
+	return ret;
+}
+
+unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
+	unsigned long long ret = 0;
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&digest_rwlock);
+#else
+	spin_rdlock(&digest_rwlock);
+#endif
+#ifdef DIGEST_STATS_FAST_1
+	size_t map_size = digest_umap.size();
+	if (parallel && map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel purge
+		int n=DIGEST_STATS_FAST_THREADS;
+		get_query_digests_parallel_args args[n];
+		for (int i=0; i<n; i++) {
+			args[i].m=i;
+			args[i].ret=0;
+			args[i].gu = &digest_umap;
+			args[i].gtu = &digest_text_umap;
+		}
+		for (int i=0; i<n; i++) {
+			if ( pthread_create(&args[i].thr, NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
+				assert(0);
+			}
+		}
+		for (int i=0; i<n; i++) {
+			pthread_join(args[i].thr, NULL);
+			ret += args[i].ret;
+		}
+	} else {
+#endif
+		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+			delete qds;
+			ret++;
+		}
+		for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
+			free(it->second);
+		}
+#ifdef DIGEST_STATS_FAST_1
+	}
+#endif
+	digest_umap.erase(digest_umap.begin(),digest_umap.end());
+	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&digest_rwlock);
+#else
+	spin_rdunlock(&digest_rwlock);
+#endif
+	return ret;
+}
+
+unsigned long long Query_Processor::get_query_digests_total_size() {
+	unsigned long long ret=0;
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&digest_rwlock);
+#else
+	spin_rdlock(&digest_rwlock);
+#endif
+	size_t map_size = digest_umap.size();
+	ret += sizeof(QP_query_digest_stats)*map_size;
+#ifdef DIGEST_STATS_FAST_1
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel search
+/*
+		int n = GloMTH->num_threads;
+		std::future<unsigned long long> results[n];
+*/
+		int n=DIGEST_STATS_FAST_THREADS;
+		//unsigned long long result2[n];
+		//int k[n];
+		get_query_digests_parallel_args args[n];
+		for (int i=0; i<n; i++) {
+			args[i].m=i;
+			args[i].ret=0;
+			args[i].gu = &digest_umap;
+			args[i].gtu = &digest_text_umap;
+		}
+		for (int i=0; i<n; i++) {
+			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_total_size_parallel, &args[i]) != 0 ) {
+				assert(0);
+			}
+		}
+		for (int i=0; i<n; i++) {
+			pthread_join(args[i].thr, NULL);
+			ret += args[i].ret;
+		}
+/*
+		// failed attempt to use async . Will try later
+		auto results0 = std::async(std::launch::async, get_query_digests_total_size_parallel, &digest_umap, &digest_text_umap, &k[0], &result2[0]);
+		auto results1 = std::async(std::launch::async, get_query_digests_total_size_parallel, &digest_umap, &digest_text_umap, &k[1], &result2[1]);
+		auto results2 = std::async(std::launch::async, get_query_digests_total_size_parallel, &digest_umap, &digest_text_umap, &k[2], &result2[2]);
+		auto results3 = std::async(std::launch::async, get_query_digests_total_size_parallel, &digest_umap, &digest_text_umap, &k[3], &result2[3]);
+		ret += results0.get();
+		ret += results1.get();
+		ret += results2.get();
+		ret += results3.get();
+*/
+#else
+		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+			if (qds->username)
+#ifdef DIGEST_STATS_FAST_1
+				if (qds->username != qds->username_buf)
+				ret += strlen(qds->username) + 1;
+#else
+				ret += strlen(qds->username) + 1;
+#endif
+			if (qds->schemaname)
+#ifdef DIGEST_STATS_FAST_1
+				if (qds->schemaname != qds->schemaname_buf)
+				ret += strlen(qds->schemaname) + 1;
+#else
+				ret += strlen(qds->schemaname) + 1;
+#endif
+			if (qds->client_address)
+#ifdef DIGEST_STATS_FAST_1
+				if (qds->client_address != qds->client_address_buf)
+				ret += strlen(qds->client_address) + 1;
+#else
+				ret += strlen(qds->client_address) + 1;
+#endif
+			if (qds->digest_text)
+				ret += strlen(qds->digest_text) + 1;
+		}
+		for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
+			if (it->second) {
+				ret += strlen(it->second) + 1;
+			}
+		}
+#endif
+#ifdef DIGEST_STATS_FAST_1
+	}
+#endif
 #if !defined(__FreeBSD__) && !defined(__APPLE__)
 	ret += ((sizeof(uint64_t) + sizeof(void *) + sizeof(std::_Rb_tree_node_base)) * digest_umap.size() );
 	ret += ((sizeof(uint64_t) + sizeof(void *) + sizeof(std::_Rb_tree_node_base)) * digest_text_umap.size() );
@@ -874,12 +1344,25 @@ unsigned long Query_Processor::get_query_digests_total_size() {
 
 SQLite3_result * Query_Processor::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
-	SQLite3_result *result=new SQLite3_result(14);
+	SQLite3_result *result = NULL;
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
 #else
 	spin_rdlock(&digest_rwlock);
 #endif
+#ifdef DIGEST_STATS_FAST_1
+	unsigned long long curtime1;
+	unsigned long long curtime2;
+	size_t map_size = digest_umap.size();
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		result = new SQLite3_result(14, true);
+		curtime1 = monotonic_time();
+	} else {
+		result = new SQLite3_result(14);
+	}
+#else
+	result = new SQLite3_result(14);
+#endif
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
 	result->add_column_definition(SQLITE_TEXT,"username");
@@ -894,26 +1377,83 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	result->add_column_definition(SQLITE_TEXT,"max_time");
 	result->add_column_definition(SQLITE_TEXT,"rows_affected");
 	result->add_column_definition(SQLITE_TEXT,"rows_sent");
-	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-		char **pta=qds->get_row(&digest_text_umap);
-		result->add_row(pta);
-		qds->free_row(pta);
+#ifdef DIGEST_STATS_FAST_1
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		int n=DIGEST_STATS_FAST_THREADS;
+		get_query_digests_parallel_args args[n];
+		for (int i=0; i<n; i++) {
+			args[i].m=i;
+			//args[i].ret=0;
+			args[i].gu = &digest_umap;
+			args[i].gtu = &digest_text_umap;
+			args[i].result = result;
+			args[i].free_me = false;
+		}
+		for (int i=0; i<n; i++) {
+			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				assert(0);
+			}
+		}
+		for (int i=0; i<n; i++) {
+			pthread_join(args[i].thr, NULL);
+		}
+	} else {
+#endif
+		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+#ifdef DIGEST_STATS_FAST_1
+			query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+			char **pta=qds->get_row(&digest_text_umap, a);
+			result->add_row(pta);
+			free(a);
+#else
+			char **pta=qds->get_row(&digest_text_umap);
+			result->add_row(pta);
+			qds->free_row(pta);
+#endif
+		}
+#ifdef DIGEST_STATS_FAST_1
 	}
+#endif
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
 #else
 	spin_rdunlock(&digest_rwlock);
 #endif
+#ifdef DIGEST_STATS_FAST_1
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		curtime2=monotonic_time();
+		curtime1 = curtime1/1000;
+		curtime2 = curtime2/1000;
+		proxy_info("Running query on stats_mysql_query_digest: locked for %llums to retrieve %llu entries\n", curtime2-curtime1, map_size);
+	}
+#endif
 	return result;
 }
 
 SQLite3_result * Query_Processor::get_query_digests_reset() {
-	SQLite3_result *result=new SQLite3_result(14);
+	SQLite3_result *result = NULL;
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&digest_rwlock);
 #else
 	spin_wrlock(&digest_rwlock);
+#endif
+#ifdef DIGEST_STATS_FAST_1
+	unsigned long long curtime1;
+	unsigned long long curtime2;
+	bool free_me = true;
+	bool defer_free = true;
+	int n=DIGEST_STATS_FAST_THREADS;
+	get_query_digests_parallel_args args[n];
+	size_t map_size = digest_umap.size();
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		curtime1=monotonic_time();
+		result = new SQLite3_result(14, true);
+	} else {
+		result = new SQLite3_result(14);
+	}
+#else
+	result = new SQLite3_result(14);
 #endif
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
@@ -929,14 +1469,53 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	result->add_column_definition(SQLITE_TEXT,"max_time");
 	result->add_column_definition(SQLITE_TEXT,"rows_affected");
 	result->add_column_definition(SQLITE_TEXT,"rows_sent");
-	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-		char **pta=qds->get_row(&digest_text_umap);
-		result->add_row(pta);
-		qds->free_row(pta);
-		delete qds;
+#ifdef DIGEST_STATS_FAST_1
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		for (int i=0; i<n; i++) {
+			args[i].m=i;
+			//args[i].ret=0;
+			args[i].gu = &digest_umap;
+			args[i].gtu = &digest_text_umap;
+			args[i].result = result;
+			args[i].free_me = free_me;
+			args[i].defer_free = defer_free;
+		}
+		for (int i=0; i<n; i++) {
+			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				assert(0);
+			}
+		}
+		for (int i=0; i<n; i++) {
+			pthread_join(args[i].thr, NULL);
+		}
+		if (free_me == false) {
+			for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+				QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+				delete qds;
+			}
+		}
+	} else {
+#endif
+		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+#ifdef DIGEST_STATS_FAST_1
+			query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+			char **pta=qds->get_row(&digest_text_umap, a);
+			result->add_row(pta);
+			//qds->free_row(pta);
+			free(a);
+#else
+			char **pta=qds->get_row(&digest_text_umap);
+			result->add_row(pta);
+			qds->free_row(pta);
+#endif
+			delete qds;
+		}
+#ifdef DIGEST_STATS_FAST_1
 	}
+#endif
 	digest_umap.erase(digest_umap.begin(),digest_umap.end());
+	// this part is always single-threaded
 	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
 		free(it->second);
 	}
@@ -945,6 +1524,25 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	pthread_rwlock_unlock(&digest_rwlock);
 #else
 	spin_wrunlock(&digest_rwlock);
+#endif
+#ifdef DIGEST_STATS_FAST_1
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		curtime2=monotonic_time();
+		curtime1 = curtime1/1000;
+		curtime2 = curtime2/1000;
+		proxy_info("Running query on stats_mysql_query_digest_reset: locked for %llums to retrieve %llu entries\n", curtime2-curtime1, map_size);
+		if (free_me) {
+			if (defer_free) {
+				for (int i=0; i<n; i++) {
+					for (unsigned long long r = 0; r < args[i].ret; r++) {
+						QP_query_digest_stats *qds = args[i].array_qds[r];
+						delete qds;
+					}
+					free(args[i].array_qds);
+				}
+			}
+		}
+	}
 #endif
 	return result;
 }

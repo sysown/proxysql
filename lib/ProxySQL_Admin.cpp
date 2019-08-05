@@ -451,8 +451,12 @@ int ProxySQL_Test___GetDigestTable(bool reset) {
 	return r;
 }
 
-
-void ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
+int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
+	int r = 0;
+	r = GloQPro->purge_query_digests(async_purge, parallel, msg);
+	return r;
+}
+int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	//unsigned long long queries=n;
 	//queries *= 1000;
 	MySQL_Session *sess = new MySQL_Session();
@@ -470,18 +474,40 @@ void ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	qp.digest_text = (char *)malloc(1024);
 	MySQL_Connection_userinfo ui;
 	char * username_buf = (char *)malloc(32);
-	char * schemaname_buf = (char *)malloc(32);
+	char * schemaname_buf = (char *)malloc(64);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
+	strcpy(username_buf,"user_name_");
+	strcpy(schemaname_buf,"shard_name_");
+	bool orig_norm = mysql_thread___query_digests_normalize_digest_text;
 	for (int i=0; i<n; i++) {
+		if (i%10 == 0) {
+			mysql_thread___query_digests_normalize_digest_text = true;
+		} else {
+			mysql_thread___query_digests_normalize_digest_text = orig_norm;
+		}
 		for (int j=0; j<10; j++) {
 			sprintf(qp.digest_text,"SELECT ? FROM table%d a JOIN table%d b WHERE a.id > ? AND a.c IN (?,?,?) ORDER BY k,l DESC LIMIT ?",i, j);
 			int digest_text_length = strlen(qp.digest_text);
 			qp.digest=SpookyHash::Hash64(qp.digest_text, digest_text_length, 0);
 			for (int k=0; k<10; k++) {
-				sprintf(username_buf,"user_%d",k%10);
+				//sprintf(username_buf,"user_%d",k%10);
+				int _k = fastrand()%20;
+				for (int _i=0 ; _i<_k ; _i++) {
+					username_buf[10+_i]='0';
+				}
+				username_buf[10+_k]='\0';
 				for (int l=0; l<10; l++) {
-					sprintf(schemaname_buf,"shard_%d",l%10);
+					//if (fastrand()%100==0) {
+					//	sprintf(schemaname_buf,"long_shard_name_shard_whatever_%d",l%10);
+					//} else {
+					//	sprintf(schemaname_buf,"shard_%d",l%10);
+					//}
+					int _k = fastrand()%30;
+					for (int _i=0 ; _i<_k ; _i++) {
+						schemaname_buf[11+_i]='0';
+					}
+					schemaname_buf[11+_k]='\0';
 					ui.set(username_buf, NULL, schemaname_buf, NULL);
 					int hg = 0;
 					uint64_t hash2;
@@ -499,7 +525,8 @@ void ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 		}
 	}
 	delete sess;
-
+	mysql_thread___query_digests_normalize_digest_text = orig_norm;
+	return n*1000;
 }
 
 
@@ -2166,6 +2193,27 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_query_digest=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_query_digest_reset"))
 		{ stats_mysql_query_digest_reset=true; refresh=true; }
+	if (stats_mysql_query_digest_reset == true && stats_mysql_query_digest == true) {
+		int nd = 0;
+		int ndr= 0;
+		char *c = NULL;
+		char *_ret = NULL;
+		c = (char *)query_no_space;
+		_ret = NULL;
+		while (_ret = strstr(c,"stats_mysql_query_digest_reset")) {
+			ndr++;
+			c = _ret + strlen("stats_mysql_query_digest_reset");
+		}
+		c = (char *)query_no_space;
+		_ret = NULL;
+		while (_ret = strstr(c,"stats_mysql_query_digest")) {
+			nd++;
+			c = _ret + strlen("stats_mysql_query_digest");
+		}
+		if (nd == ndr) {
+			stats_mysql_query_digest = false;
+		}
+	}
 	if (strstr(query_no_space,"stats_mysql_errors"))
 		{ stats_mysql_errors=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_errors_reset"))
@@ -2269,10 +2317,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
-		if (stats_mysql_query_digest)
-			stats___mysql_query_digests(false);
-		if (stats_mysql_query_digest_reset)
-			stats___mysql_query_digests(true);
+		if (stats_mysql_query_digest_reset) {
+			stats___mysql_query_digests(true, stats_mysql_query_digest);
+		} else {
+			if (stats_mysql_query_digest) {
+				stats___mysql_query_digests(false);
+			}
+		}
 		if (stats_mysql_errors)
 			stats___mysql_errors(false);
 		if (stats_mysql_errors_reset) {
@@ -2618,31 +2669,96 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			}
 		}
 	}
+	if (!strncasecmp("TRUNCATE ", query_no_space, strlen("TRUNCATE "))) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+			if (strstr(query_no_space,"stats_mysql_query_digest")) {
+				bool truncate_digest_table = false;
+				static char * truncate_digest_table_queries[] = {
+					(char *)"TRUNCATE TABLE stats.stats_mysql_query_digest",
+					(char *)"TRUNCATE TABLE stats.stats_mysql_query_digest_reset",
+					(char *)"TRUNCATE TABLE stats_mysql_query_digest",
+					(char *)"TRUNCATE TABLE stats_mysql_query_digest_reset",
+					(char *)"TRUNCATE stats.stats_mysql_query_digest",
+					(char *)"TRUNCATE stats.stats_mysql_query_digest_reset",
+					(char *)"TRUNCATE stats_mysql_query_digest",
+					(char *)"TRUNCATE stats_mysql_query_digest_reset"
+				};
+				size_t l=sizeof(truncate_digest_table_queries)/sizeof(char *);
+				unsigned int i;
+				char **ret=(char **)malloc(sizeof(char *)*l);
+				for (i=0;i<l;i++) {
+					if (truncate_digest_table == false) {
+						if (strcasecmp(truncate_digest_table_queries[i], query_no_space)==0) {
+							truncate_digest_table = true;
+						}
+					}
+				}
+				if (truncate_digest_table==true) {
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					SPA->admindb->execute("DELETE FROM stats.stats_mysql_query_digest");
+					SPA->admindb->execute("DELETE FROM stats.stats_mysql_query_digest_reset");
+					SPA->vacuum_stats(true);
+					// purge the digest map, asynchronously, in single thread
+					char *msg = NULL;
+					int r1 = ProxySQL_Test___PurgeDigestTable(true, false, &msg);
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, r1);
+					free(msg);
+					run_query=false;
+					goto __run_query;
+				}
+			}
+		}
+	}
 	if (!strncasecmp("PROXYSQLTEST ", query_no_space, strlen("PROXYSQLTEST "))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			int test_n = 0;
 			int test_arg1 = 0;
 			int test_arg2 = 0;
 			int r1 = 0;
+			char *msg = NULL;
 			sscanf(query_no_space+strlen("PROXYSQLTEST "),"%d %d %d", &test_n, &test_arg1, &test_arg2);
 			if (test_n) {
 				switch (test_n) {
 					case 1:
+						// generate test_arg1*1000 entries in digest map
 						if (test_arg1==0) {
 							test_arg1=1;
 						}
-						ProxySQL_Test___GenerateRandomQueryInDigestTable(test_arg1);
-						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+						r1 = ProxySQL_Test___GenerateRandomQueryInDigestTable(test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 2:
+						// get all the entries from the digest map, but without writing to DB
+						// it uses multiple threads
 						r1 = ProxySQL_Test___GetDigestTable(false);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 3:
+						// get all the entries from the digest map and reset, but without writing to DB
+						// it uses multiple threads
 						r1 = ProxySQL_Test___GetDigestTable(true);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 4:
+						// purge the digest map, synchronously, in single thread
+						r1 = ProxySQL_Test___PurgeDigestTable(false, false, NULL);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 5:
+						// purge the digest map, synchronously, in multiple threads
+						r1 = ProxySQL_Test___PurgeDigestTable(false, true, NULL);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 6:
+						// purge the digest map, asynchronously, in single thread
+						r1 = ProxySQL_Test___PurgeDigestTable(true, false, &msg);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, r1);
+						free(msg);
 						run_query=false;
 						break;
 					default:
@@ -3821,7 +3937,7 @@ __end_while_pool:
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_ADMIN_VERSION "0.2.0902" DEB
+#define PROXYSQL_ADMIN_VERSION "2.0.6.0805" DEB
 
 ProxySQL_Admin::ProxySQL_Admin() {
 #ifdef DEBUG
@@ -5755,7 +5871,7 @@ void ProxySQL_Admin::stats___memory_metrics() {
 		if (GloQPro) {
 			unsigned long mu = GloQPro->get_query_digests_total_size();
 			vn=(char *)"query_digest_memory";
-			sprintf(bu,"%lu",mu);
+			sprintf(bu,"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query,a,vn,bu);
 			statsdb->execute(query);
@@ -6331,7 +6447,7 @@ void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 	delete resultset;
 }
 
-void ProxySQL_Admin::stats___mysql_query_digests(bool reset) {
+void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 	if (!GloQPro) return;
 	SQLite3_result * resultset=NULL;
 	if (reset==true) {
@@ -6347,11 +6463,12 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset) {
 	sqlite3 *mydb3=statsdb->get_db();
 	char *query1=NULL;
 	char *query32=NULL;
-	if (reset) {
+	// ALWAYS delete from both tables
+	//if (reset) {
 		statsdb->execute("DELETE FROM stats_mysql_query_digest_reset");
-	} else {
+	//} else {
 		statsdb->execute("DELETE FROM stats_mysql_query_digest");
-	}
+	//}
 //	char *a=(char *)"INSERT INTO stats_mysql_query_digest VALUES (%s,\"%s\",\"%s\",\"%s\",\"%s\",%s,%s,%s,%s,%s,%s)";
 	if (reset) {
 		query1=(char *)"INSERT INTO stats_mysql_query_digest_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
@@ -6428,6 +6545,11 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset) {
 		free(query);
 	}
 */
+	if (reset) {
+		if (copy) {
+			statsdb->execute("INSERT INTO stats_mysql_query_digest SELECT * FROM stats_mysql_query_digest_reset");
+		}
+	}
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
