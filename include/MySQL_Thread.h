@@ -335,6 +335,7 @@ class MySQL_Threads_Handler
 	MySQL_Listeners_Manager *MLM;
 	public:
 	struct {
+		bool azure_enabled;
 		int monitor_history;
 		int monitor_connect_interval;
 		int monitor_connect_timeout;

@@ -231,6 +231,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
+	(char *)"azure_enabled",
 	(char *)"monitor_enabled",
 	(char *)"monitor_history",
 	(char *)"monitor_connect_interval",
@@ -363,6 +364,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connect_timeout_server_max=10000;
 	variables.free_connections_pct=10;
 	variables.connect_retries_delay=1;
+	variables.azure_enabled = false;
 	variables.monitor_enabled=true;
 	variables.monitor_history=600000;
 	variables.monitor_connect_interval=120000;
@@ -689,6 +691,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		if (!strcmp(name,"monitor_history")) return (int)variables.monitor_history;
 		if (!strcmp(name,"monitor_slave_lag_when_null")) return (int)variables.monitor_slave_lag_when_null;
 	}
+	if (!strcmp(name, "azure_enabled")) return (int)variables.azure_enabled;
 	if (!strncmp(name,"c",1)) {
 		if (!strcmp(name,"connect_retries_on_failure")) return (int)variables.connect_retries_on_failure;
 		if (!strcmp(name,"connection_delay_multiplex_ms")) return (int)variables.connection_delay_multiplex_ms;
@@ -861,6 +864,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		// FIXME : make it human readable
 		sprintf(intbuf,"%d",variables.server_capabilities);
 		return strdup(intbuf);
+	}
+	if (!strcasecmp(name, "azure_enabled")) {
+		return strdup((variables.azure_enabled ? "true" : "false"));
 	}
 	// SSL variables
 	if (!strncasecmp(name,"ssl_",4)) {
@@ -1291,6 +1297,19 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	//
 	if (!value) return false;
 	size_t vallen=strlen(value);
+
+	// Azure control
+	if (!strcasecmp(name, "azure_enabled")) {
+		if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+			variables.azure_enabled = true;
+			return true;
+		}
+		if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+			variables.azure_enabled = false;
+			return true;
+		}
+		return false;
+	}
 
 	// monitor variables
 	if (!strncasecmp(name,"monitor_",8)) {
@@ -3818,6 +3837,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ssl_p2s_key=GloMTH->get_variable_string((char *)"ssl_p2s_key");
 	if (mysql_thread___ssl_p2s_cipher) free(mysql_thread___ssl_p2s_cipher);
 	mysql_thread___ssl_p2s_cipher=GloMTH->get_variable_string((char *)"ssl_p2s_cipher");
+
+	mysql_thread___azure_enabled = (bool)GloMTH->get_variable_int((char*)"azure_enabled");
+
 
 	mysql_thread___monitor_wait_timeout=(bool)GloMTH->get_variable_int((char *)"monitor_wait_timeout");
 	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");

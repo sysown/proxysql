@@ -91,7 +91,9 @@ void * kill_query_thread(void *arg) {
 	MySQL_Thread * thread = ka->mt;
 	mysql=mysql_init(NULL);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
-	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_name", ka->hostname);
+	if (mysql_thread___azure_enabled) {
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
+	}
 	if (!mysql) {
 		goto __exit_kill_query_thread;
 	}

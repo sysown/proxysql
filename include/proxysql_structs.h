@@ -690,6 +690,9 @@ __thread int mysql_thread___eventslog_filesize;
 __thread char * mysql_thread___auditlog_filename;
 __thread int mysql_thread___auditlog_filesize;
 
+/* variables used by the Azure MySQL Connection Control*/
+__thread int mysql_thread___azure_enabled;
+
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_enabled;
 __thread int mysql_thread___monitor_history;
@@ -818,6 +821,9 @@ extern __thread int mysql_thread___eventslog_filesize;
 /* variables used by audit log */
 extern __thread char * mysql_thread___auditlog_filename;
 extern __thread int mysql_thread___auditlog_filesize;
+
+/* variables used by the Azure MySQL Connection Control*/
+extern __thread int mysql_thread___azure_enabled;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_enabled;
