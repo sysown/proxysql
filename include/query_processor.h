@@ -240,8 +240,11 @@ class Query_Processor {
 	SQLite3_result * get_stats_commands_counters();
 	SQLite3_result * get_query_digests();
 	SQLite3_result * get_query_digests_reset();
+	unsigned long long purge_query_digests(bool async_purge, bool parallel, char **msg);
+	unsigned long long purge_query_digests_async(char **msg);
+	unsigned long long purge_query_digests_sync(bool parallel);
 
-	unsigned long get_query_digests_total_size();
+	unsigned long long get_query_digests_total_size();
 	unsigned long long get_rules_mem_used();
 
 

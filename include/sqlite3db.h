@@ -118,6 +118,8 @@ class SQLite3_column {
 
 class SQLite3_result {
 	public:
+	pthread_mutex_t m;
+	bool enabled_mutex;
 	int columns;
 	int rows_count;
 	char *checksum();
@@ -159,8 +161,14 @@ class SQLite3_result {
 	int add_row(char **_fields) {
 		SQLite3_row *row=new SQLite3_row(columns);	
 		row->add_fields(_fields);
+		if (enabled_mutex) {
+			pthread_mutex_lock(&m);
+		}
 		rows.push_back(row);
 		rows_count++;
+		if (enabled_mutex) {
+			pthread_mutex_unlock(&m);
+		}
 		return SQLITE_ROW;
 	};
 	int add_row(SQLite3_row *old_row) {
@@ -178,9 +186,15 @@ class SQLite3_result {
 		}
 		while (add_row(stmt)==SQLITE_ROW) {};
 	};
-	SQLite3_result(int num_columns) {
+	SQLite3_result(int num_columns, bool en_mutex=false) {
 		rows_count=0;
 		columns=num_columns;
+		if (en_mutex) {
+			pthread_mutex_init(&m,NULL);
+			enabled_mutex = true;
+		} else {
+			enabled_mutex = false;
+		}
 	};
 	~SQLite3_result() {
 		for (std::vector<SQLite3_column *>::iterator it = column_definition.begin() ; it != column_definition.end(); ++it) {
