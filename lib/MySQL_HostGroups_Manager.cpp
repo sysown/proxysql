@@ -1079,9 +1079,10 @@ bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u , status %u, %s compression, max_connections %d, max_replication_lag %u, use_ssl=%u, max_latency_ms=%u\n", add,p,hid,_weight,status, (_comp ? "with" : "without") /*, _charset */ , _max_connections, _max_replication_lag, _use_ssl, _max_latency_ms);
 	int rc;
 	sqlite3_stmt *statement=NULL;
-	sqlite3 *mydb3=mydb->get_db();
+	//sqlite3 *mydb3=mydb->get_db();
 	char *query=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	rc = mydb->prepare_v2(query, &statement);
 	assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int64(statement, 1, hid); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 2, add, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
@@ -1112,12 +1113,14 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	mydb->execute("DELETE FROM mysql_servers_incoming");
 	sqlite3_stmt *statement1=NULL;
 	sqlite3_stmt *statement32=NULL;
-	sqlite3 *mydb3=mydb->get_db();
+	//sqlite3 *mydb3=mydb->get_db();
 	char *query1=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 	char *query32=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12), (?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36), (?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48), (?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60), (?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72), (?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84), (?85, ?86, ?87, ?88, ?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96), (?97, ?98, ?99, ?100, ?101, ?102, ?103, ?104, ?105, ?106, ?107, ?108), (?109, ?110, ?111, ?112, ?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120), (?121, ?122, ?123, ?124, ?125, ?126, ?127, ?128, ?129, ?130, ?131, ?132), (?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140, ?141, ?142, ?143, ?144), (?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154, ?155, ?156), (?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176, ?177, ?178, ?179, ?180), (?181, ?182, ?183, ?184, ?185, ?186, ?187, ?188, ?189, ?190, ?191, ?192), (?193, ?194, ?195, ?196, ?197, ?198, ?199, ?200, ?201, ?202, ?203, ?204), (?205, ?206, ?207, ?208, ?209, ?210, ?211, ?212, ?213, ?214, ?215, ?216), (?217, ?218, ?219, ?220, ?221, ?222, ?223, ?224, ?225, ?226, ?227, ?228), (?229, ?230, ?231, ?232, ?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240), (?241, ?242, ?243, ?244, ?245, ?246, ?247, ?248, ?249, ?250, ?251, ?252), (?253, ?254, ?255, ?256, ?257, ?258, ?259, ?260, ?261, ?262, ?263, ?264), (?265, ?266, ?267, ?268, ?269, ?270, ?271, ?272, ?273, ?274, ?275, ?276), (?277, ?278, ?279, ?280, ?281, ?282, ?283, ?284, ?285, ?286, ?287, ?288), (?289, ?290, ?291, ?292, ?293, ?294, ?295, ?296, ?297, ?298, ?299, ?300), (?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308, ?309, ?310, ?311, ?312), (?313, ?314, ?315, ?316, ?317, ?318, ?319, ?320, ?321, ?322, ?323, ?324), (?325, ?326, ?327, ?328, ?329, ?330, ?331, ?332, ?333, ?334, ?335, ?336), (?337, ?338, ?339, ?340, ?341, ?342, ?343, ?344, ?345, ?346, ?347, ?348), (?349, ?350, ?351, ?352, ?353, ?354, ?355, ?356, ?357, ?358, ?359, ?360), (?361, ?362, ?363, ?364, ?365, ?366, ?367, ?368, ?369, ?370, ?371, ?372), (?373, ?374, ?375, ?376, ?377, ?378, ?379, ?380, ?381, ?382, ?383, ?384)";
-	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	rc = mydb->prepare_v2(query1, &statement1);
 	assert(rc==SQLITE_OK);
-	rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+	rc = mydb->prepare_v2(query32, &statement32);
 	assert(rc==SQLITE_OK);
 	MySerStatus status1=MYSQL_SERVER_STATUS_ONLINE;
 	int row_idx=0;
@@ -1269,12 +1272,14 @@ bool MySQL_HostGroups_Manager::commit() {
 		int rc;
 		sqlite3_stmt *statement1=NULL;
 		sqlite3_stmt *statement2=NULL;
-		sqlite3 *mydb3=mydb->get_db();
+		//sqlite3 *mydb3=mydb->get_db();
 		char *query1=(char *)"UPDATE mysql_servers SET mem_pointer = ?1 WHERE hostgroup_id = ?2 AND hostname = ?3 AND port = ?4";
-		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		rc = mydb->prepare_v2(query1, &statement1);
 		assert(rc==SQLITE_OK);
 		char *query2=(char *)"UPDATE mysql_servers SET weight = ?1 , status = ?2 , compression = ?3 , max_connections = ?4 , max_replication_lag = ?5 , use_ssl = ?6 , max_latency_ms = ?7 , comment = ?8 , gtid_port = ?9 WHERE hostgroup_id = ?10 AND hostname = ?11 AND port = ?12";
-		rc=sqlite3_prepare_v2(mydb3, query2, -1, &statement2, 0);
+		//rc=sqlite3_prepare_v2(mydb3, query2, -1, &statement2, 0);
+		rc = mydb->prepare_v2(query2, &statement2);
 		assert(rc==SQLITE_OK);
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -1712,12 +1717,14 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	sqlite3_stmt *statement32=NULL;
 
 	PtrArray *lst=new PtrArray();
-	sqlite3 *mydb3=mydb->get_db();
+	//sqlite3 *mydb3=mydb->get_db();
 	char *query1=(char *)"INSERT INTO mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
-	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	rc = mydb->prepare_v2(query1, &statement1);
 	assert(rc==SQLITE_OK);
 	char *query32=(char *)"INSERT INTO mysql_servers VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13), (?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26), (?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39), (?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52), (?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65), (?66, ?67, ?68, ?69, ?70, ?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78), (?79, ?80, ?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88, ?89, ?90, ?91), (?92, ?93, ?94, ?95, ?96, ?97, ?98, ?99, ?100, ?101, ?102, ?103, ?104), (?105, ?106, ?107, ?108, ?109, ?110, ?111, ?112, ?113, ?114, ?115, ?116, ?117), (?118, ?119, ?120, ?121, ?122, ?123, ?124, ?125, ?126, ?127, ?128, ?129, ?130), (?131, ?132, ?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140, ?141, ?142, ?143), (?144, ?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154, ?155, ?156), (?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165, ?166, ?167, ?168, ?169), (?170, ?171, ?172, ?173, ?174, ?175, ?176, ?177, ?178, ?179, ?180, ?181, ?182), (?183, ?184, ?185, ?186, ?187, ?188, ?189, ?190, ?191, ?192, ?193, ?194, ?195), (?196, ?197, ?198, ?199, ?200, ?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208), (?209, ?210, ?211, ?212, ?213, ?214, ?215, ?216, ?217, ?218, ?219, ?220, ?221), (?222, ?223, ?224, ?225, ?226, ?227, ?228, ?229, ?230, ?231, ?232, ?233, ?234), (?235, ?236, ?237, ?238, ?239, ?240, ?241, ?242, ?243, ?244, ?245, ?246, ?247), (?248, ?249, ?250, ?251, ?252, ?253, ?254, ?255, ?256, ?257, ?258, ?259, ?260), (?261, ?262, ?263, ?264, ?265, ?266, ?267, ?268, ?269, ?270, ?271, ?272, ?273), (?274, ?275, ?276, ?277, ?278, ?279, ?280, ?281, ?282, ?283, ?284, ?285, ?286), (?287, ?288, ?289, ?290, ?291, ?292, ?293, ?294, ?295, ?296, ?297, ?298, ?299), (?300, ?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308, ?309, ?310, ?311, ?312), (?313, ?314, ?315, ?316, ?317, ?318, ?319, ?320, ?321, ?322, ?323, ?324, ?325), (?326, ?327, ?328, ?329, ?330, ?331, ?332, ?333, ?334, ?335, ?336, ?337, ?338), (?339, ?340, ?341, ?342, ?343, ?344, ?345, ?346, ?347, ?348, ?349, ?350, ?351), (?352, ?353, ?354, ?355, ?356, ?357, ?358, ?359, ?360, ?361, ?362, ?363, ?364), (?365, ?366, ?367, ?368, ?369, ?370, ?371, ?372, ?373, ?374, ?375, ?376, ?377), (?378, ?379, ?380, ?381, ?382, ?383, ?384, ?385, ?386, ?387, ?388, ?389, ?390), (?391, ?392, ?393, ?394, ?395, ?396, ?397, ?398, ?399, ?400, ?401, ?402, ?403), (?404, ?405, ?406, ?407, ?408, ?409, ?410, ?411, ?412, ?413, ?414, ?415, ?416)";
-	rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
+	rc = mydb->prepare_v2(query32, &statement32);
 	assert(rc==SQLITE_OK);
 
 	if (mysql_thread___hostgroup_manager_verbose) {
@@ -1880,9 +1887,10 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 	}
 	int rc;
 	sqlite3_stmt *statement=NULL;
-	sqlite3 *mydb3=mydb->get_db();
+	//sqlite3 *mydb3=mydb->get_db();
 	char *query=(char *)"INSERT INTO mysql_group_replication_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	rc = mydb->prepare_v2(query, &statement);
 	assert(rc==SQLITE_OK);
 	proxy_info("New mysql_group_replication_hostgroups table\n");
 	pthread_mutex_lock(&Group_Replication_Info_mutex);
@@ -1975,9 +1983,10 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	}
 	int rc;
 	sqlite3_stmt *statement=NULL;
-	sqlite3 *mydb3=mydb->get_db();
+	//sqlite3 *mydb3=mydb->get_db();
 	char *query=(char *)"INSERT INTO mysql_galera_hostgroups(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	rc = mydb->prepare_v2(query, &statement);
 	assert(rc==SQLITE_OK);
 	proxy_info("New mysql_galera_hostgroups table\n");
 	pthread_mutex_lock(&Galera_Info_mutex);
@@ -5222,9 +5231,10 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	}
 	int rc;
 	sqlite3_stmt *statement=NULL;
-	sqlite3 *mydb3=mydb->get_db();
+	//sqlite3 *mydb3=mydb->get_db();
 	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
-	rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+	rc = mydb->prepare_v2(query, &statement);
 	assert(rc==SQLITE_OK);
 	proxy_info("New mysql_aws_aurora_hostgroups table\n");
 	pthread_mutex_lock(&AWS_Aurora_Info_mutex);

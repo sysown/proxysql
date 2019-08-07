@@ -76,6 +76,16 @@ bool SQLite3DB::execute(const char *str) {
 	return false;
 }
 
+int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
+	int rc;
+	do {
+		rc = sqlite3_prepare_v2(db, str, -1, statement, 0);
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
+			usleep(USLEEP_SQLITE_LOCKED);
+		}
+	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
+	return rc;
+}
 
 bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int *affected_rows, SQLite3_result **resultset) {
 	int rc;

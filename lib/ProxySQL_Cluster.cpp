@@ -631,8 +631,9 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						MYSQL_ROW row;
 						char *q = (char *)"INSERT INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34)";
 						sqlite3_stmt *statement1 = NULL;
-						sqlite3 *mydb3 = GloAdmin->admindb->get_db();
-						rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
+						//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
+						//rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
+						rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 						assert(rc==SQLITE_OK);
 						while ((row = mysql_fetch_row(result1))) {
 							rc=sqlite3_bind_int64(statement1, 1, atoll(row[0])); assert(rc==SQLITE_OK); // rule_id
@@ -677,9 +678,11 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						char *q32fr = (char *)"INSERT INTO mysql_query_rules_fast_routing(username, schemaname, flagIN, destination_hostgroup, comment) VALUES (?1, ?2, ?3, ?4, ?5), (?6, ?7, ?8, ?9, ?10), (?11, ?12, ?13, ?14, ?15), (?16, ?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24, ?25), (?26, ?27, ?28, ?29, ?30), (?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40), (?41, ?42, ?43, ?44, ?45), (?46, ?47, ?48, ?49, ?50), (?51, ?52, ?53, ?54, ?55), (?56, ?57, ?58, ?59, ?60), (?61, ?62, ?63, ?64, ?65), (?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75), (?76, ?77, ?78, ?79, ?80), (?81, ?82, ?83, ?84, ?85), (?86, ?87, ?88, ?89, ?90), (?91, ?92, ?93, ?94, ?95), (?96, ?97, ?98, ?99, ?100), (?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115), (?116, ?117, ?118, ?119, ?120), (?121, ?122, ?123, ?124, ?125), (?126, ?127, ?128, ?129, ?130), (?131, ?132, ?133, ?134, ?135), (?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145), (?146, ?147, ?148, ?149, ?150), (?151, ?152, ?153, ?154, ?155), (?156, ?157, ?158, ?159, ?160)";
 						sqlite3_stmt *statement1fr = NULL;
 						sqlite3_stmt *statement32fr = NULL;
-						rc=sqlite3_prepare_v2(mydb3, q1fr, -1, &statement1fr, 0);
+						//rc=sqlite3_prepare_v2(mydb3, q1fr, -1, &statement1fr, 0);
+						rc = GloAdmin->admindb->prepare_v2(q1fr, &statement1fr);
 						assert(rc==SQLITE_OK);
-						rc=sqlite3_prepare_v2(mydb3, q32fr, -1, &statement32fr, 0);
+						//rc=sqlite3_prepare_v2(mydb3, q32fr, -1, &statement32fr, 0);
+						rc = GloAdmin->admindb->prepare_v2(q32fr, &statement32fr);
 						assert(rc==SQLITE_OK);
 						int row_idx=0;
 						int max_bulk_row_idx=mysql_num_rows(result2)/32;
@@ -775,8 +778,9 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 					MYSQL_ROW row;
 					char *q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 					sqlite3_stmt *statement1 = NULL;
-					sqlite3 *mydb3 = GloAdmin->admindb->get_db();
-					rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
+					//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
+					//rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
+					rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 					assert(rc==SQLITE_OK);
 					while ((row = mysql_fetch_row(result))) {
 						rc=sqlite3_bind_text(statement1, 1, row[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // username
