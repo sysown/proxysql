@@ -673,11 +673,12 @@ void * monitor_connect_thread(void *arg) {
 	mmsd->t2=monotonic_time();
 
 	sqlite3_stmt *statement=NULL;
-	sqlite3 *mondb=mmsd->mondb->get_db();
+	//sqlite3 *mondb=mmsd->mondb->get_db();
 	int rc;
 	char *query=NULL;
 	query=(char *)"INSERT OR REPLACE INTO mysql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
-	rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+	//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+	rc = mmsd->mondb->prepare_v2(query, &statement);
 	assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 	rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
@@ -773,14 +774,15 @@ __exit_monitor_ping_thread:
 	mmsd->t2=monotonic_time();
 	{
 		sqlite3_stmt *statement=NULL;
-		sqlite3 *mondb=mmsd->mondb->get_db();
+		//sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 #ifdef TEST_AURORA
 //		if ((rand() % 10) ==0) {
 #endif // TEST_AURORA
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
-		rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+		//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+		rc = mmsd->mondb->prepare_v2(query, &statement);
 		assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 		rc=sqlite3_bind_int(statement, 2, mmsd->port); assert(rc==SQLITE_OK);
@@ -1018,11 +1020,12 @@ __exit_monitor_read_only_thread:
 	mmsd->t2=monotonic_time();
 	{
 		sqlite3_stmt *statement=NULL;
-		sqlite3 *mondb=mmsd->mondb->get_db();
+		//sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-		rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+		//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+		rc = mmsd->mondb->prepare_v2(query, &statement);
 		assert(rc==SQLITE_OK);
 		int read_only=1; // as a safety mechanism , read_only=1 is the default
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
@@ -1938,12 +1941,13 @@ __exit_monitor_replication_lag_thread:
 	mmsd->t2=monotonic_time();
 	{
 		sqlite3_stmt *statement=NULL;
-		sqlite3 *mondb=mmsd->mondb->get_db();
+		//sqlite3 *mondb=mmsd->mondb->get_db();
 		int rc;
 		char *query=NULL;
 
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_replication_lag_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			rc = mmsd->mondb->prepare_v2(query, &statement);
 			assert(rc==SQLITE_OK);
 				int repl_lag=-2;
 				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
@@ -2156,11 +2160,12 @@ void * MySQL_Monitor::monitor_connect() {
 __end_monitor_connect_loop:
 		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
-			sqlite3 *mondb=monitordb->get_db();
+			//sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_connect_log WHERE time_start_us < ?1";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			rc = monitordb->prepare_v2(query, &statement);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
@@ -2273,11 +2278,12 @@ void * MySQL_Monitor::monitor_ping() {
 __end_monitor_ping_loop:
 		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
-			sqlite3 *mondb=monitordb->get_db();
+			//sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start_us < ?1";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			rc = monitordb->prepare_v2(query, &statement);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
@@ -2555,11 +2561,12 @@ void * MySQL_Monitor::monitor_read_only() {
 __end_monitor_read_only_loop:
 		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
-			sqlite3 *mondb=monitordb->get_db();
+			//sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			rc = monitordb->prepare_v2(query, &statement);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_read_only_interval * (mysql_thread___monitor_read_only_max_timeout_count + 1 )) { // issue #626
 				if (mysql_thread___monitor_read_only_interval < 3600000)
@@ -2887,11 +2894,12 @@ void * MySQL_Monitor::monitor_replication_lag() {
 __end_monitor_replication_lag_loop:
 		if (mysql_thread___monitor_enabled==true) {
 			sqlite3_stmt *statement=NULL;
-			sqlite3 *mondb=monitordb->get_db();
+			//sqlite3 *mondb=monitordb->get_db();
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start_us < ?1";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			rc = monitordb->prepare_v2(query, &statement);
 			assert(rc==SQLITE_OK);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
@@ -3291,14 +3299,15 @@ bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
-	sqlite3 *mondb=monitordb->get_db();
+	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT INTO mysql_server_group_replication_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
-	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	rc = monitordb->prepare_v2(query1, &statement1);
 	assert(rc==SQLITE_OK);
 	monitordb->execute((char *)"DELETE FROM mysql_server_group_replication_log");
 	std::map<std::string, MyGR_monitor_node *>::iterator it2;
@@ -3331,14 +3340,15 @@ void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
-	sqlite3 *mondb=monitordb->get_db();
+	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
-	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	rc = monitordb->prepare_v2(query1, &statement1);
 	assert(rc==SQLITE_OK);
 	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
 	std::map<std::string, Galera_monitor_node *>::iterator it2;
@@ -3466,7 +3476,7 @@ std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
-	sqlite3 *mondb=monitordb->get_db();
+	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
@@ -3475,9 +3485,11 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 	char *query2=NULL;
 	query2=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log (hostname, port, time_start_us, success_time_us, error) VALUES (?1, ?2, ?3, ?4, ?5)";
 	sqlite3_stmt *statement2=NULL;
-	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	rc = monitordb->prepare_v2(query1, &statement1);
 	assert(rc==SQLITE_OK);
-	rc=sqlite3_prepare_v2(mondb, query2, -1, &statement2, 0);
+	//rc=sqlite3_prepare_v2(mondb, query2, -1, &statement2, 0);
+	rc = monitordb->prepare_v2(query2, &statement2);
 	assert(rc==SQLITE_OK);
 	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
 	monitordb->execute((char *)"DELETE FROM mysql_server_aws_aurora_log");
@@ -3531,13 +3543,14 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_check_status() {
-	sqlite3 *mondb=monitordb->get_db();
+	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_check_status VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 	sqlite3_stmt *statement1=NULL;
-	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	rc = monitordb->prepare_v2(query1, &statement1);
 	assert(rc==SQLITE_OK);
 	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
 	monitordb->execute((char *)"DELETE FROM mysql_server_aws_aurora_check_status");

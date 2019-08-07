@@ -822,7 +822,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	int cols=0;
 	int affected_rows=0;
     SQLite3_result *resultset=NULL;
-    sqlite3 *mydb3=sessdb->get_db();
+    //sqlite3 *mydb3=sessdb->get_db();
 	string myip = string(sess->client_myds->proxy_addr.addr);
 	string clu_id_s = myip.substr(6,1);
 	unsigned int cluster_id = atoi(clu_id_s.c_str());
@@ -836,7 +836,8 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 		sqlite3_stmt *statement=NULL;
 		int rc;
 		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
-		rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+		rc = sessdb->prepare_v2(query, &statement);
 		assert(rc==SQLITE_OK);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
 			string serverid = "";
@@ -868,10 +869,11 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex aurora_mutex already acquired
 	sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
 	sqlite3_stmt *statement=NULL;
-    sqlite3 *mydb3=sessdb->get_db();
+    //sqlite3 *mydb3=sessdb->get_db();
 	int rc;
     char *query=(char *)"INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5)";
-    rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+    //rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
+    rc = sessdb->prepare_v2(query, &statement);
     assert(rc==SQLITE_OK);
 	time_t __timer;
 	char lut[30];
