@@ -3840,7 +3840,6 @@ void MySQL_Thread::refresh_variables() {
 
 	mysql_thread___azure_enabled = (bool)GloMTH->get_variable_int((char*)"azure_enabled");
 
-
 	mysql_thread___monitor_wait_timeout=(bool)GloMTH->get_variable_int((char *)"monitor_wait_timeout");
 	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");
 	mysql_thread___monitor_enabled=(bool)GloMTH->get_variable_int((char *)"monitor_enabled");
