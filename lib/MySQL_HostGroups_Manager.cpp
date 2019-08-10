@@ -2139,7 +2139,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroup
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment FROM mysql_aws_aurora_hostgroups";
+	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment FROM mysql_aws_aurora_hostgroups";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
@@ -5139,7 +5139,7 @@ AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int m
 	__active=true;
 	//need_converge=true;
 	aurora_port = _port;
-	endpoint_address = strdup(_end_addr);
+	domain_name = strdup(_end_addr);
 }
 
 AWS_Aurora_Info::~AWS_Aurora_Info() {
@@ -5147,9 +5147,9 @@ AWS_Aurora_Info::~AWS_Aurora_Info() {
 		free(comment);
 		comment=NULL;
 	}
-	if (endpoint_address) {
-		free(endpoint_address);
-		endpoint_address=NULL;
+	if (domain_name) {
+		free(domain_name);
+		domain_name=NULL;
 	}
 }
 
@@ -5188,21 +5188,21 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int ml, int ci, 
 		aurora_port = _port;
 		ret = true;
 	}
-	if (endpoint_address) {
+	if (domain_name) {
 		if (_end_addr) {
-			if (strcmp(endpoint_address,_end_addr)) {
-				free(endpoint_address);
-				endpoint_address = strdup(_end_addr);
+			if (strcmp(domain_name,_end_addr)) {
+				free(domain_name);
+				domain_name = strdup(_end_addr);
 				ret = true;
 			}
 		} else {
-			free(endpoint_address);
-			endpoint_address=NULL;
+			free(domain_name);
+			domain_name=NULL;
 			ret = true;
 		}
 	} else {
 		if (_end_addr) {
-			endpoint_address=strdup(_end_addr);
+			domain_name=strdup(_end_addr);
 			ret = true;
 		}
 	}
@@ -5232,7 +5232,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	int rc;
 	sqlite3_stmt *statement=NULL;
 	//sqlite3 *mydb3=mydb->get_db();
-	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,endpoint_address,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 	rc = mydb->prepare_v2(query, &statement);
 	assert(rc==SQLITE_OK);
@@ -5337,7 +5337,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 		ret = false;
 	}
 	unsigned port = 3306;
-	char *endpoint_address = strdup((char *)"");
+	char *domain_name = strdup((char *)"");
 	{
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 		std::map<int , AWS_Aurora_Info *>::iterator it2;
@@ -5345,16 +5345,16 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 		AWS_Aurora_Info *info=NULL;
 		if (it2!=AWS_Aurora_Info_Map.end()) {
 			info=it2->second;
-			if (info->endpoint_address) {
-				free(endpoint_address);
-				endpoint_address = strdup(info->endpoint_address);
+			if (info->domain_name) {
+				free(domain_name);
+				domain_name = strdup(info->domain_name);
 			}
 			port = info->aurora_port;
 		}
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
-	char *address = (char *)malloc(strlen(_server_id)+strlen(endpoint_address)+1);
-	sprintf(address,"%s%s",_server_id,endpoint_address);
+	char *address = (char *)malloc(strlen(_server_id)+strlen(domain_name)+1);
+	sprintf(address,"%s%s",_server_id,domain_name);
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 	int i,j;
@@ -5419,7 +5419,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 		}
 	}
 	free(address);
-	free(endpoint_address);
+	free(domain_name);
 	return ret;
 }
 
@@ -5440,7 +5440,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	bool found_reader=false;
 	int _writer_hostgroup = _whid;
 	int aurora_port = 3306;
-	char *endpoint_address = strdup((char *)"");
+	char *domain_name = strdup((char *)"");
 	int read_HG=-1;
 	{
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
@@ -5452,17 +5452,17 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			writer_is_also_reader=info->writer_is_also_reader;
 			new_reader_weight = info->new_reader_weight;
 			read_HG = info->reader_hostgroup;
-			if (info->endpoint_address) {
-				free(endpoint_address);
-				endpoint_address = strdup(info->endpoint_address);
+			if (info->domain_name) {
+				free(domain_name);
+				domain_name = strdup(info->domain_name);
 			}
 			aurora_port = info->aurora_port;
 		}
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
 
-	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(endpoint_address)+1024*1024);
-	sprintf(query, q, _server_id, endpoint_address, aurora_port);
+	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+1024*1024);
+	sprintf(query, q, _server_id, domain_name, aurora_port);
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
@@ -5552,21 +5552,21 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			sprintf(query,q,_writer_hostgroup);	
 			mydb->execute(query);
 			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-			sprintf(query, q, _writer_hostgroup, _server_id, endpoint_address, aurora_port);
+			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port);
 			mydb->execute(query);
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
-			sprintf(query, q, _writer_hostgroup, _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query, q, _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query, q, _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
 
 			// we need to move the old writer into the reader HG
@@ -5580,10 +5580,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {
 				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-				sprintf(query, q, read_HG, _writer_hostgroup, _server_id, endpoint_address, aurora_port);
+				sprintf(query, q, read_HG, _writer_hostgroup, _server_id, domain_name, aurora_port);
 				mydb->execute(query);
 				q = (char *)"UPDATE mysql_servers_incoming SET weight=%d WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-				sprintf(query, q, new_reader_weight, read_HG, _server_id, endpoint_address, aurora_port);
+				sprintf(query, q, new_reader_weight, read_HG, _server_id, domain_name, aurora_port);
 			}
 			uint64_t checksum_current = 0;
 			uint64_t checksum_incoming = 0;
@@ -5623,7 +5623,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				free(query);
 			}
 			if (checksum_incoming!=checksum_current) {
-				proxy_warning("AWS Aurora: setting host %s%s:%d as writer\n", _server_id, endpoint_address, aurora_port);
+				proxy_warning("AWS Aurora: setting host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
 				commit();
 				wrlock();
 /*
@@ -5653,7 +5653,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				wrunlock();
 			} else {
 				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
-					proxy_warning("AWS Aurora: skipping setting node %s%s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _server_id, endpoint_address, aurora_port, _writer_hostgroup);
+					proxy_warning("AWS Aurora: skipping setting node %s%s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _server_id, domain_name, aurora_port, _writer_hostgroup);
 				}
 			}
 			GloAdmin->mysql_servers_wrunlock();
@@ -5668,7 +5668,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	if (query) {
 		free(query);
 	}
-	free(endpoint_address);
+	free(domain_name);
 }
 
 void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id) {
@@ -5680,7 +5680,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	char *error=NULL;
 	int _writer_hostgroup = _whid;
 	int aurora_port = 3306;
-	char *endpoint_address = strdup((char *)"");
+	char *domain_name = strdup((char *)"");
 	{
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 		std::map<int , AWS_Aurora_Info *>::iterator it2;
@@ -5688,17 +5688,17 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		AWS_Aurora_Info *info=NULL;
 		if (it2!=AWS_Aurora_Info_Map.end()) {
 			info=it2->second;
-			if (info->endpoint_address) {
-				free(endpoint_address);
-				endpoint_address = strdup(info->endpoint_address);
+			if (info->domain_name) {
+				free(domain_name);
+				domain_name = strdup(info->domain_name);
 			}
 			aurora_port = info->aurora_port;
 		}
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3";
-	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(endpoint_address)+32);
-	sprintf(query, q, _server_id, endpoint_address, aurora_port);
+	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+32);
+	sprintf(query, q, _server_id, domain_name, aurora_port);
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
@@ -5707,22 +5707,22 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	free(query);
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
-			proxy_warning("AWS Aurora: setting host %s%s:%d (part of cluster with writer_hostgroup=%d) in a reader, moving from writer_hostgroup %d to reader_hostgroup %d\n", _server_id, endpoint_address, aurora_port, _whid, _whid, _rhid);
+			proxy_warning("AWS Aurora: setting host %s%s:%d (part of cluster with writer_hostgroup=%d) in a reader, moving from writer_hostgroup %d to reader_hostgroup %d\n", _server_id, domain_name, aurora_port, _whid, _whid, _rhid);
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
-			query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(endpoint_address)+512);
-			sprintf(query, q, _rhid, _server_id, endpoint_address, aurora_port, _rhid);
+			query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+512);
+			sprintf(query, q, _rhid, _server_id, domain_name, aurora_port, _rhid);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query, q, _server_id, endpoint_address, aurora_port, _rhid);
+			sprintf(query, q, _server_id, domain_name, aurora_port, _rhid);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			sprintf(query, q, _server_id, endpoint_address, aurora_port, _rhid);
+			sprintf(query, q, _server_id, domain_name, aurora_port, _rhid);
 			mydb->execute(query);
 			//free(query);
 			//converge_galera_config(_writer_hostgroup);
@@ -5768,7 +5768,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		delete resultset;
 		resultset=NULL;
 	}
-	free(endpoint_address);
+	free(domain_name);
 }
 
 
