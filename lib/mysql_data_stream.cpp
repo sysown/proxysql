@@ -216,10 +216,12 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	CompPktOUT.partial=0;
 	multi_pkt.ptr=NULL;
 	multi_pkt.size=0;
-
+	
 	statuses.questions = 0;
 	statuses.myconnpoll_get = 0;
 	statuses.myconnpoll_put = 0;
+
+	com_field_wild=NULL;
 }
 
 // Destructor
@@ -241,6 +243,11 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	}
 
 	free_mysql_real_query();
+
+	if (com_field_wild) {
+		free(com_field_wild);
+		com_field_wild=NULL;
+	}
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
