@@ -94,7 +94,6 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			mysql_options4(conn, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", node->hostname);
 			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
 			rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, 0);
 			//char *query = query1;
@@ -614,7 +613,6 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			mysql_options4(conn, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
 			proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
@@ -767,7 +765,6 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			mysql_options4(conn, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
@@ -850,7 +847,6 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			mysql_options4(conn, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
@@ -995,7 +991,6 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			mysql_options4(conn, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
 			proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
