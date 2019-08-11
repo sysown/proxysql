@@ -1197,6 +1197,7 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 
 bool MySQL_HostGroups_Manager::commit() {
 
+	unsigned long long curtime1=monotonic_time();
 	wrlock();
 	// purge table
 	purge_mysql_servers_table();
@@ -1592,9 +1593,15 @@ bool MySQL_HostGroups_Manager::commit() {
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 	wrunlock();
+	unsigned long long curtime2=monotonic_time();
+	curtime1 = curtime1/1000;
+	curtime2 = curtime2/1000;
+	proxy_info("MySQL_HostGroups_Manager::commit() locked for %lluus\n", curtime2-curtime1);
+
 	if (GloMTH) {
 		GloMTH->signal_all_threads(1);
 	}
+
 	return true;
 }
 
