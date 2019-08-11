@@ -773,7 +773,7 @@ SQLite3_Server::SQLite3_Server() {
 	pthread_mutex_init(&aurora_mutex,NULL);
 	unsigned int nas = time(NULL);
 	nas = nas % 3; // range
-	nas += 5; // min
+	nas += 4; // min
 	max_num_aurora_servers = 10; // hypothetical maximum number of nodes
 	for (unsigned int j=1; j<4; j++) {
 		cur_aurora_writer[j-1] = 0;
@@ -890,6 +890,12 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 		// simulate a failover
 		cur_aurora_writer[cluster_id] = rand() % num_aurora_servers[cluster_id];
 		proxy_info("Simulating a failover for AWS Aurora cluster %d , HGs (%d:%d)\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2);
+	}
+	if (rand() % 1000 == 0) {
+		if (num_aurora_servers[cluster_id] < max_num_aurora_servers) {
+			num_aurora_servers[cluster_id]++;
+			proxy_info("Simulating the add of a new server for AWS Aurora Cluster %d , HGs (%d:%d). Now adding server num %d\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2, num_aurora_servers[cluster_id]);
+		}
 	}
 	for (unsigned int i=0; i<num_aurora_servers[cluster_id]; i++) {
 		string serverid = "";
