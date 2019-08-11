@@ -899,11 +899,11 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 	}
 	for (unsigned int i=0; i<num_aurora_servers[cluster_id]; i++) {
 		string serverid = "";
-		if (cluster_id==0) {
+		//if (cluster_id==0) {
 			serverid = "host." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
-		} else {
-			serverid = "127.0." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
-		}
+		//} else {
+		//	serverid = "127.0." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
+		//}
 		string sessionid= "";
 		float lag_ms = 0;
 		if (i==cur_aurora_writer[cluster_id]) {
