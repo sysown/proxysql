@@ -474,6 +474,7 @@ void MySQL_Connection::connect_start() {
 	assert(mysql);
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql");
+	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", parent->address);
 	if (parent->use_ssl) {
 		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
 	}
