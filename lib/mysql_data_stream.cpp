@@ -514,7 +514,7 @@ int MySQL_Data_Stream::read_from_net() {
 		}
 	}
 //__exit_read_from_next:
-	proxy_debug(PROXY_DEBUG_NET, 5, "read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
+	proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: read %d bytes from fd %d into a buffer of %d bytes free\n", sess, r, fd, s);
 	//proxy_error("read %d bytes from fd %d into a buffer of %d bytes free\n", r, fd, s);
 	if (r < 1) {
 		if (encrypted==false) {
@@ -840,7 +840,7 @@ int MySQL_Data_Stream::buffer2array() {
 
 	if (myconn->get_status_compression()==true) {
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=7) {
-			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new compressed packet\n");
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new compressed packet\n", sess);
  			memcpy(&queueIN.hdr,queue_r_ptr(queueIN), sizeof(mysql_hdr));
 			queue_r(queueIN,sizeof(mysql_hdr));
 			queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr)+3;
@@ -857,7 +857,7 @@ int MySQL_Data_Stream::buffer2array() {
 	} else {
 
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=sizeof(mysql_hdr)) {
-			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Reading the header of a new packet\n");
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new packet\n", sess);
 			memcpy(&queueIN.hdr,queue_r_ptr(queueIN),sizeof(mysql_hdr));
 			pkt_sid=queueIN.hdr.pkt_id;
 			queue_r(queueIN,sizeof(mysql_hdr));
@@ -870,7 +870,7 @@ int MySQL_Data_Stream::buffer2array() {
 	}
 	if ((queueIN.pkt.size>0) && queue_data(queueIN)) {
 		int b= ( queue_data(queueIN) > (queueIN.pkt.size - queueIN.partial) ? (queueIN.pkt.size - queueIN.partial) : queue_data(queueIN) );
-		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied %d bytes into packet\n", b);
+		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Copied %d bytes into packet\n", sess, b);
 		memcpy((unsigned char *)queueIN.pkt.ptr + queueIN.partial, queue_r_ptr(queueIN),b);
 		queue_r(queueIN,b);
 		queueIN.partial+=b;
@@ -883,7 +883,7 @@ int MySQL_Data_Stream::buffer2array() {
 		if (myconn->get_status_compression()==true) {
 			Bytef *dest = NULL;
 			uLongf destLen;
-			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Copied the whole compressed packet\n");
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Copied the whole compressed packet\n", sess);
 			unsigned int progress=0;
 			unsigned int datalength;
 			unsigned int payload_length=0;
@@ -1099,14 +1099,14 @@ int MySQL_Data_Stream::array2buffer() {
 		}
 		if (queueOUT.partial==0) { // read a new packet
 			if (PSarrayOUT->len-idx) {
-				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Removing a packet from array\n", this);
+				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Removing a packet from array\n", sess, this);
 				if (queueOUT.pkt.ptr) {
 					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					queueOUT.pkt.ptr=NULL;
 				}
 		//VALGRIND_ENABLE_ERROR_REPORTING;
 				if (myconn->get_status_compression()==true) {
-					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Compression enabled\n", this);
+					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Compression enabled\n", sess, this);
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
 		//VALGRIND_DISABLE_ERROR_REPORTING;
@@ -1141,7 +1141,7 @@ int MySQL_Data_Stream::array2buffer() {
 		memcpy(queue_w_ptr(queueOUT), (unsigned char *)queueOUT.pkt.ptr + queueOUT.partial, b);
 		//VALGRIND_ENABLE_ERROR_REPORTING;
 		queue_w(queueOUT,b);
-		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Copied %d bytes into send buffer\n", this, b);
+		proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Copied %d bytes into send buffer\n", sess, this, b);
 		queueOUT.partial+=b;
 		ret=b;
 		if (queueOUT.partial==queueOUT.pkt.size) {
@@ -1149,7 +1149,7 @@ int MySQL_Data_Stream::array2buffer() {
 				l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 				queueOUT.pkt.ptr=NULL;
 			}
-			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "DataStream: %p -- Packet completely written into send buffer\n", this);
+			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Packet completely written into send buffer\n", sess, this);
 			queueOUT.partial=0;
 			pkts_sent+=1;
 		}
