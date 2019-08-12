@@ -10336,5 +10336,9 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	load_mysql_variables_to_runtime();
 	admindb->execute("INSERT INTO mysql_users (username,password,default_hostgroup) VALUES ('aurora1','pass1',1271), ('aurora2','pass2',1273), ('aurora3','pass3',1275)");
 	init_users();
+	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora1', '^SELECT.*max_lag_ms', 1272, 1)");
+	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora2', '^SELECT.*max_lag_ms', 1274, 1)");
+	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora3', '^SELECT.*max_lag_ms', 1276, 1)");
+	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_AURORA
