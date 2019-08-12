@@ -4828,6 +4828,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						std::size_t found_at = value1.find("@");
 						if (found_at != std::string::npos) {
 							char *v1 = strdup(value1.c_str());
+							char *v1t = v1;
 							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Found @ in SQL_MODE . v1 = %s\n", v1);
 							char *v2 = NULL;
 							while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
@@ -4846,7 +4847,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 									v1 = v2+1;
 								}
 							}
-							free(v1);
+							free(v1t);
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SQL Mode value %s\n", value1.c_str());
 						uint32_t sql_mode_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
