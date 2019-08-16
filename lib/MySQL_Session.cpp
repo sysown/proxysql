@@ -4693,6 +4693,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 	if (qpo->OK_msg) {
+		gtid_hid = -1;
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
