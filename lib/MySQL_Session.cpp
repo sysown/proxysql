@@ -198,6 +198,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
+	sess->gtid_hid=-1;
 }
 
 void Query_Info::end() {
