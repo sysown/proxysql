@@ -177,6 +177,7 @@ class MySQL_Session
 
 	// bool
 	bool autocommit;
+	bool autocommit_handled;
 	bool killed;
 	//bool admin;
 	bool max_connections_reached;

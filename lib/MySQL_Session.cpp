@@ -393,6 +393,7 @@ MySQL_Session::MySQL_Session() {
 #endif
 	healthy=1;
 	autocommit=true;
+	autocommit_handled=false;
 	autocommit_on_hostgroup=-1;
 	killed=false;
 	session_type=PROXYSQL_SESSION_MYSQL;
@@ -456,6 +457,7 @@ void MySQL_Session::init() {
 
 void MySQL_Session::reset() {
 	autocommit=true;
+	autocommit_handled=false;
 	autocommit_on_hostgroup=-1;
 	current_hostgroup=-1;
 	default_hostgroup=-1;
@@ -720,6 +722,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 
 
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
+	autocommit_handled=false;
 	size_t sal=strlen("set autocommit");
 	char * _ptr = (char *)pkt->ptr;
 #ifdef DEBUG
@@ -798,6 +801,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 				}
 			}
 			if (fd >= 0) { // we can set autocommit
+				autocommit_handled=true;
 #ifdef DEBUG
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Setting autocommit to = %d\n", fd);
 #endif
@@ -1784,6 +1788,13 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 							previous_status.push(PROCESSING_QUERY);
 							NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 						}
+					}
+				}
+			} else { // mysql_thread___enforce_autocommit_on_reads == true
+				if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
+					if (status == PROCESSING_QUERY) {
+						previous_status.push(PROCESSING_QUERY);
+						NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 					}
 				}
 			}
@@ -4891,7 +4902,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								__tmp_autocommit = 1;
 							}
 						}
-						if (__tmp_autocommit >= 0) {
+						if (__tmp_autocommit >= 0 && autocommit_handled==false) {
 							int fd = __tmp_autocommit;
 							__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
 							// we immediately process the number of transactions
@@ -4915,6 +4926,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 							if (fd==0) {
 								autocommit=false;	// we set it, no matter if already set or not
+							}
+						} else {
+							if (autocommit_handled==true) {
+								exit_after_SetParse = true;
 							}
 						}
 					} else if (var == "time_zone") {
