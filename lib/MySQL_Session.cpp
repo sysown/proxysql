@@ -3439,7 +3439,7 @@ handler_again:
 						goto handler_again;
 					}
 					if (mirror==false) { // do not care about autocommit and charset if mirror
-						if (mybe->server_myds->DSS == STATE_READY) {
+						if (mybe->server_myds->DSS == STATE_READY || mybe->server_myds->DSS == STATE_MARIADB_GENERIC) {
 							if (handler_again___verify_init_connect()) {
 								goto handler_again;
 							}
