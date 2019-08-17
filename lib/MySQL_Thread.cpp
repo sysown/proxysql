@@ -2146,6 +2146,45 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
+	if (!strcasecmp(name,"default_isolation_level")) {
+		if (variables.default_isolation_level) free(variables.default_isolation_level);
+		variables.default_isolation_level=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_isolation_level=strdup(value);
+		}
+		if (variables.default_isolation_level==NULL) {
+			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_character_set_results")) {
+		if (variables.default_character_set_results) free(variables.default_character_set_results);
+		variables.default_character_set_results=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_character_set_results=strdup(value);
+		}
+		if (variables.default_character_set_results==NULL) {
+			variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_session_track_gtids")) {
+		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
+		variables.default_session_track_gtids=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_session_track_gtids=strdup(value);
+		}
+		if (variables.default_session_track_gtids==NULL) {
+			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS); // default
+		}
+		return true;
+	}
+
 	if (!strcasecmp(name,"keep_multiplexing_variables")) {
 		if (vallen) {
 			free(variables.keep_multiplexing_variables);
@@ -2935,6 +2974,28 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		free(sess->client_myds->myconn->options.time_zone);
 	}
 	sess->client_myds->myconn->options.time_zone=strdup(mysql_thread___default_time_zone);
+
+	uint32_t isolation_level_int=SpookyHash::Hash32(mysql_thread___default_isolation_level,strlen(mysql_thread___default_isolation_level),10);
+	sess->client_myds->myconn->options.isolation_level_int = isolation_level_int;
+	if (sess->client_myds->myconn->options.isolation_level) {
+		free(sess->client_myds->myconn->options.isolation_level);
+	}
+	sess->client_myds->myconn->options.isolation_level=strdup(mysql_thread___default_isolation_level);
+
+	uint32_t character_set_results_int=SpookyHash::Hash32(mysql_thread___default_character_set_results,strlen(mysql_thread___default_character_set_results),10);
+	sess->client_myds->myconn->options.character_set_results_int = character_set_results_int;
+	if (sess->client_myds->myconn->options.character_set_results) {
+		free(sess->client_myds->myconn->options.character_set_results);
+	}
+	sess->client_myds->myconn->options.character_set_results=strdup(mysql_thread___default_character_set_results);
+
+	uint32_t session_track_gtids_int=SpookyHash::Hash32(mysql_thread___default_session_track_gtids,strlen(mysql_thread___default_session_track_gtids),10);
+	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
+	if (sess->client_myds->myconn->options.session_track_gtids) {
+		free(sess->client_myds->myconn->options.session_track_gtids);
+	}
+	sess->client_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
+
 	return sess;
 }
 

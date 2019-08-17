@@ -114,6 +114,9 @@ class MySQL_Session
 	bool handler_again___verify_backend_sql_log_bin();
 	bool handler_again___verify_backend_sql_mode();
 	bool handler_again___verify_backend_time_zone();
+	bool handler_again___verify_backend_isolation_level();
+	bool handler_again___verify_backend_character_set_results();
+	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);

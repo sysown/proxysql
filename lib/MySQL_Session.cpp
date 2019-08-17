@@ -1649,6 +1649,134 @@ bool MySQL_Session::handler_again___verify_backend_time_zone() {
 	return false;
 }
 
+bool MySQL_Session::handler_again___verify_backend_isolation_level() {
+	if (mybe->server_myds->myconn->options.isolation_level_int==0) {
+		// it is the first time we use this backend. Set isolation_level to default
+		if (mybe->server_myds->myconn->options.isolation_level) {
+			free(mybe->server_myds->myconn->options.isolation_level);
+			mybe->server_myds->myconn->options.isolation_level=NULL;
+		}
+		mybe->server_myds->myconn->options.isolation_level=strdup(mysql_thread___default_isolation_level);
+		uint32_t isolation_level_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.isolation_level,strlen(mybe->server_myds->myconn->options.isolation_level),10);
+		mybe->server_myds->myconn->options.isolation_level_int=isolation_level_int;
+	}
+	if (client_myds->myconn->options.isolation_level_int) {
+		if (client_myds->myconn->options.isolation_level_int != mybe->server_myds->myconn->options.isolation_level_int) {
+			{
+				mybe->server_myds->myconn->options.isolation_level_int = client_myds->myconn->options.isolation_level_int;
+				if (mybe->server_myds->myconn->options.isolation_level) {
+					free(mybe->server_myds->myconn->options.isolation_level);
+					mybe->server_myds->myconn->options.isolation_level=NULL;
+					if (client_myds->myconn->options.isolation_level) {
+						mybe->server_myds->myconn->options.isolation_level=strdup(client_myds->myconn->options.isolation_level);
+					}
+				}
+			}
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_ISOLATION_LEVEL);
+		}
+	}
+	return false;
+}
+
+bool MySQL_Session::handler_again___verify_backend_character_set_results() {
+	if (mybe->server_myds->myconn->options.character_set_results_int==0) {
+		// it is the first time we use this backend. Set character_set_results to default
+		if (mybe->server_myds->myconn->options.character_set_results) {
+			free(mybe->server_myds->myconn->options.character_set_results);
+			mybe->server_myds->myconn->options.character_set_results=NULL;
+		}
+		mybe->server_myds->myconn->options.character_set_results=strdup(mysql_thread___default_character_set_results);
+		uint32_t character_set_results_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.character_set_results,strlen(mybe->server_myds->myconn->options.character_set_results),10);
+		mybe->server_myds->myconn->options.character_set_results_int=character_set_results_int;
+	}
+	if (client_myds->myconn->options.character_set_results_int) {
+		if (client_myds->myconn->options.character_set_results_int != mybe->server_myds->myconn->options.character_set_results_int) {
+			{
+				mybe->server_myds->myconn->options.character_set_results_int = client_myds->myconn->options.character_set_results_int;
+				if (mybe->server_myds->myconn->options.character_set_results) {
+					free(mybe->server_myds->myconn->options.character_set_results);
+					mybe->server_myds->myconn->options.character_set_results=NULL;
+					if (client_myds->myconn->options.character_set_results) {
+						mybe->server_myds->myconn->options.character_set_results=strdup(client_myds->myconn->options.character_set_results);
+					}
+				}
+			}
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_CHARACTER_SET_RESULTS);
+		}
+	}
+	return false;
+}
+
+bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
+	if (mybe->server_myds->myconn->options.session_track_gtids_int==0) {
+		// it is the first time we use this backend. Set session_track_gtids to default
+		if (mybe->server_myds->myconn->options.session_track_gtids) {
+			free(mybe->server_myds->myconn->options.session_track_gtids);
+			mybe->server_myds->myconn->options.session_track_gtids=NULL;
+		}
+		mybe->server_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
+		uint32_t session_track_gtids_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.session_track_gtids,strlen(mybe->server_myds->myconn->options.session_track_gtids),10);
+		mybe->server_myds->myconn->options.session_track_gtids_int=session_track_gtids_int;
+	}
+	if (client_myds->myconn->options.session_track_gtids_int) {
+		if (client_myds->myconn->options.session_track_gtids_int != mybe->server_myds->myconn->options.session_track_gtids_int) {
+			{
+				mybe->server_myds->myconn->options.session_track_gtids_int = client_myds->myconn->options.session_track_gtids_int;
+				if (mybe->server_myds->myconn->options.session_track_gtids) {
+					free(mybe->server_myds->myconn->options.session_track_gtids);
+					mybe->server_myds->myconn->options.session_track_gtids=NULL;
+					if (client_myds->myconn->options.session_track_gtids) {
+						mybe->server_myds->myconn->options.session_track_gtids=strdup(client_myds->myconn->options.session_track_gtids);
+					}
+				}
+			}
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
+		}
+	}
+	return false;
+}
 
 bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
