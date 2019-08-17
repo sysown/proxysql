@@ -19,6 +19,9 @@
 
 #define MYSQL_DEFAULT_SQL_MODE	""
 #define MYSQL_DEFAULT_TIME_ZONE	"SYSTEM"
+#define MYSQL_DEFAULT_ISOLATION_LEVEL	""
+#define MYSQL_DEFAULT_CHARACTER_SET_RESULTS	""
+#define MYSQL_DEFAULT_SESSION_TRACK_GTIDS	""
 
 static unsigned int near_pow_2 (unsigned int n) {
   unsigned int i = 1;
@@ -441,6 +444,9 @@ class MySQL_Threads_Handler
 		char *add_ldap_user_comment;
 		char *default_sql_mode;
 		char *default_time_zone;
+		char *default_isolation_level;
+		char *default_character_set_results;
+		char *default_session_track_gtids;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */

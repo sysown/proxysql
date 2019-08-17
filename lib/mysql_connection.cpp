@@ -206,6 +206,12 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.character_set_results = NULL;
+	options.session_track_gtids = NULL;
+	options.isolation_level = NULL;
+	options.character_set_results_sent = false;
+	options.session_track_gtids_sent = false;
+	options.isolation_level_sent = false;
 	options.sql_mode_sent=false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
@@ -244,6 +250,9 @@ MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
+	if (options.character_set_results) free(options.character_set_results);
+	if (options.session_track_gtids) free(options.session_track_gtids);
+	if (options.isolation_level) free(options.isolation_level);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
 	if (options.ldap_user_variable_value) free(options.ldap_user_variable_value);
 	if (userinfo) {
@@ -1997,6 +2006,24 @@ void MySQL_Connection::reset() {
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
+	options.isolation_level_int = 0;
+	if (options.isolation_level) {
+		free (options.isolation_level);
+		options.isolation_level = NULL;
+		options.isolation_level_sent = false;
+	}
+	options.character_set_results_int = 0;
+	if (options.character_set_results) {
+		free (options.character_set_results);
+		options.character_set_results = NULL;
+		options.character_set_results_sent = false;
+	}
+	options.session_track_gtids_int = 0;
+	if (options.session_track_gtids) {
+		free (options.session_track_gtids);
+		options.session_track_gtids = NULL;
+		options.session_track_gtids_sent = false;
+	}
 	if (options.init_connect) {
 		free(options.init_connect);
 		options.init_connect = NULL;
