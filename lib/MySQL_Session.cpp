@@ -2086,6 +2086,9 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 			if (strncasecmp(myconn->options.sql_mode,(char *)"CONCAT",6)==0) {
 				q=(char *)"SET SQL_MODE=%s";
 			}
+			if (strncasecmp(myconn->options.sql_mode,(char *)"@",1)==0) {
+				q=(char *)"SET SQL_MODE=%s";
+			}
 		}
 		query=(char *)malloc(strlen(q)+strlen(myconn->options.sql_mode));
 		sprintf(query,q,myconn->options.sql_mode);
