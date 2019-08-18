@@ -1511,7 +1511,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		db = (*myds)->myconn->userinfo->schemaname;
 		(*myds)->switching_auth_stage=2;
 		charset=(*myds)->tmp_charset;
-		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
+		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Session=%p , DS=%p . Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->sess, (*myds), (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
 		goto __do_auth;
 	}
 
@@ -1526,6 +1526,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			(*myds)->encrypted = true;
 			use_ssl = true;
 			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, user);
 			goto __exit_process_pkt_handshake_response;
 		}
 	}
@@ -1549,12 +1550,14 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		pkt	+= pass_len_enc;
 		if (pass_len > (len - (pkt - _ptr))) {
 			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, user);
 			goto __exit_process_pkt_handshake_response;
 		}
 	} else {
 		pass_len = (capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
 		if (pass_len > (len - (pkt - _ptr))) {
 			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, user);
 			goto __exit_process_pkt_handshake_response;
 		}
 	}
@@ -1591,6 +1594,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		auth_plugin_id = 1;
 	}
 
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, user, auth_plugin_id);
 	if (auth_plugin_id == 0) {
 		if (strncmp((char *)auth_plugin,(char *)"mysql_native_password",strlen((char *)"mysql_native_password"))==0) {
 			auth_plugin_id = 1;
@@ -1602,6 +1606,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		}
 	}
 //__switch_auth_plugin:
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, user, auth_plugin_id);
 	if (auth_plugin_id == 0) {
 		if ((*myds)->switching_auth_stage == 0) {
 			(*myds)->switching_auth_stage = 1;
@@ -1616,6 +1621,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 				} else {
 #endif /* PROXYSQLCLICKHOUSE */
 					user_exists = GloMyAuth->exists((char *)user);
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user_exists=%d , user='%s'\n", (*myds), (*myds)->sess, user_exists, user);
 					//password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
 #ifdef PROXYSQLCLICKHOUSE
 				}
@@ -1626,6 +1632,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			} else {
 				(*myds)->switching_auth_type = 2; // mysql_clear_password
 			}
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user_exists=%d , user='%s' , setting switching_auth_type=%d\n", (*myds), (*myds)->sess, user_exists, user, (*myds)->switching_auth_type);
 			generate_pkt_auth_switch_request(true, NULL, NULL);
 			(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
 			ret = false;
@@ -1654,6 +1661,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 						generate_pkt_auth_switch_request(true, NULL, NULL);
 						(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
 						ret = false;
+						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response. User does not exist\n", (*myds), (*myds)->sess, user);
 						goto __exit_process_pkt_handshake_response;
 					}
 				}
@@ -1662,6 +1670,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	}
 	if (auth_plugin_id == 0) { // unknown plugin
 		ret = false;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth plugin\n", (*myds), (*myds)->sess, user);
 		goto __exit_process_pkt_handshake_response;
 	}
 	//char reply[SHA_DIGEST_LENGTH+1];
@@ -1681,6 +1690,7 @@ __do_auth:
 		const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(charset);
 		if (!c) {
 			proxy_error("Client %s:%d is trying to use unknown charset %d. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port, charset);
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client %s:%d is trying to use unknown charset %d. Disconnecting\n", (*myds), (*myds)->sess, user, (*myds)->addr.addr, (*myds)->addr.port, charset);
 			ret = false;
 			goto __exit_do_auth;
 		}
@@ -1694,6 +1704,15 @@ __do_auth:
 	}
 	//assert(default_hostgroup>=0);
 	if (password) {
+#ifdef DEBUG
+		char *tmp_pass=strdup(password);
+		int lpass = strlen(tmp_pass);
+		for (int i=2; i<lpass-1; i++) {
+			tmp_pass[i]='*';
+		}
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds), (*myds)->sess, user, tmp_pass);
+		free(tmp_pass);
+#endif // debug
 		(*myds)->sess->default_hostgroup=default_hostgroup;
 		(*myds)->sess->default_schema=default_schema; // just the pointer is passed
 		(*myds)->sess->schema_locked=schema_locked;
@@ -1736,6 +1755,15 @@ __do_auth:
 					(*myds)->sess->ldap_ctx = GloMyLdapAuth->ldap_ctx_init();
 					password = GloMyLdapAuth->lookup((*myds)->sess->ldap_ctx, (char *)user, (char *)pass, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &backend_username);
 					if (password) {
+#ifdef DEBUG
+						char *tmp_pass=strdup(password);
+						int lpass = strlen(tmp_pass);
+						for (int i=2; i<lpass-1; i++) {
+							tmp_pass[i]='*';
+						}
+						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds), (*myds)->sess, backend_username, tmp_pass);
+						free(tmp_pass);
+#endif // debug
 						(*myds)->sess->default_hostgroup=default_hostgroup;
 						(*myds)->sess->default_schema=default_schema; // just the pointer is passed
 						(*myds)->sess->schema_locked=schema_locked;
@@ -1777,7 +1805,17 @@ __do_auth:
 	} else {
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, user);
 		} else {
+#ifdef DEBUG
+			char *tmp_pass=strdup(password);
+			int lpass = strlen(tmp_pass);
+			for (int i=2; i<lpass-1; i++) {
+				tmp_pass[i]='*';
+			}
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, user, tmp_pass, auth_plugin_id);
+			free(tmp_pass);
+#endif // debug
 			if (password[0]!='*') { // clear text password
 				if (auth_plugin_id == 1) { // mysql_native_password
 					proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
@@ -1813,6 +1851,7 @@ __do_auth:
 						uint8 hash_stage2[SHA_DIGEST_LENGTH];
 						unhex_pass(hash_stage2,sha1_2);
 */
+						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
 						uint8 hash_stage1[SHA_DIGEST_LENGTH];
 						uint8 hash_stage2[SHA_DIGEST_LENGTH];
 						SHA_CTX sha1_context;
