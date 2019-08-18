@@ -117,11 +117,13 @@ class MySQL_Session
 	bool handler_again___verify_backend_isolation_level();
 	bool handler_again___verify_backend_character_set_results();
 	bool handler_again___verify_backend_session_track_gtids();
+	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
 	bool handler_again___status_SETTING_TIME_ZONE(int *);
+	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *, char *, char *);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);

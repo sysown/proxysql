@@ -1559,73 +1559,67 @@ bool MySQL_Session::handler_again___verify_backend_sql_log_bin() {
 }
 
 bool MySQL_Session::handler_again___verify_backend_sql_mode() {
-	if (mybe->server_myds->myconn->options.sql_mode_int==0) {
-		// it is the first time we use this backend. Set sql_mode to default
-		if (mybe->server_myds->myconn->options.sql_mode) {
-			free(mybe->server_myds->myconn->options.sql_mode);
-			mybe->server_myds->myconn->options.sql_mode=NULL;
-		}
-		mybe->server_myds->myconn->options.sql_mode=strdup(mysql_thread___default_sql_mode);
-		uint32_t sql_mode_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.sql_mode,strlen(mybe->server_myds->myconn->options.sql_mode),10);
-		mybe->server_myds->myconn->options.sql_mode_int=sql_mode_int;
-	}
-	if (client_myds->myconn->options.sql_mode_int) {
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.sql_mode_int,
+		&mybe->server_myds->myconn->options.sql_mode,
+		mysql_thread___default_sql_mode,
+		&client_myds->myconn->options.sql_mode_int,
+		client_myds->myconn->options.sql_mode,
+		SETTING_SQL_MODE
+	);
+	return ret;
+/*
+	// for sql_mode we also set sql_mode_sent . Doesn't seem used tho.
+	// snippet, for reference
 		if (
 			(client_myds->myconn->options.sql_mode_int != mybe->server_myds->myconn->options.sql_mode_int)
 			||
 			(mybe->server_myds->myconn->options.sql_mode_sent == false)
 		) {
 			mybe->server_myds->myconn->options.sql_mode_sent = true;
-			{
-				mybe->server_myds->myconn->options.sql_mode_int = client_myds->myconn->options.sql_mode_int;
-				if (mybe->server_myds->myconn->options.sql_mode) {
-					free(mybe->server_myds->myconn->options.sql_mode);
-					mybe->server_myds->myconn->options.sql_mode=NULL;
-					if (client_myds->myconn->options.sql_mode) {
-						mybe->server_myds->myconn->options.sql_mode=strdup(client_myds->myconn->options.sql_mode);
-					}
-				}
-			}
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					assert(0);
-					break;
-			}
-			NEXT_IMMEDIATE_NEW(SETTING_SQL_MODE);
-		}
-	}
-	return false;
+*/
+
 }
 
 bool MySQL_Session::handler_again___verify_backend_time_zone() {
-	if (mybe->server_myds->myconn->options.time_zone_int==0) {
-		// it is the first time we use this backend. Set time_zone to default
-		if (mybe->server_myds->myconn->options.time_zone) {
-			free(mybe->server_myds->myconn->options.time_zone);
-			mybe->server_myds->myconn->options.time_zone=NULL;
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.time_zone_int,
+		&mybe->server_myds->myconn->options.time_zone,
+		mysql_thread___default_time_zone,
+		&client_myds->myconn->options.time_zone_int,
+		client_myds->myconn->options.time_zone,
+		SETTING_TIME_ZONE
+	);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status) {
+	// be_int = backend int (hash)
+	// be_var = backend value
+	// def = default
+	// fe_int = frontend int (has)
+	// fe_var = frontend value
+	if (*be_int == 0) {
+		// it is the first time we use this backend. Set isolation_level to default
+		if (*be_var) {
+			free(*be_var);
+			*be_var = NULL;
 		}
-		mybe->server_myds->myconn->options.time_zone=strdup(mysql_thread___default_time_zone);
-		uint32_t time_zone_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.time_zone,strlen(mybe->server_myds->myconn->options.time_zone),10);
-		mybe->server_myds->myconn->options.time_zone_int=time_zone_int;
+		*be_var = strdup(def);
+		uint32_t tmp_int = SpookyHash::Hash32(*be_var, strlen(*be_var), 10);
+		*be_int = tmp_int;
 	}
-	if (client_myds->myconn->options.time_zone_int) {
-		if (client_myds->myconn->options.time_zone_int != mybe->server_myds->myconn->options.time_zone_int) {
+	if (*fe_int) {
+		if (*fe_int != *be_int) {
 			{
-				mybe->server_myds->myconn->options.time_zone_int = client_myds->myconn->options.time_zone_int;
-				if (mybe->server_myds->myconn->options.time_zone) {
-					free(mybe->server_myds->myconn->options.time_zone);
-					mybe->server_myds->myconn->options.time_zone=NULL;
-					if (client_myds->myconn->options.time_zone) {
-						mybe->server_myds->myconn->options.time_zone=strdup(client_myds->myconn->options.time_zone);
+				*be_int = *fe_int;
+				if (*be_var) {
+					free(*be_var);
+					*be_var = NULL;
+					if (fe_var) {
+						*be_var = strdup(fe_var);
 					}
 				}
 			}
@@ -1643,139 +1637,49 @@ bool MySQL_Session::handler_again___verify_backend_time_zone() {
 					assert(0);
 					break;
 			}
-			NEXT_IMMEDIATE_NEW(SETTING_TIME_ZONE);
+			NEXT_IMMEDIATE_NEW(next_sess_status);
 		}
 	}
 	return false;
 }
 
 bool MySQL_Session::handler_again___verify_backend_isolation_level() {
-	if (mybe->server_myds->myconn->options.isolation_level_int==0) {
-		// it is the first time we use this backend. Set isolation_level to default
-		if (mybe->server_myds->myconn->options.isolation_level) {
-			free(mybe->server_myds->myconn->options.isolation_level);
-			mybe->server_myds->myconn->options.isolation_level=NULL;
-		}
-		mybe->server_myds->myconn->options.isolation_level=strdup(mysql_thread___default_isolation_level);
-		uint32_t isolation_level_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.isolation_level,strlen(mybe->server_myds->myconn->options.isolation_level),10);
-		mybe->server_myds->myconn->options.isolation_level_int=isolation_level_int;
-	}
-	if (client_myds->myconn->options.isolation_level_int) {
-		if (client_myds->myconn->options.isolation_level_int != mybe->server_myds->myconn->options.isolation_level_int) {
-			{
-				mybe->server_myds->myconn->options.isolation_level_int = client_myds->myconn->options.isolation_level_int;
-				if (mybe->server_myds->myconn->options.isolation_level) {
-					free(mybe->server_myds->myconn->options.isolation_level);
-					mybe->server_myds->myconn->options.isolation_level=NULL;
-					if (client_myds->myconn->options.isolation_level) {
-						mybe->server_myds->myconn->options.isolation_level=strdup(client_myds->myconn->options.isolation_level);
-					}
-				}
-			}
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					assert(0);
-					break;
-			}
-			NEXT_IMMEDIATE_NEW(SETTING_ISOLATION_LEVEL);
-		}
-	}
-	return false;
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.isolation_level_int,
+		&mybe->server_myds->myconn->options.isolation_level,
+		mysql_thread___default_isolation_level,
+		&client_myds->myconn->options.isolation_level_int,
+		client_myds->myconn->options.isolation_level,
+		SETTING_ISOLATION_LEVEL
+	);
+	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_backend_character_set_results() {
-	if (mybe->server_myds->myconn->options.character_set_results_int==0) {
-		// it is the first time we use this backend. Set character_set_results to default
-		if (mybe->server_myds->myconn->options.character_set_results) {
-			free(mybe->server_myds->myconn->options.character_set_results);
-			mybe->server_myds->myconn->options.character_set_results=NULL;
-		}
-		mybe->server_myds->myconn->options.character_set_results=strdup(mysql_thread___default_character_set_results);
-		uint32_t character_set_results_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.character_set_results,strlen(mybe->server_myds->myconn->options.character_set_results),10);
-		mybe->server_myds->myconn->options.character_set_results_int=character_set_results_int;
-	}
-	if (client_myds->myconn->options.character_set_results_int) {
-		if (client_myds->myconn->options.character_set_results_int != mybe->server_myds->myconn->options.character_set_results_int) {
-			{
-				mybe->server_myds->myconn->options.character_set_results_int = client_myds->myconn->options.character_set_results_int;
-				if (mybe->server_myds->myconn->options.character_set_results) {
-					free(mybe->server_myds->myconn->options.character_set_results);
-					mybe->server_myds->myconn->options.character_set_results=NULL;
-					if (client_myds->myconn->options.character_set_results) {
-						mybe->server_myds->myconn->options.character_set_results=strdup(client_myds->myconn->options.character_set_results);
-					}
-				}
-			}
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					assert(0);
-					break;
-			}
-			NEXT_IMMEDIATE_NEW(SETTING_CHARACTER_SET_RESULTS);
-		}
-	}
-	return false;
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.character_set_results_int,
+		&mybe->server_myds->myconn->options.character_set_results,
+		mysql_thread___default_character_set_results,
+		&client_myds->myconn->options.character_set_results_int,
+		client_myds->myconn->options.character_set_results,
+		SETTING_CHARACTER_SET_RESULTS
+	);
+	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
-	if (mybe->server_myds->myconn->options.session_track_gtids_int==0) {
-		// it is the first time we use this backend. Set session_track_gtids to default
-		if (mybe->server_myds->myconn->options.session_track_gtids) {
-			free(mybe->server_myds->myconn->options.session_track_gtids);
-			mybe->server_myds->myconn->options.session_track_gtids=NULL;
-		}
-		mybe->server_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
-		uint32_t session_track_gtids_int=SpookyHash::Hash32(mybe->server_myds->myconn->options.session_track_gtids,strlen(mybe->server_myds->myconn->options.session_track_gtids),10);
-		mybe->server_myds->myconn->options.session_track_gtids_int=session_track_gtids_int;
-	}
-	if (client_myds->myconn->options.session_track_gtids_int) {
-		if (client_myds->myconn->options.session_track_gtids_int != mybe->server_myds->myconn->options.session_track_gtids_int) {
-			{
-				mybe->server_myds->myconn->options.session_track_gtids_int = client_myds->myconn->options.session_track_gtids_int;
-				if (mybe->server_myds->myconn->options.session_track_gtids) {
-					free(mybe->server_myds->myconn->options.session_track_gtids);
-					mybe->server_myds->myconn->options.session_track_gtids=NULL;
-					if (client_myds->myconn->options.session_track_gtids) {
-						mybe->server_myds->myconn->options.session_track_gtids=strdup(client_myds->myconn->options.session_track_gtids);
-					}
-				}
-			}
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					assert(0);
-					break;
-			}
-			NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
-		}
-	}
-	return false;
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.session_track_gtids_int,
+		&mybe->server_myds->myconn->options.session_track_gtids,
+		mysql_thread___default_session_track_gtids,
+		&client_myds->myconn->options.session_track_gtids_int,
+		client_myds->myconn->options.session_track_gtids,
+		SETTING_SESSION_TRACK_GTIDS
+	);
+	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_init_connect() {
@@ -2293,8 +2197,8 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
-	bool ret=false;
+bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, char *var_name, char *var_value) {
+	bool ret = false;
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
@@ -2307,13 +2211,13 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 	unsigned long query_length=0;
 	if (myconn->async_state_machine==ASYNC_IDLE) {
 		char *q = NULL;
-		if (myconn->options.time_zone[0]=='@') {
-			q=(char *)"SET TIME_ZONE=%s";
+		if (var_value[0]=='@') {
+			q=(char *)"SET %s=%s";
 		} else {
-			q=(char *)"SET TIME_ZONE='%s'";
+			q=(char *)"SET %s='%s'";
 		}
-		query=(char *)malloc(strlen(q)+strlen(myconn->options.time_zone));
-		sprintf(query,q,myconn->options.time_zone);
+		query=(char *)malloc(strlen(q)+strlen(var_value));
+		sprintf(query,q,var_name, var_value);
 		query_length=strlen(query);
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
@@ -2333,10 +2237,10 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 			if (myerr >= 2000) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection while setting TIME_ZONE on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								retry_conn=true;
+				proxy_error("Detected a broken connection while setting %s on %s , %d : %d, %s\n", var_name, myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					retry_conn=true;
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd=0;
@@ -2347,7 +2251,7 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 				*_rc=-1;	// an error happened, we should destroy the Session
 				return ret;
 			} else {
-				proxy_warning("Error while setting TIME_ZONE: %d, %s\n", myerr, mysql_error(myconn->mysql));
+				proxy_warning("Error while setting %s: %d, %s\n", var_name, myerr, mysql_error(myconn->mysql));
 					// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2362,6 +2266,13 @@ bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 			// rc==1 , nothing to do for now
 		}
 	}
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, "TIME_ZONE", mybe->server_myds->myconn->options.time_zone);
 	return ret;
 }
 
