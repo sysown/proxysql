@@ -1505,6 +1505,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pkt     += sizeof(mysql_hdr);
 
 	if ((*myds)->myconn->userinfo->username) {
+		(*myds)->switching_auth_stage=2;
 		if (len==5) {
 			ret = false;
 			user = (unsigned char *)(*myds)->myconn->userinfo->username;
@@ -1523,7 +1524,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		pass[pass_len] = 0;
 		user = (unsigned char *)(*myds)->myconn->userinfo->username;
 		db = (*myds)->myconn->userinfo->schemaname;
-		(*myds)->switching_auth_stage=2;
+		//(*myds)->switching_auth_stage=2;
 		charset=(*myds)->tmp_charset;
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Session=%p , DS=%p . Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->sess, (*myds), (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
 		goto __do_auth;
