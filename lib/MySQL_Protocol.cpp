@@ -1316,6 +1316,10 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	bool ret=false;
 	char *password=NULL;
 
+#ifdef DEBUG
+	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
+#endif
+
 	if (len!=sizeof(mysql_hdr)+20) {
 		return ret;
 	}
@@ -1462,6 +1466,9 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 }
 
 bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned int len) {
+#ifdef DEBUG
+	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
+#endif
 	bool ret=false;
 	uint8_t charset;
 	uint32_t  capabilities;
@@ -1498,6 +1505,13 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	pkt     += sizeof(mysql_hdr);
 
 	if ((*myds)->myconn->userinfo->username) {
+		if (len==5) {
+			ret = false;
+			user = (unsigned char *)(*myds)->myconn->userinfo->username;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, user);
+			proxy_error("User '%s'@'%s' is disconnecting during switch auth\n", user, (*myds)->addr.addr);
+			goto __exit_process_pkt_handshake_response;
+		}
 		auth_plugin_id = (*myds)->switching_auth_type;
 		if (auth_plugin_id==1) {
 			pass_len = len - sizeof(mysql_hdr);
@@ -1751,6 +1765,17 @@ __do_auth:
 			// try LDAP
 			if (auth_plugin_id==2) {
 				if (GloMyLdapAuth) {
+#ifdef DEBUG
+					{
+						char *tmp_pass=strdup((const char *)pass);
+						int lpass = strlen(tmp_pass);
+						for (int i=2; i<lpass-1; i++) {
+							tmp_pass[i]='*';
+						}
+						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds), (*myds)->sess, user, tmp_pass);
+						free(tmp_pass);
+					}
+#endif // debug
 					char *backend_username = NULL;
 					(*myds)->sess->ldap_ctx = GloMyLdapAuth->ldap_ctx_init();
 					password = GloMyLdapAuth->lookup((*myds)->sess->ldap_ctx, (char *)user, (char *)pass, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &backend_username);
