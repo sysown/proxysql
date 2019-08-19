@@ -130,6 +130,32 @@ TEST(TestParse, SET_TIME_ZONE) {
   TestParse(time_zone, arraysize(time_zone), "time_zone");
 }
 
+static Test session_track_gtids[] = {
+  { "SET @@session_track_gtids = OFF", { Expected("session_track_gtids",  {"OFF"}) } },
+  { "SET @@session_track_gtids = OWN_GTID", { Expected("session_track_gtids",  {"OWN_GTID"}) } },
+  { "SET @@SESSION.session_track_gtids = OWN_GTID", { Expected("session_track_gtids",  {"OWN_GTID"}) } },
+  { "SET SESSION session_track_gtids = OWN_GTID", { Expected("session_track_gtids",  {"OWN_GTID"}) } },
+  { "SET @@session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
+  { "SET @@SESSION.session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
+  { "SET SESSION session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
+};
+
+TEST(TestParse, SET_SESSION_TRACK_GTIDS) {
+  TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
+}
+
+static Test character_set_results[] = {
+  { "SET @@character_set_results = utf8", { Expected("character_set_results",  {"utf8"}) } },
+  { "SET @@character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
+  { "SET character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
+  { "SET @@session.character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
+  { "SET session character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
+};
+
+TEST(TestParse, SET_CHARACTER_SET_RESULTS) {
+  TestParse(character_set_results, arraysize(character_set_results), "character_set_results");
+}
+
 static Test names[] = {
   { "SET NAMES utf8", { Expected("names",  {"utf8"}) } },
   { "SET NAMES 'utf8'", { Expected("names",  {"utf8"}) } },
