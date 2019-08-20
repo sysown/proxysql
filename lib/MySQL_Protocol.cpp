@@ -1819,6 +1819,8 @@ __do_auth:
 									userinfo->fe_username=strdup((const char *)tmp_user);
 									free(tmp_user);
 									ret=true;
+								} else {
+									proxy_error("Unable to load credentials for backend user %s , associated to LDAP user %s\n", backend_username, user);
 								}
 							} else {
 								ret=true;

@@ -2792,7 +2792,7 @@ __get_pkts_from_client:
 								}
 							}
 						}
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n");
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , client_myds=%p . Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n", this, client_myds);
 						if (session_fast_forward==true) { // if it is fast forward
 							mybe=find_or_create_backend(current_hostgroup); // set a backend
 							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
