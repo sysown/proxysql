@@ -1696,6 +1696,71 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___verify_backend_sql_auto_is_null() {
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.sql_auto_is_null_int,
+		&mybe->server_myds->myconn->options.sql_auto_is_null,
+		mysql_thread___default_sql_auto_is_null,
+		&client_myds->myconn->options.sql_auto_is_null_int,
+		client_myds->myconn->options.sql_auto_is_null,
+		SETTING_SQL_AUTO_IS_NULL
+	);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___verify_backend_sql_select_limit() {
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.sql_select_limit_int,
+		&mybe->server_myds->myconn->options.sql_select_limit,
+		mysql_thread___default_sql_select_limit,
+		&client_myds->myconn->options.sql_select_limit_int,
+		client_myds->myconn->options.sql_select_limit,
+		SETTING_SQL_SELECT_LIMIT
+	);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___verify_backend_sql_safe_updates() {
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.sql_safe_updates_int,
+		&mybe->server_myds->myconn->options.sql_safe_updates,
+		mysql_thread___default_sql_safe_updates,
+		&client_myds->myconn->options.sql_safe_updates_int,
+		client_myds->myconn->options.sql_safe_updates,
+		SETTING_SQL_SAFE_UPDATES
+	);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___verify_backend_collation_connection() {
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.collation_connection_int,
+		&mybe->server_myds->myconn->options.collation_connection,
+		mysql_thread___default_collation_connection,
+		&client_myds->myconn->options.collation_connection_int,
+		client_myds->myconn->options.collation_connection,
+		SETTING_COLLATION_CONNECTION
+	);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___verify_backend_net_write_timeout() {
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.net_write_timeout_int,
+		&mybe->server_myds->myconn->options.net_write_timeout,
+		mysql_thread___default_net_write_timeout,
+		&client_myds->myconn->options.net_write_timeout_int,
+		client_myds->myconn->options.net_write_timeout,
+		SETTING_NET_WRITE_TIMEOUT
+	);
+	return ret;
+}
+
 bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
@@ -2116,7 +2181,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, "SQL_MODE", mybe->server_myds->myconn->options.sql_mode);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_MODE", mybe->server_myds->myconn->options.sql_mode);
 	return ret;
 }
 
@@ -2302,28 +2367,63 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, ch
 bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, "TIME_ZONE", mybe->server_myds->myconn->options.time_zone);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"TIME_ZONE", mybe->server_myds->myconn->options.time_zone);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_ISOLATION_LEVEL(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, "ISOLATION LEVEL", mybe->server_myds->myconn->options.isolation_level);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"ISOLATION LEVEL", mybe->server_myds->myconn->options.isolation_level);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, "CHARACTER_SET_RESULTS", mybe->server_myds->myconn->options.character_set_results);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARACTER_SET_RESULTS", mybe->server_myds->myconn->options.character_set_results);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, "SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_AUTO_IS_NULL", mybe->server_myds->myconn->options.sql_auto_is_null);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SQL_SELECT_LIMIT(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SELECT_LIMIT", mybe->server_myds->myconn->options.sql_select_limit);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SQL_SAFE_UPDATES(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SAFE_UPDATES", mybe->server_myds->myconn->options.sql_safe_updates);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_COLLATION_CONNECTION(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"COLLATION_CONNECTION", mybe->server_myds->myconn->options.collation_connection);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"NET_WRITE_TIMEOUT", mybe->server_myds->myconn->options.net_write_timeout);
 	return ret;
 }
 
@@ -3561,6 +3661,21 @@ handler_again:
 								goto handler_again;
 							}
 							if (handler_again___verify_backend_session_track_gtids()) {
+								goto handler_again;
+							}
+							if (handler_again___verify_backend_sql_auto_is_null()) {
+								goto handler_again;
+							}
+							if (handler_again___verify_backend_sql_select_limit()) {
+								goto handler_again;
+							}
+							if (handler_again___verify_backend_sql_safe_updates()) {
+								goto handler_again;
+							}
+							if (handler_again___verify_backend_collation_connection()) {
+								goto handler_again;
+							}
+							if (handler_again___verify_backend_net_write_timeout()) {
 								goto handler_again;
 							}
 						}

@@ -155,6 +155,11 @@ enum session_status {
 	SETTING_ISOLATION_LEVEL,
 	SETTING_CHARACTER_SET_RESULTS,
 	SETTING_SESSION_TRACK_GTIDS,
+	SETTING_SQL_AUTO_IS_NULL,
+	SETTING_SQL_SELECT_LIMIT,
+	SETTING_SQL_SAFE_UPDATES,
+	SETTING_COLLATION_CONNECTION,
+	SETTING_NET_WRITE_TIMEOUT,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
@@ -618,6 +623,11 @@ __thread char *mysql_thread___default_time_zone;
 __thread char *mysql_thread___default_isolation_level;
 __thread char *mysql_thread___default_character_set_results;
 __thread char *mysql_thread___default_session_track_gtids;
+__thread char *mysql_thread___default_sql_auto_is_null;
+__thread char *mysql_thread___default_sql_select_limit;
+__thread char *mysql_thread___default_sql_safe_updates;
+__thread char *mysql_thread___default_collation_connection;
+__thread char *mysql_thread___default_net_write_timeout;
 __thread int mysql_thread___max_allowed_packet;
 __thread int mysql_thread___throttle_connections_per_sec_to_hostgroup;
 __thread int mysql_thread___max_transaction_time;
@@ -755,6 +765,11 @@ extern __thread char *mysql_thread___default_time_zone;
 extern __thread char *mysql_thread___default_isolation_level;
 extern __thread char *mysql_thread___default_character_set_results;
 extern __thread char *mysql_thread___default_session_track_gtids;
+extern __thread char *mysql_thread___default_sql_auto_is_null;
+extern __thread char *mysql_thread___default_sql_select_limit;
+extern __thread char *mysql_thread___default_sql_safe_updates;
+extern __thread char *mysql_thread___default_collation_connection;
+extern __thread char *mysql_thread___default_net_write_timeout;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread int mysql_thread___throttle_connections_per_sec_to_hostgroup;
 extern __thread int mysql_thread___max_transaction_time;

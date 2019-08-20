@@ -22,6 +22,11 @@
 #define MYSQL_DEFAULT_ISOLATION_LEVEL	""
 #define MYSQL_DEFAULT_CHARACTER_SET_RESULTS	""
 #define MYSQL_DEFAULT_SESSION_TRACK_GTIDS	""
+#define MYSQL_DEFAULT_SQL_AUTO_IS_NULL	""
+#define MYSQL_DEFAULT_SQL_SELECT_LIMIT	""
+#define MYSQL_DEFAULT_SQL_SAFE_UPDATES	""
+#define MYSQL_DEFAULT_COLLATION_CONNECTION	""
+#define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	""
 
 static unsigned int near_pow_2 (unsigned int n) {
   unsigned int i = 1;
@@ -447,6 +452,11 @@ class MySQL_Threads_Handler
 		char *default_isolation_level;
 		char *default_character_set_results;
 		char *default_session_track_gtids;
+		char *default_sql_auto_is_null;
+		char *default_sql_select_limit;
+		char *default_sql_safe_updates;
+		char *default_collation_connection;
+		char *default_net_write_timeout;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */
