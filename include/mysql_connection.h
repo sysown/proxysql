@@ -111,6 +111,7 @@ class MySQL_Connection {
 	bool multiplex_delayed;
 	bool unknown_transaction_status;
 	void compute_unknown_transaction_status();
+	char gtid_uuid[128];
 	MySQL_Connection();
 	~MySQL_Connection();
 	bool set_autocommit(bool);

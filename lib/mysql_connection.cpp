@@ -237,7 +237,7 @@ MySQL_Connection::MySQL_Connection() {
 	statuses.questions = 0;
 	statuses.myconnpoll_get = 0;
 	statuses.myconnpoll_put = 0;
-
+	memset(gtid_uuid,0,sizeof(gtid_uuid));
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -2020,15 +2020,22 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 		return ret;
 	}
 	if (mysql) {
-		const char *data;
-		size_t length;
-		if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
-			if (memcmp(buff,data,length)) {
-				memcpy(buff,data,length);
-				buff[length]=0;
-				//fprintf(stderr,"GTID=%s\n",buff);
-				__sync_fetch_and_add(&myds->sess->thread->status_variables.gtid_session_collected,1);
-				ret = true;
+		if (mysql->net.last_errno==0) { // only if there is no error
+			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
+				const char *data;
+				size_t length;
+				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
+					if (memcmp(gtid_uuid,data,length)) {
+						// copy to local buffer in MySQL_Connection
+						memcpy(gtid_uuid,data,length);
+						gtid_uuid[length]=0;
+						// copy to external buffer in MySQL_Backend
+						memcpy(buff,data,length);
+						buff[length]=0;
+						__sync_fetch_and_add(&myds->sess->thread->status_variables.gtid_session_collected,1);
+						ret = true;
+					}
+				}
 			}
 		}
 	}
