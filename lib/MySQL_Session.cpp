@@ -6026,6 +6026,8 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
 	free(b);
+	CurrentQuery.QueryLength = _pkt->size - 5;
+	CurrentQuery.QueryPointer = (unsigned char *)_pkt->ptr + 5;
 }
 
 void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
