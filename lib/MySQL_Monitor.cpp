@@ -1988,6 +1988,7 @@ __exit_monitor_replication_lag_thread:
 									row_lag_value=atoi(row[j]);
 								}
 								repl_lag = row_lag_value>repl_lag ? row_lag_value:repl_lag;
+							}
 						}
 						if (repl_lag>=0) {
 							rc=sqlite3_bind_int64(statement, 5, repl_lag); assert(rc==SQLITE_OK);
