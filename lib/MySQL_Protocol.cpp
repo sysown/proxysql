@@ -625,7 +625,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			if (mysql_thread___client_session_track_gtid) {
 				if (sess) {
 					if (sess->gtid_hid >= 0) {
-						myhdr.pkt_length++;
+						if (msg_len == 0) {
+							myhdr.pkt_length++;
+						}
 						client_session_track=true;
 						gtid_len = strlen(sess->gtid_buf);
 						gtid_len_len = mysql_encode_length(gtid_len, &gtid_prefix);
@@ -675,7 +677,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	}
 	l+=msg_len;
 	if (client_session_track == true) {
-		_ptr[l]=0x00; l++;
+		if (msg_len == 0) {
+			_ptr[l]=0x00; l++;
+		}
 		if (gtid_len) {
 			unsigned char gtid_prefix_h1 = gtid_len+2;
 			unsigned char state_change_prefix = gtid_prefix_h1+2;
