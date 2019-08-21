@@ -122,6 +122,7 @@ class MySQL_Session
 	bool handler_again___verify_backend_sql_safe_updates();
 	bool handler_again___verify_backend_collation_connection();
 	bool handler_again___verify_backend_net_write_timeout();
+	bool handler_again___verify_backend_max_join_size();
 	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
@@ -136,7 +137,8 @@ class MySQL_Session
 	bool handler_again___status_SETTING_SQL_SAFE_UPDATES(int *);
 	bool handler_again___status_SETTING_COLLATION_CONNECTION(int *);
 	bool handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *);
-	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *, char *, char *);
+	bool handler_again___status_SETTING_MAX_JOIN_SIZE(int *);
+	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *, char *, char *, bool no_quote=false);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);

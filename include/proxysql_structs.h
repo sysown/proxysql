@@ -160,6 +160,7 @@ enum session_status {
 	SETTING_SQL_SAFE_UPDATES,
 	SETTING_COLLATION_CONNECTION,
 	SETTING_NET_WRITE_TIMEOUT,
+	SETTING_MAX_JOIN_SIZE,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
@@ -628,6 +629,7 @@ __thread char *mysql_thread___default_sql_select_limit;
 __thread char *mysql_thread___default_sql_safe_updates;
 __thread char *mysql_thread___default_collation_connection;
 __thread char *mysql_thread___default_net_write_timeout;
+__thread char *mysql_thread___default_max_join_size;
 __thread int mysql_thread___max_allowed_packet;
 __thread int mysql_thread___throttle_connections_per_sec_to_hostgroup;
 __thread int mysql_thread___max_transaction_time;
@@ -770,6 +772,7 @@ extern __thread char *mysql_thread___default_sql_select_limit;
 extern __thread char *mysql_thread___default_sql_safe_updates;
 extern __thread char *mysql_thread___default_collation_connection;
 extern __thread char *mysql_thread___default_net_write_timeout;
+extern __thread char *mysql_thread___default_max_join_size;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread int mysql_thread___throttle_connections_per_sec_to_hostgroup;
 extern __thread int mysql_thread___max_transaction_time;

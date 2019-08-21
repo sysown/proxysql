@@ -52,6 +52,7 @@ class MySQL_Connection {
 		uint32_t sql_safe_updates_int;
 		uint32_t collation_connection_int;
 		uint32_t net_write_timeout_int;
+		uint32_t max_join_size_int;
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
 		uint32_t client_flag;
@@ -66,6 +67,7 @@ class MySQL_Connection {
 		char * sql_safe_updates;
 		char * collation_connection;
 		char * net_write_timeout;
+		char * max_join_size;
 		bool isolation_level_sent;
 		bool character_set_results_sent;
 		bool session_track_gtids_sent;
@@ -74,6 +76,7 @@ class MySQL_Connection {
 		bool sql_safe_updates_sent;
 		bool collation_connection_sent;
 		bool net_write_timeout_sent;
+		bool max_join_size_sent;
 		bool sql_mode_sent;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;

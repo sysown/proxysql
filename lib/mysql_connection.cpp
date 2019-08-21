@@ -214,6 +214,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.sql_safe_updates = NULL;
 	options.collation_connection = NULL;
 	options.net_write_timeout = NULL;
+	options.max_join_size = NULL;
 	options.isolation_level_sent = false;
 	options.character_set_results_sent = false;
 	options.session_track_gtids_sent = false;
@@ -222,6 +223,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.sql_safe_updates_sent = false;
 	options.collation_connection_sent = false;
 	options.net_write_timeout_sent = false;
+	options.max_join_size_sent = false;
 	options.sql_mode_sent=false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
@@ -268,6 +270,7 @@ MySQL_Connection::~MySQL_Connection() {
 	if (options.sql_safe_updates) free(options.sql_safe_updates);
 	if (options.collation_connection) free(options.collation_connection);
 	if (options.net_write_timeout) free(options.net_write_timeout);
+	if (options.max_join_size) free(options.max_join_size);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
 	if (options.ldap_user_variable_value) free(options.ldap_user_variable_value);
 	if (userinfo) {
@@ -2068,6 +2071,12 @@ void MySQL_Connection::reset() {
 		free (options.net_write_timeout);
 		options.net_write_timeout = NULL;
 		options.net_write_timeout_sent = false;
+	}
+	options.max_join_size_int = 0;
+	if (options.max_join_size) {
+		free (options.max_join_size);
+		options.max_join_size = NULL;
+		options.max_join_size_sent = false;
 	}
 	if (options.init_connect) {
 		free(options.init_connect);

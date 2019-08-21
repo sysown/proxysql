@@ -1761,6 +1761,19 @@ bool MySQL_Session::handler_again___verify_backend_net_write_timeout() {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___verify_backend_max_join_size() {
+	bool ret = false;
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.max_join_size_int,
+		&mybe->server_myds->myconn->options.max_join_size,
+		mysql_thread___default_max_join_size,
+		&client_myds->myconn->options.max_join_size_int,
+		client_myds->myconn->options.max_join_size,
+		SETTING_MAX_JOIN_SIZE
+	);
+	return ret;
+}
+
 bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
@@ -2288,7 +2301,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 }
 */
 
-bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, char *var_name, char *var_value) {
+bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, char *var_name, char *var_value, bool no_quote) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -2302,15 +2315,19 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, ch
 	unsigned long query_length=0;
 	if (myconn->async_state_machine==ASYNC_IDLE) {
 		char *q = NULL;
-		q=(char *)"SET %s='%s'"; // default
-		if (var_value[0]=='@') {
-			q=(char *)"SET %s=%s";}
-		if (strncasecmp(var_value,(char *)"CONCAT",6)==0)
+		if (no_quote) {
 			q=(char *)"SET %s=%s";
-		if (strncasecmp(var_value,(char *)"IFNULL",6)==0)
-			q=(char *)"SET %s=%s";
-		if (strncasecmp(var_value,(char *)"REPLACE",7)==0)
-			q=(char *)"SET %s=%s";
+		} else {
+			q=(char *)"SET %s='%s'"; // default
+			if (var_value[0]=='@') {
+				q=(char *)"SET %s=%s";}
+			if (strncasecmp(var_value,(char *)"CONCAT",6)==0)
+				q=(char *)"SET %s=%s";
+			if (strncasecmp(var_value,(char *)"IFNULL",6)==0)
+				q=(char *)"SET %s=%s";
+			if (strncasecmp(var_value,(char *)"REPLACE",7)==0)
+				q=(char *)"SET %s=%s";
+		}
 		query=(char *)malloc(strlen(q)+strlen(var_value));
 		sprintf(query,q,var_name, var_value);
 		query_length=strlen(query);
@@ -2381,35 +2398,35 @@ bool MySQL_Session::handler_again___status_SETTING_ISOLATION_LEVEL(int *_rc) {
 bool MySQL_Session::handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARACTER_SET_RESULTS", mybe->server_myds->myconn->options.character_set_results);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARACTER_SET_RESULTS", mybe->server_myds->myconn->options.character_set_results, true);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_AUTO_IS_NULL", mybe->server_myds->myconn->options.sql_auto_is_null);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_AUTO_IS_NULL", mybe->server_myds->myconn->options.sql_auto_is_null, true);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_SQL_SELECT_LIMIT(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SELECT_LIMIT", mybe->server_myds->myconn->options.sql_select_limit);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SELECT_LIMIT", mybe->server_myds->myconn->options.sql_select_limit, true);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_SQL_SAFE_UPDATES(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SAFE_UPDATES", mybe->server_myds->myconn->options.sql_safe_updates);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SAFE_UPDATES", mybe->server_myds->myconn->options.sql_safe_updates, true);
 	return ret;
 }
 
@@ -2423,7 +2440,14 @@ bool MySQL_Session::handler_again___status_SETTING_COLLATION_CONNECTION(int *_rc
 bool MySQL_Session::handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"NET_WRITE_TIMEOUT", mybe->server_myds->myconn->options.net_write_timeout);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"NET_WRITE_TIMEOUT", mybe->server_myds->myconn->options.net_write_timeout, true);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_MAX_JOIN_SIZE(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"MAX_JOIN_SIZE", mybe->server_myds->myconn->options.max_join_size, true);
 	return ret;
 }
 
@@ -3678,6 +3702,9 @@ handler_again:
 							if (handler_again___verify_backend_net_write_timeout()) {
 								goto handler_again;
 							}
+							if (handler_again___verify_backend_max_join_size()) {
+								goto handler_again;
+							}
 						}
 						if (status==PROCESSING_STMT_EXECUTE) {
 							CurrentQuery.mysql_stmt=myconn->local_stmts->find_backend_stmt_by_global_id(CurrentQuery.stmt_global_id);
@@ -4240,6 +4267,78 @@ handler_again:
 				int rc=0;
 				if (handler_again___status_SETTING_SESSION_TRACK_GTIDS(&rc))
 					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_SQL_AUTO_IS_NULL:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_SQL_AUTO_IS_NULL(&rc))
+					goto handler_again; // we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_SQL_SELECT_LIMIT:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_SQL_SELECT_LIMIT(&rc))
+					goto handler_again; // we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_SQL_SAFE_UPDATES:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_SQL_SAFE_UPDATES(&rc))
+					goto handler_again; // we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_COLLATION_CONNECTION:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_COLLATION_CONNECTION(&rc))
+					goto handler_again; // we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_NET_WRITE_TIMEOUT:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_NET_WRITE_TIMEOUT(&rc))
+					goto handler_again; // we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_MAX_JOIN_SIZE:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_MAX_JOIN_SIZE(&rc))
+					goto handler_again; // we changed status
 				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
 					return handler_ret;

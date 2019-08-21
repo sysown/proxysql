@@ -124,6 +124,7 @@ static Test time_zone[] = {
   { "SET @@time_zone = \"Europe/Paris\"", { Expected("time_zone",  {"Europe/Paris"}) } },
   { "SET @@time_zone = \"+00:00\"", { Expected("time_zone",  {"+00:00"}) } },
   { "SET @@time_zone = @OLD_TIME_ZONE", { Expected("time_zone",  {"@OLD_TIME_ZONE"}) } },
+  { "SET @@TIME_ZONE = @OLD_TIME_ZONE", { Expected("time_zone",  {"@OLD_TIME_ZONE"}) } },
 };
 
 TEST(TestParse, SET_TIME_ZONE) {
@@ -165,6 +166,29 @@ static Test names[] = {
 
 TEST(TestParse, SET_NAMES) {
   TestParse(names, arraysize(names), "names");
+}
+static Test various[] = {
+  { "SET @@SESSION.SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
+  { "SET @@SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
+  { "SET SESSION SQL_SELECT_LIMIT   = DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
+  { "SET @@SESSION.SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
+  { "SET @@SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
+  { "SET SESSION SQL_SELECT_LIMIT   = 1234", { Expected("sql_select_limit",  {"1234"}) } },
+  { "SET @@SESSION.SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
+  { "SET @@SESSION.SQL_SELECT_LIMIT= @old_sql_select_limit", { Expected("sql_select_limit",  {"@old_sql_select_limit"}) } },
+  { "SET SQL_SELECT_LIMIT= @old_sql_select_limit", { Expected("sql_select_limit",  {"@old_sql_select_limit"}) } },
+  { "SET @@SESSION.sql_auto_is_null = 0", { Expected("sql_auto_is_null",  {"0"}) } },
+  { "SET SESSION sql_auto_is_null = 1", { Expected("sql_auto_is_null",  {"1"}) } },
+  { "SET sql_auto_is_null = OFF", { Expected("sql_auto_is_null",  {"OFF"}) } },
+  { "SET @@sql_auto_is_null = ON", { Expected("sql_auto_is_null",  {"ON"}) } },
+  { "SET @@SESSION.sql_safe_updates = 0", { Expected("sql_safe_updates",  {"0"}) } },
+  { "SET SESSION sql_safe_updates = 1", { Expected("sql_safe_updates",  {"1"}) } },
+  { "SET SQL_SAFE_UPDATES = OFF", { Expected("sql_safe_updates",  {"OFF"}) } },
+  { "SET @@sql_safe_updates = ON", { Expected("sql_safe_updates",  {"ON"}) } },
+};
+
+TEST(TestParse, SET_VARIOUS) {
+  TestParse(various, arraysize(various), "various");
 }
 
 static Test multiple[] = {

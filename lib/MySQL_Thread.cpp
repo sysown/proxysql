@@ -339,6 +339,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_sql_safe_updates",
 	(char *)"default_collation_connection",
 	(char *)"default_net_write_timeout",
+	(char *)"default_max_join_size",
 	(char *)"connpoll_reset_queue_length",
 	(char *)"min_num_servers_lantency_awareness",
 	(char *)"stats_time_backend_query",
@@ -444,6 +445,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES);
 	variables.default_collation_connection=strdup((char *)MYSQL_DEFAULT_COLLATION_CONNECTION);
 	variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT);
+	variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE);
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
@@ -693,6 +695,12 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT);
 		}
 		return strdup(variables.default_net_write_timeout);
+	}
+	if (!strcmp(name,"default_max_join_size")) {
+		if (variables.default_max_join_size==NULL) {
+			variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE);
+		}
+		return strdup(variables.default_max_join_size);
 	}
 	if (!strcmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
@@ -978,6 +986,12 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT);
 		}
 		return strdup(variables.default_net_write_timeout);
+	}
+	if (!strcasecmp(name,"default_max_join_size")) {
+		if (variables.default_max_join_size==NULL) {
+			variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE);
+		}
+		return strdup(variables.default_max_join_size);
 	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
@@ -2320,6 +2334,19 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
+	if (!strcasecmp(name,"default_max_join_size")) {
+		if (variables.default_max_join_size) free(variables.default_max_join_size);
+		variables.default_max_join_size=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_max_join_size=strdup(value);
+		}
+		if (variables.default_max_join_size==NULL) {
+			variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE); // default
+		}
+		return true;
+	}
+
 	if (!strcasecmp(name,"keep_multiplexing_variables")) {
 		if (vallen) {
 			free(variables.keep_multiplexing_variables);
@@ -2938,6 +2965,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.default_sql_safe_updates) free(variables.default_sql_safe_updates);
 	if (variables.default_collation_connection) free(variables.default_collation_connection);
 	if (variables.default_net_write_timeout) free(variables.default_net_write_timeout);
+	if (variables.default_max_join_size) free(variables.default_max_join_size);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
 	if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
@@ -3066,6 +3094,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_sql_safe_updates) { free(mysql_thread___default_sql_safe_updates); mysql_thread___default_sql_safe_updates=NULL; }
 	if (mysql_thread___default_collation_connection) { free(mysql_thread___default_collation_connection); mysql_thread___default_collation_connection=NULL; }
 	if (mysql_thread___default_net_write_timeout) { free(mysql_thread___default_net_write_timeout); mysql_thread___default_net_write_timeout=NULL; }
+	if (mysql_thread___default_max_join_size) { free(mysql_thread___default_max_join_size); mysql_thread___default_max_join_size=NULL; }
 	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
 	if (mysql_thread___auditlog_filename) { free(mysql_thread___auditlog_filename); mysql_thread___auditlog_filename=NULL; }
 	if (mysql_thread___ssl_p2s_ca) { free(mysql_thread___ssl_p2s_ca); mysql_thread___ssl_p2s_ca=NULL; }
@@ -3175,6 +3204,13 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		free(sess->client_myds->myconn->options.net_write_timeout);
 	}
 	sess->client_myds->myconn->options.net_write_timeout=strdup(mysql_thread___default_net_write_timeout);
+
+	uint32_t max_join_size_int=SpookyHash::Hash32(mysql_thread___default_max_join_size,strlen(mysql_thread___default_max_join_size),10);
+	sess->client_myds->myconn->options.max_join_size_int = max_join_size_int;
+	if (sess->client_myds->myconn->options.max_join_size) {
+		free(sess->client_myds->myconn->options.max_join_size);
+	}
+	sess->client_myds->myconn->options.max_join_size=strdup(mysql_thread___default_max_join_size);
 
 	return sess;
 }
@@ -4251,6 +4287,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_collation_connection=GloMTH->get_variable_string((char *)"default_collation_connection");
 	if (mysql_thread___default_net_write_timeout) free(mysql_thread___default_net_write_timeout);
 	mysql_thread___default_net_write_timeout=GloMTH->get_variable_string((char *)"default_net_write_timeout");
+	if (mysql_thread___default_max_join_size) free(mysql_thread___default_max_join_size);
+	mysql_thread___default_max_join_size=GloMTH->get_variable_string((char *)"default_max_join_size");
 	if (mysql_thread___server_version) free(mysql_thread___server_version);
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
