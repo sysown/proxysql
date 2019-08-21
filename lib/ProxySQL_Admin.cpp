@@ -9279,7 +9279,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
                     if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=0;
                     line.lookupValue("comment", comment);
-                    line.lookupValue("domain_name", comment);
+                    line.lookupValue("domain_name", domain_name);
                     char *o1=strdup(comment.c_str());
                     char *o=escape_string_single_quotes(o1, false);
                     char *p1=strdup(domain_name.c_str());
