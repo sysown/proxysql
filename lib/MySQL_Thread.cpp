@@ -3154,6 +3154,7 @@ __mysql_thread_exit_add_mirror:
 					if (myds->wait_until > curtime) {
 						if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
 							mypolls.poll_timeout= myds->wait_until - curtime;
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , wait_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->wait_until, curtime);
 						}
 					}
 				}
@@ -3161,6 +3162,7 @@ __mysql_thread_exit_add_mirror:
 					if (unlikely(myds->sess->pause_until > 0)) {
 						if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
 							mypolls.poll_timeout= myds->sess->pause_until - curtime;
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , pause_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->pause_until, curtime);
 						}
 					}
 				}
@@ -3254,12 +3256,14 @@ __run_skip_1a:
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
 		}
 
+		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);
 		if (mysql_thread___wait_timeout==0) {
 			// we should be going into PAUSE mode
 			if (mypolls.poll_timeout==0 || mypolls.poll_timeout > 100000) {
 				mypolls.poll_timeout=100000;
 			}
 		}
+		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);
 
 
 		// flush mysql log file
