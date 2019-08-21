@@ -1979,13 +1979,15 @@ __exit_monitor_replication_lag_thread:
 							}
 						}
 						if (j>-1) {
-							MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-							if (row) {
-								repl_lag=-1; // this is old behavior
-							repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
-							if (row[j]) { // if Seconds_Behind_Master is not NULL
-									repl_lag=atoi(row[j]);
+							MYSQL_ROW row;
+							int row_lag_value=repl_lag;
+							while (row=mysql_fetch_row(mmsd->result)) {
+								//row_lag_value=-1; // this is old behavior
+								row_lag_value=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
+								if (row[j]) { // if Seconds_Behind_Master is not NULL
+									row_lag_value=atoi(row[j]);
 								}
+								repl_lag = row_lag_value>repl_lag ? row_lag_value:repl_lag;
 							}
 						}
 						if (repl_lag>=0) {
