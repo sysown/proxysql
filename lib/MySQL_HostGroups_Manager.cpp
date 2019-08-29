@@ -5467,7 +5467,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3";
 
 	int writer_is_also_reader=0;
-	int new_reader_weight = 0;
+	int new_reader_weight = 1;
 	bool found_writer=false;
 	bool found_reader=false;
 	int _writer_hostgroup = _whid;
@@ -5691,6 +5691,32 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			GloAdmin->mysql_servers_wrunlock();
 			free(query);
 			query = NULL;
+		} else {
+			GloAdmin->mysql_servers_wrlock();
+			mydb->execute("DELETE FROM mysql_servers_incoming");
+			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostname<>'%s%s'";
+			sprintf(query,q, _server_id, domain_name);
+			mydb->execute(query);
+			q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight) VALUES (%d, '%s%s', %d, %d)";
+			sprintf(query,q, _writer_hostgroup, _server_id, domain_name, aurora_port, new_reader_weight);
+			mydb->execute(query);
+			if (writer_is_also_reader && read_HG>=0) {
+				q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight) VALUES (%d, '%s%s', %d, %d)";
+				sprintf(query, q, read_HG, _server_id, domain_name, aurora_port, new_reader_weight);
+				mydb->execute(query);
+			}
+			proxy_info("AWS Aurora: setting new auto-discovered host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
+			commit();
+			wrlock();
+			q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
+			sprintf(query,q,_whid,_rhid);
+			mydb->execute(query);
+			generate_mysql_servers_table(&_whid);
+			generate_mysql_servers_table(&_rhid);
+			wrunlock();
+			GloAdmin->mysql_servers_wrunlock();
+			free(query);
+			query = NULL;
 		}
 	}
 	if (resultset) {
@@ -5806,9 +5832,8 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			unsigned int max_max_connections = 1000;
 			unsigned int max_use_ssl = 0;
 			wrlock();
-			for (int i=0; i<(int)MyHostGroups->len; i++) {
-				MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-				if (_rhid!=(int)myhgc->hid) continue;
+			MyHGC *myhgc=MyHGC_lookup(_rhid);
+			{
 				for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 					MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 					if (mysrvc->max_connections > max_max_connections) {
@@ -5839,7 +5864,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				free(query);
 			}
 			wrunlock();
-	// it is now time to build a new structure in Monitor
+			// it is now time to build a new structure in Monitor
 			pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 			pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
 			{
