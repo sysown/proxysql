@@ -9117,7 +9117,11 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			}
 			server.lookupValue("port", port);
 			server.lookupValue("gtid_port", gtid_port);
-			if (server.lookupValue("hostgroup", hostgroup)==false) continue;
+			if (server.lookupValue("hostgroup", hostgroup)==false) {
+				if (server.lookupValue("hostgroup_id", hostgroup)==false) {
+					continue;
+				}
+			}
 			server.lookupValue("status", status);
 			if (
 				(strcasecmp(status.c_str(),(char *)"ONLINE"))
