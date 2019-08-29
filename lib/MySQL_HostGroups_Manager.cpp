@@ -2355,6 +2355,31 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
+#ifdef USE_MYSRVC_ARRAY
+		if (max_lag_ms) { // we are using AWS Aurora, as this logic is implemented only here)
+			if (num_candidates > 2) { // there are at least 2 replicas
+				// we try to remove the writer
+				unsigned int total_aws_aurora_current_lag_us=0;
+				for (j=0; j<num_candidates; j++) {
+					mysrvc = mysrvcCandidates[j];
+					total_aws_aurora_current_lag_us += mysrvc->aws_aurora_current_lag_us;
+				}
+				if (total_aws_aurora_current_lag_us) { // we are just double checking that we don't have all servers with aws_aurora_current_lag_us==0
+					for (j=0; j<num_candidates; j++) {
+						mysrvc = mysrvcCandidates[j];
+						if (mysrvc->aws_aurora_current_lag_us==0) {
+							sum-=mysrvc->weight;
+							TotalUsedConn-=mysrvc->ConnectionsUsed->conns_length();
+							if (j < num_candidates-1) {
+								mysrvcCandidates[j]=mysrvcCandidates[num_candidates-1];
+							}
+							num_candidates--;
+						}
+					}
+				}
+			}
+		}
+#endif // USE_MYSRVC_ARRAY
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
@@ -5388,7 +5413,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 							// the server should be a reader
 							// but it is in the writer hostgroup
 							ret = false;
-							reader_found_in_whg == true;
+							reader_found_in_whg = true;
 						}
 					} else {
 						if (is_writer==true) {
