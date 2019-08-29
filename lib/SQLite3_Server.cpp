@@ -289,6 +289,29 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_no_space[query_no_space_length]=0;
 	}
 
+	// fix bug #1047
+	if (
+		(!strncasecmp("BEGIN", query_no_space, strlen("BEGIN")))
+		||
+		(!strncasecmp("START TRANSACTION", query_no_space, strlen("START TRANSACTION")))
+		||
+		(!strncasecmp("COMMIT", query_no_space, strlen("COMMIT")))
+		||
+		(!strncasecmp("ROLLBACK", query_no_space, strlen("ROLLBACK")))
+		||
+		(!strncasecmp("SET character_set_results", query_no_space, strlen("SET character_set_results")))
+		||
+		(!strncasecmp("SET SQL_AUTO_IS_NULL", query_no_space, strlen("SET SQL_AUTO_IS_NULL")))
+		||
+		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
+		||
+		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
+	) {
+		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
@@ -773,7 +796,7 @@ SQLite3_Server::SQLite3_Server() {
 	pthread_mutex_init(&aurora_mutex,NULL);
 	unsigned int nas = time(NULL);
 	nas = nas % 3; // range
-	nas += 5; // min
+	nas += 4; // min
 	max_num_aurora_servers = 10; // hypothetical maximum number of nodes
 	for (unsigned int j=1; j<4; j++) {
 		cur_aurora_writer[j-1] = 0;
@@ -891,13 +914,19 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 		cur_aurora_writer[cluster_id] = rand() % num_aurora_servers[cluster_id];
 		proxy_info("Simulating a failover for AWS Aurora cluster %d , HGs (%d:%d)\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2);
 	}
+	if (rand() % 1000 == 0) {
+		if (num_aurora_servers[cluster_id] < max_num_aurora_servers) {
+			num_aurora_servers[cluster_id]++;
+			proxy_info("Simulating the add of a new server for AWS Aurora Cluster %d , HGs (%d:%d). Now adding server num %d\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2, num_aurora_servers[cluster_id]);
+		}
+	}
 	for (unsigned int i=0; i<num_aurora_servers[cluster_id]; i++) {
 		string serverid = "";
-		if (cluster_id==0) {
+		//if (cluster_id==0) {
 			serverid = "host." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
-		} else {
-			serverid = "127.0." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
-		}
+		//} else {
+		//	serverid = "127.0." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
+		//}
 		string sessionid= "";
 		float lag_ms = 0;
 		if (i==cur_aurora_writer[cluster_id]) {
