@@ -10301,7 +10301,13 @@ void ProxySQL_Admin::enable_aurora_testing() {
 			if (j==1) {
 				serverid = "host." + std::to_string(j) + "." + std::to_string(i+11) + ".aws-test.com";
 			} else {
-				serverid = "127.0." + std::to_string(j) + "." + std::to_string(i+11);
+				if (j==2) {
+					serverid = "host." + std::to_string(j) + "." + std::to_string(i+11) + ".cluster2.aws.test";
+				} else {
+					if (j==3) {
+						serverid = "host." + std::to_string(j) + "." + std::to_string(i+11) + ".aws.3.test.com";
+					}
+				}
 			}
 			string sessionid= "";
 			sessionid = "b80ef4b4-" + serverid + "-aa01";
@@ -10316,8 +10322,8 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	}
 	sqlite3_finalize(statement);
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 'Automated Aurora Testing Cluster 1')");
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1273, 1274, 1, 25, 120, 90, 0, 1, 'Automated Aurora Testing Cluster 2')");
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1275, 1276, 1, 25, 120, 90, 0, 2, 'Automated Aurora Testing Cluster 3')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 120, 90, 0, 1, 'Automated Aurora Testing Cluster 2')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1275, 1276, 1, '.aws.3.test.com', 25, 120, 90, 0, 2, 'Automated Aurora Testing Cluster 3')");
 	admindb->execute("UPDATE mysql_aws_aurora_hostgroups SET active=1");
 	//admindb->execute("update mysql_servers set max_replication_lag=20");
 	load_mysql_servers_to_runtime();
@@ -10334,5 +10340,9 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	load_mysql_variables_to_runtime();
 	admindb->execute("INSERT INTO mysql_users (username,password,default_hostgroup) VALUES ('aurora1','pass1',1271), ('aurora2','pass2',1273), ('aurora3','pass3',1275)");
 	init_users();
+	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora1', '^SELECT.*max_lag_ms', 1272, 1)");
+	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora2', '^SELECT.*max_lag_ms', 1274, 1)");
+	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora3', '^SELECT.*max_lag_ms', 1276, 1)");
+	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_AURORA

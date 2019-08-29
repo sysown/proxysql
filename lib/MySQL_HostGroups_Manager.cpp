@@ -1197,6 +1197,7 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 
 bool MySQL_HostGroups_Manager::commit() {
 
+	unsigned long long curtime1=monotonic_time();
 	wrlock();
 	// purge table
 	purge_mysql_servers_table();
@@ -1592,9 +1593,15 @@ bool MySQL_HostGroups_Manager::commit() {
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 	wrunlock();
+	unsigned long long curtime2=monotonic_time();
+	curtime1 = curtime1/1000;
+	curtime2 = curtime2/1000;
+	proxy_info("MySQL_HostGroups_Manager::commit() locked for %lluus\n", curtime2-curtime1);
+
 	if (GloMTH) {
 		GloMTH->signal_all_threads(1);
 	}
+
 	return true;
 }
 
@@ -5705,6 +5712,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	char *error=NULL;
 	int _writer_hostgroup = _whid;
 	int aurora_port = 3306;
+	int new_reader_weight = 0;
 	char *domain_name = strdup((char *)"");
 	{
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
@@ -5718,6 +5726,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				domain_name = strdup(info->domain_name);
 			}
 			aurora_port = info->aurora_port;
+			new_reader_weight = info->new_reader_weight;
 		}
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
@@ -5787,6 +5796,71 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
 			free(query);
+		} else {
+			// we couldn't find the server
+			// autodiscovery algorithm here
+			char *full_hostname=(char *)malloc(strlen(_server_id)+strlen(domain_name)+1);
+			sprintf(full_hostname, "%s%s", _server_id, domain_name);
+			bool found = false;
+			GloAdmin->mysql_servers_wrlock();
+			unsigned int max_max_connections = 1000;
+			unsigned int max_use_ssl = 0;
+			wrlock();
+			for (int i=0; i<(int)MyHostGroups->len; i++) {
+				MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+				if (_rhid!=(int)myhgc->hid) continue;
+				for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+					MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+					if (mysrvc->max_connections > max_max_connections) {
+						max_max_connections = mysrvc->max_connections;
+					}
+					if (mysrvc->use_ssl > max_use_ssl) {
+						max_use_ssl = mysrvc->use_ssl;
+					}
+					if (strcmp(mysrvc->address,full_hostname)==0 && mysrvc->port==aurora_port) {
+						found = true;
+						// we found the server, we just configure it online if it was offline
+						if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+							mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+						}
+					}
+				}
+				if (found == false) { // the server doesn't exist
+					MySrvC *mysrvc=new MySrvC(full_hostname, aurora_port, 0, new_reader_weight, MYSQL_SERVER_STATUS_ONLINE, 0, max_max_connections, 0, max_use_ssl, 0, (char *)""); // add new fields here if adding more columns in mysql_servers
+					proxy_info("Adding new discovered AWS Aurora node %s:%d with: hostgroup=%d, weight=%d, max_connections=%d\n" , full_hostname, aurora_port, _rhid , new_reader_weight, max_max_connections);
+					add(mysrvc,_rhid);
+				}
+				q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
+				query = (char *)malloc(strlen(q)+64);
+				sprintf(query,q,_whid,_rhid);
+				mydb->execute(query);
+				generate_mysql_servers_table(&_whid);
+				generate_mysql_servers_table(&_rhid);
+				free(query);
+			}
+			wrunlock();
+	// it is now time to build a new structure in Monitor
+			pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+			pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+			{
+				char *error=NULL;
+				int cols=0;
+				int affected_rows=0;
+				SQLite3_result *resultset=NULL;
+				char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl , max_lag_ms , check_interval_ms , check_timeout_ms FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
+				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+				if (resultset) {
+					if (GloMyMon->AWS_Aurora_Hosts_resultset) {
+						delete GloMyMon->AWS_Aurora_Hosts_resultset;
+					}
+					GloMyMon->AWS_Aurora_Hosts_resultset=resultset;
+					GloMyMon->AWS_Aurora_Hosts_resultset_checksum=resultset->raw_checksum();
+				}
+			}
+			pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+			pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+			GloAdmin->mysql_servers_wrunlock();
+			free(full_hostname);
 		}
 	}
 	if (resultset) {
