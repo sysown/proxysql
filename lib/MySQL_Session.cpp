@@ -1639,7 +1639,7 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 	// fe_int = frontend int (has)
 	// fe_var = frontend value
 	if (*be_int == 0) {
-		// it is the first time we use this backend. Set isolation_level to default
+		// it is the first time we use this backend. Set value to default
 		if (*be_var) {
 			free(*be_var);
 			*be_var = NULL;
@@ -1655,9 +1655,9 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 				if (*be_var) {
 					free(*be_var);
 					*be_var = NULL;
-					if (fe_var) {
-						*be_var = strdup(fe_var);
-					}
+				}
+				if (fe_var) {
+					*be_var = strdup(fe_var);
 				}
 			}
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
@@ -2009,6 +2009,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	if (rc==0) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		//myds->free_mysql_real_query();
+		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -2068,6 +2069,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 	) { // nothing to do
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		//myds->free_mysql_real_query();
+		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -2097,6 +2099,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 	if (rc==0) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		//myds->free_mysql_real_query();
+		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -2172,6 +2175,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 			myconn->set_status_sql_log_bin0(false);
 		}
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -2342,7 +2346,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, ch
 			q=(char *)"SET %s=%s";
 		} else {
 			q=(char *)"SET %s='%s'"; // default
-			if (var_value[0]=='@') {
+			if (var_value[0] && var_value[0]=='@') {
 				q=(char *)"SET %s=%s";}
 			if (strncasecmp(var_value,(char *)"CONCAT",6)==0)
 				q=(char *)"SET %s=%s";
@@ -2362,6 +2366,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, ch
 	}
 	if (rc==0) {
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -2490,6 +2495,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_init_db, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
+		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -2776,6 +2782,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_set_names, 1);
+		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
@@ -3701,7 +3708,6 @@ handler_again:
 							if (handler_again___verify_backend_time_zone()) {
 								goto handler_again;
 							}
-/*
 							if (handler_again___verify_backend_isolation_level()) {
 								goto handler_again;
 							}
@@ -3729,7 +3735,6 @@ handler_again:
 							if (handler_again___verify_backend_max_join_size()) {
 								goto handler_again;
 							}
-*/
 						}
 						if (status==PROCESSING_STMT_EXECUTE) {
 							CurrentQuery.mysql_stmt=myconn->local_stmts->find_backend_stmt_by_global_id(CurrentQuery.stmt_global_id);

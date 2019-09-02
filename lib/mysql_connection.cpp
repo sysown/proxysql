@@ -318,6 +318,42 @@ MySQL_Connection::~MySQL_Connection() {
 		free(options.time_zone);
 		options.time_zone=NULL;
 	}
+	if (options.isolation_level) {
+		free(options.isolation_level);
+		options.isolation_level=NULL;
+	}
+	if (options.character_set_results) {
+		free(options.character_set_results);
+		options.character_set_results=NULL;
+	}
+	if (options.session_track_gtids) {
+		free(options.session_track_gtids);
+		options.session_track_gtids=NULL;
+	}
+	if (options.sql_auto_is_null) {
+		free(options.sql_auto_is_null);
+		options.sql_auto_is_null=NULL;
+	}
+	if (options.sql_select_limit) {
+		free(options.sql_select_limit);
+		options.sql_select_limit=NULL;
+	}
+	if (options.sql_safe_updates) {
+		free(options.sql_safe_updates);
+		options.sql_safe_updates=NULL;
+	}
+	if (options.collation_connection) {
+		free(options.collation_connection);
+		options.collation_connection=NULL;
+	}
+	if (options.net_write_timeout) {
+		free(options.net_write_timeout);
+		options.net_write_timeout=NULL;
+	}
+	if (options.max_join_size) {
+		free(options.max_join_size);
+		options.max_join_size=NULL;
+	}
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
