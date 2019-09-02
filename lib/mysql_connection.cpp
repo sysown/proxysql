@@ -233,6 +233,15 @@ MySQL_Connection::MySQL_Connection() {
 	options.sql_mode_int=0;	// #509
 	options.time_zone=NULL;	// #819
 	options.time_zone_int=0;	// #819
+	options.isolation_level_int=0;
+	options.character_set_results_int=0;
+	options.session_track_gtids_int=0;
+	options.sql_auto_is_null_int=0;
+	options.sql_select_limit_int=0;
+	options.sql_safe_updates_int=0;
+	options.collation_connection_int=0;
+	options.net_write_timeout_int=0;
+	options.max_join_size_int=0;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;

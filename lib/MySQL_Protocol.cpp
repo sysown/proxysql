@@ -1465,7 +1465,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
 	uint8_t charset;
-	uint32_t  capabilities;
+	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
 	unsigned char *user=NULL;
