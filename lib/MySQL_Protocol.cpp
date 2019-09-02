@@ -569,6 +569,7 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 			case STATE_CLIENT_HANDSHAKE:
 			case STATE_QUERY_SENT_DS:
 			case STATE_QUERY_SENT_NET:
+			case STATE_ERR:
 				(*myds)->DSS=STATE_ERR;
 				break;
 			case STATE_OK:
