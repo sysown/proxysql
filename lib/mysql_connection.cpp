@@ -262,15 +262,6 @@ MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
-	if (options.character_set_results) free(options.character_set_results);
-	if (options.session_track_gtids) free(options.session_track_gtids);
-	if (options.isolation_level) free(options.isolation_level);
-	if (options.sql_auto_is_null) free(options.sql_auto_is_null);
-	if (options.sql_select_limit) free(options.sql_select_limit);
-	if (options.sql_safe_updates) free(options.sql_safe_updates);
-	if (options.collation_connection) free(options.collation_connection);
-	if (options.net_write_timeout) free(options.net_write_timeout);
-	if (options.max_join_size) free(options.max_join_size);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
 	if (options.ldap_user_variable_value) free(options.ldap_user_variable_value);
 	if (userinfo) {
