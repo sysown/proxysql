@@ -1518,8 +1518,14 @@ bool MySQL_Session::handler_again___verify_backend_charset() {
 	if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 		//previous_status.push(PROCESSING_QUERY);
 		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_PRE_QUERY:
+				previous_status.push(PROCESSING_PRE_QUERY);
+				break;
 			case PROCESSING_QUERY:
 				previous_status.push(PROCESSING_QUERY);
+				break;
+			case PROCESSING_POST_QUERY:
+				previous_status.push(PROCESSING_POST_QUERY);
 				break;
 			case PROCESSING_STMT_PREPARE:
 				previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1540,13 +1546,19 @@ bool MySQL_Session::handler_again___verify_backend_sql_log_bin() {
 	if (client_myds->myconn->options.sql_log_bin != mybe->server_myds->myconn->options.sql_log_bin) {
 		mybe->server_myds->myconn->options.sql_log_bin = client_myds->myconn->options.sql_log_bin;
 		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_PRE_QUERY:
+				previous_status.push(PROCESSING_PRE_QUERY);
+				break;
 			case PROCESSING_QUERY:
 				previous_status.push(PROCESSING_QUERY);
 				break;
-				case PROCESSING_STMT_PREPARE:
-			previous_status.push(PROCESSING_STMT_PREPARE);
+			case PROCESSING_POST_QUERY:
+				previous_status.push(PROCESSING_POST_QUERY);
 				break;
-				case PROCESSING_STMT_EXECUTE:
+			case PROCESSING_STMT_PREPARE:
+				previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+			case PROCESSING_STMT_EXECUTE:
 				previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
@@ -1587,8 +1599,14 @@ bool MySQL_Session::handler_again___verify_backend_sql_mode() {
 				}
 			}
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_PRE_QUERY:
+					previous_status.push(PROCESSING_PRE_QUERY);
+					break;
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_POST_QUERY:
+					previous_status.push(PROCESSING_POST_QUERY);
 					break;
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1630,8 +1648,14 @@ bool MySQL_Session::handler_again___verify_backend_time_zone() {
 				}
 			}
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_PRE_QUERY:
+					previous_status.push(PROCESSING_PRE_QUERY);
+					break;
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_POST_QUERY:
+					previous_status.push(PROCESSING_POST_QUERY);
 					break;
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1658,8 +1682,14 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect=strdup(mysql_thread___init_connect);
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_PRE_QUERY:
+					previous_status.push(PROCESSING_PRE_QUERY);
+					break;
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_POST_QUERY:
+					previous_status.push(PROCESSING_POST_QUERY);
 					break;
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1710,8 +1740,14 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 			// we send ldap user variable  query only if set
 			mybe->server_myds->myconn->options.ldap_user_variable=strdup(mysql_thread___ldap_user_variable);
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_PRE_QUERY:
+					previous_status.push(PROCESSING_PRE_QUERY);
+					break;
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_POST_QUERY:
+					previous_status.push(PROCESSING_POST_QUERY);
 					break;
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1741,8 +1777,14 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 			if (CurrentQuery.is_select_NOT_for_update()==false) {
 				//previous_status.push(PROCESSING_QUERY);
 				switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+					case PROCESSING_PRE_QUERY:
+						previous_status.push(PROCESSING_PRE_QUERY);
+						break;
 					case PROCESSING_QUERY:
 						previous_status.push(PROCESSING_QUERY);
+						break;
+					case PROCESSING_POST_QUERY:
+						previous_status.push(PROCESSING_POST_QUERY);
 						break;
 					case PROCESSING_STMT_PREPARE:
 						previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1760,8 +1802,14 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 			// in every other cases, enforce autocommit
 			//previous_status.push(PROCESSING_QUERY);
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_PRE_QUERY:
+					previous_status.push(PROCESSING_PRE_QUERY);
+					break;
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_POST_QUERY:
+					previous_status.push(PROCESSING_POST_QUERY);
 					break;
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1810,8 +1858,14 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 		if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
 			//previous_status.push(PROCESSING_QUERY);
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_PRE_QUERY:
+					previous_status.push(PROCESSING_PRE_QUERY);
+					break;
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_POST_QUERY:
+					previous_status.push(PROCESSING_POST_QUERY);
 					break;
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
@@ -1829,8 +1883,14 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 		if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
 			//previous_status.push(PROCESSING_QUERY);
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_PRE_QUERY:
+					previous_status.push(PROCESSING_PRE_QUERY);
+					break;
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_POST_QUERY:
+					previous_status.push(PROCESSING_POST_QUERY);
 					break;
 				case PROCESSING_STMT_PREPARE:
 					previous_status.push(PROCESSING_STMT_PREPARE);
@@ -2868,6 +2928,8 @@ __get_pkts_from_client:
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									pre_query = NULL;
+									post_query = NULL;
 									if (qpo->max_lag_ms >= 0) {
 										thread->status_variables.queries_with_max_lag_ms++;
 									}
@@ -3155,6 +3217,8 @@ __get_pkts_from_client:
 									CurrentQuery.stmt_global_id=stmt_global_id;
 									// now we get the statement information
 									MySQL_STMT_Global_info *stmt_info=NULL;
+									pre_query = NULL;
+									post_query = NULL;
 									stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(stmt_global_id);
 									if (stmt_info==NULL) {
 										// we couldn't find it
@@ -3391,6 +3455,55 @@ handler_again:
 			}
 			break;
 
+        case PROCESSING_PRE_QUERY:
+			{
+				mybe->server_myds->DSS=STATE_MARIADB_GENERIC;
+				int pre_rc = mybe->server_myds->myconn->async_query(mybe->server_myds->revents,(char *)pre_query, strlen((char *)pre_query));
+				if (pre_rc==0) {
+					int myerr=mysql_errno(mybe->server_myds->myconn->mysql);
+					if ( myerr > 0 ) {
+						char sqlstate[10];
+						sprintf(sqlstate,"%s",mysql_sqlstate(mybe->server_myds->myconn->mysql));
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,previous_client_pkt_sid+1,myerr,sqlstate,(char *)"Query execution was interrupted because pre-query has failed.");
+						client_myds->pkt_sid = previous_client_pkt_sid + 2;
+						CurrentQuery.mysql_stmt = NULL;
+						RequestEnd(mybe->server_myds);
+						break;
+					}
+					mybe->server_myds->myconn->async_free_result();
+					mybe->server_myds->myconn->MyRS_reuse = NULL;
+					client_myds->pkt_sid = previous_client_pkt_sid;
+					status=previous_status.top();
+					previous_status.pop();
+					NEXT_IMMEDIATE(status);
+				} else {
+					goto handler_again;
+				}
+				break;
+			}
+        case PROCESSING_POST_QUERY:
+			{
+				int post_rc = mybe->server_myds->myconn->async_query(mybe->server_myds->revents,(char *)qpo->run_after, strlen((char *)qpo->run_after));
+				if (post_rc==0) {
+					int myerr=mysql_errno(mybe->server_myds->myconn->mysql);
+					if ( myerr > 0 ) {
+						char sqlstate[10];
+						char sqlerror[200];
+						sprintf(sqlstate,"%s",mysql_sqlstate(mybe->server_myds->myconn->mysql));
+						sprintf(sqlerror,"Post-run hook failed: %s", (char *)mysql_error(mybe->server_myds->myconn->mysql));
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,myerr,sqlstate,sqlerror);
+						client_myds->pkt_sid = 2;
+						RequestEnd(mybe->server_myds);
+						break;
+					}
+					MySQL_Result_to_MySQL_wire(mybe->server_myds->myconn->mysql, mybe->server_myds->myconn->MyRS_reuse);
+					RequestEnd(mybe->server_myds);
+					finishQuery(mybe->server_myds,mybe->server_myds->myconn,NULL);
+				} else {
+					goto handler_again;
+				}
+				break;
+			}
 		case PROCESSING_STMT_PREPARE:
 		case PROCESSING_STMT_EXECUTE:
 		case PROCESSING_QUERY:
@@ -3424,6 +3537,12 @@ handler_again:
 						break;
 					case PROCESSING_STMT_EXECUTE:
 						previous_status.push(PROCESSING_STMT_EXECUTE);
+						break;
+					case PROCESSING_PRE_QUERY:
+						previous_status.push(PROCESSING_PRE_QUERY);
+						break;
+					case PROCESSING_POST_QUERY:
+						previous_status.push(PROCESSING_POST_QUERY);
 						break;
 					default:
 						assert(0);
@@ -3502,6 +3621,32 @@ handler_again:
 						}
 					}
 				}
+				switch (status) {
+					case PROCESSING_QUERY:
+						if (qpo->run_before && pre_query == NULL) {
+							pre_query = qpo->run_before;
+							previous_client_pkt_sid = client_myds->pkt_sid;
+							mybe->server_myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+							previous_status.push(status);
+							NEXT_IMMEDIATE(PROCESSING_PRE_QUERY);
+						}
+						break;
+					case PROCESSING_STMT_EXECUTE:
+						{			
+						MySQL_STMT_Global_info *stmt_info=NULL;
+					    stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
+						if (stmt_info->properties.run_before && pre_query == NULL) {
+							pre_query = stmt_info->properties.run_before;
+							previous_client_pkt_sid = client_myds->pkt_sid;
+							mybe->server_myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+							previous_status.push(status);
+							NEXT_IMMEDIATE(PROCESSING_PRE_QUERY);
+						}
+						break;
+						}
+					default:
+						break;
+				}
 				int rc;
 				timespec begint;
 				if (thread->variables.stats_time_backend_query) {
@@ -3559,10 +3704,9 @@ handler_again:
 							}
 						}
 					}
-
 					switch (status) {
 						case PROCESSING_QUERY:
-							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+							if (!qpo->run_after) MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
 							break;
 						case PROCESSING_STMT_PREPARE:
 							{
@@ -3581,6 +3725,8 @@ handler_again:
 										qpo->cache_ttl,
 										qpo->timeout,
 										qpo->delay,
+										qpo->run_before,
+										qpo->run_after,
 										false);
 									if (CurrentQuery.QueryParserArgs.digest_text) {
 										if (stmt_info->digest_text==NULL) {
@@ -3616,7 +3762,7 @@ handler_again:
 						case PROCESSING_STMT_EXECUTE:
 							{
 								thread->status_variables.backend_stmt_execute++;
-								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
+								if (!qpo->run_after) MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 								LogQuery(myds);
 								if (CurrentQuery.stmt_meta)
 									if (CurrentQuery.stmt_meta->pkt) {
@@ -3631,7 +3777,22 @@ handler_again:
 							break;
 						default:
 							assert(0);
-							break;
+					break;
+					}
+					if (qpo->run_after && status != PROCESSING_STMT_PREPARE) {
+						previous_client_pkt_sid = client_myds->pkt_sid;
+						mybe->server_myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+						mybe->server_myds->myconn->MyRS_reuse = mybe->server_myds->myconn->MyRS;
+						mybe->server_myds->myconn->MyRS = NULL;
+						mybe->server_myds->myconn->query.ptr = NULL;
+						mybe->server_myds->myconn->query.length = 0;
+						mybe->server_myds->myconn->compute_unknown_transaction_status();
+						mybe->server_myds->myconn->async_state_machine=ASYNC_IDLE;
+						previous_num_rows = mysql_affected_rows(mybe->server_myds->myconn->mysql);
+						previous_insert_id = mybe->server_myds->myconn->mysql->insert_id;
+						previous_warning_count = mybe->server_myds->myconn->mysql->warning_count;
+						mybe->server_myds->myconn->mysql->info == NULL ? previous_mysql_info = new std::string() : previous_mysql_info = new std::string(mybe->server_myds->myconn->mysql->info);
+						NEXT_IMMEDIATE(PROCESSING_POST_QUERY);
 					}
 					RequestEnd(myds);
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
@@ -5630,7 +5791,11 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
 			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 			setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, mysql->warning_count,mysql->info);
+			if (status == PROCESSING_POST_QUERY) { // we need to surface the return parameters of the previous (main) query.
+				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,previous_num_rows,previous_insert_id, setStatus, previous_warning_count,(char *)previous_mysql_info->c_str());
+			} else {
+				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, mysql->warning_count,mysql->info);
+			}
 			//client_myds->pkt_sid++;
 		} else {
 			// error

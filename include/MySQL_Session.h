@@ -151,6 +151,8 @@ class MySQL_Session
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
 	char * default_schema;
+	char *pre_query;
+	char *post_query;
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
@@ -173,6 +175,11 @@ class MySQL_Session
 	int transaction_persistent_hostgroup;
 	int to_process;
 	int pending_connect;
+	int previous_client_pkt_sid;
+	int previous_num_rows;
+	int previous_insert_id;
+	int previous_warning_count;
+	std::string *previous_mysql_info;
 	enum proxysql_session_type session_type;
 
 	// bool

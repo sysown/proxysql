@@ -54,7 +54,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=35; // this count the number of fields
+		num_fields=37; // this count the number of fields
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -110,6 +110,8 @@ class QP_rule_text {
 		itostr(pta[32], (long long)QPr->apply);
 		pta[33]=strdup_null(QPr->comment); // issue #643
 		itostr(pta[34], (long long)QPr->hits);
+		pta[35]=strdup_null(QPr->run_before);
+		pta[36]=strdup_null(QPr->run_after);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -450,6 +452,10 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 		s+=strlen(qr->OK_msg);
 	if (qr->comment)
 		s+=strlen(qr->comment);
+	if (qr->run_before)
+		s+=strlen(qr->run_before);
+	if (qr->run_after)
+		s+=strlen(qr->run_after);
 	if (qr->match_digest || qr->match_pattern || qr->replace_pattern) {
 		s+= sizeof(__RE2_objects_t *)+sizeof(__RE2_objects_t);
 		s+= sizeof(pcrecpp::RE_Options *) + sizeof(pcrecpp::RE_Options);
@@ -504,6 +510,10 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->error_msg);
 	if (qr->OK_msg)
 		free(qr->OK_msg);
+	if (qr->run_before)
+		free(qr->run_before);
+	if (qr->run_after)
+		free(qr->run_after);
 	if (qr->regex_engine1) {
 		re2_t *r=(re2_t *)qr->regex_engine1;
 		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
@@ -699,7 +709,7 @@ unsigned long long Query_Processor::get_rules_mem_used() {
 	return s;
 }
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment, char *run_before, char *run_after) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -744,6 +754,8 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->gtid_from_hostgroup = gtid_from_hostgroup;
 	newQR->apply=apply;
 	newQR->comment=(comment ? strdup(comment) : NULL); // see issue #643
+	newQR->run_before=(run_before ? strdup(run_before) : NULL);
+	newQR->run_after=(run_after ? strdup(run_after) : NULL);
 	newQR->regex_engine1=NULL;
 	newQR->regex_engine2=NULL;
 	newQR->hits=0;
@@ -777,7 +789,7 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 			proxy_error("Incorrect digest for rule_id %d : %s\n" , rule_id, digest);
 		}
 	}
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_digest=\"%s\", %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_digest, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply);
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Creating new rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_digest=\"%s\", %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d, run_before: %s, run_after: %s\n", newQR, newQR->rule_id, newQR->active, newQR->username, newQR->schemaname, newQR->flagIN, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_digest, (newQR->negate_match_pattern ? "(!)" : "") , newQR->match_pattern, newQR->flagOUT, newQR->replace_pattern, newQR->destination_hostgroup, newQR->apply, newQR->run_before, newQR->run_after);
 	return newQR;
 };
 
@@ -912,7 +924,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(35);
+	SQLite3_result *result=new SQLite3_result(37);
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&rwlock);
 #else
@@ -954,6 +966,8 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"apply");
 	result->add_column_definition(SQLITE_TEXT,"comment"); // issue #643
 	result->add_column_definition(SQLITE_TEXT,"hits");
+	result->add_column_definition(SQLITE_TEXT,"run_before");
+	result->add_column_definition(SQLITE_TEXT,"run_after");
 	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
 		qr1=*it;
 		QP_rule_text *qt=new QP_rule_text(qr1);
@@ -1608,7 +1622,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					qr1->error_msg, qr1->OK_msg, qr1->sticky_conn, qr1->multiplex,
 					qr1->gtid_from_hostgroup,
 					qr1->log, qr1->apply,
-					qr1->comment);
+					qr1->comment, qr1->run_before, qr1->run_after);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: \n", qr2->rule_id, qr2->match_digest);
@@ -1819,6 +1833,16 @@ __internal_loop:
 			//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
       ret->OK_msg=strdup(qr->OK_msg);
     }
+	if (sess->CurrentQuery.MyComQueryCmd != MYSQL_COM_QUERY_PREPARE) { // Dont apply before and after hooks if we are preparing the statement.
+		if (qr->run_before) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set run_before: %s\n", qr->rule_id, qr->run_before);
+			ret->run_before=strdup(qr->run_before);
+		}
+		if (qr->run_after) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set run_after: %s\n", qr->rule_id, qr->run_after);
+			ret->run_after=strdup(qr->run_after);
+		}
+	}
     if (qr->cache_ttl >= 0) {
 			// Note: negative TTL means this rule doesn't change
       proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));

@@ -63,6 +63,8 @@ class MySQL_STMT_Global_info {
 		int cache_ttl;
 		int timeout;
 		int delay;
+		char *run_before;
+		char *run_after;
 	} properties;
 	bool is_select_NOT_for_update;
 	MYSQL_BIND **params; // seems unused (?)
@@ -259,7 +261,7 @@ class MySQL_STMT_Manager_v14 {
 	void unlock() { pthread_rwlock_unlock(&rwlock_); }
 	void ref_count_client(uint64_t _stmt, int _v, bool lock=true);
 	void ref_count_server(uint64_t _stmt, int _v, bool lock=true);
-	MySQL_STMT_Global_info * add_prepared_statement(unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock=true);
+	MySQL_STMT_Global_info * add_prepared_statement(unsigned int h, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, char *run_before, char *run_after, bool lock=true);
 	void get_metrics(uint64_t *c_unique, uint64_t *c_total, uint64_t *stmt_max_stmt_id, uint64_t *cached, uint64_t *s_unique, uint64_t *s_total);
 	SQLite3_result * get_prepared_statements_global_infos();
 };

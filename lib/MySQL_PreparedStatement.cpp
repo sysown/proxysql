@@ -815,7 +815,7 @@ bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 
 MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
     unsigned int _h, char *u, char *s, char *q, unsigned int ql,
-    MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock) {
+    MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, char *run_before, char *run_after, bool lock) {
 	MySQL_STMT_Global_info *ret = NULL;
 	uint64_t hash = stmt_compute_hash(
 	    _h, u, s, q, ql);  // this identifies the prepared statement
@@ -854,6 +854,8 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 		a->properties.cache_ttl = _cache_ttl;
 		a->properties.timeout = _timeout;
 		a->properties.delay = _delay;
+		a->properties.run_before = run_before;
+		a->properties.run_after = run_after;
 		// insert it in both maps
 		map_stmt_id_to_info.insert(std::make_pair(a->statement_id, a));
 		map_stmt_hash_to_info.insert(std::make_pair(a->hash, a));
