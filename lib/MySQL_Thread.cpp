@@ -1700,7 +1700,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 #ifdef IDLE_THREADS
 	if (!strcasecmp(name,"session_idle_ms")) {
 		int intv=atoi(value);
-		if (intv >= 100 && intv <= 3600*1000) {
+		if (intv >= 1 && intv <= 3600*1000) {
 			variables.session_idle_ms=intv;
 			return true;
 		} else {
