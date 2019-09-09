@@ -262,6 +262,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
+	(char *)"tcp_keepalive_time",
+	(char *)"use_tcp_keepalive",
 	(char *)"throttle_connections_per_sec_to_hostgroup",
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
@@ -397,6 +399,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
 	variables.max_allowed_packet=4*1024*1024;
+	variables.use_tcp_keepalive=false;
+	variables.tcp_keepalive_time=0;
 	variables.throttle_connections_per_sec_to_hostgroup=1000000;
 	variables.max_transaction_time=4*3600*1000;
 	variables.hostgroup_manager_verbose=1;
@@ -757,6 +761,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		if (!strcmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
 	}
 	if (!strncmp(name,"t",1)) {
+		if (!strcmp(name,"tcp_keepalive_time")) return (int)variables.tcp_keepalive_time;
 		if (!strcmp(name,"throttle_connections_per_sec_to_hostgroup")) return (int)variables.throttle_connections_per_sec_to_hostgroup;
 		if (!strcmp(name,"threshold_query_length")) return (int)variables.threshold_query_length;
 		if (!strcmp(name,"threshold_resultset_size")) return (int)variables.threshold_resultset_size;
@@ -825,6 +830,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	if (!strcmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	if (!strcmp(name,"client_multi_statements")) return (int)variables.client_multi_statements;
+	if (!strcmp(name,"use_tcp_keepalive")) return (int)variables.use_tcp_keepalive;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 //VALGRIND_ENABLE_ERROR_REPORTING;
@@ -1093,6 +1099,15 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.max_allowed_packet);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"tcp_keepalive_time")) {
+		sprintf(intbuf,"%d",variables.tcp_keepalive_time);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"use_tcp_keepalive")) {
+		sprintf(intbuf,"%d",variables.use_tcp_keepalive);
+		return strdup(intbuf);
+	}
+
 	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) {
 		sprintf(intbuf,"%d",variables.throttle_connections_per_sec_to_hostgroup);
 		return strdup(intbuf);
@@ -1734,6 +1749,26 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"tcp_keepalive_time")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 7200) {
+			variables.tcp_keepalive_time=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"use_tcp_keepalive")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.use_tcp_keepalive=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.use_tcp_keepalive=false;
+			return true;
+		}
+		return false;
 	}
 	if (!strcasecmp(name,"max_stmts_per_connection")) {
 		int intv=atoi(value);
@@ -2862,7 +2897,16 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	register_session(sess); // register session
 	sess->client_myds = new MySQL_Data_Stream();
 	sess->client_myds->fd=_fd;
-	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
+	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
+
+	if (mysql_thread___use_tcp_keepalive) {
+		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_KEEPALIVE, (char *) &arg_on, sizeof(arg_on));
+		if (mysql_thread___tcp_keepalive_time > 0) {
+			int keepalive_time = mysql_thread___tcp_keepalive_time;
+			setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &keepalive_time, sizeof(keepalive_time));
+		}
+	}
+
 #ifdef __APPLE__
 		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
 #endif
@@ -3856,6 +3900,8 @@ void MySQL_Thread::refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
 	mysql_thread___max_allowed_packet=GloMTH->get_variable_int((char *)"max_allowed_packet");
+	mysql_thread___use_tcp_keepalive=(bool)GloMTH->get_variable_int((char *)"use_tcp_keepalive");
+	mysql_thread___tcp_keepalive_time=GloMTH->get_variable_int((char *)"tcp_keepalive_time");
 	mysql_thread___throttle_connections_per_sec_to_hostgroup=GloMTH->get_variable_int((char *)"throttle_connections_per_sec_to_hostgroup");
 	mysql_thread___max_transaction_time=GloMTH->get_variable_int((char *)"max_transaction_time");
 	mysql_thread___threshold_query_length=GloMTH->get_variable_int((char *)"threshold_query_length");
