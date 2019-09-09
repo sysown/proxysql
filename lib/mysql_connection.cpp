@@ -28,9 +28,9 @@ static char * session_vars[]= {
 	// For issue #555 , multiplexing is disabled if --safe-updates is used
 	//(char *)"SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?",
 	// for issue #1832 , we are splitting the above into 3 variables
-	(char *)"SQL_SAFE_UPDATES",
-	(char *)"SQL_SELECT_LIMIT",
-	(char *)"MAX_JOIN_SIZE",
+//	(char *)"SQL_SAFE_UPDATES",
+//	(char *)"SQL_SELECT_LIMIT",
+//	(char *)"MAX_JOIN_SIZE",
 	(char *)"FOREIGN_KEY_CHECKS",
 	(char *)"UNIQUE_CHECKS",
 	(char *)"AUTO_INCREMENT_INCREMENT",
@@ -208,6 +208,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.init_connect_sent=false;
 	options.character_set_results = NULL;
 	options.isolation_level = NULL;
+	options.transaction_read = NULL;
 	options.session_track_gtids = NULL;
 	options.sql_auto_is_null = NULL;
 	options.sql_select_limit = NULL;
@@ -216,6 +217,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
 	options.isolation_level_sent = false;
+	options.transaction_read_sent = false;
 	options.character_set_results_sent = false;
 	options.session_track_gtids_sent = false;
 	options.sql_auto_is_null_sent = false;
@@ -234,6 +236,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.time_zone=NULL;	// #819
 	options.time_zone_int=0;	// #819
 	options.isolation_level_int=0;
+	options.transaction_read_int=0;
 	options.character_set_results_int=0;
 	options.session_track_gtids_int=0;
 	options.sql_auto_is_null_int=0;
@@ -321,6 +324,10 @@ MySQL_Connection::~MySQL_Connection() {
 	if (options.isolation_level) {
 		free(options.isolation_level);
 		options.isolation_level=NULL;
+	}
+	if (options.transaction_read) {
+		free(options.transaction_read);
+		options.transaction_read=NULL;
 	}
 	if (options.character_set_results) {
 		free(options.character_set_results);
@@ -2065,6 +2072,12 @@ void MySQL_Connection::reset() {
 		free (options.isolation_level);
 		options.isolation_level = NULL;
 		options.isolation_level_sent = false;
+	}
+	options.transaction_read_int = 0;
+	if (options.transaction_read) {
+		free (options.transaction_read);
+		options.transaction_read = NULL;
+		options.transaction_read_sent = false;
 	}
 	options.character_set_results_int = 0;
 	if (options.character_set_results) {

@@ -115,6 +115,7 @@ class MySQL_Session
 	bool handler_again___verify_backend_sql_mode();
 	bool handler_again___verify_backend_time_zone();
 	bool handler_again___verify_backend_isolation_level();
+	bool handler_again___verify_backend_transaction_read();
 	bool handler_again___verify_backend_character_set_results();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_sql_auto_is_null();
@@ -130,6 +131,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_SQL_MODE(int *);
 	bool handler_again___status_SETTING_TIME_ZONE(int *);
 	bool handler_again___status_SETTING_ISOLATION_LEVEL(int *);
+	bool handler_again___status_SETTING_TRANSACTION_READ(int *);
 	bool handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
 	bool handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *);
@@ -138,7 +140,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_COLLATION_CONNECTION(int *);
 	bool handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *);
 	bool handler_again___status_SETTING_MAX_JOIN_SIZE(int *);
-	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *, char *, char *, bool no_quote=false);
+	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, char *var_name, char *var_value, bool no_quote=false, bool set_transaction=false);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
@@ -265,6 +267,7 @@ class MySQL_Session
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
+	void unable_to_parse_set_statement(bool *);
 };
 
 #define KILL_QUERY       1

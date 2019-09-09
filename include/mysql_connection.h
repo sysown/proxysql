@@ -46,6 +46,7 @@ class MySQL_Connection {
 		uint32_t time_zone_int;
 		uint32_t character_set_results_int;
 		uint32_t isolation_level_int;
+		uint32_t transaction_read_int;
 		uint32_t session_track_gtids_int;
 		uint32_t sql_auto_is_null_int;
 		uint32_t sql_select_limit_int;
@@ -61,6 +62,7 @@ class MySQL_Connection {
 		bool init_connect_sent;
 		char * character_set_results;
 		char * isolation_level;
+		char * transaction_read;
 		char * session_track_gtids;
 		char * sql_auto_is_null;
 		char * sql_select_limit;
@@ -69,6 +71,7 @@ class MySQL_Connection {
 		char * net_write_timeout;
 		char * max_join_size;
 		bool isolation_level_sent;
+		bool transaction_read_sent;
 		bool character_set_results_sent;
 		bool session_track_gtids_sent;
 		bool sql_auto_is_null_sent;
