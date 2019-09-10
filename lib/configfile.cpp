@@ -67,7 +67,11 @@ bool ProxySQL_ConfigFile::OpenFile(const char *__filename) {
 };
 
 void ProxySQL_ConfigFile::CloseFile() {
-	delete cfg;
+/* FIXME
+	for now we are commenting out this.
+	It seems that after upgrade to jemalloc 5.2.0 , valgrind crashes here
+*/
+//	delete cfg;
 	cfg=NULL;
 }
 

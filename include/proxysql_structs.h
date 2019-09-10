@@ -152,6 +152,16 @@ enum session_status {
 	SETTING_SQL_LOG_BIN,
 	SETTING_SQL_MODE,
 	SETTING_TIME_ZONE,
+	SETTING_ISOLATION_LEVEL,
+	SETTING_TRANSACTION_READ,
+	SETTING_CHARACTER_SET_RESULTS,
+	SETTING_SESSION_TRACK_GTIDS,
+	SETTING_SQL_AUTO_IS_NULL,
+	SETTING_SQL_SELECT_LIMIT,
+	SETTING_SQL_SAFE_UPDATES,
+	SETTING_COLLATION_CONNECTION,
+	SETTING_NET_WRITE_TIMEOUT,
+	SETTING_MAX_JOIN_SIZE,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
@@ -612,6 +622,16 @@ __thread char *mysql_thread___init_connect;
 __thread char *mysql_thread___ldap_user_variable;
 __thread char *mysql_thread___default_sql_mode;
 __thread char *mysql_thread___default_time_zone;
+__thread char *mysql_thread___default_isolation_level;
+__thread char *mysql_thread___default_transaction_read;
+__thread char *mysql_thread___default_character_set_results;
+__thread char *mysql_thread___default_session_track_gtids;
+__thread char *mysql_thread___default_sql_auto_is_null;
+__thread char *mysql_thread___default_sql_select_limit;
+__thread char *mysql_thread___default_sql_safe_updates;
+__thread char *mysql_thread___default_collation_connection;
+__thread char *mysql_thread___default_net_write_timeout;
+__thread char *mysql_thread___default_max_join_size;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___use_tcp_keepalive;
 __thread int mysql_thread___tcp_keepalive_time;
@@ -748,6 +768,16 @@ extern __thread char *mysql_thread___init_connect;
 extern __thread char *mysql_thread___ldap_user_variable;
 extern __thread char *mysql_thread___default_sql_mode;
 extern __thread char *mysql_thread___default_time_zone;
+extern __thread char *mysql_thread___default_isolation_level;
+extern __thread char *mysql_thread___default_transaction_read;
+extern __thread char *mysql_thread___default_character_set_results;
+extern __thread char *mysql_thread___default_session_track_gtids;
+extern __thread char *mysql_thread___default_sql_auto_is_null;
+extern __thread char *mysql_thread___default_sql_select_limit;
+extern __thread char *mysql_thread___default_sql_safe_updates;
+extern __thread char *mysql_thread___default_collation_connection;
+extern __thread char *mysql_thread___default_net_write_timeout;
+extern __thread char *mysql_thread___default_max_join_size;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___use_tcp_keepalive;
 extern __thread int mysql_thread___tcp_keepalive_time;

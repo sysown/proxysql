@@ -333,6 +333,16 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"add_ldap_user_comment",
 	(char *)"default_sql_mode",
 	(char *)"default_time_zone",
+	(char *)"default_isolation_level",
+	(char *)"default_transaction_read",
+	(char *)"default_character_set_results",
+	(char *)"default_session_track_gtids",
+	(char *)"default_sql_auto_is_null",
+	(char *)"default_sql_select_limit",
+	(char *)"default_sql_safe_updates",
+	(char *)"default_collation_connection",
+	(char *)"default_net_write_timeout",
+	(char *)"default_max_join_size",
 	(char *)"connpoll_reset_queue_length",
 	(char *)"min_num_servers_lantency_awareness",
 	(char *)"stats_time_backend_query",
@@ -432,6 +442,16 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.add_ldap_user_comment=NULL;
 	variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
 	variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
+	variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+	variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
+	variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
+	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
+	variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
+	variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT);
+	variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES);
+	variables.default_collation_connection=strdup((char *)MYSQL_DEFAULT_COLLATION_CONNECTION);
+	variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT);
+	variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE);
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
@@ -633,6 +653,66 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
 		}
 		return strdup(variables.default_time_zone);
+	}
+	if (!strcmp(name,"default_isolation_level")) {
+		if (variables.default_isolation_level==NULL) {
+			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+		}
+		return strdup(variables.default_isolation_level);
+	}
+	if (!strcmp(name,"default_transaction_read")) {
+		if (variables.default_transaction_read==NULL) {
+			variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
+		}
+		return strdup(variables.default_transaction_read);
+	}
+	if (!strcmp(name,"default_character_set_results")) {
+		if (variables.default_character_set_results==NULL) {
+			variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
+		}
+		return strdup(variables.default_character_set_results);
+	}
+	if (!strcmp(name,"default_session_track_gtids")) {
+		if (variables.default_session_track_gtids==NULL) {
+			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
+		}
+		return strdup(variables.default_session_track_gtids);
+	}
+	if (!strcmp(name,"default_sql_auto_is_null")) {
+		if (variables.default_sql_auto_is_null==NULL) {
+			variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
+		}
+		return strdup(variables.default_sql_auto_is_null);
+	}
+	if (!strcmp(name,"default_sql_select_limit")) {
+		if (variables.default_sql_select_limit==NULL) {
+			variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT);
+		}
+		return strdup(variables.default_sql_select_limit);
+	}
+	if (!strcmp(name,"default_sql_safe_updates")) {
+		if (variables.default_sql_safe_updates==NULL) {
+			variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES);
+		}
+		return strdup(variables.default_sql_safe_updates);
+	}
+	if (!strcmp(name,"default_collation_connection")) {
+		if (variables.default_collation_connection==NULL) {
+			variables.default_collation_connection=strdup((char *)MYSQL_DEFAULT_COLLATION_CONNECTION);
+		}
+		return strdup(variables.default_collation_connection);
+	}
+	if (!strcmp(name,"default_net_write_timeout")) {
+		if (variables.default_net_write_timeout==NULL) {
+			variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT);
+		}
+		return strdup(variables.default_net_write_timeout);
+	}
+	if (!strcmp(name,"default_max_join_size")) {
+		if (variables.default_max_join_size==NULL) {
+			variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE);
+		}
+		return strdup(variables.default_max_join_size);
 	}
 	if (!strcmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
@@ -872,6 +952,66 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
 		}
 		return strdup(variables.default_time_zone);
+	}
+	if (!strcasecmp(name,"default_isolation_level")) {
+		if (variables.default_isolation_level==NULL) {
+			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+		}
+		return strdup(variables.default_isolation_level);
+	}
+	if (!strcasecmp(name,"default_transaction_read")) {
+		if (variables.default_transaction_read==NULL) {
+			variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
+		}
+		return strdup(variables.default_transaction_read);
+	}
+	if (!strcasecmp(name,"default_character_set_results")) {
+		if (variables.default_character_set_results==NULL) {
+			variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
+		}
+		return strdup(variables.default_character_set_results);
+	}
+	if (!strcasecmp(name,"default_session_track_gtids")) {
+		if (variables.default_session_track_gtids==NULL) {
+			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
+		}
+		return strdup(variables.default_session_track_gtids);
+	}
+	if (!strcasecmp(name,"default_sql_auto_is_null")) {
+		if (variables.default_sql_auto_is_null==NULL) {
+			variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
+		}
+		return strdup(variables.default_sql_auto_is_null);
+	}
+	if (!strcasecmp(name,"default_sql_select_limit")) {
+		if (variables.default_sql_select_limit==NULL) {
+			variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT);
+		}
+		return strdup(variables.default_sql_select_limit);
+	}
+	if (!strcasecmp(name,"default_sql_safe_updates")) {
+		if (variables.default_sql_safe_updates==NULL) {
+			variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES);
+		}
+		return strdup(variables.default_sql_safe_updates);
+	}
+	if (!strcasecmp(name,"default_collation_connection")) {
+		if (variables.default_collation_connection==NULL) {
+			variables.default_collation_connection=strdup((char *)MYSQL_DEFAULT_COLLATION_CONNECTION);
+		}
+		return strdup(variables.default_collation_connection);
+	}
+	if (!strcasecmp(name,"default_net_write_timeout")) {
+		if (variables.default_net_write_timeout==NULL) {
+			variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT);
+		}
+		return strdup(variables.default_net_write_timeout);
+	}
+	if (!strcasecmp(name,"default_max_join_size")) {
+		if (variables.default_max_join_size==NULL) {
+			variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE);
+		}
+		return strdup(variables.default_max_join_size);
 	}
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
@@ -2139,6 +2279,136 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
+	if (!strcasecmp(name,"default_isolation_level")) {
+		if (variables.default_isolation_level) free(variables.default_isolation_level);
+		variables.default_isolation_level=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_isolation_level=strdup(value);
+		}
+		if (variables.default_isolation_level==NULL) {
+			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_transaction_read")) {
+		if (variables.default_transaction_read) free(variables.default_transaction_read);
+		variables.default_transaction_read=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_transaction_read=strdup(value);
+		}
+		if (variables.default_transaction_read==NULL) {
+			variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_character_set_results")) {
+		if (variables.default_character_set_results) free(variables.default_character_set_results);
+		variables.default_character_set_results=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_character_set_results=strdup(value);
+		}
+		if (variables.default_character_set_results==NULL) {
+			variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_session_track_gtids")) {
+		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
+		variables.default_session_track_gtids=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_session_track_gtids=strdup(value);
+		}
+		if (variables.default_session_track_gtids==NULL) {
+			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_sql_auto_is_null")) {
+		if (variables.default_sql_auto_is_null) free(variables.default_sql_auto_is_null);
+		variables.default_sql_auto_is_null=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_sql_auto_is_null=strdup(value);
+		}
+		if (variables.default_sql_auto_is_null==NULL) {
+			variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_sql_select_limit")) {
+		if (variables.default_sql_select_limit) free(variables.default_sql_select_limit);
+		variables.default_sql_select_limit=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_sql_select_limit=strdup(value);
+		}
+		if (variables.default_sql_select_limit==NULL) {
+			variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_sql_safe_updates")) {
+		if (variables.default_sql_safe_updates) free(variables.default_sql_safe_updates);
+		variables.default_sql_safe_updates=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_sql_safe_updates=strdup(value);
+		}
+		if (variables.default_sql_safe_updates==NULL) {
+			variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_collation_connection")) {
+		if (variables.default_collation_connection) free(variables.default_collation_connection);
+		variables.default_collation_connection=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_collation_connection=strdup(value);
+		}
+		if (variables.default_collation_connection==NULL) {
+			variables.default_collation_connection=strdup((char *)MYSQL_DEFAULT_COLLATION_CONNECTION); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_net_write_timeout")) {
+		if (variables.default_net_write_timeout) free(variables.default_net_write_timeout);
+		variables.default_net_write_timeout=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_net_write_timeout=strdup(value);
+		}
+		if (variables.default_net_write_timeout==NULL) {
+			variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT); // default
+		}
+		return true;
+	}
+
+	if (!strcasecmp(name,"default_max_join_size")) {
+		if (variables.default_max_join_size) free(variables.default_max_join_size);
+		variables.default_max_join_size=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_max_join_size=strdup(value);
+		}
+		if (variables.default_max_join_size==NULL) {
+			variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE); // default
+		}
+		return true;
+	}
+
 	if (!strcasecmp(name,"keep_multiplexing_variables")) {
 		if (vallen) {
 			free(variables.keep_multiplexing_variables);
@@ -2749,6 +3019,16 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
 	if (variables.default_sql_mode) free(variables.default_sql_mode);
 	if (variables.default_time_zone) free(variables.default_time_zone);
+	if (variables.default_isolation_level) free(variables.default_isolation_level);
+	if (variables.default_transaction_read) free(variables.default_transaction_read);
+	if (variables.default_character_set_results) free(variables.default_character_set_results);
+	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
+	if (variables.default_sql_auto_is_null) free(variables.default_sql_auto_is_null);
+	if (variables.default_sql_select_limit) free(variables.default_sql_select_limit);
+	if (variables.default_sql_safe_updates) free(variables.default_sql_safe_updates);
+	if (variables.default_collation_connection) free(variables.default_collation_connection);
+	if (variables.default_net_write_timeout) free(variables.default_net_write_timeout);
+	if (variables.default_max_join_size) free(variables.default_max_join_size);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
 	if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
@@ -2869,6 +3149,16 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
 	if (mysql_thread___default_sql_mode) { free(mysql_thread___default_sql_mode); mysql_thread___default_sql_mode=NULL; }
 	if (mysql_thread___default_time_zone) { free(mysql_thread___default_time_zone); mysql_thread___default_time_zone=NULL; }
+	if (mysql_thread___default_isolation_level) { free(mysql_thread___default_isolation_level); mysql_thread___default_isolation_level=NULL; }
+	if (mysql_thread___default_transaction_read) { free(mysql_thread___default_transaction_read); mysql_thread___default_transaction_read=NULL; }
+	if (mysql_thread___default_character_set_results) { free(mysql_thread___default_character_set_results); mysql_thread___default_character_set_results=NULL; }
+	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
+	if (mysql_thread___default_sql_auto_is_null) { free(mysql_thread___default_sql_auto_is_null); mysql_thread___default_sql_auto_is_null=NULL; }
+	if (mysql_thread___default_sql_select_limit) { free(mysql_thread___default_sql_select_limit); mysql_thread___default_sql_select_limit=NULL; }
+	if (mysql_thread___default_sql_safe_updates) { free(mysql_thread___default_sql_safe_updates); mysql_thread___default_sql_safe_updates=NULL; }
+	if (mysql_thread___default_collation_connection) { free(mysql_thread___default_collation_connection); mysql_thread___default_collation_connection=NULL; }
+	if (mysql_thread___default_net_write_timeout) { free(mysql_thread___default_net_write_timeout); mysql_thread___default_net_write_timeout=NULL; }
+	if (mysql_thread___default_max_join_size) { free(mysql_thread___default_max_join_size); mysql_thread___default_max_join_size=NULL; }
 	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
 	if (mysql_thread___auditlog_filename) { free(mysql_thread___auditlog_filename); mysql_thread___auditlog_filename=NULL; }
 	if (mysql_thread___ssl_p2s_ca) { free(mysql_thread___ssl_p2s_ca); mysql_thread___ssl_p2s_ca=NULL; }
@@ -2931,6 +3221,77 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		free(sess->client_myds->myconn->options.time_zone);
 	}
 	sess->client_myds->myconn->options.time_zone=strdup(mysql_thread___default_time_zone);
+
+	uint32_t isolation_level_int=SpookyHash::Hash32(mysql_thread___default_isolation_level,strlen(mysql_thread___default_isolation_level),10);
+	sess->client_myds->myconn->options.isolation_level_int = isolation_level_int;
+	if (sess->client_myds->myconn->options.isolation_level) {
+		free(sess->client_myds->myconn->options.isolation_level);
+	}
+	sess->client_myds->myconn->options.isolation_level=strdup(mysql_thread___default_isolation_level);
+
+	uint32_t transaction_read_int=SpookyHash::Hash32(mysql_thread___default_transaction_read,strlen(mysql_thread___default_transaction_read),10);
+	sess->client_myds->myconn->options.transaction_read_int = transaction_read_int;
+	if (sess->client_myds->myconn->options.transaction_read) {
+		free(sess->client_myds->myconn->options.transaction_read);
+	}
+	sess->client_myds->myconn->options.transaction_read=strdup(mysql_thread___default_transaction_read);
+
+	uint32_t character_set_results_int=SpookyHash::Hash32(mysql_thread___default_character_set_results,strlen(mysql_thread___default_character_set_results),10);
+	sess->client_myds->myconn->options.character_set_results_int = character_set_results_int;
+	if (sess->client_myds->myconn->options.character_set_results) {
+		free(sess->client_myds->myconn->options.character_set_results);
+	}
+	sess->client_myds->myconn->options.character_set_results=strdup(mysql_thread___default_character_set_results);
+
+	uint32_t session_track_gtids_int=SpookyHash::Hash32(mysql_thread___default_session_track_gtids,strlen(mysql_thread___default_session_track_gtids),10);
+	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
+	if (sess->client_myds->myconn->options.session_track_gtids) {
+		free(sess->client_myds->myconn->options.session_track_gtids);
+	}
+	sess->client_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
+
+	uint32_t sql_auto_is_null_int=SpookyHash::Hash32(mysql_thread___default_sql_auto_is_null,strlen(mysql_thread___default_sql_auto_is_null),10);
+	sess->client_myds->myconn->options.sql_auto_is_null_int = sql_auto_is_null_int;
+	if (sess->client_myds->myconn->options.sql_auto_is_null) {
+		free(sess->client_myds->myconn->options.sql_auto_is_null);
+	}
+	sess->client_myds->myconn->options.sql_auto_is_null=strdup(mysql_thread___default_sql_auto_is_null);
+
+	uint32_t sql_select_limit_int=SpookyHash::Hash32(mysql_thread___default_sql_select_limit,strlen(mysql_thread___default_sql_select_limit),10);
+	sess->client_myds->myconn->options.sql_select_limit_int = sql_select_limit_int;
+	if (sess->client_myds->myconn->options.sql_select_limit) {
+		free(sess->client_myds->myconn->options.sql_select_limit);
+	}
+	sess->client_myds->myconn->options.sql_select_limit=strdup(mysql_thread___default_sql_select_limit);
+
+	uint32_t sql_safe_updates_int=SpookyHash::Hash32(mysql_thread___default_sql_safe_updates,strlen(mysql_thread___default_sql_safe_updates),10);
+	sess->client_myds->myconn->options.sql_safe_updates_int = sql_safe_updates_int;
+	if (sess->client_myds->myconn->options.sql_safe_updates) {
+		free(sess->client_myds->myconn->options.sql_safe_updates);
+	}
+	sess->client_myds->myconn->options.sql_safe_updates=strdup(mysql_thread___default_sql_safe_updates);
+
+	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
+	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;
+	if (sess->client_myds->myconn->options.collation_connection) {
+		free(sess->client_myds->myconn->options.collation_connection);
+	}
+	sess->client_myds->myconn->options.collation_connection=strdup(mysql_thread___default_collation_connection);
+
+	uint32_t net_write_timeout_int=SpookyHash::Hash32(mysql_thread___default_net_write_timeout,strlen(mysql_thread___default_net_write_timeout),10);
+	sess->client_myds->myconn->options.net_write_timeout_int = net_write_timeout_int;
+	if (sess->client_myds->myconn->options.net_write_timeout) {
+		free(sess->client_myds->myconn->options.net_write_timeout);
+	}
+	sess->client_myds->myconn->options.net_write_timeout=strdup(mysql_thread___default_net_write_timeout);
+
+	uint32_t max_join_size_int=SpookyHash::Hash32(mysql_thread___default_max_join_size,strlen(mysql_thread___default_max_join_size),10);
+	sess->client_myds->myconn->options.max_join_size_int = max_join_size_int;
+	if (sess->client_myds->myconn->options.max_join_size) {
+		free(sess->client_myds->myconn->options.max_join_size);
+	}
+	sess->client_myds->myconn->options.max_join_size=strdup(mysql_thread___default_max_join_size);
+
 	return sess;
 }
 
@@ -2969,8 +3330,8 @@ bool MySQL_Thread::init() {
 
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_MODE( *)(:|)=( *)");
-	match_regexes[2]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)TIME_ZONE( *)(:|)=( *)");
+	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)(SQL_MODE|TIME_ZONE|CHARACTER_SET_RESULTS|SESSION_TRACK_GTIDS|SQL_AUTO_IS_NULL|SQL_SELECT_LIMIT|SQL_SAFE_UPDATES|COLLATION_CONNECTION|NET_WRITE_TIMEOUT|MAX_JOIN_SIZE( *)(:|)=( *))");
+	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 
 
 	return true;
@@ -3996,6 +4357,26 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_sql_mode=GloMTH->get_variable_string((char *)"default_sql_mode");
 	if (mysql_thread___default_time_zone) free(mysql_thread___default_time_zone);
 	mysql_thread___default_time_zone=GloMTH->get_variable_string((char *)"default_time_zone");
+	if (mysql_thread___default_isolation_level) free(mysql_thread___default_isolation_level);
+	mysql_thread___default_isolation_level=GloMTH->get_variable_string((char *)"default_isolation_level");
+	if (mysql_thread___default_transaction_read) free(mysql_thread___default_transaction_read);
+	mysql_thread___default_transaction_read=GloMTH->get_variable_string((char *)"default_transaction_read");
+	if (mysql_thread___default_character_set_results) free(mysql_thread___default_character_set_results);
+	mysql_thread___default_character_set_results=GloMTH->get_variable_string((char *)"default_character_set_results");
+	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
+	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
+	if (mysql_thread___default_sql_auto_is_null) free(mysql_thread___default_sql_auto_is_null);
+	mysql_thread___default_sql_auto_is_null=GloMTH->get_variable_string((char *)"default_sql_auto_is_null");
+	if (mysql_thread___default_sql_select_limit) free(mysql_thread___default_sql_select_limit);
+	mysql_thread___default_sql_select_limit=GloMTH->get_variable_string((char *)"default_sql_select_limit");
+	if (mysql_thread___default_sql_safe_updates) free(mysql_thread___default_sql_safe_updates);
+	mysql_thread___default_sql_safe_updates=GloMTH->get_variable_string((char *)"default_sql_safe_updates");
+	if (mysql_thread___default_collation_connection) free(mysql_thread___default_collation_connection);
+	mysql_thread___default_collation_connection=GloMTH->get_variable_string((char *)"default_collation_connection");
+	if (mysql_thread___default_net_write_timeout) free(mysql_thread___default_net_write_timeout);
+	mysql_thread___default_net_write_timeout=GloMTH->get_variable_string((char *)"default_net_write_timeout");
+	if (mysql_thread___default_max_join_size) free(mysql_thread___default_max_join_size);
+	mysql_thread___default_max_join_size=GloMTH->get_variable_string((char *)"default_max_join_size");
 	if (mysql_thread___server_version) free(mysql_thread___server_version);
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);

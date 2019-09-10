@@ -28,9 +28,9 @@ static char * session_vars[]= {
 	// For issue #555 , multiplexing is disabled if --safe-updates is used
 	//(char *)"SQL_SAFE_UPDATES=?,SQL_SELECT_LIMIT=?,MAX_JOIN_SIZE=?",
 	// for issue #1832 , we are splitting the above into 3 variables
-	(char *)"SQL_SAFE_UPDATES",
-	(char *)"SQL_SELECT_LIMIT",
-	(char *)"MAX_JOIN_SIZE",
+//	(char *)"SQL_SAFE_UPDATES",
+//	(char *)"SQL_SELECT_LIMIT",
+//	(char *)"MAX_JOIN_SIZE",
 	(char *)"FOREIGN_KEY_CHECKS",
 	(char *)"UNIQUE_CHECKS",
 	(char *)"AUTO_INCREMENT_INCREMENT",
@@ -206,6 +206,26 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.character_set_results = NULL;
+	options.isolation_level = NULL;
+	options.transaction_read = NULL;
+	options.session_track_gtids = NULL;
+	options.sql_auto_is_null = NULL;
+	options.sql_select_limit = NULL;
+	options.sql_safe_updates = NULL;
+	options.collation_connection = NULL;
+	options.net_write_timeout = NULL;
+	options.max_join_size = NULL;
+	options.isolation_level_sent = false;
+	options.transaction_read_sent = false;
+	options.character_set_results_sent = false;
+	options.session_track_gtids_sent = false;
+	options.sql_auto_is_null_sent = false;
+	options.sql_select_limit_sent = false;
+	options.sql_safe_updates_sent = false;
+	options.collation_connection_sent = false;
+	options.net_write_timeout_sent = false;
+	options.max_join_size_sent = false;
 	options.sql_mode_sent=false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
@@ -215,6 +235,16 @@ MySQL_Connection::MySQL_Connection() {
 	options.sql_mode_int=0;	// #509
 	options.time_zone=NULL;	// #819
 	options.time_zone_int=0;	// #819
+	options.isolation_level_int=0;
+	options.transaction_read_int=0;
+	options.character_set_results_int=0;
+	options.session_track_gtids_int=0;
+	options.sql_auto_is_null_int=0;
+	options.sql_select_limit_int=0;
+	options.sql_safe_updates_int=0;
+	options.collation_connection_int=0;
+	options.net_write_timeout_int=0;
+	options.max_join_size_int=0;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -290,6 +320,46 @@ MySQL_Connection::~MySQL_Connection() {
 	if (options.time_zone) {
 		free(options.time_zone);
 		options.time_zone=NULL;
+	}
+	if (options.isolation_level) {
+		free(options.isolation_level);
+		options.isolation_level=NULL;
+	}
+	if (options.transaction_read) {
+		free(options.transaction_read);
+		options.transaction_read=NULL;
+	}
+	if (options.character_set_results) {
+		free(options.character_set_results);
+		options.character_set_results=NULL;
+	}
+	if (options.session_track_gtids) {
+		free(options.session_track_gtids);
+		options.session_track_gtids=NULL;
+	}
+	if (options.sql_auto_is_null) {
+		free(options.sql_auto_is_null);
+		options.sql_auto_is_null=NULL;
+	}
+	if (options.sql_select_limit) {
+		free(options.sql_select_limit);
+		options.sql_select_limit=NULL;
+	}
+	if (options.sql_safe_updates) {
+		free(options.sql_safe_updates);
+		options.sql_safe_updates=NULL;
+	}
+	if (options.collation_connection) {
+		free(options.collation_connection);
+		options.collation_connection=NULL;
+	}
+	if (options.net_write_timeout) {
+		free(options.net_write_timeout);
+		options.net_write_timeout=NULL;
+	}
+	if (options.max_join_size) {
+		free(options.max_join_size);
+		options.max_join_size=NULL;
 	}
 };
 
@@ -1997,6 +2067,66 @@ void MySQL_Connection::reset() {
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
+	options.isolation_level_int = 0;
+	if (options.isolation_level) {
+		free (options.isolation_level);
+		options.isolation_level = NULL;
+		options.isolation_level_sent = false;
+	}
+	options.transaction_read_int = 0;
+	if (options.transaction_read) {
+		free (options.transaction_read);
+		options.transaction_read = NULL;
+		options.transaction_read_sent = false;
+	}
+	options.character_set_results_int = 0;
+	if (options.character_set_results) {
+		free (options.character_set_results);
+		options.character_set_results = NULL;
+		options.character_set_results_sent = false;
+	}
+	options.session_track_gtids_int = 0;
+	if (options.session_track_gtids) {
+		free (options.session_track_gtids);
+		options.session_track_gtids = NULL;
+		options.session_track_gtids_sent = false;
+	}
+	options.sql_auto_is_null_int = 0;
+	if (options.sql_auto_is_null) {
+		free (options.sql_auto_is_null);
+		options.sql_auto_is_null = NULL;
+		options.sql_auto_is_null_sent = false;
+	}
+	options.sql_select_limit_int = 0;
+	if (options.sql_select_limit) {
+		free (options.sql_select_limit);
+		options.sql_select_limit = NULL;
+		options.sql_select_limit_sent = false;
+	}
+	options.sql_safe_updates_int = 0;
+	if (options.sql_safe_updates) {
+		free (options.sql_safe_updates);
+		options.sql_safe_updates = NULL;
+		options.sql_safe_updates_sent = false;
+	}
+	options.collation_connection_int = 0;
+	if (options.collation_connection) {
+		free (options.collation_connection);
+		options.collation_connection = NULL;
+		options.collation_connection_sent = false;
+	}
+	options.net_write_timeout_int = 0;
+	if (options.net_write_timeout) {
+		free (options.net_write_timeout);
+		options.net_write_timeout = NULL;
+		options.net_write_timeout_sent = false;
+	}
+	options.max_join_size_int = 0;
+	if (options.max_join_size) {
+		free (options.max_join_size);
+		options.max_join_size = NULL;
+		options.max_join_size_sent = false;
+	}
 	if (options.init_connect) {
 		free(options.init_connect);
 		options.init_connect = NULL;

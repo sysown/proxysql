@@ -9,7 +9,8 @@ class SetParser {
 	std::string query;
 	public:
 	SetParser(std::string q);
-	std::map<std::string, std::vector<std::string>> parse();
+	std::map<std::string, std::vector<std::string>> parse1();
+	std::map<std::string, std::vector<std::string>> parse2();
 };
 
 

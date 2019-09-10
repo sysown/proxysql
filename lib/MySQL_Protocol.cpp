@@ -569,6 +569,7 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 			case STATE_CLIENT_HANDSHAKE:
 			case STATE_QUERY_SENT_DS:
 			case STATE_QUERY_SENT_NET:
+			case STATE_ERR:
 				(*myds)->DSS=STATE_ERR;
 				break;
 			case STATE_OK:
@@ -1475,7 +1476,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 #endif
 	bool ret=false;
 	uint8_t charset;
-	uint32_t  capabilities;
+	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
 	unsigned char *user=NULL;
