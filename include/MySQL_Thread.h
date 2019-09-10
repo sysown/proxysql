@@ -411,6 +411,8 @@ class MySQL_Threads_Handler
 		bool autocommit_false_is_transaction;
 		bool verbose_query_error;
 		int max_allowed_packet;
+		bool use_tcp_keepalive;
+		int tcp_keepalive_time;
 		int throttle_connections_per_sec_to_hostgroup;
 		int max_transaction_time;
 		int threshold_query_length;
