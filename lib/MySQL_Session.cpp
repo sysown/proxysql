@@ -938,7 +938,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["max_join_size"] = ( client_myds->myconn->options.max_join_size ? client_myds->myconn->options.max_join_size : "") ;
 	j["conn"]["charset"] = client_myds->myconn->options.charset;
 	j["conn"]["sql_log_bin"] = client_myds->myconn->options.sql_log_bin;
-	j["conn"]["autocommit"] = client_myds->myconn->options.autocommit;
+	j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
 	j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
 	j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
 	j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
@@ -991,10 +991,10 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["net_write_timeout"] = ( _myconn->options.net_write_timeout ? _myconn->options.net_write_timeout : "") ;
                 j["backends"][i]["conn"]["max_join_size"] = ( _myconn->options.max_join_size ? _myconn->options.max_join_size : "") ;
 				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
-				j["backends"][i]["conn"]["sql_log_bin"] = _myconn->options.sql_log_bin;
+				j["backends"][i]["conn"]["sql_log_bin"] = ( _myconn->options.sql_log_bin ? "ON" : "OFF" );
 				j["backends"][i]["conn"]["init_connect"] = ( _myconn->options.init_connect ? _myconn->options.init_connect : "");
 				j["backends"][i]["conn"]["init_connect_sent"] = _myds->myconn->options.init_connect_sent;
-				j["backends"][i]["conn"]["autocommit"] = _myds->myconn->options.autocommit;
+				j["backends"][i]["conn"]["autocommit"] = ( _myds->myconn->options.autocommit ? "ON" : "OFF" );
 				j["backends"][i]["conn"]["last_set_autocommit"] = _myds->myconn->options.last_set_autocommit;
 				j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
 				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status_get_lock();
