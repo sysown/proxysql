@@ -107,11 +107,11 @@ std::map<std::string,std::vector<string>> SetParser::parse2() {
 		if (value1 != "") { // session is specified
 			if (value2 != "") { // isolation level
 				key = value2;
-				std::transform(value3.begin(), value3.end(), value3.begin(), ::tolower);
+				std::transform(value3.begin(), value3.end(), value3.begin(), ::toupper);
 				op.push_back(value3);
 			} else {
 				key = value4;
-				std::transform(value5.begin(), value5.end(), value5.begin(), ::tolower);
+				std::transform(value5.begin(), value5.end(), value5.begin(), ::toupper);
 				op.push_back(value5);
 			}
 		}

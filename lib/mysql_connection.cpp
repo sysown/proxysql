@@ -1900,21 +1900,43 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		}
 	}
 	if (get_status_user_variable()==false) { // we search for variables only if not already set
-		if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 //			if (
 //				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
 //				&&
 //				strncasecmp(query_digest_text,"SELECT @@version", strlen("SELECT @@version"))
-			if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
-				set_status_user_variable(true);
-			}
-		}
 		if (strncasecmp(query_digest_text,"SET ",4)==0) {
 			// For issue #555 , multiplexing is disabled if --safe-updates is used (see session_vars definition)
-			for (unsigned int i = 0; i < sizeof(session_vars)/sizeof(char *); i++) {
-				if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
-					set_status_user_variable(true);
+			int sqloh = mysql_thread___set_query_lock_on_hostgroup;
+			switch (sqloh) {
+				case 0: // old algorithm
+					if (mul!=2) {
+						if (index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
+							if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
+								set_status_user_variable(true);
+							}
+						} else {
+							for (unsigned int i = 0; i < sizeof(session_vars)/sizeof(char *); i++) {
+								if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
+									set_status_user_variable(true);
+									break;
+								}
+							}
+						}
+					}
 					break;
+				case 1: // new algorithm
+					if (myds->sess->locked_on_hostgroup > -1) {
+						// locked_on_hostgroup was set, so some variable wasn't parsed
+						set_status_user_variable(true);
+					}
+					break;
+				default:
+					break;
+			}
+		} else {
+			if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
+				if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
+					set_status_user_variable(true);
 				}
 			}
 		}
