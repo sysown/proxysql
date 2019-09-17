@@ -43,7 +43,10 @@ class SQLite3_Server {
 #ifdef TEST_GALERA
 	std::vector<table_def_t *> *tables_defs_galera;
 #endif // TEST_GALERA
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#ifdef TEST_GROUPREP
+	std::vector<table_def_t *> *tables_defs_grouprep;
+#endif // TEST_GROUPREP
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
@@ -55,6 +58,7 @@ class SQLite3_Server {
 	unsigned int max_num_aurora_servers;
 	pthread_mutex_t aurora_mutex;
 	void populate_aws_aurora_table(MySQL_Session *sess);
+	void init_aurora_ifaces_string(std::string& s);
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
 	//unsigned int cur_aurora_writer[3];
@@ -62,7 +66,13 @@ class SQLite3_Server {
 	unsigned int max_num_galera_servers;
 	pthread_mutex_t galera_mutex;
 	void populate_galera_table(MySQL_Session *sess);
+	void init_galera_ifaces_string(std::string& s);
 #endif // TEST_GALERA
+#ifdef TEST_GROUPREP
+	pthread_mutex_t grouprep_mutex;
+	void populate_grouprep_table(MySQL_Session *sess);
+	void init_grouprep_ifaces_string(std::string& s);
+#endif // TEST_GROUPREP
 	SQLite3_Server();
 	~SQLite3_Server();
 	char **get_variables_list();

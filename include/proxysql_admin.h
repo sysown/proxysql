@@ -319,5 +319,9 @@ class ProxySQL_Admin {
 	void enable_galera_testing();
 #endif // TEST_GALERA
 
+#ifdef TEST_GROUPREP
+	void enable_grouprep_testing();
+#endif // TEST_GROUPREP
+
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
