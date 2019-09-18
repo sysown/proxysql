@@ -84,6 +84,8 @@ static char *s_strdup(char *s) {
 }
 
 static int __SQLite3_Server_refresh_interval=1000;
+static bool testTimeoutSequence[] = {true, false, true, false, true, false, true, false};
+static int testIndex = 7;
 
 extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;
@@ -246,7 +248,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
 	query[query_length-1]=0;
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 	if (sess->client_myds->proxy_addr.addr == NULL) {
 		struct sockaddr addr;
 		socklen_t addr_len=sizeof(struct sockaddr);
@@ -276,7 +278,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 			sess->client_myds->proxy_addr.addr = strdup("unknown");
 		}
 	}
-#endif // TEST_AURORA || TEST_GALERA
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 
 	char *query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
@@ -315,13 +317,13 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
 			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
 			sprintf(query,a,sess->client_myds->proxy_addr.addr);
 #else
 			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
-#endif // TEST_AURORA || TEST_GALERA
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
@@ -497,7 +499,7 @@ __end_show_commands:
 
 __run_query:
 	if (run_query) {
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
 #ifdef TEST_AURORA
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
@@ -511,6 +513,12 @@ __run_query:
 				GloSQLite3Server->populate_galera_table(sess);
 			}
 #endif // TEST_GALERA
+#ifdef TEST_GROUPREP
+			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
+				pthread_mutex_lock(&GloSQLite3Server->grouprep_mutex);
+				GloSQLite3Server->populate_grouprep_table(sess);
+			}
+#endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
 				free(query);
 				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
@@ -518,10 +526,10 @@ __run_query:
 				sprintf(query,a,rand()%30+10);
 			}
 		}
-#endif // TEST_AURORA || TEST_GALERA
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
 #ifdef TEST_AURORA
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
@@ -544,6 +552,25 @@ __run_query:
 				}
 			}
 #endif // TEST_GALERA
+#ifdef TEST_GROUPREP
+			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
+				pthread_mutex_unlock(&GloSQLite3Server->grouprep_mutex);
+				if (resultset->rows_count == 0) {
+					PROXY_TRACE();
+				}
+
+				if (strncmp("127.2.1.2", sess->client_myds->proxy_addr.addr,9) == 0) {
+					if (testTimeoutSequence[testIndex--])
+						sleep(2);
+					if (testIndex < 0)
+						testIndex = 7;
+				}
+				else {
+					if (rand() % 20 == 0)
+						sleep(2);
+				}
+			}
+#endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
 				if (rand() % 10 == 0) {
 					// randomly add some latency on 10% of the traffic
@@ -551,7 +578,7 @@ __run_query:
 				}
 			}
 		}
-#endif // TEST_AURORA || TEST_GALERA
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 	}
@@ -768,7 +795,65 @@ SQLite3_Server::~SQLite3_Server() {
 	drop_tables_defs(tables_defs_aurora);
 	delete tables_defs_aurora;
 #endif // TEST_AURORA
+
+#ifdef TEST_GROUPREP
+	drop_tables_defs(tables_defs_grouprep);
+	delete tables_defs_grouprep;
+#endif // TEST_GROUPREP
 };
+
+#ifdef TEST_AURORA
+void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
+	if(!s.empty())
+		s += ";";
+	pthread_mutex_init(&aurora_mutex,NULL);
+	unsigned int nas = time(NULL);
+	nas = nas % 3; // range
+	nas += 4; // min
+	max_num_aurora_servers = 10; // hypothetical maximum number of nodes
+	for (unsigned int j=1; j<4; j++) {
+		cur_aurora_writer[j-1] = 0;
+		num_aurora_servers[j-1] = nas;
+		for (unsigned int i=11; i<max_num_aurora_servers+11 ; i++) {
+			s += "127.0." + std::to_string(j) + "." + std::to_string(i) + ":3306";
+			if ( j!=3 || (j==3 && i<max_num_aurora_servers+11-1) ) {
+				s += ";";
+			}
+		}
+	}
+}
+#endif
+
+#ifdef TEST_GALERA
+void SQLite3_Server::init_galera_ifaces_string(std::string& s) {
+	if(!s.empty())
+		s += ";";
+	pthread_mutex_init(&galera_mutex,NULL);
+	unsigned int ngs = time(NULL);
+	ngs = ngs % 3; // range
+	ngs += 5; // min
+	max_num_galera_servers = 10; // hypothetical maximum number of nodes
+	for (unsigned int j=1; j<4; j++) {
+		//cur_aurora_writer[j-1] = 0;
+		num_galera_servers[j-1] = ngs;
+		for (unsigned int i=11; i<max_num_galera_servers+11 ; i++) {
+			s += "127.1." + std::to_string(j) + "." + std::to_string(i) + ":3306";
+			if ( j!=3 || (j==3 && i<max_num_galera_servers+11-1) ) {
+				s += ";";
+			}
+		}
+	}
+}
+#endif // TEST_GALERA
+
+#ifdef TEST_GROUPREP
+void SQLite3_Server::init_grouprep_ifaces_string(std::string& s) {
+	pthread_mutex_init(&grouprep_mutex,NULL);
+	if (!s.empty())
+		s += ";";
+	s += "127.2.1.1:3306;127.2.1.2:3306;127.2.1.3:3306";
+}
+#endif // TEST_GROUPREP
 
 SQLite3_Server::SQLite3_Server() {
 #ifdef DEBUG
@@ -786,53 +871,30 @@ SQLite3_Server::SQLite3_Server() {
 	pthread_rwlock_init(&rwlock,NULL);
 
 	sessdb = new SQLite3DB();
-    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
+    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
 	variables.read_only=false;
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 	string s = "";
+
 #ifdef TEST_AURORA
-	pthread_mutex_init(&aurora_mutex,NULL);
-	unsigned int nas = time(NULL);
-	nas = nas % 3; // range
-	nas += 4; // min
-	max_num_aurora_servers = 10; // hypothetical maximum number of nodes
-	for (unsigned int j=1; j<4; j++) {
-		cur_aurora_writer[j-1] = 0;
-		num_aurora_servers[j-1] = nas;
-		for (unsigned int i=11; i<max_num_aurora_servers+11 ; i++) {
-			s += "127.0." + std::to_string(j) + "." + std::to_string(i) + ":3306";
-			if ( j!=3 || (j==3 && i<max_num_aurora_servers+11-1) ) {
-				s += ";";
-			}
-		}
-	}
+	init_aurora_ifaces_string(s);
 #endif // TEST_AURORA
-#if defined(TEST_AURORA) && defined(TEST_GALERA)
-	s += ";";
-#endif // TEST_AURORA || TEST_GALERA
+
 #ifdef TEST_GALERA
-	pthread_mutex_init(&galera_mutex,NULL);
-	unsigned int ngs = time(NULL);
-	ngs = ngs % 3; // range
-	ngs += 5; // min
-	max_num_galera_servers = 10; // hypothetical maximum number of nodes
-	for (unsigned int j=1; j<4; j++) {
-		//cur_aurora_writer[j-1] = 0;
-		num_galera_servers[j-1] = ngs;
-		for (unsigned int i=11; i<max_num_galera_servers+11 ; i++) {
-			s += "127.1." + std::to_string(j) + "." + std::to_string(i) + ":3306";
-			if ( j!=3 || (j==3 && i<max_num_galera_servers+11-1) ) {
-				s += ";";
-			}
-		}
-	}
+	init_galera_ifaces_string(s);
 #endif // TEST_GALERA
+
+#ifdef TEST_GROUPREP
+	init_grouprep_ifaces_string(s);
+#endif // TEST_GROUPREP
+
 	variables.mysql_ifaces=strdup(s.c_str());
+
 #else
 	variables.mysql_ifaces=strdup("127.0.0.1:6030");
-#endif // TEST_AURORA || TEST_GALERA
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 };
 
 
@@ -955,8 +1017,22 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 }
 #endif // TEST_AURORA
 
+#ifdef TEST_GROUPREP
+void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess) {
+	// this function needs to be called with lock on mutex galera_mutex already acquired
+	//
+	sessdb->execute("DELETE FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
+	string myip = string(sess->client_myds->proxy_addr.addr);
+	string server_id = myip.substr(8,1);
+	if (server_id == "1")
+		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'NO', 0)");
+	else
+		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'YES', 0)");
+}
+#endif // TEST_GALERA
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 void SQLite3_Server::insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def) {
 	table_def_t *td = new table_def_t;
 	td->table_name=strdup(table_name);
@@ -986,7 +1062,7 @@ void SQLite3_Server::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
 		delete td;
 	}
 };
-#endif // TEST_AURORA || TEST_GALERA
+#endif // TEST_AURORA || TEST_GALERA || defined(TEST_GROUPREP)
 
 void SQLite3_Server::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
@@ -1019,6 +1095,14 @@ bool SQLite3_Server::init() {
 		(const char *)"CREATE TABLE HOST_STATUS_GALERA (hostgroup_id INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , wsrep_local_state VARCHAR , read_only VARCHAR , wsrep_local_recv_queue VARCHAR , wsrep_desync VARCHAR , wsrep_reject_queries VARCHAR , wsrep_sst_donor_rejects_queries VARCHAR , wsrep_cluster_status VARCHAR , PRIMARY KEY (hostgroup_id, hostname, port))");
 	check_and_build_standard_tables(sessdb, tables_defs_galera);
 	GloAdmin->enable_galera_testing();
+#endif // TEST_GALERA
+#ifdef TEST_GROUPREP
+	tables_defs_grouprep = new std::vector<table_def_t *>;
+	insert_into_tables_defs(tables_defs_grouprep,
+		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS",
+		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null)");
+	check_and_build_standard_tables(sessdb, tables_defs_grouprep);
+	GloAdmin->enable_grouprep_testing();
 #endif // TEST_GALERA
 
 	child_func[0]=child_mysql;

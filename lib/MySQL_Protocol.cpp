@@ -1746,7 +1746,7 @@ __do_auth:
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
 		|| 
 			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		|| 
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
 #endif // TEST_AURORA  || TEST_GALERA

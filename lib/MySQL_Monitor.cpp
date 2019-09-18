@@ -852,9 +852,9 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 	if (mysql_thread___monitor_wait_timeout==false) {
 		return true;
 	}
-#if defined(TEST_AURORA) || defined(TEST_GALERA)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 	return true;
-#endif // TEST_AURORA || TEST_GALERA
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 	bool ret=false;
 	char *query=NULL;
 	char *qt=(char *)"SET wait_timeout=%d";
@@ -1200,7 +1200,11 @@ void * monitor_group_replication_thread(void *arg) {
 	//async_exit_status=mysql_change_user_start(&ret_bool, mysql,"msandbox2","msandbox2","information_schema");
 	//mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	mmsd->interr=0; // reset the value
+#ifdef TEST_GROUPREP
+	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
+#else
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status");
+#endif
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();
@@ -1274,6 +1278,7 @@ __exit_monitor_group_replication_thread:
 		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
 		bool viable_candidate=false;
 		bool read_only=true;
+		int num_timeouts = 0;
 		long long transactions_behind=-1;
 		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
@@ -1335,11 +1340,63 @@ __end_process_group_replication_result:
 			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
 			GloMyMon->Group_Replication_Hosts_Map.insert(std::make_pair(s,node));
 		}
+		if (mmsd->mysql_error_msg) {
+			if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
+				int max_num_timeout = 10;
+				if (mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count < max_num_timeout) {
+					max_num_timeout = mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+				}
+				unsigned long long start_times[max_num_timeout];
+				bool timeouts[max_num_timeout];
+				for (int i=0; i<max_num_timeout; i++) {
+					start_times[i]=0;
+					timeouts[i]=false;
+				}
+				for (int i=0; i<MyGR_Nentries; i++) {
+					if (node->last_entries[i].start_time) {
+						int smallidx = 0;
+						for (int j=0; j<max_num_timeout; j++) {
+							if (j!=smallidx) {
+								if (start_times[j] < start_times[smallidx]) {
+									smallidx = j;
+								}
+							}
+						}
+						if (start_times[smallidx] < node->last_entries[i].start_time) {
+							start_times[smallidx] = node->last_entries[i].start_time;
+							timeouts[smallidx] = false;
+							if (node->last_entries[i].error) {
+								if (strncasecmp(node->last_entries[i].error, (char *)"timeout", 7) == 0) {
+									timeouts[smallidx] = true;
+								}
+							}
+						}
+					}
+				}
+				for (int i=0; i<max_num_timeout; i++) {
+					if (timeouts[i]) {
+						num_timeouts++;
+					}
+				}
+			}
+		}
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 
 		// NOTE: we update MyHGM outside the mutex group_replication_mutex
 		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
-			MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
+			if (num_timeouts == 0) {
+				// it wasn't a timeout, reconfigure immediately
+				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
+			} else {
+				// it was a timeout. Check if we are having consecutive timeout
+				if (num_timeouts == mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count) {
+					proxy_error("Server %s:%d missed %d group replication checks. Number retires %d, Assuming offline\n",
+					mmsd->hostname, mmsd->port, num_timeouts, num_timeouts);
+					MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
+				} else {
+					// not enough timeout
+				}
+			}
 		} else {
 			if (viable_candidate==false) {
 				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"viable_candidate=NO");
