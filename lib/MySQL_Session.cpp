@@ -1445,7 +1445,10 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	} else {
 		if (rc==-1 || rc==-2) {
 			if (rc==-2) {
-				proxy_error("Ping timeout during ping on %s , %d\n", myconn->parent->address, myconn->parent->port);
+				unsigned long long us = mysql_thread___ping_timeout_server*1000;
+				us += thread->curtime;
+				us -= myds->wait_until;
+				proxy_error("Ping timeout during ping on %s:%d after %lluus (timeout %dms)\n", myconn->parent->address, myconn->parent->port, us, mysql_thread___ping_timeout_server);
 			} else { // rc==-1
 				int myerr=mysql_errno(myconn->mysql);
 				proxy_error("Detected a broken connection during ping on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
