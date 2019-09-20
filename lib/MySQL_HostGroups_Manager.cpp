@@ -848,10 +848,22 @@ void MySrvC::connect_error(int err_num) {
 	// as a single connection failure won't make a significant difference
 	__sync_fetch_and_add(&connect_ERR,1);
 	__sync_fetch_and_add(&MyHGM->status.server_connections_aborted,1);
+	if (err_num >= 1048 && err_num <= 1052)
+		return;
+	if (err_num >= 1054 && err_num <= 1075)
+		return;
 	switch (err_num) {
+		case 1007: // Can't create database
+		case 1008: // Can't drop database
 		case 1044: // access denied
 		case 1045: // access denied
-		case 1049: //Unknown databas
+/*
+		case 1048: // Column cannot be null
+		case 1049: // Unknown database
+		case 1050: // Table already exists
+		case 1051: // Unknown table
+		case 1052: // Column is ambiguous
+*/
 		case 1203: // User %s already has more than 'max_user_connections' active connections
 		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
 			return;
