@@ -396,6 +396,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_groupreplication_healthcheck_interval=5000;
 	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_groupreplication_healthcheck_timeout=800;
+	variables.monitor_groupreplication_healthcheck_max_timeout_count=3;
 	variables.monitor_galera_healthcheck_interval=5000;
 	variables.monitor_galera_healthcheck_timeout=800;
 	variables.monitor_galera_healthcheck_max_timeout_count=3;
