@@ -4231,6 +4231,8 @@ void MySQL_Thread::process_all_sessions() {
 		}
 		if (sess->healthy==0) {
 			char _buf[1024];
+			if (sess->client_myds)
+				proxy_warning("Closing unhealthy client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 			sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
 			GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 			unregister_session(n);
@@ -4243,6 +4245,8 @@ void MySQL_Thread::process_all_sessions() {
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc==-1 || sess->killed==true) {
 						char _buf[1024];
+						if (sess->client_myds && sess->killed)
+							proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 						sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 						unregister_session(n);
@@ -4255,6 +4259,8 @@ void MySQL_Thread::process_all_sessions() {
 					// this is a special cause, if killed the session needs to be executed no matter if paused
 					sess->handler();
 					char _buf[1024];
+					if (sess->client_myds)
+						proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
 					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 					unregister_session(n);
