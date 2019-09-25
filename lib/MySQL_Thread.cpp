@@ -448,7 +448,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
 	variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
 	variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
-	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 	variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
 	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
 	variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
@@ -667,7 +667,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	}
 	if (!strcmp(name,"default_tx_isolation")) {
 		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 		}
 		return strdup(variables.default_tx_isolation);
 	}
@@ -973,7 +973,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"default_tx_isolation")) {
 		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 		}
 		return strdup(variables.default_tx_isolation);
 	}
@@ -2331,7 +2331,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 				variables.default_tx_isolation=strdup(value);
 		}
 		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL); // default
+			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION); // default
 		}
 		return true;
 	}
