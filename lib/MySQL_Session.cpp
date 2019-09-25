@@ -928,6 +928,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["time_zone"] = ( client_myds->myconn->options.time_zone ? client_myds->myconn->options.time_zone : "") ;
 	j["conn"]["isolation_level"] = ( client_myds->myconn->options.isolation_level ? client_myds->myconn->options.isolation_level : "") ;
 	j["conn"]["transaction_read"] = ( client_myds->myconn->options.transaction_read ? client_myds->myconn->options.transaction_read : "") ;
+	j["conn"]["tx_isolation"] = ( client_myds->myconn->options.tx_isolation ? client_myds->myconn->options.tx_isolation : "") ;
 	j["conn"]["character_set_results"] = ( client_myds->myconn->options.character_set_results ? client_myds->myconn->options.character_set_results : "") ;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	j["conn"]["sql_auto_is_null"] = ( client_myds->myconn->options.sql_auto_is_null ? client_myds->myconn->options.sql_auto_is_null : "") ;
@@ -981,6 +982,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["sql_mode_sent"] = _myds->myconn->options.sql_mode_sent;
 				j["backends"][i]["conn"]["time_zone"] = ( _myconn->options.time_zone ? _myconn->options.time_zone : "") ;
 				j["backends"][i]["conn"]["isolation_level"] = ( _myconn->options.isolation_level ? _myconn->options.isolation_level : "") ;
+				j["backends"][i]["conn"]["tx_isolation"] = ( _myconn->options.tx_isolation ? _myconn->options.tx_isolation : "") ;
 				j["backends"][i]["conn"]["transaction_read"] = ( _myconn->options.transaction_read ? _myconn->options.transaction_read : "") ;
 				j["backends"][i]["conn"]["character_set_results"] = ( _myconn->options.character_set_results ? _myconn->options.character_set_results : "") ;
 				j["backends"][i]["conn"]["session_track_gtids"] = ( _myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "") ;
@@ -1715,6 +1717,20 @@ bool MySQL_Session::handler_again___verify_backend_transaction_read() {
 		&client_myds->myconn->options.transaction_read_int,
 		client_myds->myconn->options.transaction_read,
 		SETTING_TRANSACTION_READ
+	);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___verify_backend_tx_isolation() {
+	bool ret = false;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.tx_isolation, mybe->server_myds->myconn->options.tx_isolation);
+	ret = handler_again___verify_backend__generic_variable(
+		&mybe->server_myds->myconn->options.tx_isolation_int,
+		&mybe->server_myds->myconn->options.tx_isolation,
+		mysql_thread___default_tx_isolation,
+		&client_myds->myconn->options.tx_isolation_int,
+		client_myds->myconn->options.tx_isolation,
+		SETTING_TX_ISOLATION
 	);
 	return ret;
 }
@@ -2501,6 +2517,13 @@ bool MySQL_Session::handler_again___status_SETTING_TRANSACTION_READ(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION TRANSACTION READ", mybe->server_myds->myconn->options.transaction_read, false, true);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_TX_ISOLATION(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"TX_ISOLATION", mybe->server_myds->myconn->options.tx_isolation, false, false);
 	return ret;
 }
 
@@ -3799,6 +3822,9 @@ handler_again:
 								if (handler_again___verify_backend_transaction_read()) {
 									goto handler_again;
 								}
+								if (handler_again___verify_backend_tx_isolation()) {
+									goto handler_again;
+								}
 								if (handler_again___verify_backend_character_set_results()) {
 									goto handler_again;
 								}
@@ -4380,6 +4406,19 @@ handler_again:
 				}
 			}
 			break;
+
+		case SETTING_TX_ISOLATION:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_TX_ISOLATION(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
 
 		case SETTING_CHARACTER_SET_RESULTS:
 			{
@@ -5733,6 +5772,33 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							client_myds->myconn->set_charset(c->nr);
 							exit_after_SetParse = true;
 						}
+					} else if (var == "tx_isolation") {
+						std::string value1 = *values;
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET tx_isolation value %s\n", value1.c_str());
+						uint32_t tx_isolation_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (client_myds->myconn->options.tx_isolation_int != tx_isolation_int) {
+							//fprintf(stderr,"sql_mode_int='%u'\n", sql_mode_int);
+							client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
+							if (client_myds->myconn->options.tx_isolation) {
+								free(client_myds->myconn->options.tx_isolation);
+							}
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
+							client_myds->myconn->options.tx_isolation=strdup(value1.c_str());
+						}
+
+						// We need to keep isolation_level variable in sync with tx_isolation,
+						// but in different format: dashes '-' are replaced by spaces
+						std::replace(value1.begin(), value1.end(), '-', ' ');
+						uint32_t isolation_level_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (client_myds->myconn->options.isolation_level_int != isolation_level_int) {
+							client_myds->myconn->options.isolation_level_int = isolation_level_int;
+							if (client_myds->myconn->options.isolation_level) {
+								free(client_myds->myconn->options.isolation_level);
+							}
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
+							client_myds->myconn->options.isolation_level=strdup(value1.c_str());
+						}
+						exit_after_SetParse = true;
 					} else {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
@@ -5854,6 +5920,20 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
 							client_myds->myconn->options.isolation_level=strdup(value1.c_str());
+						}
+
+						// We need to keep tx_isolation variable in sync with isolation_level,
+						// but in different format: spaces are replaced with '-'
+						std::replace(value1.begin(), value1.end(), ' ', '-');
+						uint32_t tx_isolation_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (client_myds->myconn->options.tx_isolation_int != tx_isolation_int) {
+							//fprintf(stderr,"sql_mode_int='%u'\n", sql_mode_int);
+							client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
+							if (client_myds->myconn->options.tx_isolation) {
+								free(client_myds->myconn->options.tx_isolation);
+							}
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
+							client_myds->myconn->options.tx_isolation=strdup(value1.c_str());
 						}
 						exit_after_SetParse = true;
 					} else if (var == "read") {

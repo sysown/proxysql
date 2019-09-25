@@ -336,6 +336,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_time_zone",
 	(char *)"default_isolation_level",
 	(char *)"default_transaction_read",
+	(char *)"default_tx_isolation",
 	(char *)"default_character_set_results",
 	(char *)"default_session_track_gtids",
 	(char *)"default_sql_auto_is_null",
@@ -447,6 +448,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
 	variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
 	variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
+	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
 	variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
 	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
 	variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
@@ -662,6 +664,12 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
 		}
 		return strdup(variables.default_isolation_level);
+	}
+	if (!strcmp(name,"default_tx_isolation")) {
+		if (variables.default_tx_isolation==NULL) {
+			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+		}
+		return strdup(variables.default_tx_isolation);
 	}
 	if (!strcmp(name,"default_transaction_read")) {
 		if (variables.default_transaction_read==NULL) {
@@ -962,6 +970,12 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
 		}
 		return strdup(variables.default_isolation_level);
+	}
+	if (!strcasecmp(name,"default_tx_isolation")) {
+		if (variables.default_tx_isolation==NULL) {
+			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
+		}
+		return strdup(variables.default_tx_isolation);
 	}
 	if (!strcasecmp(name,"default_transaction_read")) {
 		if (variables.default_transaction_read==NULL) {
@@ -2309,6 +2323,19 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
+	if (!strcasecmp(name,"default_tx_isolation")) {
+		if (variables.default_tx_isolation) free(variables.default_tx_isolation);
+		variables.default_tx_isolation=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.default_tx_isolation=strdup(value);
+		}
+		if (variables.default_tx_isolation==NULL) {
+			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL); // default
+		}
+		return true;
+	}
+
 	if (!strcasecmp(name,"default_transaction_read")) {
 		if (variables.default_transaction_read) free(variables.default_transaction_read);
 		variables.default_transaction_read=NULL;
@@ -3037,6 +3064,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.default_sql_mode) free(variables.default_sql_mode);
 	if (variables.default_time_zone) free(variables.default_time_zone);
 	if (variables.default_isolation_level) free(variables.default_isolation_level);
+	if (variables.default_tx_isolation) free(variables.default_tx_isolation);
 	if (variables.default_transaction_read) free(variables.default_transaction_read);
 	if (variables.default_character_set_results) free(variables.default_character_set_results);
 	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
@@ -3167,6 +3195,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_sql_mode) { free(mysql_thread___default_sql_mode); mysql_thread___default_sql_mode=NULL; }
 	if (mysql_thread___default_time_zone) { free(mysql_thread___default_time_zone); mysql_thread___default_time_zone=NULL; }
 	if (mysql_thread___default_isolation_level) { free(mysql_thread___default_isolation_level); mysql_thread___default_isolation_level=NULL; }
+	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation=NULL; }
 	if (mysql_thread___default_transaction_read) { free(mysql_thread___default_transaction_read); mysql_thread___default_transaction_read=NULL; }
 	if (mysql_thread___default_character_set_results) { free(mysql_thread___default_character_set_results); mysql_thread___default_character_set_results=NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
@@ -3245,6 +3274,13 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		free(sess->client_myds->myconn->options.isolation_level);
 	}
 	sess->client_myds->myconn->options.isolation_level=strdup(mysql_thread___default_isolation_level);
+
+	uint32_t tx_isolation_int=SpookyHash::Hash32(mysql_thread___default_tx_isolation,strlen(mysql_thread___default_tx_isolation),10);
+	sess->client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
+	if (sess->client_myds->myconn->options.tx_isolation) {
+		free(sess->client_myds->myconn->options.tx_isolation);
+	}
+	sess->client_myds->myconn->options.tx_isolation=strdup(mysql_thread___default_tx_isolation);
 
 	uint32_t transaction_read_int=SpookyHash::Hash32(mysql_thread___default_transaction_read,strlen(mysql_thread___default_transaction_read),10);
 	sess->client_myds->myconn->options.transaction_read_int = transaction_read_int;
@@ -3347,7 +3383,7 @@ bool MySQL_Thread::init() {
 
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)(SQL_MODE|TIME_ZONE|CHARACTER_SET_RESULTS|SESSION_TRACK_GTIDS|SQL_AUTO_IS_NULL|SQL_SELECT_LIMIT|SQL_SAFE_UPDATES|COLLATION_CONNECTION|NET_WRITE_TIMEOUT|MAX_JOIN_SIZE( *)(:|)=( *))");
+	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)(SQL_MODE|TIME_ZONE|CHARACTER_SET_RESULTS|SESSION_TRACK_GTIDS|SQL_AUTO_IS_NULL|SQL_SELECT_LIMIT|SQL_SAFE_UPDATES|COLLATION_CONNECTION|NET_WRITE_TIMEOUT|TX_ISOLATION|MAX_JOIN_SIZE( *)(:|)=( *))");
 	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 
 
@@ -4383,6 +4419,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_time_zone=GloMTH->get_variable_string((char *)"default_time_zone");
 	if (mysql_thread___default_isolation_level) free(mysql_thread___default_isolation_level);
 	mysql_thread___default_isolation_level=GloMTH->get_variable_string((char *)"default_isolation_level");
+	if (mysql_thread___default_tx_isolation) free(mysql_thread___default_tx_isolation);
+	mysql_thread___default_tx_isolation=GloMTH->get_variable_string((char *)"default_tx_isolation");
 	if (mysql_thread___default_transaction_read) free(mysql_thread___default_transaction_read);
 	mysql_thread___default_transaction_read=GloMTH->get_variable_string((char *)"default_transaction_read");
 	if (mysql_thread___default_character_set_results) free(mysql_thread___default_character_set_results);
