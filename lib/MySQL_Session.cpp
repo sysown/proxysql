@@ -3221,6 +3221,11 @@ __get_pkts_from_client:
 										if (locked_on_hostgroup < 0) {
 											if (lock_hostgroup) {
 												// we are locking on hostgroup now
+												if ( qpo->destination_hostgroup >= 0 ) {
+													if (transaction_persistent_hostgroup == -1) {
+														current_hostgroup=qpo->destination_hostgroup;
+													}
+												}
 												locked_on_hostgroup = current_hostgroup;
 												thread->status_variables.hostgroup_locked++;
 												thread->status_variables.hostgroup_locked_set_cmds++;
