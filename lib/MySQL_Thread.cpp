@@ -1869,6 +1869,9 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 20*24*3600*1000) {
 			variables.wait_timeout=intv;
+			if (variables.wait_timeout < 5000) {
+				proxy_warning("mysql-wait_timeout is set to a low value: %ums\n", variables.wait_timeout);
+			}
 			return true;
 		} else {
 			return false;
