@@ -2421,7 +2421,18 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, ch
 			q=(char *)"SET %s %s";
 		}
 		query=(char *)malloc(strlen(q)+strlen(var_name)+strlen(var_value));
-		sprintf(query,q,var_name, var_value);
+		if (strncasecmp("tx_isolation", var_name, 12) == 0) {
+			char *sv = mybe->server_myds->myconn->mysql->server_version;
+			if (strncmp(sv,(char *)"8",1)==0) {
+				sprintf(query,q,"transaction_isolation", var_value);
+			}
+			else {
+				sprintf(query,q,"tx_isolation", var_value);
+			}
+		}
+		else {
+			sprintf(query,q,var_name, var_value);
+		}
 		query_length=strlen(query);
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
@@ -5785,19 +5796,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 							client_myds->myconn->options.tx_isolation=strdup(value1.c_str());
 						}
-
-						// We need to keep isolation_level variable in sync with tx_isolation,
-						// but in different format: dashes '-' are replaced by spaces
-						std::replace(value1.begin(), value1.end(), '-', ' ');
-						uint32_t isolation_level_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (client_myds->myconn->options.isolation_level_int != isolation_level_int) {
-							client_myds->myconn->options.isolation_level_int = isolation_level_int;
-							if (client_myds->myconn->options.isolation_level) {
-								free(client_myds->myconn->options.isolation_level);
-							}
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
-							client_myds->myconn->options.isolation_level=strdup(value1.c_str());
-						}
 						exit_after_SetParse = true;
 					} else {
 						std::string value1 = *values;
@@ -5920,20 +5918,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
 							client_myds->myconn->options.isolation_level=strdup(value1.c_str());
-						}
-
-						// We need to keep tx_isolation variable in sync with isolation_level,
-						// but in different format: spaces are replaced with '-'
-						std::replace(value1.begin(), value1.end(), ' ', '-');
-						uint32_t tx_isolation_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (client_myds->myconn->options.tx_isolation_int != tx_isolation_int) {
-							//fprintf(stderr,"sql_mode_int='%u'\n", sql_mode_int);
-							client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
-							if (client_myds->myconn->options.tx_isolation) {
-								free(client_myds->myconn->options.tx_isolation);
-							}
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
-							client_myds->myconn->options.tx_isolation=strdup(value1.c_str());
 						}
 						exit_after_SetParse = true;
 					} else if (var == "read") {
