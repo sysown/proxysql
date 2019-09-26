@@ -1982,6 +1982,7 @@ void Query_Processor::update_query_processor_stats() {
 void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags) {
 	// trying to get rid of libinjection
 	// instead of initializing qp->sf , we copy query info later in this function
+	proxy_warning("TRACE : query_parser_init\n");
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
