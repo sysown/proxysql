@@ -208,6 +208,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.init_connect_sent=false;
 	options.character_set_results = NULL;
 	options.isolation_level = NULL;
+	options.tx_isolation = NULL;
 	options.transaction_read = NULL;
 	options.session_track_gtids = NULL;
 	options.sql_auto_is_null = NULL;
@@ -217,6 +218,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
 	options.isolation_level_sent = false;
+	options.tx_isolation_sent = false;
 	options.transaction_read_sent = false;
 	options.character_set_results_sent = false;
 	options.session_track_gtids_sent = false;
@@ -236,6 +238,7 @@ MySQL_Connection::MySQL_Connection() {
 	options.time_zone=NULL;	// #819
 	options.time_zone_int=0;	// #819
 	options.isolation_level_int=0;
+	options.tx_isolation_int=0;
 	options.transaction_read_int=0;
 	options.character_set_results_int=0;
 	options.session_track_gtids_int=0;
@@ -324,6 +327,10 @@ MySQL_Connection::~MySQL_Connection() {
 	if (options.isolation_level) {
 		free(options.isolation_level);
 		options.isolation_level=NULL;
+	}
+	if (options.tx_isolation) {
+		free(options.tx_isolation);
+		options.tx_isolation=NULL;
 	}
 	if (options.transaction_read) {
 		free(options.transaction_read);
@@ -2094,6 +2101,12 @@ void MySQL_Connection::reset() {
 		free (options.isolation_level);
 		options.isolation_level = NULL;
 		options.isolation_level_sent = false;
+	}
+	options.tx_isolation_int = 0;
+	if (options.tx_isolation) {
+		free (options.tx_isolation);
+		options.tx_isolation = NULL;
+		options.tx_isolation_sent = false;
 	}
 	options.transaction_read_int = 0;
 	if (options.transaction_read) {

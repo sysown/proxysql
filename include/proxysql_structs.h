@@ -154,6 +154,7 @@ enum session_status {
 	SETTING_TIME_ZONE,
 	SETTING_ISOLATION_LEVEL,
 	SETTING_TRANSACTION_READ,
+	SETTING_TX_ISOLATION,
 	SETTING_CHARACTER_SET_RESULTS,
 	SETTING_SESSION_TRACK_GTIDS,
 	SETTING_SQL_AUTO_IS_NULL,
@@ -624,6 +625,7 @@ __thread char *mysql_thread___default_sql_mode;
 __thread char *mysql_thread___default_time_zone;
 __thread char *mysql_thread___default_isolation_level;
 __thread char *mysql_thread___default_transaction_read;
+__thread char *mysql_thread___default_tx_isolation;
 __thread char *mysql_thread___default_character_set_results;
 __thread char *mysql_thread___default_session_track_gtids;
 __thread char *mysql_thread___default_sql_auto_is_null;
@@ -771,6 +773,7 @@ extern __thread char *mysql_thread___default_sql_mode;
 extern __thread char *mysql_thread___default_time_zone;
 extern __thread char *mysql_thread___default_isolation_level;
 extern __thread char *mysql_thread___default_transaction_read;
+extern __thread char *mysql_thread___default_tx_isolation;
 extern __thread char *mysql_thread___default_character_set_results;
 extern __thread char *mysql_thread___default_session_track_gtids;
 extern __thread char *mysql_thread___default_sql_auto_is_null;

@@ -116,6 +116,7 @@ class MySQL_Session
 	bool handler_again___verify_backend_time_zone();
 	bool handler_again___verify_backend_isolation_level();
 	bool handler_again___verify_backend_transaction_read();
+	bool handler_again___verify_backend_tx_isolation();
 	bool handler_again___verify_backend_character_set_results();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_sql_auto_is_null();
@@ -132,6 +133,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_TIME_ZONE(int *);
 	bool handler_again___status_SETTING_ISOLATION_LEVEL(int *);
 	bool handler_again___status_SETTING_TRANSACTION_READ(int *);
+	bool handler_again___status_SETTING_TX_ISOLATION(int *);
 	bool handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
 	bool handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *);
