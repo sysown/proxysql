@@ -289,8 +289,11 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 // mysql_replication_hostgroups in v2.0.0
 #define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0 "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
+// mysql_replication_hostgroups in v2.0.8
+#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_8 "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
+
 // mysql_replication_hostgroups current
-#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0
+#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_8
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
@@ -306,7 +309,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port AND gtid_port >= 0 AND gtid_port <= 65535) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT CHECK (flagIN >= 0) NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT CHECK (proxy_port >= 0 AND proxy_port <= 65535), digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT CHECK (flagOUT >= 0), replace_pattern VARCHAR CHECK(CASE WHEN replace_pattern IS NULL THEN 1 WHEN replace_pattern IS NOT NULL AND match_pattern IS NOT NULL THEN 1 ELSE 0 END) , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , cache_empty_result INT CHECK (cache_empty_result IN (0,1)) DEFAULT NULL , cache_timeout INT CHECK(cache_timeout >= 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED CHECK (timeout >= 0) , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED CHECK (delay >=0) , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , OK_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1,2)) , gtid_from_hostgroup INT UNSIGNED , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
 
@@ -9773,6 +9776,20 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS,false);
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) SELECT writer_hostgroup , reader_hostgroup , comment FROM mysql_replication_hostgroups_v145");
+	}
+	rci=configdb->check_table_structure((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0); // issue #2186
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version v2.0.0 (pre-2.0.8) of table mysql_replication_hostgroups\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_replication_hostgroups in progress\n");
+		// drop any existing table with suffix _v200
+		configdb->execute("DROP TABLE IF EXISTS mysql_replication_hostgroups_v200");
+		// rename current table to add suffix _v200
+		configdb->execute("ALTER TABLE mysql_replication_hostgroups RENAME TO mysql_replication_hostgroups_v200");
+		// create new table
+		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_replication_hostgroups SELECT * FROM mysql_replication_hostgroups_v200");
 	}
 
 	// upgrade mysql_group_replication_hostgroups
