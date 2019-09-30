@@ -43,7 +43,6 @@ chown -R %{name}: /var/lib/%{name} /var/run/%{name}
 chown root:%{name} /etc/%{name}.cnf
 chmod 640 /etc/%{name}.cnf
 chkconfig --add %{name}
-#systemctl enable proxysql.service
 
 %preun
 /etc/init.d/%{name} stop
