@@ -1,6 +1,7 @@
 /* c_tokenizer.c */
 // Borrowed from http://www.cplusplus.com/faq/sequences/strings/split/
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,6 +13,7 @@ extern __thread int mysql_thread___query_digests_max_query_length;
 #define bool char
 extern __thread bool mysql_thread___query_digests_lowercase;
 extern __thread bool mysql_thread___query_digests_replace_null;
+extern __thread bool mysql_thread___query_digests_no_digits;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -209,8 +211,10 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 
 	bool lowercase=0;
 	bool replace_null=0;
+	bool replace_number=0;
 	lowercase=mysql_thread___query_digests_lowercase;
 	replace_null = mysql_thread___query_digests_replace_null;
+	replace_number = mysql_thread___query_digests_no_digits;
 
 	while(i < len)
 	{
@@ -253,9 +257,18 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			// may be digit - start with digit
 			else if(is_token_char(prev_char) && is_digit_char(*s))
 			{
-				flag = 5;
-				if(len == i+1)
-					continue;
+				if (replace_number) {
+					*p_r++ = '?';
+					while(*s != '\0' && is_digit_char(*s)) {
+						s++;
+						i++;
+					}
+				}
+				else {
+					flag = 5;
+					if(len == i+1)
+						continue;
+				}
 			}
 
 			// not above case - remove duplicated space char
@@ -274,6 +287,15 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					s++;
 					i++;
 					continue;
+				}
+				if (replace_number) {
+					if (!is_digit_char(prev_char) && is_digit_char(*s)) {
+						*p_r++ = '?';
+						while(*s != '\0' && is_digit_char(*s)) {
+							s++;
+							i++;
+						}
+					}
 				}
 				if (replace_null) {
 				if (*s == 'n' || *s == 'N') { // we search for NULL , #2171
