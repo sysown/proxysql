@@ -1,5 +1,23 @@
 <a><img src="https://proxysql.com/assets/images/sm-share-default.png" alt="ProxySQL"></a>
 
+Introduction	
+============	
+
+ProxySQL is a high performance, high availability, protocol aware proxy for MySQL and forks (like Percona Server and MariaDB).	
+All the while getting the unlimited freedom that comes with a GPL license.	
+
+Its development is driven by the lack of open source proxies that provide high performance.  	
+
+Useful links	
+===============	
+
+- [Official website](http://www.proxysql.com/)	
+- [Documentation](https://github.com/sysown/proxysql/wiki)
+- [DockerHub Repository](https://hub.docker.com/r/proxysql/proxysql)
+- [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)	
+- [Forum](https://groups.google.com/forum/#!forum/proxysql/)	
+- [Linkedin group](https://www.linkedin.com/groups/13581070/)	
+
 Getting started
 ===============
 
