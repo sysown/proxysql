@@ -471,6 +471,8 @@ class MySQL_HostGroups_Manager {
 	void purge_mysql_servers_table();
 	void generate_mysql_servers_table(int *_onlyhg=NULL);
 	void generate_mysql_replication_hostgroups_table();
+	Galera_Info *get_galera_node_info(int hostgroup);
+
 	SQLite3_result *incoming_replication_hostgroups;
 
 	void generate_mysql_group_replication_hostgroups_table();
