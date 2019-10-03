@@ -194,6 +194,7 @@ class MySQL_Connection {
 	void stmt_execute_store_result_cont(short event);
 
 
+	void query_close_stmt();
 	void async_free_result();
 	bool IsActiveTransaction(); /* {
 		bool ret=false;
