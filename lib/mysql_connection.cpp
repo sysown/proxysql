@@ -2174,8 +2174,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 
 void MySQL_Connection::query_close_stmt() {
 	if (query.stmt) {
-		if (mysql_stmt_close(query.stmt))
-			proxy_error("Error closing stmt");
+		mysql_stmt_free(query.stmt);
 		query.stmt = NULL;
 	}
 }
