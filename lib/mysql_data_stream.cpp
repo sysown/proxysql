@@ -437,6 +437,7 @@ int MySQL_Data_Stream::read_from_net() {
 			r = SSL_read (ssl, queue_w_ptr(queueIN), s);
 		}
 */
+		PROXY_TRACE();
 		if (s < MY_SSL_BUFFER) {
 			return 0;	// no enough space for reads
 		}
@@ -444,7 +445,8 @@ int MySQL_Data_Stream::read_from_net() {
 		//ssize_t n = read(fd, buf, sizeof(buf));
 		int n = recv(fd, buf, sizeof(buf), 0);
 		//proxy_info("SSL recv of %d bytes\n", n);
-		if (n > 0) {
+		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %u ,  num_read: %u\n", sess, n,  rbio_ssl->num_write , rbio_ssl->num_read);
+		if (n > 0 || rbio_ssl->num_write > rbio_ssl->num_read) {
 			//on_read_cb(buf, (size_t)n);
 
 			char buf2[MY_SSL_BUFFER];
@@ -452,8 +454,9 @@ int MySQL_Data_Stream::read_from_net() {
 			enum sslstatus status;
 			char *src = buf;
 			int len = n;
-			while (len) {
+			while (len > 0) {
 				n2 = BIO_write(rbio_ssl, src, len);
+				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: write %d bytes into BIO %p, len=%d\n", sess, n2, rbio_ssl, len);
 				//proxy_info("BIO_write with len = %d and %d bytes\n", len , n2);
 				if (n2 <= 0) {
 					shut_soft();
@@ -477,6 +480,7 @@ int MySQL_Data_Stream::read_from_net() {
 				}
 			}
 			n2 = SSL_read (ssl, queue_w_ptr(queueIN), s);
+			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: read %d bytes from BIO %p into a buffer with %d bytes free\n", sess, n2, rbio_ssl, s);
 			r = n2;
 			//proxy_info("Read %d bytes from SSL\n", r);
 			if (n2 > 0) {
@@ -1397,4 +1401,11 @@ void MySQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	unplug_backend();
 	mc->send_quit=sq;
 	MyHGM->destroy_MyConn_from_pool(mc);
+}
+
+bool MySQL_Data_Stream::data_in_rbio() {
+	if (rbio_ssl->num_write > rbio_ssl->num_read) {
+		return true;
+	}
+	return false;
 }
