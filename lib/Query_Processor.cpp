@@ -367,8 +367,11 @@ class QP_query_digest_stats {
 		//sprintf(qdsp->max_time,"%llu",max_time);
 		my_itoa(qdsp->max_time,max_time);
 		pta[10]=qdsp->max_time;
-		//sprintf(qdsp->hid,"%d",hid);
-		my_itoa(qdsp->hid,hid);
+		// we are reverting this back to the use of sprintf instead of my_itoa
+		// because with my_itoa we are losing the sign
+		// see issue #2285
+		sprintf(qdsp->hid,"%d",hid);
+		//my_itoa(qdsp->hid,hid);
 		pta[11]=qdsp->hid;
 		//sprintf(qdsp->rows_affected,"%llu",rows_affected);
 		my_itoa(qdsp->rows_affected,rows_affected);
