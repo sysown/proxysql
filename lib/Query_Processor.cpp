@@ -2640,3 +2640,31 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 	fast_routing_resultset = resultset; // save it
 	rules_mem_used += fast_routing_resultset->get_size();
 };
+
+int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN) {
+	int ret = -1;
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_rdlock(&rwlock);
+#else
+	spin_rdlock(&rwlock);
+#endif
+	size_t mapl = rules_fast_routing.size();
+	if (mapl) { // trigger new routing algorithm only if rules exists
+		string s = username;
+		s.append(rand_del);
+		s.append(schemaname);
+		s.append("---");
+		s.append(std::to_string(flagIN));
+		std::unordered_map<std::string, int>:: iterator it;
+		it = rules_fast_routing.find(s);
+		if (it != rules_fast_routing.end()) {
+			ret = it->second;
+		}
+	}
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&rwlock);
+#else
+	spin_rdunlock(&rwlock);
+#endif
+	return ret;
+}

@@ -252,6 +252,7 @@ class Query_Processor {
 	SQLite3_result * fast_routing_resultset;
 	void load_fast_routing(SQLite3_result *resultset);
 	SQLite3_result * get_current_query_rules_fast_routing();
+	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
 };
 
 typedef Query_Processor * create_Query_Processor_t();
