@@ -2799,10 +2799,13 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						free(msg);
 						break;
 					case 14:
-						//
+						// verify all mysql_query_rules_fast_routing rules
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
 						{
 							int ret1, ret2;
-							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2);
+							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1);
 							if (bret) {
 								SPA->send_MySQL_OK(&sess->client_myds->myprot, "Verified all rules in mysql_query_rules_fast_routing", ret1);
 							} else {
@@ -4931,7 +4934,7 @@ void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB 
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
-bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2) {
+bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt) {
 	char *q = (char *)"SELECT username, schemaname, flagIN, destination_hostgroup FROM mysql_query_rules_fast_routing ORDER BY RANDOM()";
 	char *error=NULL;
 	int cols=0;
@@ -4950,7 +4953,6 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 			SQLite3_row *r=*it;
 			int dest_HG = atoi(r->fields[3]);
 			int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
-			//fprintf(stderr, "%d %d\n", dest_HG, ret_HG);
 			if (dest_HG == ret_HG) {
 				matching_rows++;
 			}
@@ -4960,6 +4962,17 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 		ret = false;
 	}
 	*ret1 = matching_rows;
+	if (ret == true) {
+		if (cnt > 1) {
+			for (int i=1 ; i < cnt; i++) {
+				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+					SQLite3_row *r=*it;
+					int dest_HG = atoi(r->fields[3]);
+					int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+				}
+			}
+		}
+	}
 	if (resultset) delete resultset;
 	return ret;
 }
