@@ -247,6 +247,15 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				flag = 3;
 			}
 
+			else if (*s == '-') {
+				if (prev_char != '-' && i!=(len-1) && ((*(s+1)=='-'))) {
+					flag = 3;
+				}
+				else if (i==0 && ((*(s+1)=='-'))) {
+					flag = 3;
+				}
+			}
+
 			// string - start with '
 			else if(*s == '\'' || *s == '"')
 			{
