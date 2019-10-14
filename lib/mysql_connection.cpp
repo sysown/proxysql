@@ -382,9 +382,10 @@ bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
 	return _ac;
 }
 
-uint8_t MySQL_Connection::set_charset(uint8_t _c) {
+uint8_t MySQL_Connection::set_charset(uint8_t _c, enum charset_action action) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
 	options.charset=_c;
+	options.charset_action = action;
 	return _c;
 }
 
@@ -562,6 +563,7 @@ void MySQL_Connection::connect_start() {
 		proxy_error("Not existing charset number %u\n", mysql_thread___default_charset);
 		assert(0);
 	}
+	set_charset(c->nr, NAMES);
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	unsigned long client_flags = 0;
 	//if (mysql_thread___client_found_rows)
@@ -1693,7 +1695,7 @@ int MySQL_Connection::async_set_names(short event, uint8_t c) {
 			return -1;
 			break;
 		case ASYNC_IDLE:
-			set_charset(c);
+			set_charset(c, NAMES);
 			async_state_machine=ASYNC_SET_NAMES_START;
 		default:
 			handler(event);

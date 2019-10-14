@@ -43,6 +43,7 @@ static inline char is_normal_char(char c) {
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
+extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
@@ -1292,7 +1293,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg,true);
 			free(errmsg);
 		} else {
-			client_myds->myconn->set_charset(c->nr);
+			client_myds->myconn->set_charset(c->nr, NAMES);
 			unsigned int nTrx=NumActiveTransactions();
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
@@ -2524,6 +2525,15 @@ bool MySQL_Session::handler_again___status_SETTING_ISOLATION_LEVEL(int *_rc) {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___status_SETTING_CHARSET(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(mybe->server_myds->myconn->options.charset);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARSET", (char*)c->csname, false, true);
+	return ret;
+}
+
 bool MySQL_Session::handler_again___status_SETTING_TRANSACTION_READ(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
@@ -2891,56 +2901,64 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
-	if (myds->mypolls==NULL) {
-		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
-	}
-	int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
-	if (rc==0) {
-		__sync_fetch_and_add(&MyHGM->status.backend_set_names, 1);
+	if (myconn->options.charset_action == NAMES) {
+		if (myds->mypolls==NULL) {
+			thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+		}
+		int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
+		if (rc==0) {
+			__sync_fetch_and_add(&MyHGM->status.backend_set_names, 1);
+			myds->DSS = STATE_MARIADB_GENERIC;
+			st=previous_status.top();
+			previous_status.pop();
+			NEXT_IMMEDIATE_NEW(st);
+		} else {
+			if (rc==-1) {
+				// the command failed
+				int myerr=mysql_errno(myconn->mysql);
+				if (myerr >= 2000) {
+					if (myerr == 2019) {
+						client_myds->myconn->options.charset = mysql_thread___default_charset;
+					}
+					bool retry_conn=false;
+					// client error, serious
+					proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+						retry_conn=true;
+					}
+					myds->destroy_MySQL_Connection_From_Pool(false);
+					myds->fd=0;
+					if (retry_conn) {
+						myds->DSS=STATE_NOT_INITIALIZED;
+						//previous_status.push(PROCESSING_QUERY);
+						NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+					}
+					*_rc=-1;
+					return false;
+				} else {
+					proxy_warning("Error during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
+					// we won't go back to PROCESSING_QUERY
+					st=previous_status.top();
+					previous_status.pop();
+					char sqlstate[10];
+					sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+					myds->destroy_MySQL_Connection_From_Pool(true);
+					myds->fd=0;
+					status=WAITING_CLIENT_DATA;
+					client_myds->DSS=STATE_SLEEP;
+					RequestEnd(myds);
+				}
+			} else {
+				// rc==1 , nothing to do for now
+			}
+		}
+	} else if (myconn->options.charset_action == CHARSET) {
+		handler_again___status_SETTING_CHARSET(_rc);
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
-	} else {
-		if (rc==-1) {
-			// the command failed
-			int myerr=mysql_errno(myconn->mysql);
-			if (myerr >= 2000) {
-				if (myerr == 2019) {
-					client_myds->myconn->options.charset = mysql_thread___default_charset;
-				}
-				bool retry_conn=false;
-				// client error, serious
-				proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-					retry_conn=true;
-				}
-				myds->destroy_MySQL_Connection_From_Pool(false);
-				myds->fd=0;
-				if (retry_conn) {
-					myds->DSS=STATE_NOT_INITIALIZED;
-					//previous_status.push(PROCESSING_QUERY);
-					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
-				}
-				*_rc=-1;
-				return false;
-			} else {
-				proxy_warning("Error during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
-					// we won't go back to PROCESSING_QUERY
-				st=previous_status.top();
-				previous_status.pop();
-				char sqlstate[10];
-				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
-				myds->destroy_MySQL_Connection_From_Pool(true);
-				myds->fd=0;
-				status=WAITING_CLIENT_DATA;
-				client_myds->DSS=STATE_SLEEP;
-				RequestEnd(myds);
-			}
-		} else {
-			// rc==1 , nothing to do for now
-		}
 	}
 	return false;
 }
@@ -5785,7 +5803,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							return true;
 						} else {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection charset to %d\n", c->nr);
-							client_myds->myconn->set_charset(c->nr);
+							client_myds->myconn->set_charset(c->nr, NAMES);
 							exit_after_SetParse = true;
 						}
 					} else if (var == "tx_isolation") {
@@ -5955,6 +5973,34 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						l_free(pkt->size,pkt->ptr);
 						return true;
 					}
+				}
+			} else if (match_regexes && match_regexes[3]->match(dig)) {
+				SetParser parser(nq);
+				std::string charset = parser.parse_character_set();
+				const MARIADB_CHARSET_INFO * c;
+				if (!charset.empty()) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET CHARACTER SET %s\n", charset.c_str());
+					c = proxysql_find_charset_name(charset.c_str());
+				} else {
+					unable_to_parse_set_statement(lock_hostgroup);
+					return false;
+				}
+				if (!c) {
+					char *m = NULL;
+					char *errmsg = NULL;
+					m=(char *)"Unknown character set: '%s'";
+					errmsg=(char *)malloc(charset.length()+strlen(m));
+					sprintf(errmsg,m,charset.c_str());
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg, true);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					free(errmsg);
+					return true;
+				} else {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection charset to %d\n", c->nr);
+					client_myds->myconn->set_charset(c->nr, CHARSET);
+					exit_after_SetParse = true;
 				}
 			} else {
 				unable_to_parse_set_statement(lock_hostgroup);
