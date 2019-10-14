@@ -2713,8 +2713,11 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 			row_length += rand_del_size;
 			tot_size += row_length;
 		}
+		int nt = GloMTH->num_threads;
 		rules_fast_routing___keys_values = (char *)malloc(tot_size);
 		rules_fast_routing___keys_values___size = tot_size;
+		rules_mem_used += rules_fast_routing___keys_values___size; // global
+		rules_mem_used += rules_fast_routing___keys_values___size * nt; // per-thread
 		char *ptr = rules_fast_routing___keys_values;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -2730,6 +2733,8 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 			memcpy(ptr,r->fields[3],l+1);
 			ptr += l;
 			ptr++; // NULL 2
+			rules_mem_used += ((sizeof(int) + sizeof(char *) + 4 )); // not sure about memory overhead
+			rules_mem_used += ((sizeof(int) + sizeof(char *) + 4 ) * nt); // per-thread . not sure about memory overhead
 		}
 	}
 #else
