@@ -2761,6 +2761,66 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						free(msg);
 						run_query=false;
 						break;
+					case 11:
+						// generate random mysql_query_rules_fast_routing
+						if (test_arg1==0) {
+							test_arg1=10000;
+						}
+						r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Generated new mysql_query_rules_fast_routing table", r1);
+						run_query=false;
+						break;
+					case 12:
+						// generate random mysql_query_rules_fast_routing and LOAD TO RUNTIME
+						if (test_arg1==0) {
+							test_arg1=10000;
+						}
+						r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1);
+						msg = SPA->load_mysql_query_rules_to_runtime();
+						if (msg==NULL) {
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Generated new mysql_query_rules_fast_routing table and loaded to runtime", r1);
+						} else {
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, msg);
+						}
+						run_query=false;
+						break;
+					case 13:
+						// generate random mysql_query_rules_fast_routing and LOAD TO RUNTIME
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
+						for (int i=0; i<test_arg1; i++) {
+							SPA->load_mysql_query_rules_to_runtime();
+						}
+						msg = (char *)malloc(128);
+						sprintf(msg,"Loaded mysql_query_rules_fast_routing to runtime %d times",test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
+						run_query=false;
+						free(msg);
+						break;
+					case 14:
+						// verify all mysql_query_rules_fast_routing rules
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
+						{
+							int ret1, ret2;
+							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1);
+							if (bret) {
+								SPA->send_MySQL_OK(&sess->client_myds->myprot, "Verified all rules in mysql_query_rules_fast_routing", ret1);
+							} else {
+								if (ret1==-1) {
+									SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Severe error in verifying rules in mysql_query_rules_fast_routing");
+								} else {
+									msg = (char *)malloc(256);
+									sprintf(msg,"Error verifying mysql_query_rules_fast_routing. Found %d rows out of %d", ret1, ret2);
+									SPA->send_MySQL_ERR(&sess->client_myds->myprot, msg);
+									free(msg);
+								}
+							}
+						}
+							run_query=false;
+						break;
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
 						run_query=false;
@@ -4873,6 +4933,96 @@ void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB 
 	free(varnames);
 }
 #endif /* PROXYSQLCLICKHOUSE */
+
+bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt) {
+	char *q = (char *)"SELECT username, schemaname, flagIN, destination_hostgroup FROM mysql_query_rules_fast_routing ORDER BY RANDOM()";
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	int matching_rows = 0;
+	bool ret = true;
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		*ret1 = -1;
+		return false;
+	} else {
+		*ret2 = resultset->rows_count;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			int dest_HG = atoi(r->fields[3]);
+			int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+			if (dest_HG == ret_HG) {
+				matching_rows++;
+			}
+		}
+	}
+	if (matching_rows !=  resultset->rows_count) {
+		ret = false;
+	}
+	*ret1 = matching_rows;
+	if (ret == true) {
+		if (cnt > 1) {
+			for (int i=1 ; i < cnt; i++) {
+				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+					SQLite3_row *r=*it;
+					int dest_HG = atoi(r->fields[3]);
+					int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+				}
+			}
+		}
+	}
+	if (resultset) delete resultset;
+	return ret;
+}
+
+unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt) {
+	char *a = "INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
+	int rc;
+	unsigned int i=0;
+	sqlite3_stmt *statement1=NULL;
+	rc=admindb->prepare_v2(a, &statement1);
+	assert(rc==SQLITE_OK);
+	admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
+	char * username_buf = (char *)malloc(32);
+	char * schemaname_buf = (char *)malloc(64);
+	//ui.username = username_buf;
+	//ui.schemaname = schemaname_buf;
+	strcpy(username_buf,"user_name_");
+	strcpy(schemaname_buf,"shard_name_");
+	int _k;
+	for (int i=0; i<cnt; i++) {
+		_k = fastrand()%20 + 1;
+		for (int _i=0 ; _i<_k ; _i++) {
+			int b = fastrand()%10;
+			username_buf[10+_i]='0' + b;
+		}
+		username_buf[10+_k]='\0';
+		_k = fastrand()%30 + 1;
+		for (int _i=0 ; _i<_k ; _i++) {
+			int b = fastrand()%10;
+			schemaname_buf[11+_i]='0' + b;
+		}
+		schemaname_buf[11+_k]='\0';
+		int flagIN = fastrand()%20;
+		int destHG = fastrand()%100;
+		rc=sqlite3_bind_text(statement1, 1, username_buf, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement1, 2, schemaname_buf, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement1, 3, flagIN); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_int64(statement1, 4, destHG); assert(rc==SQLITE_OK);
+		SAFE_SQLITE3_STEP2(statement1);
+		if (sqlite3_changes(admindb->get_db())==0) {
+			i--;
+		}
+		rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
+		rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+	}
+	sqlite3_finalize(statement1);
+	free(username_buf);
+	free(schemaname_buf);
+	return 0;
+}
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);

@@ -3,6 +3,13 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#define FAST_ROUTING_NEW208
+
+
+#ifdef FAST_ROUTING_NEW208
+#include "khash.h"
+KHASH_MAP_INIT_STR(khStrInt, int)
+#endif
 #define PROXYSQL_QPRO_PTHREAD_MUTEX
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
@@ -199,7 +206,13 @@ class Query_Processor {
 	rwlock_t rwlock;
 #endif
 	std::vector<QP_rule_t *> rules;
+#ifdef FAST_ROUTING_NEW208
+	khash_t(khStrInt) * rules_fast_routing;
+	char * rules_fast_routing___keys_values;
+	unsigned long long rules_fast_routing___keys_values___size;
+#else
 	std::unordered_map<std::string,int> rules_fast_routing;
+#endif
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 	volatile unsigned int version;
 	unsigned long long rules_mem_used;
@@ -252,6 +265,7 @@ class Query_Processor {
 	SQLite3_result * fast_routing_resultset;
 	void load_fast_routing(SQLite3_result *resultset);
 	SQLite3_result * get_current_query_rules_fast_routing();
+	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
 };
 
 typedef Query_Processor * create_Query_Processor_t();
