@@ -17,7 +17,6 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
-
 // these structs will be used for various regex hardcoded
 // their initial use will be for sql_log_bin , sql_mode and time_zone
 // issues #509 , #815 and #816

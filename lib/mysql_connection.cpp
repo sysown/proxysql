@@ -248,6 +248,8 @@ MySQL_Connection::MySQL_Connection() {
 	options.collation_connection_int=0;
 	options.net_write_timeout_int=0;
 	options.max_join_size_int=0;
+	options.charset=0;
+	options.charset_action=UNKNOWN;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
