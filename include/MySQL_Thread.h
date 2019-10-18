@@ -418,6 +418,7 @@ class MySQL_Threads_Handler
 		bool client_found_rows;
 		bool multiplexing;
 //		bool stmt_multiplexing;
+		bool log_unhealthy_connections;
 		bool forward_autocommit;
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
