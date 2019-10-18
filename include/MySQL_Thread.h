@@ -405,6 +405,7 @@ class MySQL_Threads_Handler
 		char *server_version;
 		char *keep_multiplexing_variables;
 		unsigned int default_charset;
+		unsigned int handle_unknown_charset;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
