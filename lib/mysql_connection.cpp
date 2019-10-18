@@ -1789,6 +1789,13 @@ bool MySQL_Connection::IsAutoCommit() {
 				// we assume that what we sent last is correct .  #873
 				ret = false;
 			}
+		} else {
+			if (options.last_set_autocommit==-1) {
+				// if a connection was reset (thus last_set_autocommit==-1)
+				// the information related to SERVER_STATUS_AUTOCOMMIT is lost
+				// therefore we fall back on the safe assumption that autocommit==1
+				ret = true;
+			}
 		}
 	}
 	return ret;
