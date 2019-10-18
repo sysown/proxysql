@@ -268,6 +268,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"throttle_connections_per_sec_to_hostgroup",
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
+	(char *)"log_unhealthy_connections",
 	(char *)"forward_autocommit",
 	(char *)"enforce_autocommit_on_reads",
 	(char *)"autocommit_false_not_reusable",
@@ -480,6 +481,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_found_rows=true;
 	variables.commands_stats=true;
 	variables.multiplexing=true;
+	variables.log_unhealthy_connections=true;
 	variables.forward_autocommit=false;
 	variables.enforce_autocommit_on_reads=false;
 	variables.autocommit_false_not_reusable=false;
@@ -896,6 +898,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	if (!strcmp(name,"have_ssl")) return (int)variables.have_ssl;
 	if (!strcmp(name,"hostgroup_manager_verbose")) return (int)variables.hostgroup_manager_verbose;
 	if (!strcmp(name,"multiplexing")) return (int)variables.multiplexing;
+	if (!strcmp(name,"log_unhealthy_connections")) return (int)variables.log_unhealthy_connections;
 	if (!strcmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
 	if (!strcmp(name,"enforce_autocommit_on_reads")) return (int)variables.enforce_autocommit_on_reads;
 	if (!strcmp(name,"autocommit_false_not_reusable")) return (int)variables.autocommit_false_not_reusable;
@@ -1422,6 +1425,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"multiplexing")) {
 		return strdup((variables.multiplexing ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"log_unhealthy_connections")) {
+		return strdup((variables.log_unhealthy_connections ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"forward_autocommit")) {
 		return strdup((variables.forward_autocommit ? "true" : "false"));
@@ -2697,6 +2703,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.multiplexing=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"log_unhealthy_connections")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.log_unhealthy_connections=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.log_unhealthy_connections=false;
 			return true;
 		}
 		return false;
@@ -4288,8 +4305,11 @@ void MySQL_Thread::process_all_sessions() {
 		}
 		if (sess->healthy==0) {
 			char _buf[1024];
-			if (sess->client_myds)
-				proxy_warning("Closing unhealthy client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+			if (sess->client_myds) {
+				if (mysql_thread___log_unhealthy_connections) {
+					proxy_warning("Closing unhealthy client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+				}
+			}
 			sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
 			GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 			unregister_session(n);
@@ -4484,6 +4504,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___have_ssl=(bool)GloMTH->get_variable_int((char *)"have_ssl");
 	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
+	mysql_thread___log_unhealthy_connections=(bool)GloMTH->get_variable_int((char *)"log_unhealthy_connections");
 	mysql_thread___forward_autocommit=(bool)GloMTH->get_variable_int((char *)"forward_autocommit");
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___autocommit_false_not_reusable=(bool)GloMTH->get_variable_int((char *)"autocommit_false_not_reusable");
