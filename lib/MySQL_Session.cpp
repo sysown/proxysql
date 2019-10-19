@@ -2907,6 +2907,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 			int myerr=mysql_errno(myconn->mysql);
 			if (myerr >= 2000) {
 				if (myerr == 2019) {
+					proxy_error("Client trying to set a charset/collation (%d) not supported by backend (%s:%d). Changing it to %d\n", client_myds->myconn->options.charset, myconn->parent->address, myconn->parent->port, mysql_thread___default_charset);
 					client_myds->myconn->options.charset = mysql_thread___default_charset;
 				}
 				bool retry_conn=false;
