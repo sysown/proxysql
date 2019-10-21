@@ -1580,7 +1580,15 @@ bool MySQL_Session::handler_again___verify_backend_charset() {
 				assert(0);
 				break;
 		}
-		NEXT_IMMEDIATE_NEW(CHANGING_CHARSET);
+		if (client_myds->myconn->options.charset_action == NAMES) {
+			client_myds->myconn->options.charset_sent=true;
+			NEXT_IMMEDIATE_NEW(CHANGING_CHARSET);
+		} else if (client_myds->myconn->options.charset_action == CHARSET) {
+			client_myds->myconn->options.charset_sent=true;
+			NEXT_IMMEDIATE_NEW(SETTING_CHARSET);
+		} else {
+			assert(0);
+		}
 	}
 	return false;
 }
@@ -2529,7 +2537,7 @@ bool MySQL_Session::handler_again___status_SETTING_CHARSET(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 
-	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(mybe->server_myds->myconn->options.charset);
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(client_myds->myconn->options.charset);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARSET", (char*)c->csname, false, true);
 	return ret;
 }
@@ -2901,12 +2909,11 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
-	if (myconn->options.charset_action == NAMES) {
+	if (client_myds->myconn->options.charset_action == NAMES) {
 		if (myds->mypolls==NULL) {
 			thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 		}
 		int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
-		client_myds->myconn->options.charset_sent=true;
 		if (rc==0) {
 			__sync_fetch_and_add(&MyHGM->status.backend_set_names, 1);
 			myds->DSS = STATE_MARIADB_GENERIC;
@@ -2955,9 +2962,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				// rc==1 , nothing to do for now
 			}
 		}
-	} else if (myconn->options.charset_action == CHARSET) {
-		client_myds->myconn->options.charset_sent=true;
-		handler_again___status_SETTING_CHARSET(_rc);
+	} else if (client_myds->myconn->options.charset_action == CHARSET) {
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
@@ -4376,6 +4381,18 @@ handler_again:
 			{
 				int rc=0;
 				if (handler_again___status_CHANGING_CHARSET(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_CHARSET:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_CHARSET(&rc))
 					goto handler_again;	// we changed status
 				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
@@ -6005,6 +6022,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					client_myds->myconn->set_charset(c->nr, CHARSET);
 					exit_after_SetParse = true;
 				}
+				if (exit_after_SetParse) {
+					if (command_type == _MYSQL_COM_QUERY) {
+						client_myds->DSS=STATE_QUERY_SENT_NET;
+						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
+						RequestEnd(NULL);
+						l_free(pkt->size,pkt->ptr);
+						return true;
+					}
+				}			
 			} else {
 				unable_to_parse_set_statement(lock_hostgroup);
 				return false;
