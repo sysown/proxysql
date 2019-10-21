@@ -112,7 +112,7 @@ extern int gdbg;
 #define ASSERT_SQLITE3(cond, arg, db) \
 	do { \
 		if (!cond) { \
-			proxy_error("SQLite3 error on %s:%d:%s(). Return corde %d. Error message: %s\n", __FILE__, __LINE__, __func__, arg, sqlite3_errmsg(db->get_db())); \
+			proxy_error("SQLite3 error with return corde %d. Error message: %s\n", arg, sqlite3_errmsg(db->get_db())); \
 			exit(EXIT_FAILURE); \
 		} \
 	} while(0)
