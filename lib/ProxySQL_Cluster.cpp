@@ -634,45 +634,45 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 						//rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
 						rc = GloAdmin->admindb->prepare_v2(q, &statement1);
-						assert(rc==SQLITE_OK);
+						ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						while ((row = mysql_fetch_row(result1))) {
-							rc=sqlite3_bind_int64(statement1, 1, atoll(row[0])); assert(rc==SQLITE_OK); // rule_id
-							rc=sqlite3_bind_int64(statement1, 2, 1); assert(rc==SQLITE_OK); // active
-							rc=sqlite3_bind_text(statement1, 3, row[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // username
-							rc=sqlite3_bind_text(statement1, 4, row[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // schemaname
-							rc=sqlite3_bind_text(statement1, 5, row[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // flagIN
-							rc=sqlite3_bind_text(statement1, 6, row[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // client_addr
-							rc=sqlite3_bind_text(statement1, 7, row[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // proxy_addr
-							rc=sqlite3_bind_text(statement1, 8, row[6], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // proxy_port
-							rc=sqlite3_bind_text(statement1, 9, row[7], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // digest
-							rc=sqlite3_bind_text(statement1, 10, row[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // match_digest
-							rc=sqlite3_bind_text(statement1, 11, row[9], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // match_pattern
-							rc=sqlite3_bind_text(statement1, 12, row[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // negate_match_pattern
-							rc=sqlite3_bind_text(statement1, 13, row[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // re_modifiers
-							rc=sqlite3_bind_text(statement1, 14, row[12], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // flagOUT
-							rc=sqlite3_bind_text(statement1, 15, row[13], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // replace_pattern
-							rc=sqlite3_bind_text(statement1, 16, row[14], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // destination_hostgroup
-							rc=sqlite3_bind_text(statement1, 17, row[15], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cache_ttl
-							rc=sqlite3_bind_text(statement1, 18, row[16], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cache_empty_result
-							rc=sqlite3_bind_text(statement1, 19, row[17], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cache_timeout
-							rc=sqlite3_bind_text(statement1, 20, row[18], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // reconnect
-							rc=sqlite3_bind_text(statement1, 21, row[19], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // timeout
-							rc=sqlite3_bind_text(statement1, 22, row[20], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // retries
-							rc=sqlite3_bind_text(statement1, 23, row[21], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // delay
-							rc=sqlite3_bind_text(statement1, 24, row[22], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // next_query_flagIN
-							rc=sqlite3_bind_text(statement1, 25, row[23], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_flagOUT
-							rc=sqlite3_bind_text(statement1, 26, row[24], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mirror_hostgroup
-							rc=sqlite3_bind_text(statement1, 27, row[25], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // error_msg
-							rc=sqlite3_bind_text(statement1, 28, row[26], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // OK_msg
-							rc=sqlite3_bind_text(statement1, 29, row[27], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // sticky_conn
-							rc=sqlite3_bind_text(statement1, 30, row[28], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // multiplex
-							rc=sqlite3_bind_text(statement1, 31, row[29], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // gtid_from_hostgroup
-							rc=sqlite3_bind_text(statement1, 32, row[30], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // log
-							rc=sqlite3_bind_text(statement1, 33, row[31], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // apply
-							rc=sqlite3_bind_text(statement1, 34, row[32], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
+							rc=sqlite3_bind_int64(statement1, 1, atoll(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // rule_id
+							rc=sqlite3_bind_int64(statement1, 2, 1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
+							rc=sqlite3_bind_text(statement1, 3, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+							rc=sqlite3_bind_text(statement1, 4, row[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // schemaname
+							rc=sqlite3_bind_text(statement1, 5, row[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // flagIN
+							rc=sqlite3_bind_text(statement1, 6, row[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // client_addr
+							rc=sqlite3_bind_text(statement1, 7, row[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // proxy_addr
+							rc=sqlite3_bind_text(statement1, 8, row[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // proxy_port
+							rc=sqlite3_bind_text(statement1, 9, row[7], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // digest
+							rc=sqlite3_bind_text(statement1, 10, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // match_digest
+							rc=sqlite3_bind_text(statement1, 11, row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // match_pattern
+							rc=sqlite3_bind_text(statement1, 12, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // negate_match_pattern
+							rc=sqlite3_bind_text(statement1, 13, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // re_modifiers
+							rc=sqlite3_bind_text(statement1, 14, row[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // flagOUT
+							rc=sqlite3_bind_text(statement1, 15, row[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // replace_pattern
+							rc=sqlite3_bind_text(statement1, 16, row[14], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // destination_hostgroup
+							rc=sqlite3_bind_text(statement1, 17, row[15], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // cache_ttl
+							rc=sqlite3_bind_text(statement1, 18, row[16], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // cache_empty_result
+							rc=sqlite3_bind_text(statement1, 19, row[17], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // cache_timeout
+							rc=sqlite3_bind_text(statement1, 20, row[18], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // reconnect
+							rc=sqlite3_bind_text(statement1, 21, row[19], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // timeout
+							rc=sqlite3_bind_text(statement1, 22, row[20], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // retries
+							rc=sqlite3_bind_text(statement1, 23, row[21], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // delay
+							rc=sqlite3_bind_text(statement1, 24, row[22], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // next_query_flagIN
+							rc=sqlite3_bind_text(statement1, 25, row[23], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // mirror_flagOUT
+							rc=sqlite3_bind_text(statement1, 26, row[24], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // mirror_hostgroup
+							rc=sqlite3_bind_text(statement1, 27, row[25], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // error_msg
+							rc=sqlite3_bind_text(statement1, 28, row[26], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // OK_msg
+							rc=sqlite3_bind_text(statement1, 29, row[27], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // sticky_conn
+							rc=sqlite3_bind_text(statement1, 30, row[28], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // multiplex
+							rc=sqlite3_bind_text(statement1, 31, row[29], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // gtid_from_hostgroup
+							rc=sqlite3_bind_text(statement1, 32, row[30], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // log
+							rc=sqlite3_bind_text(statement1, 33, row[31], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // apply
+							rc=sqlite3_bind_text(statement1, 34, row[32], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 							SAFE_SQLITE3_STEP2(statement1);
-							rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-							rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+							rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						}
 						char *q1fr = (char *)"INSERT INTO mysql_query_rules_fast_routing(username, schemaname, flagIN, destination_hostgroup, comment) VALUES (?1, ?2, ?3, ?4, ?5)";
 						char *q32fr = (char *)"INSERT INTO mysql_query_rules_fast_routing(username, schemaname, flagIN, destination_hostgroup, comment) VALUES (?1, ?2, ?3, ?4, ?5), (?6, ?7, ?8, ?9, ?10), (?11, ?12, ?13, ?14, ?15), (?16, ?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24, ?25), (?26, ?27, ?28, ?29, ?30), (?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40), (?41, ?42, ?43, ?44, ?45), (?46, ?47, ?48, ?49, ?50), (?51, ?52, ?53, ?54, ?55), (?56, ?57, ?58, ?59, ?60), (?61, ?62, ?63, ?64, ?65), (?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75), (?76, ?77, ?78, ?79, ?80), (?81, ?82, ?83, ?84, ?85), (?86, ?87, ?88, ?89, ?90), (?91, ?92, ?93, ?94, ?95), (?96, ?97, ?98, ?99, ?100), (?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115), (?116, ?117, ?118, ?119, ?120), (?121, ?122, ?123, ?124, ?125), (?126, ?127, ?128, ?129, ?130), (?131, ?132, ?133, ?134, ?135), (?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145), (?146, ?147, ?148, ?149, ?150), (?151, ?152, ?153, ?154, ?155), (?156, ?157, ?158, ?159, ?160)";
@@ -680,35 +680,35 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						sqlite3_stmt *statement32fr = NULL;
 						//rc=sqlite3_prepare_v2(mydb3, q1fr, -1, &statement1fr, 0);
 						rc = GloAdmin->admindb->prepare_v2(q1fr, &statement1fr);
-						assert(rc==SQLITE_OK);
+						ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						//rc=sqlite3_prepare_v2(mydb3, q32fr, -1, &statement32fr, 0);
 						rc = GloAdmin->admindb->prepare_v2(q32fr, &statement32fr);
-						assert(rc==SQLITE_OK);
+						ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						int row_idx=0;
 						int max_bulk_row_idx=mysql_num_rows(result2)/32;
 						max_bulk_row_idx=max_bulk_row_idx*32;
 						while ((row = mysql_fetch_row(result2))) {
 							int idx=row_idx%32;
 							if (row_idx<max_bulk_row_idx) { // bulk
-								rc=sqlite3_bind_text(statement32fr, (idx*5)+1, row[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // username
-								rc=sqlite3_bind_text(statement32fr, (idx*5)+2, row[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // schemaname
-								rc=sqlite3_bind_int64(statement32fr, (idx*5)+3, atoll(row[2])); assert(rc==SQLITE_OK); // flagIN
-								rc=sqlite3_bind_int64(statement32fr, (idx*5)+4, atoll(row[3])); assert(rc==SQLITE_OK); // destination_hostgroup
-								rc=sqlite3_bind_text(statement32fr, (idx*5)+5, row[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
+								rc=sqlite3_bind_text(statement32fr, (idx*5)+1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+								rc=sqlite3_bind_text(statement32fr, (idx*5)+2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // schemaname
+								rc=sqlite3_bind_int64(statement32fr, (idx*5)+3, atoll(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // flagIN
+								rc=sqlite3_bind_int64(statement32fr, (idx*5)+4, atoll(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // destination_hostgroup
+								rc=sqlite3_bind_text(statement32fr, (idx*5)+5, row[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 								if (idx==31) {
 									SAFE_SQLITE3_STEP2(statement32fr);
-									rc=sqlite3_clear_bindings(statement32fr); assert(rc==SQLITE_OK);
-									rc=sqlite3_reset(statement32fr); assert(rc==SQLITE_OK);
+									rc=sqlite3_clear_bindings(statement32fr); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+									rc=sqlite3_reset(statement32fr); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 								}
 							} else { // single row
-								rc=sqlite3_bind_text(statement1fr, 1, row[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // username
-								rc=sqlite3_bind_text(statement1fr, 2, row[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // schemaname
-								rc=sqlite3_bind_int64(statement1fr, 3, atoll(row[2])); assert(rc==SQLITE_OK); // flagIN
-								rc=sqlite3_bind_int64(statement1fr, 4, atoll(row[3])); assert(rc==SQLITE_OK); // destination_hostgroup
-								rc=sqlite3_bind_text(statement1fr, 5, row[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
+								rc=sqlite3_bind_text(statement1fr, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+								rc=sqlite3_bind_text(statement1fr, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // schemaname
+								rc=sqlite3_bind_int64(statement1fr, 3, atoll(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // flagIN
+								rc=sqlite3_bind_int64(statement1fr, 4, atoll(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // destination_hostgroup
+								rc=sqlite3_bind_text(statement1fr, 5, row[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 								SAFE_SQLITE3_STEP2(statement1fr);
-								rc=sqlite3_clear_bindings(statement1fr); assert(rc==SQLITE_OK);
-								rc=sqlite3_reset(statement1fr); assert(rc==SQLITE_OK);
+								rc=sqlite3_clear_bindings(statement1fr); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								rc=sqlite3_reset(statement1fr); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 							}
 							row_idx++;
 						}
@@ -781,25 +781,25 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 					//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 					//rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
 					rc = GloAdmin->admindb->prepare_v2(q, &statement1);
-					assert(rc==SQLITE_OK);
+					ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 					while ((row = mysql_fetch_row(result))) {
-						rc=sqlite3_bind_text(statement1, 1, row[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // username
-						rc=sqlite3_bind_text(statement1, 2, row[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // password
-						rc=sqlite3_bind_int64(statement1, 3, atoll(row[2])); assert(rc==SQLITE_OK); // active
-						rc=sqlite3_bind_int64(statement1, 4, atoll(row[3])); assert(rc==SQLITE_OK); // use_ssl
-						rc=sqlite3_bind_int64(statement1, 5, atoll(row[4])); assert(rc==SQLITE_OK); // default_hostgroup
-						rc=sqlite3_bind_text(statement1, 6, row[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // default_schema
-						rc=sqlite3_bind_int64(statement1, 7, atoll(row[6])); assert(rc==SQLITE_OK); // schema_locked
-						rc=sqlite3_bind_int64(statement1, 8, atoll(row[7])); assert(rc==SQLITE_OK); // transaction_persistent
-						rc=sqlite3_bind_int64(statement1, 9, atoll(row[8])); assert(rc==SQLITE_OK); // fast_forward
-						rc=sqlite3_bind_int64(statement1, 10, atoll(row[9])); assert(rc==SQLITE_OK); // backend
-						rc=sqlite3_bind_int64(statement1, 11, atoll(row[10])); assert(rc==SQLITE_OK); // frontend
-						rc=sqlite3_bind_int64(statement1, 12, atoll(row[11])); assert(rc==SQLITE_OK); // max_connection
-						rc=sqlite3_bind_text(statement1, 13, row[12], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // comment
+						rc=sqlite3_bind_text(statement1, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+						rc=sqlite3_bind_text(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // password
+						rc=sqlite3_bind_int64(statement1, 3, atoll(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
+						rc=sqlite3_bind_int64(statement1, 4, atoll(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // use_ssl
+						rc=sqlite3_bind_int64(statement1, 5, atoll(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_hostgroup
+						rc=sqlite3_bind_text(statement1, 6, row[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_schema
+						rc=sqlite3_bind_int64(statement1, 7, atoll(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // schema_locked
+						rc=sqlite3_bind_int64(statement1, 8, atoll(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // transaction_persistent
+						rc=sqlite3_bind_int64(statement1, 9, atoll(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // fast_forward
+						rc=sqlite3_bind_int64(statement1, 10, atoll(row[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend
+						rc=sqlite3_bind_int64(statement1, 11, atoll(row[10])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend
+						rc=sqlite3_bind_int64(statement1, 12, atoll(row[11])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connection
+						rc=sqlite3_bind_text(statement1, 13, row[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 
 						SAFE_SQLITE3_STEP2(statement1);
-						rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-						rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+						rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+						rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 					}
 					mysql_free_result(result);
 					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d completed\n", hostname, port);

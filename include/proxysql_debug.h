@@ -109,10 +109,12 @@ extern int gdbg;
 //void *debug_logger();
 #endif
 
-#define ASSERT_SQLITE3(cond, arg, db) \
+#define ASSERT_SQLITE_OK(rc, db) \
 	do { \
-		if (!cond) { \
-			proxy_error("SQLite3 error with return corde %d. Error message: %s\n", arg, sqlite3_errmsg(db->get_db())); \
+		if (rc!=SQLITE_OK) { \
+			proxy_error("SQLite3 error with return corde %d. Error message: %s. Shutting down.\n", rc, db?sqlite3_errmsg(db->get_db()):"The pointer to sqlite3 database is null. Cannot get error message."); \
 			exit(EXIT_FAILURE); \
 		} \
 	} while(0)
+
+
