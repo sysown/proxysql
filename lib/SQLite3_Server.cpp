@@ -923,25 +923,25 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = sessdb->prepare_v2(query, &statement);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, sessdb);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
 			string serverid = "";
 			serverid = "127.1." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
 //			fprintf(stderr,"%d , %s:3306 \n", hg_id , serverid.c_str());
 
-			rc=sqlite3_bind_int64(statement, 1, hg_id); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 3, 3306); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 4, 4); assert(rc==SQLITE_OK); // wsrep_local_state
-			rc=sqlite3_bind_int64(statement, 5, 0); assert(rc==SQLITE_OK); // read_only
-			rc=sqlite3_bind_int64(statement, 6, 0); assert(rc==SQLITE_OK); // wsrep_local_recv_queue
-			rc=sqlite3_bind_int64(statement, 7, 0); assert(rc==SQLITE_OK); // wsrep_desync
-			rc=sqlite3_bind_text(statement, 8, (char *)"NONE", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // wsrep_reject_queries
-			rc=sqlite3_bind_int64(statement, 9, 0); assert(rc==SQLITE_OK); // wsrep_sst_donor_rejects_queries
-			rc=sqlite3_bind_text(statement, 10, (char *)"Primary", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // wsrep_cluster_status
+			rc=sqlite3_bind_int64(statement, 1, hg_id); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_int64(statement, 3, 3306); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_int64(statement, 4, 4); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_int64(statement, 5, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_int64(statement, 6, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_int64(statement, 7, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_text(statement, 8, (char *)"NONE", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_int64(statement, 9, 0); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_text(statement, 10, (char *)"Primary", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
 		}
 		sqlite3_finalize(statement);
 	}
@@ -959,7 +959,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
     char *query=(char *)"INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5)";
     //rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
     rc = sessdb->prepare_v2(query, &statement);
-    assert(rc==SQLITE_OK);
+    ASSERT_SQLITE_OK(rc, sessdb);
 	time_t __timer;
 	char lut[30];
 	struct tm __tm_info;
@@ -1004,14 +1004,14 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 		int cpu_i = rand() % 10000;
 		float cpu = cpu_i;
 		cpu /= 100;
-		rc=sqlite3_bind_text(statement, 1, serverid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_text(statement, 2, sessionid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_double(statement, 3, cpu); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_text(statement, 4, lut, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_double(statement, 5, lag_ms); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement, 1, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+		rc=sqlite3_bind_text(statement, 2, sessionid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+		rc=sqlite3_bind_double(statement, 3, cpu); ASSERT_SQLITE_OK(rc, sessdb);
+		rc=sqlite3_bind_text(statement, 4, lut, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+		rc=sqlite3_bind_double(statement, 5, lag_ms); ASSERT_SQLITE_OK(rc, sessdb);
 		SAFE_SQLITE3_STEP2(statement);
-		rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-		rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
+		rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
 	}
 	sqlite3_finalize(statement);
 }
