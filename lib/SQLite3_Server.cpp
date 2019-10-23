@@ -982,6 +982,14 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 			proxy_info("Simulating the add of a new server for AWS Aurora Cluster %d , HGs (%d:%d). Now adding server num %d\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2, num_aurora_servers[cluster_id]);
 		}
 	}
+	if (rand() % 1000 == 0) {
+		if (num_aurora_servers[cluster_id] > 1) {
+			if (cur_aurora_writer[cluster_id] != (num_aurora_servers[cluster_id] - 1) ) {
+				num_aurora_servers[cluster_id]--;
+				proxy_info("Simulating the deletion of a server from AWS Aurora Cluster %d , HGs (%d:%d). Removing server num %d\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2, num_aurora_servers[cluster_id]+1);
+			}
+		}
+	}
 	for (unsigned int i=0; i<num_aurora_servers[cluster_id]; i++) {
 		string serverid = "";
 		//if (cluster_id==0) {
