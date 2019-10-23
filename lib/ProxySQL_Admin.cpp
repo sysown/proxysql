@@ -9434,7 +9434,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                     if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
                     if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=1000;
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
-                    if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=0;
+                    if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=1;
                     line.lookupValue("comment", comment);
                     line.lookupValue("domain_name", domain_name);
                     char *o1=strdup(comment.c_str());
