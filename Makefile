@@ -113,6 +113,10 @@ build_src_testall: build_deps build_lib_testall
 build_lib_testall: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_tap_test 
+build_tap_test: build_src
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
 .PHONY: build_src_debug
 build_src_debug: build_deps build_lib_debug
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
@@ -146,6 +150,7 @@ build_src_debug_clickhouse: build_deps build_lib_debug_clickhouse
 clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
+	cd test/tap && ${MAKE} clean
 
 packages: centos6.7 centos7 centos6.7-dbg centos7-dbg ubuntu14 debian7 debian8 ubuntu14-dbg debian7-dbg debian8-dbg ubuntu16 ubuntu16-dbg fedora24 fedora24-dbg debian9 debian9-dbg ubuntu16-clickhouse debian9-clickhouse centos7-clickhouse fedora24-clickhouse fedora27 fedora27-dbg fedora27-clickhouse ubuntu18 ubuntu18-dbg ubuntu18-clickhouse fedora28 fedora28-dbg fedora28-clickhouse
 .PHONY: packages
