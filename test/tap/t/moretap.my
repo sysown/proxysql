@@ -1,0 +1,63 @@
+BEGIN;
+SELECT tap.plan(32);
+
+-- Replace the internal record of the plan for a few tests.
+UPDATE tap.__tcache__ SET value = 3 WHERE label = 'plan' AND cid = connection_id();
+
+/****************************************************************************/
+-- Test pass().
+SELECT tap.pass( 'My pass() passed, w00t!' );
+
+-- Test fail().
+set @fail_numb = 2;
+SELECT 'ok 2 - Testing fail()';
+
+SELECT tap.eq(
+       tap.fail('oops'),
+       'not ok 2 - oops
+# Failed test 2: "oops"', 'We should get the proper output from fail()');
+
+/****************************************************************************/
+-- Check num_failed
+SELECT tap.eq( tap.num_failed(), 1, 'We should have one failure' );
+UPDATE tap.__tresults__ SET ok = 1, aok = 1 WHERE numb = @fail_numb AND cid = connection_id();
+SELECT tap.eq( tap.num_failed(), 0, 'We should now have no failures' );
+
+/****************************************************************************/
+-- Check diag.
+SELECT tap.eq( tap.diag('foo'), '# foo', 'tap.diag() should work properly' );
+SELECT tap.eq( tap.diag( 'foo
+bar'), '# foo
+# bar', 'multiline tap.diag() should work properly' );
+SELECT tap.eq( tap.diag( 'foo
+# bar'), '# foo
+# # bar', 'multiline tap.diag() should work properly with existing comments' );
+
+/****************************************************************************/
+-- Test ok()
+SELECT tap.check_test( tap.ok(1, NULL), 1, 'ok(1)', '', '', 0);
+SELECT tap.check_test( tap.ok(1, ''), 1, 'ok(1, '''')', '', '', 0 );
+SELECT tap.check_test( tap.ok(1, 'foo'), 1, 'ok(1, ''foo'')', 'foo', '', 0 );
+
+SELECT tap.check_test( tap.ok(0, NULL), 0, 'ok(0)', '', '', 0 );
+SELECT tap.check_test( tap.ok(0, ''), 0, 'ok(0, '''')', '', '', 0 );
+SELECT tap.check_test( tap.ok(0, 'foo'), 0, 'ok(0, ''foo'')', 'foo', '', 0 );
+SELECT tap.check_test( tap.ok(NULL, 'null'), 0, 'ok(NULL, ''null'')', 'null', '    (test result was NULL)', 0 );
+
+/****************************************************************************/
+-- test multiline description.
+SELECT tap.check_test(
+    tap.ok( 1, 'foo
+bar' ),
+     1,
+     'multiline desc', 'foo
+bar',
+    '',
+    0
+);
+
+/****************************************************************************/
+-- Finish the tests and clean up.
+UPDATE tap.__tcache__ SET value = 32 WHERE label = 'plan' AND cid = connection_id();
+CALL tap.finish();
+ROLLBACK;

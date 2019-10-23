@@ -1,0 +1,63 @@
+BEGIN;
+
+SELECT tap.plan(37);
+-- CALL tap.no_plan(;
+
+/****************************************************************************/
+-- Test is().
+SELECT tap.check_test( tap.eq(1, 1, NULL), 1, 'tap.eq(1, 1)', '', '', 0 );
+SELECT tap.check_test( tap.eq('x', 'x', NULL), 1, 'tap.eq(''x'', ''x'')', '', '', 0 );
+SELECT tap.check_test( tap.eq(1.1, 1.10, NULL), 0, 'tap.eq(1.1, 1.10)', '', '       have: 1.1
+        want: 1.10', 0 );
+SELECT tap.check_test( tap.eq(1, 1, NULL), 1, 'tap.eq(1, 1)', '', '', 0 );
+SELECT tap.check_test( tap.eq(0, 0, NULL), 1, 'tap.eq(0, 0)', '', '', 0 );
+SELECT tap.check_test( tap.eq(1, 1, 'foo'), 1, 'tap.eq(1, 1, desc)', 'foo', '', 0 );
+SELECT tap.check_test( tap.eq(1, 2, NULL), 0, 'tap.eq(1, 2)', '', '       have: 1
+        want: 2', 0);
+
+/****************************************************************************/
+-- Test not_eq().
+SELECT tap.check_test( tap.not_eq(1, 2, ''), 1, 'not_eq(1, 2)', '', '', 0 );
+SELECT tap.check_test( tap.not_eq(1, 1, ''), 0, 'not_eq(1, 1)', '', '       have: 1
+        want: anything else', 0 );
+
+/****************************************************************************/
+-- Try using variables.
+SET @foo = 'waffle';
+SET @bar = 'waffle';
+SELECT tap.eq( @foo, @bar, 'eq() should work with variables' );
+
+/****************************************************************************/
+-- Try using NULLs.
+
+SELECT tap.check_test(
+    tap.eq( NULL, NULL, 'NULLs' ),
+    1,
+    'tap.eq(NULL, NULL)',
+    'NULLs',
+    '',
+    0
+);
+
+SELECT tap.check_test(
+    tap.eq( NULL, 'foo', '' ),
+    0,
+    'tap.eq(NULL, foo)',
+    '',
+    '       have: NULL
+        want: foo',
+    0
+);
+
+SELECT tap.check_test(
+    tap.eq( 'foo', NULL, '' ),
+    0,
+    'tap.eq(foo, NULL)',
+    '',
+    '       have: foo
+        want: NULL',
+    0
+);
+
+CALL tap.finish();
+ROLLBACK;
