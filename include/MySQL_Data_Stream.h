@@ -136,7 +136,7 @@ class MySQL_Data_Stream
 
 	int switching_auth_stage;
 	int switching_auth_type;
-	uint8_t tmp_charset;
+	unsigned int tmp_charset;
 
 	short revents;
 

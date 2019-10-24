@@ -1562,7 +1562,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
 bool MySQL_Session::handler_again___verify_backend_charset() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client charset: %d , backend charset: %d\n", this, client_myds->myconn->options.charset, mybe->server_myds->myconn->mysql->charset->nr);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client charset: %u , backend charset: %u\n", this, client_myds->myconn->options.charset, mybe->server_myds->myconn->mysql->charset->nr);
 	if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 		//previous_status.push(PROCESSING_QUERY);
 		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
@@ -2907,7 +2907,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 			int myerr=mysql_errno(myconn->mysql);
 			if (myerr >= 2000) {
 				if (myerr == 2019) {
-					proxy_error("Client trying to set a charset/collation (%d) not supported by backend (%s:%d). Changing it to %d\n", client_myds->myconn->options.charset, myconn->parent->address, myconn->parent->port, mysql_thread___default_charset);
+					proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", client_myds->myconn->options.charset, myconn->parent->address, myconn->parent->port, mysql_thread___default_charset);
 					client_myds->myconn->options.charset = mysql_thread___default_charset;
 				}
 				bool retry_conn=false;

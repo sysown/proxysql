@@ -745,7 +745,7 @@ uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	return 0;
 }
 
-uint8_t MySQL_Threads_Handler::get_variable_uint8(char *name) {
+unsigned int MySQL_Threads_Handler::get_variable_uint(char *name) {
 	if (!strcasecmp(name,"default_charset")) return variables.default_charset;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
@@ -4497,7 +4497,7 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
 	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
-	mysql_thread___default_charset=GloMTH->get_variable_uint8((char *)"default_charset");
+	mysql_thread___default_charset=GloMTH->get_variable_uint((char *)"default_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
