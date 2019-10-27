@@ -349,7 +349,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_max_join_size",
 	(char *)"connpoll_reset_queue_length",
 	(char *)"min_num_servers_lantency_awareness",
-	(char *)"aurora_only_read_from_replicas",
+	(char *)"aurora_max_lag_ms_only_read_from_replicas",
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
@@ -496,7 +496,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_track_hostname=false;
 	variables.connpoll_reset_queue_length = 50;
 	variables.min_num_servers_lantency_awareness = 1000;
-	variables.aurora_only_read_from_replicas = 2;
+	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
@@ -874,7 +874,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		if (!strcmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 	}
 	if (!strncmp(name,"a",1)) {
-		if (!strcmp(name,"aurora_only_read_from_replicas")) return variables.aurora_only_read_from_replicas;
+		if (!strcmp(name,"aurora_max_lag_ms_only_read_from_replicas")) return variables.aurora_max_lag_ms_only_read_from_replicas;
 	}
 	if (!strcmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 	if (!strcmp(name,"eventslog_default_log")) return (int)variables.eventslog_default_log;
@@ -1406,8 +1406,8 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.min_num_servers_lantency_awareness);
 		return strdup(intbuf);
 	}
-	if (!strcasecmp(name,"aurora_only_read_from_replicas")) {
-		sprintf(intbuf,"%d",variables.aurora_only_read_from_replicas);
+	if (!strcasecmp(name,"aurora_max_lag_ms_only_read_from_replicas")) {
+		sprintf(intbuf,"%d",variables.aurora_max_lag_ms_only_read_from_replicas);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"threads")) {
@@ -2624,10 +2624,10 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
-	if (!strcasecmp(name,"aurora_only_read_from_replicas")) {
+	if (!strcasecmp(name,"aurora_max_lag_ms_only_read_from_replicas")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 100) {
-			variables.aurora_only_read_from_replicas=intv;
+			variables.aurora_max_lag_ms_only_read_from_replicas=intv;
 			return true;
 		} else {
 			return false;
@@ -4536,7 +4536,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
-	variables.aurora_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_only_read_from_replicas");
+	variables.aurora_max_lag_ms_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
 	variables.stats_time_query_processor=(bool)GloMTH->get_variable_int((char *)"stats_time_query_processor");
 	variables.query_cache_stores_empty_result=(bool)GloMTH->get_variable_int((char *)"query_cache_stores_empty_result");
@@ -4638,7 +4638,7 @@ MySQL_Thread::MySQL_Thread() {
 	match_regexes=NULL;
 
 	variables.min_num_servers_lantency_awareness = 1000;
-	variables.aurora_only_read_from_replicas = 2;
+	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;

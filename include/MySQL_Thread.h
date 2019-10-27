@@ -273,7 +273,7 @@ class MySQL_Thread
 
 	struct {
 		int min_num_servers_lantency_awareness;
-		int aurora_only_read_from_replicas;
+		int aurora_max_lag_ms_only_read_from_replicas;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
@@ -489,7 +489,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
 		int min_num_servers_lantency_awareness;
-		int aurora_only_read_from_replicas;
+		int aurora_max_lag_ms_only_read_from_replicas;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
