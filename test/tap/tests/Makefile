@@ -6,7 +6,7 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm basic-t set_character_set-t charset_unsigned_int-t
+	rm -f basic-t set_character_set-t charset_unsigned_int-t || true
 
 OPT=-O2
 

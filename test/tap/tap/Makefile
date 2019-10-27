@@ -5,7 +5,7 @@ all: tap
 
 .PHONY: clean
 clean:
-	rm *.o libtap.a
+	rm -f *.o libtap.a || true
 
 
 OPT=-O2
