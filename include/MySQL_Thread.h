@@ -403,7 +403,7 @@ class MySQL_Threads_Handler
 		char *interfaces;
 		char *server_version;
 		char *keep_multiplexing_variables;
-		uint8_t default_charset;
+		unsigned int default_charset;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -515,7 +515,7 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	uint8_t get_variable_uint8(char *name);
+	unsigned int get_variable_uint(char *name);
 	uint16_t get_variable_uint16(char *name);
 	int get_variable_int(const char *name);
 	void print_version();

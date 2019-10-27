@@ -382,7 +382,7 @@ bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
 	return _ac;
 }
 
-uint8_t MySQL_Connection::set_charset(uint8_t _c) {
+unsigned int MySQL_Connection::set_charset(unsigned int _c) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
 	options.charset=_c;
 	return _c;
@@ -1679,7 +1679,7 @@ int MySQL_Connection::async_set_autocommit(short event, bool ac) {
 	return 1;
 }
 
-int MySQL_Connection::async_set_names(short event, uint8_t c) {
+int MySQL_Connection::async_set_names(short event, unsigned int c) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
