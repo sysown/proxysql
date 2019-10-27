@@ -3990,7 +3990,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 #ifdef TEST_AURORA
 	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID");
 #else
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS > 0 AND REPLICA_LAG_IN_MILLISECONDS != 900000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
+	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS > 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
 #endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
