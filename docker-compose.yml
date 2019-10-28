@@ -57,8 +57,8 @@ services:
   centos7_build:
     image: proxysql/packaging:build-centos7
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -70,8 +70,8 @@ services:
   centos7_dbg_build:
     image: proxysql/packaging:build-centos7
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -84,8 +84,8 @@ services:
   centos7_ch_build:
     image: proxysql/packaging:build-centos7
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -354,6 +354,47 @@ services:
       - PROXYSQL_BUILD_TYPE=clickhouse
     command:
       - /opt/entrypoint/entrypoint.bash
+  debian10_build:
+    image: proxysql/packaging:build-debian10
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=debian10
+    command:
+      - /opt/entrypoint/entrypoint.bash
+  debian10_dbg_build:
+    image: proxysql/packaging:build-debian10
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=dbg-debian10
+      - PROXYSQL_BUILD_TYPE=debug
+    command:
+      - /opt/entrypoint/entrypoint.bash
+  debian10_ch_build:
+    image: proxysql/packaging:build-debian10
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=clickhouse-debian10
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command:
+      - /opt/entrypoint/entrypoint.bash
   ubuntu12_build:
     image: proxysql/packaging:build-ubuntu12
     volumes:
@@ -452,7 +493,7 @@ services:
   ubuntu18_build:
     image: proxysql/packaging:build-ubuntu18
     volumes:
-      - ./docker/images/proxysql/deb-compliant/bionic-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -465,7 +506,7 @@ services:
   ubuntu18_dbg_build:
     image: proxysql/packaging:build-ubuntu18
     volumes:
-      - ./docker/images/proxysql/deb-compliant/bionic-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -479,7 +520,7 @@ services:
   ubuntu18_ch_build:
     image: proxysql/packaging:build-ubuntu18
     volumes:
-      - ./docker/images/proxysql/deb-compliant/bionic-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
       - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
