@@ -327,6 +327,13 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY___NONE // Special marker.
 };
 
+enum handle_unknown_charset {
+	DISCONNECT_CLIENT,
+	REPLACE_WITH_DEFAULT_VERBOSE,
+	REPLACE_WITH_DEFAULT,
+	MAX_HANDLE_VALUE
+};
+
 #endif /* PROXYSQL_ENUMS */
 
 
@@ -673,6 +680,7 @@ __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
 __thread unsigned int mysql_thread___default_charset;
+__thread unsigned int mysql_thread___handle_unknown_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
@@ -823,6 +831,7 @@ extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
 extern __thread unsigned int  mysql_thread___default_charset;
+extern __thread unsigned int mysql_thread___handle_unknown_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
