@@ -454,11 +454,21 @@ int ProxySQL_Test___GetDigestTable(bool reset) {
 	return r;
 }
 
+bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
+	MySQL_Thread *mysql_thr=new MySQL_Thread();
+	mysql_thr->curtime=monotonic_time();
+	for (unsigned int i = 0; i < cnt ; i++) {
+		mysql_thr->refresh_variables();
+	}
+	delete mysql_thr;
+}
+
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
 	int r = 0;
 	r = GloQPro->purge_query_digests(async_purge, parallel, msg);
 	return r;
 }
+
 int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	//unsigned long long queries=n;
 	//queries *= 1000;
@@ -2823,6 +2833,19 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							}
 						}
 							run_query=false;
+						break;
+					case 21:
+						// refresh mysql variables N*1000 times
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
+						test_arg1 *= 1000;
+						ProxySQL_Test___Refresh_MySQL_Variables(test_arg1);
+						msg = (char *)malloc(128);
+						sprintf(msg,"Refreshed MySQL Variables %d times",test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
+						run_query=false;
+						free(msg);
 						break;
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
