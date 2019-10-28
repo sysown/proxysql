@@ -225,6 +225,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"auditlog_filename",
 	(char *)"auditlog_filesize",
 	(char *)"default_charset",
+	(char *)"handle_unknown_charset",
 	(char *)"free_connections_pct",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_ms",
@@ -464,6 +465,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.default_charset=33;
+	variables.handle_unknown_charset=0;
 	variables.interfaces=strdup((char *)"");
 	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
@@ -751,6 +753,7 @@ uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 
 unsigned int MySQL_Threads_Handler::get_variable_uint(char *name) {
 	if (!strcasecmp(name,"default_charset")) return variables.default_charset;
+	if (!strcasecmp(name,"handle_unknown_charset")) return variables.handle_unknown_charset;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 }
@@ -1223,6 +1226,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			assert(c);
 		}
 		return strdup(c->csname);
+	}
+	if (!strcasecmp(name, "handle_unknown_charset")) {
+		sprintf(intbuf, "%d",variables.handle_unknown_charset);
+		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"shun_on_failures")) {
 		sprintf(intbuf,"%d",variables.shun_on_failures);
@@ -2666,6 +2673,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			} else {
 				return false;
 			}
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"handle_unknown_charset")) {
+		uint8_t intv=atoi(value);
+		if (intv >= 0 && intv < HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE) {
+			variables.handle_unknown_charset=intv;
+			return true;
 		} else {
 			return false;
 		}
@@ -4540,6 +4556,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___default_charset=GloMTH->get_variable_uint((char *)"default_charset");
+	mysql_thread___handle_unknown_charset=GloMTH->get_variable_uint((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
