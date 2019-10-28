@@ -2679,7 +2679,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	}
 	if (!strcasecmp(name,"handle_unknown_charset")) {
 		uint8_t intv=atoi(value);
-		if (intv >= 0 && intv < MAX_HANDLE_VALUE) {
+		if (intv >= 0 && intv < HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE) {
 			variables.handle_unknown_charset=intv;
 			return true;
 		} else {

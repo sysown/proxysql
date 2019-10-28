@@ -2892,9 +2892,9 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	char msg[128];
 
 	/* Validate that server can support client's charset */
-	if (client_myds->myconn->options.charset >= 255 && strncmp(myconn->mysql->server_version, "8", 1) < 0) {
+	if (client_myds->myconn->options.charset >= 255 && myconn->mysql->server_version[0] != '8') {
 		switch(mysql_thread___handle_unknown_charset) {
-			case DISCONNECT_CLIENT:
+			case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
 				snprintf(msg,sizeof(msg),"Can't initialize character set %d",client_myds->myconn->options.charset);
 				proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing connection.\n",
 						myconn->parent->address, myconn->parent->port, 2019, msg);
@@ -2902,12 +2902,12 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				myds->fd=0;
 				*_rc=-1;
 				return false;
-			case REPLACE_WITH_DEFAULT_VERBOSE:
+			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
 				proxy_warning("Server doesn't support collation id %d. Replace it with default charset %d.\n",
 						client_myds->myconn->options.charset, mysql_thread___default_charset);
 				client_myds->myconn->options.charset=mysql_thread___default_charset;
 				break;
-			case REPLACE_WITH_DEFAULT:
+			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT:
 				client_myds->myconn->options.charset=mysql_thread___default_charset;
 				break;
 			default:
