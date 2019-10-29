@@ -4214,7 +4214,18 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 									rb = 0; // exit loop
 								}
 							} else {
-								rb = 0; // exit loop
+								bool set_rb_zero = true;
+								if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
+									if (myds->encrypted == true) {
+										if (SSL_is_init_finished(myds->ssl)) {
+											if (myds->data_in_rbio()) {
+												set_rb_zero = false;
+											}
+										}
+									}
+								}
+								if (set_rb_zero)
+									rb = 0; // exit loop
 							}
 						} while (rb > 0);
 
