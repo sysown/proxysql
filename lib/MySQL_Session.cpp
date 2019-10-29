@@ -1563,8 +1563,8 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
 bool MySQL_Session::handler_again___verify_backend_charset() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client charset: %d , backend charset: %d\n", this, client_myds->myconn->options.charset, mybe->server_myds->myconn->mysql->charset->nr);
-	if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr || client_myds->myconn->options.charset_action != mybe->server_myds->myconn->options.charset_action) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client charset: %u , backend charset: %u\n", this, client_myds->myconn->options.charset, mybe->server_myds->myconn->mysql->charset->nr);
+	if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
 		//previous_status.push(PROCESSING_QUERY);
 		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
@@ -2905,6 +2905,33 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
+	char msg[128];
+
+	/* Validate that server can support client's charset */
+	if (client_myds->myconn->options.charset >= 255 && myconn->mysql->server_version[0] != '8') {
+		switch(mysql_thread___handle_unknown_charset) {
+			case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
+				snprintf(msg,sizeof(msg),"Can't initialize character set %d",client_myds->myconn->options.charset);
+				proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing connection.\n",
+						myconn->parent->address, myconn->parent->port, 2019, msg);
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				*_rc=-1;
+				return false;
+			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
+				proxy_warning("Server doesn't support collation id %d. Replace it with default charset %d.\n",
+						client_myds->myconn->options.charset, mysql_thread___default_charset);
+				client_myds->myconn->options.charset=mysql_thread___default_charset;
+				break;
+			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT:
+				client_myds->myconn->options.charset=mysql_thread___default_charset;
+				break;
+			default:
+				proxy_error("Wrong configuration of the handle_unknown_charset\n");
+				break;
+		}
+	}
+
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
 	if (client_myds->myconn->options.charset_action == NAMES) {
@@ -2924,6 +2951,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				int myerr=mysql_errno(myconn->mysql);
 				if (myerr >= 2000) {
 					if (myerr == 2019) {
+            			proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", client_myds->myconn->options.charset, myconn->parent->address, myconn->parent->port, mysql_thread___default_charset);
 						client_myds->myconn->options.charset = mysql_thread___default_charset;
 					}
 					bool retry_conn=false;

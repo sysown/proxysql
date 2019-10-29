@@ -289,8 +289,11 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 // mysql_replication_hostgroups in v2.0.0
 #define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0 "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
+// mysql_replication_hostgroups in v2.0.8
+#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_8 "CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
+
 // mysql_replication_hostgroups current
-#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0
+#define ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_8
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
@@ -306,7 +309,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port AND gtid_port >= 0 AND gtid_port <= 65535) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT CHECK (flagIN >= 0) NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT CHECK (proxy_port >= 0 AND proxy_port <= 65535), digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT CHECK (flagOUT >= 0), replace_pattern VARCHAR CHECK(CASE WHEN replace_pattern IS NULL THEN 1 WHEN replace_pattern IS NOT NULL AND match_pattern IS NOT NULL THEN 1 ELSE 0 END) , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , cache_empty_result INT CHECK (cache_empty_result IN (0,1)) DEFAULT NULL , cache_timeout INT CHECK(cache_timeout >= 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED CHECK (timeout >= 0) , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED CHECK (delay >=0) , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , OK_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1,2)) , gtid_from_hostgroup INT UNSIGNED , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , comment VARCHAR)"
 
@@ -451,11 +454,21 @@ int ProxySQL_Test___GetDigestTable(bool reset) {
 	return r;
 }
 
+bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
+	MySQL_Thread *mysql_thr=new MySQL_Thread();
+	mysql_thr->curtime=monotonic_time();
+	for (unsigned int i = 0; i < cnt ; i++) {
+		mysql_thr->refresh_variables();
+	}
+	delete mysql_thr;
+}
+
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
 	int r = 0;
 	r = GloQPro->purge_query_digests(async_purge, parallel, msg);
 	return r;
 }
+
 int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	//unsigned long long queries=n;
 	//queries *= 1000;
@@ -2761,6 +2774,79 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						free(msg);
 						run_query=false;
 						break;
+					case 11:
+						// generate random mysql_query_rules_fast_routing
+						if (test_arg1==0) {
+							test_arg1=10000;
+						}
+						r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Generated new mysql_query_rules_fast_routing table", r1);
+						run_query=false;
+						break;
+					case 12:
+						// generate random mysql_query_rules_fast_routing and LOAD TO RUNTIME
+						if (test_arg1==0) {
+							test_arg1=10000;
+						}
+						r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1);
+						msg = SPA->load_mysql_query_rules_to_runtime();
+						if (msg==NULL) {
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Generated new mysql_query_rules_fast_routing table and loaded to runtime", r1);
+						} else {
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, msg);
+						}
+						run_query=false;
+						break;
+					case 13:
+						// generate random mysql_query_rules_fast_routing and LOAD TO RUNTIME
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
+						for (int i=0; i<test_arg1; i++) {
+							SPA->load_mysql_query_rules_to_runtime();
+						}
+						msg = (char *)malloc(128);
+						sprintf(msg,"Loaded mysql_query_rules_fast_routing to runtime %d times",test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
+						run_query=false;
+						free(msg);
+						break;
+					case 14:
+						// verify all mysql_query_rules_fast_routing rules
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
+						{
+							int ret1, ret2;
+							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1);
+							if (bret) {
+								SPA->send_MySQL_OK(&sess->client_myds->myprot, "Verified all rules in mysql_query_rules_fast_routing", ret1);
+							} else {
+								if (ret1==-1) {
+									SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Severe error in verifying rules in mysql_query_rules_fast_routing");
+								} else {
+									msg = (char *)malloc(256);
+									sprintf(msg,"Error verifying mysql_query_rules_fast_routing. Found %d rows out of %d", ret1, ret2);
+									SPA->send_MySQL_ERR(&sess->client_myds->myprot, msg);
+									free(msg);
+								}
+							}
+						}
+							run_query=false;
+						break;
+					case 21:
+						// refresh mysql variables N*1000 times
+						if (test_arg1==0) {
+							test_arg1=1;
+						}
+						test_arg1 *= 1000;
+						ProxySQL_Test___Refresh_MySQL_Variables(test_arg1);
+						msg = (char *)malloc(128);
+						sprintf(msg,"Refreshed MySQL Variables %d times",test_arg1);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
+						run_query=false;
+						free(msg);
+						break;
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
 						run_query=false;
@@ -4874,6 +4960,96 @@ void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB 
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
+bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt) {
+	char *q = (char *)"SELECT username, schemaname, flagIN, destination_hostgroup FROM mysql_query_rules_fast_routing ORDER BY RANDOM()";
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	int matching_rows = 0;
+	bool ret = true;
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		*ret1 = -1;
+		return false;
+	} else {
+		*ret2 = resultset->rows_count;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			int dest_HG = atoi(r->fields[3]);
+			int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+			if (dest_HG == ret_HG) {
+				matching_rows++;
+			}
+		}
+	}
+	if (matching_rows !=  resultset->rows_count) {
+		ret = false;
+	}
+	*ret1 = matching_rows;
+	if (ret == true) {
+		if (cnt > 1) {
+			for (int i=1 ; i < cnt; i++) {
+				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+					SQLite3_row *r=*it;
+					int dest_HG = atoi(r->fields[3]);
+					int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+				}
+			}
+		}
+	}
+	if (resultset) delete resultset;
+	return ret;
+}
+
+unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt) {
+	char *a = "INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
+	int rc;
+	unsigned int i=0;
+	sqlite3_stmt *statement1=NULL;
+	rc=admindb->prepare_v2(a, &statement1);
+	ASSERT_SQLITE_OK(rc, admindb);
+	admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
+	char * username_buf = (char *)malloc(32);
+	char * schemaname_buf = (char *)malloc(64);
+	//ui.username = username_buf;
+	//ui.schemaname = schemaname_buf;
+	strcpy(username_buf,"user_name_");
+	strcpy(schemaname_buf,"shard_name_");
+	int _k;
+	for (int i=0; i<cnt; i++) {
+		_k = fastrand()%20 + 1;
+		for (int _i=0 ; _i<_k ; _i++) {
+			int b = fastrand()%10;
+			username_buf[10+_i]='0' + b;
+		}
+		username_buf[10+_k]='\0';
+		_k = fastrand()%30 + 1;
+		for (int _i=0 ; _i<_k ; _i++) {
+			int b = fastrand()%10;
+			schemaname_buf[11+_i]='0' + b;
+		}
+		schemaname_buf[11+_k]='\0';
+		int flagIN = fastrand()%20;
+		int destHG = fastrand()%100;
+		rc=sqlite3_bind_text(statement1, 1, username_buf, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+		rc=sqlite3_bind_text(statement1, 2, schemaname_buf, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+		rc=sqlite3_bind_int64(statement1, 3, flagIN); ASSERT_SQLITE_OK(rc, admindb);
+		rc=sqlite3_bind_int64(statement1, 4, destHG); ASSERT_SQLITE_OK(rc, admindb);
+		SAFE_SQLITE3_STEP2(statement1);
+		if (sqlite3_changes(admindb->get_db())==0) {
+			i--;
+		}
+		rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+		rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	}
+	sqlite3_finalize(statement1);
+	free(username_buf);
+	free(schemaname_buf);
+	return 0;
+}
+
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
@@ -4916,13 +5092,13 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	//sqlite3 *mydb3=db->get_db();
 	//rc=sqlite3_prepare_v2(mydb3, a, -1, &statement1, 0);
 	rc=db->prepare_v2(a, &statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, db);
 	if (runtime)  {
 		db->execute("DELETE FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		b=(char *)"INSERT INTO runtime_global_variables(variable_name, variable_value) VALUES(?1, ?2)";
 		//rc=sqlite3_prepare_v2(mydb3, b, -1, &statement2, 0);
 		rc=db->prepare_v2(b, &statement2);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, db);
 	}
 	GloMTH->wrlock();
 	db->execute("BEGIN");
@@ -4931,17 +5107,17 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		char *val=GloMTH->get_variable(varnames[i]);
 		char *qualified_name=(char *)malloc(strlen(varnames[i])+7);
 		sprintf(qualified_name, "mysql-%s", varnames[i]);
-		rc=sqlite3_bind_text(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-		rc=sqlite3_bind_text(statement1, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+		rc=sqlite3_bind_text(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc=sqlite3_bind_text(statement1, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		SAFE_SQLITE3_STEP2(statement1);
-		rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-		rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+		rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, db);
+		rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, db);
 		if (runtime) {
-			rc=sqlite3_bind_text(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement2, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement2, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc=sqlite3_bind_text(statement2, 2, (val ? val : (char *)""), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			SAFE_SQLITE3_STEP2(statement2);
-			rc=sqlite3_clear_bindings(statement2); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement2); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement2); ASSERT_SQLITE_OK(rc, db);
+			rc=sqlite3_reset(statement2); ASSERT_SQLITE_OK(rc, db);
 		}
 		if (val)
 			free(val);
@@ -6079,10 +6255,10 @@ void ProxySQL_Admin::stats___mysql_processlist() {
 
 	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 	rc = statsdb->prepare_v2(query1, &statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	rc = statsdb->prepare_v2(query32, &statement32);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 
 /* for reference
 CREATE TABLE stats_mysql_processlist (
@@ -6114,95 +6290,95 @@ CREATE TABLE stats_mysql_processlist (
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=sqlite3_bind_int64(statement32, (idx*16)+1, atoll(r1->fields[0])); assert(rc==SQLITE_OK); // ThreadID
-			rc=sqlite3_bind_int64(statement32, (idx*16)+2, atoll(r1->fields[1])); assert(rc==SQLITE_OK); // SessionID
-			rc=sqlite3_bind_text(statement32, (idx*16)+3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // user
-			rc=sqlite3_bind_text(statement32, (idx*16)+4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // db
-			rc=sqlite3_bind_text(statement32, (idx*16)+5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cli_host
+			rc=sqlite3_bind_int64(statement32, (idx*16)+1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb); // ThreadID
+			rc=sqlite3_bind_int64(statement32, (idx*16)+2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb); // SessionID
+			rc=sqlite3_bind_text(statement32, (idx*16)+3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // user
+			rc=sqlite3_bind_text(statement32, (idx*16)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // db
+			rc=sqlite3_bind_text(statement32, (idx*16)+5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // cli_host
 			if (r1->fields[5]) {
-				rc=sqlite3_bind_int64(statement32, (idx*16)+6, atoll(r1->fields[5])); assert(rc==SQLITE_OK); // cli_port
+				rc=sqlite3_bind_int64(statement32, (idx*16)+6, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb); // cli_port
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*16)+6); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*16)+6); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 			if (r1->fields[6]) {
-				rc=sqlite3_bind_int64(statement32, (idx*16)+7, atoll(r1->fields[6])); assert(rc==SQLITE_OK); // hostgroup
+				rc=sqlite3_bind_int64(statement32, (idx*16)+7, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb); // hostgroup
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*16)+8); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*16)+8); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement32, (idx*16)+8, r1->fields[7], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // l_srv_host
+			rc=sqlite3_bind_text(statement32, (idx*16)+8, r1->fields[7], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // l_srv_host
 			if (r1->fields[8]) {
-				rc=sqlite3_bind_int64(statement32, (idx*16)+9, atoll(r1->fields[8])); assert(rc==SQLITE_OK); // l_srv_port
+				rc=sqlite3_bind_int64(statement32, (idx*16)+9, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb); // l_srv_port
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*16)+9); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*16)+9); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement32, (idx*16)+10, r1->fields[9], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // srv_host
+			rc=sqlite3_bind_text(statement32, (idx*16)+10, r1->fields[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // srv_host
 			if (r1->fields[10]) {
-				rc=sqlite3_bind_int64(statement32, (idx*16)+11, atoll(r1->fields[10])); assert(rc==SQLITE_OK); // srv_port
+				rc=sqlite3_bind_int64(statement32, (idx*16)+11, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb); // srv_port
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*16)+11); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*16)+11); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement32, (idx*16)+12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // command
+			rc=sqlite3_bind_text(statement32, (idx*16)+12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // command
 			if (r1->fields[12]) {
-				rc=sqlite3_bind_int64(statement32, (idx*16)+13, atoll(r1->fields[12])); assert(rc==SQLITE_OK); // time_ms
+				rc=sqlite3_bind_int64(statement32, (idx*16)+13, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // time_ms
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*16)+13); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*16)+13); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement32, (idx*16)+14, r1->fields[13], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // info
+			rc=sqlite3_bind_text(statement32, (idx*16)+14, r1->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // info
 			if (r1->fields[14]) {
-				rc=sqlite3_bind_int64(statement32, (idx*16)+15, atoll(r1->fields[14])); assert(rc==SQLITE_OK); // status_flags
+				rc=sqlite3_bind_int64(statement32, (idx*16)+15, atoll(r1->fields[14])); ASSERT_SQLITE_OK(rc, statsdb); // status_flags
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*16)+15); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*16)+15); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement32, (idx*16)+16, r1->fields[15], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // extended_info
+			rc=sqlite3_bind_text(statement32, (idx*16)+16, r1->fields[15], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // extended_info
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
-				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 		} else { // single row
-			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); assert(rc==SQLITE_OK); // ThreadID
-			rc=sqlite3_bind_int64(statement1, 2, atoll(r1->fields[1])); assert(rc==SQLITE_OK); // SessionID
-			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // user
-			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // db
-			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // cli_host
+			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb); // ThreadID
+			rc=sqlite3_bind_int64(statement1, 2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb); // SessionID
+			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // user
+			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // db
+			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // cli_host
 			if (r1->fields[5]) {
-				rc=sqlite3_bind_int64(statement1, 6, atoll(r1->fields[5])); assert(rc==SQLITE_OK); // cli_port
+				rc=sqlite3_bind_int64(statement1, 6, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb); // cli_port
 			} else {
-				rc = sqlite3_bind_null(statement1, 6); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 6); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 			if (r1->fields[6]) {
-				rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[6])); assert(rc==SQLITE_OK); // hostgroup
+				rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb); // hostgroup
 			} else {
-				rc = sqlite3_bind_null(statement1, 8); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 8); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement1, 8, r1->fields[7], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // l_srv_host
+			rc=sqlite3_bind_text(statement1, 8, r1->fields[7], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // l_srv_host
 			if (r1->fields[8]) {
-				rc=sqlite3_bind_int64(statement1, 9, atoll(r1->fields[8])); assert(rc==SQLITE_OK); // l_srv_port
+				rc=sqlite3_bind_int64(statement1, 9, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb); // l_srv_port
 			} else {
-				rc = sqlite3_bind_null(statement1, 9); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 9); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement1, 10, r1->fields[9], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // srv_host
+			rc=sqlite3_bind_text(statement1, 10, r1->fields[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // srv_host
 			if (r1->fields[10]) {
-				rc=sqlite3_bind_int64(statement1, 11, atoll(r1->fields[10])); assert(rc==SQLITE_OK); // srv_port
+				rc=sqlite3_bind_int64(statement1, 11, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb); // srv_port
 			} else {
-				rc = sqlite3_bind_null(statement1, 11); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 11); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // command
+			rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // command
 			if (r1->fields[12]) {
-				rc=sqlite3_bind_int64(statement1, 13, atoll(r1->fields[12])); assert(rc==SQLITE_OK); // time_ms
+				rc=sqlite3_bind_int64(statement1, 13, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // time_ms
 			} else {
-				rc = sqlite3_bind_null(statement1, 13); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 13); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement1, 14, r1->fields[13], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // info
+			rc=sqlite3_bind_text(statement1, 14, r1->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // info
 			if (r1->fields[14]) {
-				rc=sqlite3_bind_int64(statement1, 15, atoll(r1->fields[14])); assert(rc==SQLITE_OK); // status_flags
+				rc=sqlite3_bind_int64(statement1, 15, atoll(r1->fields[14])); ASSERT_SQLITE_OK(rc, statsdb); // status_flags
 			} else {
-				rc = sqlite3_bind_null(statement1, 15); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 15); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement1, 16, r1->fields[15], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // extended_info
+			rc=sqlite3_bind_text(statement1, 16, r1->fields[15], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // extended_info
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
 		row_idx++;
 	}
@@ -6257,10 +6433,10 @@ void ProxySQL_Admin::stats___mysql_free_connections() {
 
 	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 	rc = statsdb->prepare_v2(query1, &statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	rc = statsdb->prepare_v2(query32, &statement32);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_free_connections");
@@ -6272,65 +6448,65 @@ void ProxySQL_Admin::stats___mysql_free_connections() {
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=sqlite3_bind_int64(statement32, (idx*13)+1, atoll(r1->fields[0])); assert(rc==SQLITE_OK); // FD
-			rc=sqlite3_bind_int64(statement32, (idx*13)+2, atoll(r1->fields[1])); assert(rc==SQLITE_OK); // hostgroup
-			rc=sqlite3_bind_text(statement32, (idx*13)+3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // srv_host
+			rc=sqlite3_bind_int64(statement32, (idx*13)+1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb); // FD
+			rc=sqlite3_bind_int64(statement32, (idx*13)+2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb); // hostgroup
+			rc=sqlite3_bind_text(statement32, (idx*13)+3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // srv_host
 			if (r1->fields[3]) {
-				rc=sqlite3_bind_int64(statement32, (idx*13)+4, atoll(r1->fields[3])); assert(rc==SQLITE_OK); // srv_port
+				rc=sqlite3_bind_int64(statement32, (idx*13)+4, atoll(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb); // srv_port
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*13)+4); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*13)+4); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement32, (idx*13)+5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // user
-			rc=sqlite3_bind_text(statement32, (idx*13)+6, r1->fields[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // db
-			rc=sqlite3_bind_text(statement32, (idx*13)+7, r1->fields[6], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // init_connect
-			rc=sqlite3_bind_text(statement32, (idx*13)+8, r1->fields[7], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // time_zone
-			rc=sqlite3_bind_text(statement32, (idx*13)+9, r1->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // sql_mode
+			rc=sqlite3_bind_text(statement32, (idx*13)+5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // user
+			rc=sqlite3_bind_text(statement32, (idx*13)+6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // db
+			rc=sqlite3_bind_text(statement32, (idx*13)+7, r1->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // init_connect
+			rc=sqlite3_bind_text(statement32, (idx*13)+8, r1->fields[7], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // time_zone
+			rc=sqlite3_bind_text(statement32, (idx*13)+9, r1->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // sql_mode
 			if (r1->fields[9]) {
-				rc=sqlite3_bind_int64(statement32, (idx*13)+10, atoll(r1->fields[9])); assert(rc==SQLITE_OK); // autocommit
+				rc=sqlite3_bind_int64(statement32, (idx*13)+10, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb); // autocommit
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*13)+10); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*13)+10); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 			if (r1->fields[10]) {
-				rc=sqlite3_bind_int64(statement32, (idx*13)+11, atoll(r1->fields[10])); assert(rc==SQLITE_OK); // idle_ms
+				rc=sqlite3_bind_int64(statement32, (idx*13)+11, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb); // idle_ms
 			} else {
-				rc = sqlite3_bind_null(statement32, (idx*13)+11); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement32, (idx*13)+11); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement32, (idx*13)+12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // statistics
-			rc=sqlite3_bind_text(statement32, (idx*13)+13, r1->fields[12], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mysql_info
+			rc=sqlite3_bind_text(statement32, (idx*13)+12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // statistics
+			rc=sqlite3_bind_text(statement32, (idx*13)+13, r1->fields[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // mysql_info
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
-				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 		} else { // single row
-			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); assert(rc==SQLITE_OK); // FD
-			rc=sqlite3_bind_int64(statement1, 2, atoll(r1->fields[1])); assert(rc==SQLITE_OK); // hostgroup
-			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // srv_host
+			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb); // FD
+			rc=sqlite3_bind_int64(statement1, 2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb); // hostgroup
+			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // srv_host
 			if (r1->fields[3]) {
-				rc=sqlite3_bind_int64(statement1, 4, atoll(r1->fields[3])); assert(rc==SQLITE_OK); // srv_port
+				rc=sqlite3_bind_int64(statement1, 4, atoll(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb); // srv_port
 			} else {
-				rc = sqlite3_bind_null(statement1, 4); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 4); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // user
-			rc=sqlite3_bind_text(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // db
-			rc=sqlite3_bind_text(statement1, 7, r1->fields[6], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // init_connect
-			rc=sqlite3_bind_text(statement1, 8, r1->fields[7], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // time_zone
-			rc=sqlite3_bind_text(statement1, 9, r1->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // sql_mode
+			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // user
+			rc=sqlite3_bind_text(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // db
+			rc=sqlite3_bind_text(statement1, 7, r1->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // init_connect
+			rc=sqlite3_bind_text(statement1, 8, r1->fields[7], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // time_zone
+			rc=sqlite3_bind_text(statement1, 9, r1->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // sql_mode
 			if (r1->fields[9]) {
-				rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[9])); assert(rc==SQLITE_OK); // autocommit
+				rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb); // autocommit
 			} else {
-				rc = sqlite3_bind_null(statement1, 10); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 10); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 			if (r1->fields[10]) {
-				rc=sqlite3_bind_int64(statement1, 11, atoll(r1->fields[10])); assert(rc==SQLITE_OK); // idle_ms
+				rc=sqlite3_bind_int64(statement1, 11, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb); // idle_ms
 			} else {
-				rc = sqlite3_bind_null(statement1, 11); assert(rc==SQLITE_OK);
+				rc = sqlite3_bind_null(statement1, 11); ASSERT_SQLITE_OK(rc, statsdb);
 			}
-			rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // statistics
-			rc=sqlite3_bind_text(statement1, 13, r1->fields[12], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK); // mysql_info
+			rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // statistics
+			rc=sqlite3_bind_text(statement1, 13, r1->fields[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // mysql_info
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
 		row_idx++;
 	}
@@ -6395,21 +6571,21 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 		query1=(char *)"INSERT INTO stats_proxysql_servers_checksums VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 		rc = statsdb->prepare_v2(query1, &statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, statsdb);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r1=*it;
-			rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 4, atoi(r1->fields[3])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 5, atoi(r1->fields[4])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
 		sqlite3_finalize(statement1);
 	}
@@ -6432,22 +6608,22 @@ void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 		query1=(char *)"INSERT INTO stats_proxysql_servers_metrics VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 		rc = statsdb->prepare_v2(query1, &statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, statsdb);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r1=*it;
-			rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 5, atoi(r1->fields[4])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 6, atoi(r1->fields[5])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
 		sqlite3_finalize(statement1);
 	}
@@ -6495,10 +6671,10 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 */
 	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 	rc = statsdb->prepare_v2(query1, &statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	rc = statsdb->prepare_v2(query32, &statement32);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	int row_idx=0;
 	int max_bulk_row_idx=resultset->rows_count/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
@@ -6506,43 +6682,43 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=sqlite3_bind_int64(statement32, (idx*14)+1, atoll(r1->fields[11])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*14)+2, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*14)+3, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*14)+4, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*14)+5, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*14)+6, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*14)+7, atoll(r1->fields[5])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*14)+8, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*14)+9, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*14)+10, atoll(r1->fields[8])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*14)+11, atoll(r1->fields[9])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*14)+12, atoll(r1->fields[10])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*14)+13, atoll(r1->fields[12])); assert(rc==SQLITE_OK); // rows affected
-			rc=sqlite3_bind_int64(statement32, (idx*14)+14, atoll(r1->fields[13])); assert(rc==SQLITE_OK); // rows sent
+			rc=sqlite3_bind_int64(statement32, (idx*14)+1, atoll(r1->fields[11])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+2, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+3, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+4, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+5, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+6, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+7, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+8, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+9, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+10, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+11, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+12, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+13, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
+			rc=sqlite3_bind_int64(statement32, (idx*14)+14, atoll(r1->fields[13])); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
-				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 		} else { // single row
-			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[11])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 2, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 3, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 4, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 5, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 6, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[5])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 8, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 9, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[8])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 11, atoll(r1->fields[9])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 12, atoll(r1->fields[10])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 13, atoll(r1->fields[12])); assert(rc==SQLITE_OK); // rows affected
-			rc=sqlite3_bind_int64(statement1, 14, atoll(r1->fields[13])); assert(rc==SQLITE_OK); // rows sent
+			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[11])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 2, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 3, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 4, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 5, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 6, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 8, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 9, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 11, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 12, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 13, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
+			rc=sqlite3_bind_int64(statement1, 14, atoll(r1->fields[13])); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
 		row_idx++;
 	}
@@ -6595,10 +6771,10 @@ void ProxySQL_Admin::stats___mysql_errors(bool reset) {
 
 	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 	rc = statsdb->prepare_v2(query1, &statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	rc = statsdb->prepare_v2(query32, &statement32);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	int row_idx=0;
 	int max_bulk_row_idx=resultset->rows_count/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
@@ -6606,37 +6782,37 @@ void ProxySQL_Admin::stats___mysql_errors(bool reset) {
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=sqlite3_bind_int64(statement32, (idx*11)+1, atoll(r1->fields[0])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*11)+2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*11)+3, atoll(r1->fields[2])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*11)+4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*11)+5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*11)+6, r1->fields[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*11)+7, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*11)+8, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*11)+9, atoll(r1->fields[8])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*11)+10, atoll(r1->fields[9])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*11)+11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*11)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+3, atoll(r1->fields[2])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*11)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*11)+5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*11)+6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+7, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+8, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+9, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*11)+10, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*11)+11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
-				rc=sqlite3_clear_bindings(statement32); //assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement32); //assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement32); //ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_reset(statement32); //ASSERT_SQLITE_OK(rc, statsdb);
 			}
 		} else { // single row
-			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 3, atoll(r1->fields[2])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 8, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 9, atoll(r1->fields[8])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[9])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 3, atoll(r1->fields[2])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 8, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 9, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 10, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 11, r1->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); //assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); //assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); //ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_reset(statement1); //ASSERT_SQLITE_OK(rc, statsdb);
 		}
 		row_idx++;
 	}
@@ -6693,10 +6869,10 @@ void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runt
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 		rc = admindb->prepare_v2(query1, &statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 		rc = admindb->prepare_v2(query32, &statement32);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
 		max_bulk_row_idx=max_bulk_row_idx*32;
@@ -6704,25 +6880,25 @@ void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runt
 			SQLite3_row *r1=*it;
 			int idx=row_idx%32;
 			if (row_idx<max_bulk_row_idx) { // bulk
-				rc=sqlite3_bind_text(statement32, (idx*5)+1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement32, (idx*5)+2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*5)+3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*5)+4, atoi(r1->fields[3])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement32, (idx*5)+5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement32, (idx*5)+1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*5)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*5)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*5)+4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*5)+5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				if (idx==31) {
 					SAFE_SQLITE3_STEP2(statement32);
-					rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-					rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+					rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, admindb);
+					rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, admindb);
 				}
 			} else { // single row
-				rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 4, atoi(r1->fields[3])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP2(statement1);
-				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			}
 			row_idx++;
 		}
@@ -7591,57 +7767,57 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	//sqlite3 *mydb3 = admindb->get_db();
 	//rc=sqlite3_prepare_v2(mydb3, q, -1, &statement1, 0);
 	rc = admindb->prepare_v2(q,&statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, admindb);
 	admindb->execute((char *)"BEGIN");
 	admindb->execute((char *)"DELETE FROM runtime_checksums_values");
 
-	rc=sqlite3_bind_text(statement1, 1, "admin_variables", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.admin_variables.version); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.admin_variables.epoch); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.admin_variables.checksum, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement1, 1, "admin_variables", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.admin_variables.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.admin_variables.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.admin_variables.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-	rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
-	rc=sqlite3_bind_text(statement1, 1, "mysql_query_rules", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_query_rules.version); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_query_rules.epoch); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_query_rules.checksum, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement1, 1, "mysql_query_rules", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_query_rules.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_query_rules.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_query_rules.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-	rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
-	rc=sqlite3_bind_text(statement1, 1, "mysql_servers", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_servers.version); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_servers.epoch); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_servers.checksum, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement1, 1, "mysql_servers", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_servers.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_servers.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_servers.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-	rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
-	rc=sqlite3_bind_text(statement1, 1, "mysql_users", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_users.version); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_users.epoch); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_users.checksum, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement1, 1, "mysql_users", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_users.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_users.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_users.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-	rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
-	rc=sqlite3_bind_text(statement1, 1, "mysql_variables", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_variables.version); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_variables.epoch); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_variables.checksum, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement1, 1, "mysql_variables", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.mysql_variables.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.mysql_variables.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.mysql_variables.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-	rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
-	rc=sqlite3_bind_text(statement1, 1, "proxysql_servers", -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.proxysql_servers.version); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.proxysql_servers.epoch); assert(rc==SQLITE_OK);
-	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.proxysql_servers.checksum, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+	rc=sqlite3_bind_text(statement1, 1, "proxysql_servers", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 2, GloVars.checksums_values.proxysql_servers.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_int64(statement1, 3, GloVars.checksums_values.proxysql_servers.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_bind_text(statement1, 4, GloVars.checksums_values.proxysql_servers.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-	rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
 	admindb->execute((char *)"COMMIT");
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
@@ -7687,10 +7863,10 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 	}
 	//rc=sqlite3_prepare_v2(mydb3, q_stmt1_f, -1, &f_statement1, 0);
 	rc = admindb->prepare_v2(q_stmt1_f, &f_statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, admindb);
 	//rc=sqlite3_prepare_v2(mydb3, q_stmt1_b, -1, &b_statement1, 0);
 	rc = admindb->prepare_v2(q_stmt1_b, &b_statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, admindb);
 	for (i=0; i<num_users; i++) {
 	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
 		account_details_t *ad=ads[i];
@@ -7729,20 +7905,20 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 				free(query);
 			} else {
 */
-			rc=sqlite3_bind_text(statement1, 1, ad->username, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 2, ad->password, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 3, ad->use_ssl); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 4, ad->default_hostgroup); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 5, ad->default_schema, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 6, ad->schema_locked); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 7, ad->transaction_persistent); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 8, ad->fast_forward); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 9, ad->username, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 10, ad->max_connections); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 11, ad->comment, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_text(statement1, 1, ad->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement1, 2, ad->password, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement1, 3, ad->use_ssl); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement1, 4, ad->default_hostgroup); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement1, 5, ad->default_schema, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement1, 6, ad->schema_locked); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement1, 7, ad->transaction_persistent); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement1, 8, ad->fast_forward); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement1, 9, ad->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement1, 10, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement1, 11, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 		}
 		free(ad->username);
 		free(ad->password); // this is not initialized with dump_all_users( , false)
@@ -7787,10 +7963,10 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 		rc = admindb->prepare_v2(query1, &statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//rc=sqlite3_prepare_v2(mydb3, query8, -1, &statement8, 0);
 		rc = admindb->prepare_v2(query8, &statement8);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/8;
 		max_bulk_row_idx=max_bulk_row_idx*8;
@@ -7798,23 +7974,23 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 			SQLite3_row *r1=*it;
 			int idx=row_idx%8;
 			if (row_idx<max_bulk_row_idx) { // bulk
-				rc=sqlite3_bind_int64(statement8, (idx*7)+1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement8, (idx*7)+2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement8, (idx*7)+3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement8, (idx*7)+4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement8, (idx*7)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement8, (idx*7)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement8, (idx*7)+3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement8, (idx*7)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				if (idx==7) {
 					SAFE_SQLITE3_STEP2(statement8);
-					rc=sqlite3_clear_bindings(statement8); assert(rc==SQLITE_OK);
-					rc=sqlite3_reset(statement8); assert(rc==SQLITE_OK);
+					rc=sqlite3_clear_bindings(statement8); ASSERT_SQLITE_OK(rc, admindb);
+					rc=sqlite3_reset(statement8); ASSERT_SQLITE_OK(rc, admindb);
 				}
 			} else { // single row
-				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP2(statement1);
-				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			}
 			row_idx++;
 		}
@@ -7866,10 +8042,10 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 		q_stmt1_b=qbr_stmt1;
 		//rc=sqlite3_prepare_v2(mydb3, q_stmt1_f, -1, &f_statement1, 0);
 		rc = admindb->prepare_v2(q_stmt1_f, &f_statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//rc=sqlite3_prepare_v2(mydb3, q_stmt1_b, -1, &b_statement1, 0);
 		rc = admindb->prepare_v2(q_stmt1_b, &b_statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 	}
 	for (i=0; i<num_users; i++) {
 	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
@@ -7901,22 +8077,22 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 				admindb->execute(query);
 				free(query);
 			} else {
-				rc=sqlite3_bind_text(statement1, 1, ad->username, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 2, ad->password, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 3, ad->max_connections); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 1, ad->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 2, ad->password, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 3, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
 /*
-				rc=sqlite3_bind_int64(statement1, 3, ad->use_ssl); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 4, ad->default_hostgroup); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 5, ad->default_schema, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 6, ad->schema_locked); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 7, ad->transaction_persistent); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 8, ad->fast_forward); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 9, ad->username, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 10, ad->max_connections); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 3, ad->use_ssl); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 4, ad->default_hostgroup); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 5, ad->default_schema, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 6, ad->schema_locked); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 7, ad->transaction_persistent); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 8, ad->fast_forward); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 9, ad->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 10, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
 */
 				SAFE_SQLITE3_STEP2(statement1);
-				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			}
 		}
 		free(ad->username);
@@ -7978,10 +8154,10 @@ void ProxySQL_Admin::stats___mysql_gtid_executed() {
 
 		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 		rc = statsdb->prepare_v2(query1, &statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, statsdb);
 		//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 		rc = statsdb->prepare_v2(query32, &statement32);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, statsdb);
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
 		max_bulk_row_idx=max_bulk_row_idx*32;
@@ -7989,23 +8165,23 @@ void ProxySQL_Admin::stats___mysql_gtid_executed() {
 			SQLite3_row *r1=*it;
 			int idx=row_idx%32;
 			if (row_idx<max_bulk_row_idx) { // bulk
-				rc=sqlite3_bind_text(statement32, (idx*4)+1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*4)+2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement32, (idx*4)+3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*4)+4, atoll(r1->fields[3])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement32, (idx*4)+1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_bind_int64(statement32, (idx*4)+2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_bind_text(statement32, (idx*4)+3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_bind_int64(statement32, (idx*4)+4, atoll(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb);
 				if (idx==31) {
 					SAFE_SQLITE3_STEP(statement32);
-					rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-					rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+					rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+					rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, statsdb);
 				}
 			} else { // single row
-				rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 4, atoll(r1->fields[3])); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_bind_int64(statement1, 4, atoll(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb);
 				SAFE_SQLITE3_STEP(statement1);
-				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 			row_idx++;
 		}
@@ -8128,10 +8304,10 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 		rc = admindb->prepare_v2(query1, &statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 		rc = admindb->prepare_v2(query32, &statement32);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
 		max_bulk_row_idx=max_bulk_row_idx*32;
@@ -8139,39 +8315,39 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			SQLite3_row *r1=*it;
 			int idx=row_idx%32;
 			if (row_idx<max_bulk_row_idx) { // bulk
-				rc=sqlite3_bind_int64(statement32, (idx*12)+1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement32, (idx*12)+2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+4, atoi(r1->fields[3])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement32, (idx*12)+5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+6, atoi(r1->fields[4])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*12)+11, atoi(r1->fields[10])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement32, (idx*12)+12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*12)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*12)+5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+6, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*12)+11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*12)+12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				if (idx==31) {
 					SAFE_SQLITE3_STEP2(statement32);
-					rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-					rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+					rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, admindb);
+					rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, admindb);
 				}
 			} else { // single row
-				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 4, atoi(r1->fields[3])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 6, atoi(r1->fields[4])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 11, atoi(r1->fields[10])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 6, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP(statement1);
-				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			}
 			row_idx++;
 		}
@@ -8240,23 +8416,23 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = admindb->prepare_v2(query, &statement);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//proxy_info("New mysql_group_replication_hostgroups table\n");
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 5, atoi(r->fields[4])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
 		sqlite3_finalize(statement);
 	}
@@ -8283,23 +8459,23 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = admindb->prepare_v2(query, &statement);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//proxy_info("New mysql_galera_hostgroups table\n");
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 5, atoi(r->fields[4])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
 		sqlite3_finalize(statement);
 	}
@@ -8326,25 +8502,25 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = admindb->prepare_v2(query, &statement);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//proxy_info("New mysql_aws_aurora_hostgroups table\n");
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 9, atoi(r->fields[8])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 10, atoi(r->fields[9])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
 		sqlite3_finalize(statement);
 	}
@@ -9281,7 +9457,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                     if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
                     if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=1000;
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
-                    if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=0;
+                    if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=1;
                     line.lookupValue("comment", comment);
                     line.lookupValue("domain_name", domain_name);
                     char *o1=strdup(comment.c_str());
@@ -9774,6 +9950,20 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_replication_hostgroups (writer_hostgroup,reader_hostgroup,comment) SELECT writer_hostgroup , reader_hostgroup , comment FROM mysql_replication_hostgroups_v145");
 	}
+	rci=configdb->check_table_structure((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS_V2_0_0); // issue #2186
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version v2.0.0 (pre-2.0.8) of table mysql_replication_hostgroups\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_replication_hostgroups in progress\n");
+		// drop any existing table with suffix _v200
+		configdb->execute("DROP TABLE IF EXISTS mysql_replication_hostgroups_v200");
+		// rename current table to add suffix _v200
+		configdb->execute("ALTER TABLE mysql_replication_hostgroups RENAME TO mysql_replication_hostgroups_v200");
+		// create new table
+		configdb->build_table((char *)"mysql_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_replication_hostgroups SELECT * FROM mysql_replication_hostgroups_v200");
+	}
 
 	// upgrade mysql_group_replication_hostgroups
 	rci=configdb->check_table_structure((char *)"mysql_group_replication_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS_V1_4);
@@ -10133,10 +10323,10 @@ void ProxySQL_Admin::save_proxysql_servers_runtime_to_database(bool _runtime) {
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 		rc = admindb->prepare_v2(query1, &statement1);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 		rc = admindb->prepare_v2(query32, &statement32);
-		assert(rc==SQLITE_OK);
+		ASSERT_SQLITE_OK(rc, admindb);
 		int row_idx=0;
 		int max_bulk_row_idx=resultset->rows_count/32;
 		max_bulk_row_idx=max_bulk_row_idx*32;
@@ -10144,23 +10334,23 @@ void ProxySQL_Admin::save_proxysql_servers_runtime_to_database(bool _runtime) {
 			SQLite3_row *r1=*it;
 			int idx=row_idx%32;
 			if (row_idx<max_bulk_row_idx) { // bulk
-				rc=sqlite3_bind_text(statement32, (idx*4)+1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*4)+2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement32, (idx*4)+3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement32, (idx*4)+4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement32, (idx*4)+1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*4)+2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*4)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*4)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				if (idx==31) {
 					SAFE_SQLITE3_STEP2(statement32);
-					rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-					rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+					rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, admindb);
+					rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, admindb);
 				}
 			} else { // single row
-				rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); assert(rc==SQLITE_OK);
-				rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+				rc=sqlite3_bind_text(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP2(statement1);
-				rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			}
 			row_idx++;
 		}
@@ -10189,10 +10379,10 @@ void ProxySQL_Admin::stats___mysql_prepared_statements_info() {
 	query32=(char *)"INSERT INTO stats_mysql_prepared_statements_info VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32), (?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40), (?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48), (?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56), (?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64), (?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72), (?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80), (?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88), (?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96), (?97, ?98, ?99, ?100, ?101, ?102, ?103, ?104), (?105, ?106, ?107, ?108, ?109, ?110, ?111, ?112), (?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120), (?121, ?122, ?123, ?124, ?125, ?126, ?127, ?128), (?129, ?130, ?131, ?132, ?133, ?134, ?135, ?136), (?137, ?138, ?139, ?140, ?141, ?142, ?143, ?144), (?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152), (?153, ?154, ?155, ?156, ?157, ?158, ?159, ?160), (?161, ?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176), (?177, ?178, ?179, ?180, ?181, ?182, ?183, ?184), (?185, ?186, ?187, ?188, ?189, ?190, ?191, ?192), (?193, ?194, ?195, ?196, ?197, ?198, ?199, ?200), (?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208), (?209, ?210, ?211, ?212, ?213, ?214, ?215, ?216), (?217, ?218, ?219, ?220, ?221, ?222, ?223, ?224), (?225, ?226, ?227, ?228, ?229, ?230, ?231, ?232), (?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240), (?241, ?242, ?243, ?244, ?245, ?246, ?247, ?248), (?249, ?250, ?251, ?252, ?253, ?254, ?255, ?256)";
 	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 	rc = statsdb->prepare_v2(query1, &statement1);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	//rc=sqlite3_prepare_v2(mydb3, query32, -1, &statement32, 0);
 	rc = statsdb->prepare_v2(query32, &statement32);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, statsdb);
 	int row_idx=0;
 	int max_bulk_row_idx=resultset->rows_count/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
@@ -10200,31 +10390,31 @@ void ProxySQL_Admin::stats___mysql_prepared_statements_info() {
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=sqlite3_bind_int64(statement32, (idx*8)+1, atoll(r1->fields[0])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*8)+2, atoll(r1->fields[1])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*8)+3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*8)+4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*8)+5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*8)+6, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement32, (idx*8)+7, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement32, (idx*8)+8, r1->fields[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement32, (idx*8)+1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*8)+2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*8)+3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*8)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*8)+5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*8)+6, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement32, (idx*8)+7, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement32, (idx*8)+8, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
-				rc=sqlite3_clear_bindings(statement32); assert(rc==SQLITE_OK);
-				rc=sqlite3_reset(statement32); assert(rc==SQLITE_OK);
+				rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, statsdb);
 			}
 		} else { // single row
-			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 2, atoll(r1->fields[1])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 6, atoll(r1->fields[6])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[7])); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement1, 8, r1->fields[5], -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement1, 1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 6, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_int64(statement1, 7, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_bind_text(statement1, 8, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			SAFE_SQLITE3_STEP2(statement1);
-			rc=sqlite3_clear_bindings(statement1); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement1); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
 		row_idx++;
 	}
@@ -10246,7 +10436,7 @@ void ProxySQL_Admin::enable_galera_testing() {
 	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
 	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 	rc = admindb->prepare_v2(query, &statement);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, admindb);
 	for (unsigned int j=1; j<4; j++) {
 		proxy_info("Admin is enabling Galera Testing using SQLite3 Server and writer_HG %d\n" , 2260+j*10+1);
 		for (unsigned int i=0; i<num_galera_servers; i++) {
@@ -10254,13 +10444,13 @@ void ProxySQL_Admin::enable_galera_testing() {
 			serverid = "127.1." + std::to_string(j) + "." + std::to_string(i+11);
 			string sessionid= "";
 			sessionid = "node_" + serverid;
-			rc=sqlite3_bind_int64(statement, 1, 2260+j*10+1 ); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 3, 0); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 4, sessionid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, 2260+j*10+1 ); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 3, 0); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 4, sessionid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
 	}
 	sqlite3_finalize(statement);
@@ -10293,7 +10483,7 @@ void ProxySQL_Admin::enable_aurora_testing() {
 	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
 	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 	rc = admindb->prepare_v2(query, &statement);
-	assert(rc==SQLITE_OK);
+	ASSERT_SQLITE_OK(rc, admindb);
 	for (unsigned int j=1; j<4; j++) {
 		proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs 127%d and 127%d\n" , j*2-1 , j*2);
 		for (unsigned int i=0; i<num_aurora_servers; i++) {
@@ -10311,13 +10501,13 @@ void ProxySQL_Admin::enable_aurora_testing() {
 			}
 			string sessionid= "";
 			sessionid = "b80ef4b4-" + serverid + "-aa01";
-			rc=sqlite3_bind_int64(statement, 1, 1270+j*2 ); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_int64(statement, 3, 0); assert(rc==SQLITE_OK);
-			rc=sqlite3_bind_text(statement, 4, sessionid.c_str(), -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
+			rc=sqlite3_bind_int64(statement, 1, 1270+j*2 ); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 3, 0); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 4, sessionid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
-			rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
+			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, admindb);
 		}
 	}
 	sqlite3_finalize(statement);

@@ -328,6 +328,13 @@ enum MYSQL_COM_QUERY_command {
 	MYSQL_COM_QUERY___NONE // Special marker.
 };
 
+enum handle_unknown_charset {
+	HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT,
+	HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE,
+	HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT,
+	HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE
+};
+
 #endif /* PROXYSQL_ENUMS */
 
 
@@ -673,13 +680,15 @@ __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
-__thread uint8_t mysql_thread___default_charset;
+__thread unsigned int mysql_thread___default_charset;
+__thread unsigned int mysql_thread___handle_unknown_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___have_ssl;
 __thread bool mysql_thread___client_found_rows;
 __thread bool mysql_thread___multiplexing;
+__thread bool mysql_thread___log_unhealthy_connections;
 __thread bool mysql_thread___forward_autocommit;
 __thread bool mysql_thread___enforce_autocommit_on_reads;
 __thread bool mysql_thread___autocommit_false_not_reusable;
@@ -822,13 +831,15 @@ extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
-extern __thread uint8_t mysql_thread___default_charset;
+extern __thread unsigned int  mysql_thread___default_charset;
+extern __thread unsigned int mysql_thread___handle_unknown_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___have_ssl;
 extern __thread bool mysql_thread___client_found_rows;
 extern __thread bool mysql_thread___multiplexing;
+extern __thread bool mysql_thread___log_unhealthy_connections;
 extern __thread bool mysql_thread___forward_autocommit;
 extern __thread bool mysql_thread___enforce_autocommit_on_reads;
 extern __thread bool mysql_thread___autocommit_false_not_reusable;

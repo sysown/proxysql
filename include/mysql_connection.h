@@ -204,7 +204,7 @@ class MySQL_Connection {
 	int async_change_user(short event);
 	int async_select_db(short event);
 	int async_set_autocommit(short event, bool);
-	int async_set_names(short event, uint8_t nr);
+	int async_set_names(short event, unsigned int nr);
 	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
 	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);

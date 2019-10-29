@@ -1,0 +1,74 @@
+BEGIN;
+
+SELECT tap.plan(20);
+
+/****************************************************************************/
+-- Test matches().
+SELECT tap.matches( 'foo', 'o', 'matches() should work' );
+SELECT tap.matches( 'foo', '^fo', 'matches() should work with a regex' );
+-- SELECT tap.imatches( 'FOO', '^fo', 'imatches() should work with a regex' );
+
+-- Check matches() diagnostics.
+SELECT tap.check_test(
+    tap.matches( 'foo', '^a', NULL ),
+    0,
+    'matches() fail',
+    '',
+    '                 ''foo''
+   doesn''t match: ''^a''',
+   0
+);
+
+-- Check doesnt_match.
+SELECT tap.doesnt_match( 'foo', 'a', 'doesnt_match() should work' );
+SELECT tap.doesnt_match( 'foo', '^o', 'doesnt_match() should work with a regex' );
+-- SELECT tap.doesnt_imatch( 'foo', '^o', 'doesnt_imatch() should work with a regex' );
+
+-- Check doesnt_match diagnostics.
+SELECT tap.check_test(
+    tap.doesnt_match( 'foo', 'o', '' ),
+    0,
+    'doesnt_match() fail',
+    '',
+    '                 ''foo''
+          matches: ''o''',
+    0
+);
+
+/****************************************************************************/
+-- Test alike().
+SELECT tap.alike( 'foo', 'foo', 'alike() should work' );
+SELECT tap.alike( 'foo', 'fo%', 'alike() should work with a regex' );
+-- SELECT tap.ialike( 'FOO', 'fo%', 'ialike() should work with a regex' );
+
+-- Check alike() diagnostics.
+SELECT tap.check_test(
+    tap.alike( 'foo', 'a%', '' ),
+    0,
+    'alike() fail',
+    '',
+    '                 ''foo''
+   doesn''t match: ''a%''',
+    0
+);
+
+-- Test unalike().
+SELECT tap.unalike( 'foo', 'f', 'unalike() should work' );
+SELECT tap.unalike( 'foo', 'f%i', 'unalike() should work with a regex' );
+-- SELECT tap.unialike( 'FOO', 'f%i', 'iunalike() should work with a regex' );
+
+-- Check unalike() diagnostics.
+SELECT tap.check_test(
+    tap.unalike( 'foo', 'f%', '' ),
+    0,
+    'unalike() fail',
+    '',
+    '                 ''foo''
+          matches: ''f%''',
+    0
+);
+
+/****************************************************************************/
+-- Finish the tests and clean up.
+CALL tap.finish();
+ROLLBACK;

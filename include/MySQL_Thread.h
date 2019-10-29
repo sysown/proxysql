@@ -273,6 +273,7 @@ class MySQL_Thread
 
 	struct {
 		int min_num_servers_lantency_awareness;
+		int aurora_max_lag_ms_only_read_from_replicas;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
@@ -403,7 +404,8 @@ class MySQL_Threads_Handler
 		char *interfaces;
 		char *server_version;
 		char *keep_multiplexing_variables;
-		uint8_t default_charset;
+		unsigned int default_charset;
+		unsigned int handle_unknown_charset;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -418,6 +420,7 @@ class MySQL_Threads_Handler
 		bool client_found_rows;
 		bool multiplexing;
 //		bool stmt_multiplexing;
+		bool log_unhealthy_connections;
 		bool forward_autocommit;
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
@@ -487,6 +490,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_cipher;
 		int query_cache_size_MB;
 		int min_num_servers_lantency_awareness;
+		int aurora_max_lag_ms_only_read_from_replicas;
 		bool stats_time_backend_query;
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
@@ -514,7 +518,7 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	uint8_t get_variable_uint8(char *name);
+	unsigned int get_variable_uint(char *name);
 	uint16_t get_variable_uint16(char *name);
 	int get_variable_int(const char *name);
 	void print_version();

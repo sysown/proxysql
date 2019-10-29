@@ -1147,7 +1147,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
     //+ sizeof(glovars.server_language)
     //+ sizeof(glovars.server_status)
     + sizeof(mysql_thread___server_capabilities)/2
-    + sizeof(mysql_thread___default_charset)
+    + sizeof(uint8_t) // charset in handshake is 1 byte
     + sizeof(server_status)
     + 3 // unknown stuff
     + 10 // filler
@@ -1207,7 +1207,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
-  memcpy(_ptr+l,&mysql_thread___default_charset, sizeof(mysql_thread___default_charset)); l+=sizeof(mysql_thread___default_charset);
+  uint8_t uint8_charset = mysql_thread___default_charset & 255;
+  memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
   memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
@@ -1475,7 +1476,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
 #endif
 	bool ret=false;
-	uint8_t charset;
+	unsigned int charset;
 	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
@@ -1709,8 +1710,8 @@ __do_auth:
 		// reject connections from unknown charsets
 		const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(charset);
 		if (!c) {
-			proxy_error("Client %s:%d is trying to use unknown charset %d. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port, charset);
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client %s:%d is trying to use unknown charset %d. Disconnecting\n", (*myds), (*myds)->sess, user, (*myds)->addr.addr, (*myds)->addr.port, charset);
+			proxy_error("Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port, charset);
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds), (*myds)->sess, user, (*myds)->addr.addr, (*myds)->addr.port, charset);
 			ret = false;
 			goto __exit_do_auth;
 		}

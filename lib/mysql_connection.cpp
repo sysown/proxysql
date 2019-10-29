@@ -384,7 +384,7 @@ bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
 	return _ac;
 }
 
-uint8_t MySQL_Connection::set_charset(uint8_t _c, enum charset_action action) {
+unsigned int MySQL_Connection::set_charset(unsigned int _c, enum charset_action action) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
 	options.charset=_c;
 	options.charset_action = action;
@@ -1683,7 +1683,7 @@ int MySQL_Connection::async_set_autocommit(short event, bool ac) {
 	return 1;
 }
 
-int MySQL_Connection::async_set_names(short event, uint8_t c) {
+int MySQL_Connection::async_set_names(short event, unsigned int c) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
@@ -1792,6 +1792,13 @@ bool MySQL_Connection::IsAutoCommit() {
 				// we last sent SET AUTOCOMMIT = 0 , but the server says it is 1
 				// we assume that what we sent last is correct .  #873
 				ret = false;
+			}
+		} else {
+			if (options.last_set_autocommit==-1) {
+				// if a connection was reset (thus last_set_autocommit==-1)
+				// the information related to SERVER_STATUS_AUTOCOMMIT is lost
+				// therefore we fall back on the safe assumption that autocommit==1
+				ret = true;
 			}
 		}
 	}

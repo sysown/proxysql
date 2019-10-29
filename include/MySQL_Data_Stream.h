@@ -136,7 +136,7 @@ class MySQL_Data_Stream
 
 	int switching_auth_stage;
 	int switching_auth_type;
-	uint8_t tmp_charset;
+	unsigned int tmp_charset;
 
 	short revents;
 
@@ -210,5 +210,7 @@ class MySQL_Data_Stream
 	void free_mysql_real_query();	
 	void reinit_queues();
 	void destroy_queues();
+
+	bool data_in_rbio();
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

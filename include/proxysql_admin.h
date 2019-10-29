@@ -323,5 +323,7 @@ class ProxySQL_Admin {
 	void enable_grouprep_testing();
 #endif // TEST_GROUPREP
 
+	unsigned int ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int);
+	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
