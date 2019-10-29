@@ -94,7 +94,7 @@ class MySQL_Connection {
 		char *ldap_user_variable_value;
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
-		uint8_t charset;
+		unsigned int charset;
 		enum charset_action charset_action;
 		uint8_t sql_log_bin;
 		int8_t last_set_autocommit;
@@ -156,7 +156,7 @@ class MySQL_Connection {
 	~MySQL_Connection();
 	bool set_autocommit(bool);
 	bool set_no_backslash_escapes(bool);
-	uint8_t set_charset(uint8_t, enum charset_action);
+	unsigned int set_charset(unsigned int, enum charset_action);
 
 	void set_status_transaction(bool);
 	void set_status_compression(bool);
