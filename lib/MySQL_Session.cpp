@@ -1564,7 +1564,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 
 bool MySQL_Session::handler_again___verify_backend_charset() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client charset: %u , backend charset: %u\n", this, client_myds->myconn->options.charset, mybe->server_myds->myconn->mysql->charset->nr);
-	if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr) {
+	if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr || client_myds->myconn->options.charset_action != mybe->server_myds->myconn->options.charset_action) {
 		//previous_status.push(PROCESSING_QUERY);
 		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
