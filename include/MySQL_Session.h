@@ -136,6 +136,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_TX_ISOLATION(int *);
 	bool handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
+	bool handler_again___status_SETTING_CHARSET(int *_rc);
 	bool handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *);
 	bool handler_again___status_SETTING_SQL_SELECT_LIMIT(int *);
 	bool handler_again___status_SETTING_SQL_SAFE_UPDATES(int *);

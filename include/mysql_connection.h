@@ -16,6 +16,12 @@
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 #define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
 
+enum charset_action {
+	UNKNOWN,
+	NAMES,
+	CHARSET
+};
+
 class MySQL_Connection_userinfo {
 	private:
 	uint64_t compute_hash();
@@ -89,6 +95,7 @@ class MySQL_Connection {
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
 		unsigned int charset;
+		enum charset_action charset_action;
 		uint8_t sql_log_bin;
 		int8_t last_set_autocommit;
 		bool autocommit;
@@ -149,7 +156,7 @@ class MySQL_Connection {
 	~MySQL_Connection();
 	bool set_autocommit(bool);
 	bool set_no_backslash_escapes(bool);
-	unsigned int set_charset(unsigned int);
+	unsigned int set_charset(unsigned int, enum charset_action);
 
 	void set_status_transaction(bool);
 	void set_status_compression(bool);

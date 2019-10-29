@@ -121,3 +121,23 @@ std::map<std::string,std::vector<string>> SetParser::parse2() {
 	return result;
 }
 
+std::string SetParser::parse_character_set() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
+	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
+	opt2->set_case_sensitive(false);
+	opt2->set_longest_match(false);
+
+	re2::RE2 re0("^\\s*SET\\s+", *opt2);
+	re2::RE2::Replace(&query, re0, "");
+
+	std::map<std::string,std::vector<string>> result;
+
+	const string pattern="((charset)|(character +set))(?: )(\\S+)";
+	re2::RE2 re(pattern, *opt2);
+	string var;
+	string value1, value2, value3, value4;
+	re2::StringPiece input(query);
+	re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4);
+	return value4;
+}
+
