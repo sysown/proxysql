@@ -2378,7 +2378,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		if (max_lag_ms) { // we are using AWS Aurora, as this logic is implemented only here
 			unsigned int min_num_replicas = sess->thread->variables.aurora_max_lag_ms_only_read_from_replicas;
 			if (min_num_replicas) {
-				if (num_candidates > 2) { // there are at least 2 replicas
+				if (num_candidates >= min_num_replicas) { // there are at least N replicas
 					// we try to remove the writer
 					unsigned int total_aws_aurora_current_lag_us=0;
 					for (j=0; j<num_candidates; j++) {
