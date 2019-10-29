@@ -3777,6 +3777,25 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (query_no_space_length==strlen("SELECT CONFIG FILE") && !strncasecmp("SELECT CONFIG FILE", query_no_space, query_no_space_length)) {
+		std::string data;
+		data.reserve(100000);
+		run_query = false;
+		if (pa->Write_Global_Variables_to_configfile(data))
+			goto __run_query;
+		if (pa->Write_MySQL_Users_from_configfile(data))
+			goto __run_query;
+		char *pta[1];
+		pta[0]=NULL;
+		pta[0]=(char*)data.c_str();
+		SQLite3_result* resultset = new SQLite3_result(1);
+		resultset->add_column_definition(SQLITE_TEXT,"Data");
+		resultset->add_row(pta);
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		delete resultset;
+		goto __run_query;
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
@@ -9665,6 +9684,51 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	return NULL;
 }
 
+int ProxySQL_Admin::Write_Global_Variables_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char *query=(char *)"SELECT variable_name, variable_value FROM global_variables ORDER BY variable_name";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from global_variables : %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+
+			for (auto r : sqlite_resultset->rows) {
+				std::string input(r->fields[0]);
+				std::string p1 = input.substr(0, input.find("-"));
+				if (prefix.empty()) {
+					prefix = input.substr(0, input.find("-"));
+					data += prefix + "_variables =\n{\n";
+				} else {
+					if (p1.compare(prefix)) {
+						prefix = p1;
+						data += "}\n\n" + prefix + "_variables = \n{\n";
+					}
+				}
+				if (strlen(r->fields[1])) {
+						char strBuf[256];
+						snprintf(strBuf, sizeof(strBuf), "\t%s = %s\n",r->fields[0] + p1.size() + 1, r->fields[1]);
+						data += strBuf;
+				}
+			}
+
+			if (!prefix.empty())
+				data += "}\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
+}
+
 int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
@@ -9704,6 +9768,70 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 	admindb->execute("PRAGMA foreign_keys = ON");
 	free(groupname);
 	return i;
+}
+
+int ProxySQL_Admin::Write_MySQL_Users_from_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char *query=(char *)"SELECT * FROM mysql_users";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from global_variables : %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "mysql_users:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				char strBuf[256] = {0};
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				snprintf(strBuf, sizeof(strBuf), "\t\tusername = \"%s\"\n", r->fields[0]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tpassword = \"%s\"\n", r->fields[1]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tactive = %s\n", r->fields[2]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tuse_ssl = %s\n", r->fields[3]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tdefault_hostgroup = %s\n", r->fields[4]);
+				data += strBuf;
+				if (strlen(r->fields[5])) {
+					snprintf(strBuf, sizeof(strBuf), "\t\tdefault_schema = %s\n", r->fields[5]);
+					data += strBuf;
+				}
+				snprintf(strBuf, sizeof(strBuf), "\t\tschema_locked = %s\n", r->fields[6]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\ttransaction_persistent = %s\n", r->fields[7]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tfast_forward = %s\n", r->fields[8]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tbackend = %s\n", r->fields[9]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tfrontend = %s\n", r->fields[10]);
+				data += strBuf;
+				snprintf(strBuf, sizeof(strBuf), "\t\tmax_connections = %s\n", r->fields[11]);
+				data += strBuf;
+				if (strlen(r->fields[12])) {
+					snprintf(strBuf, sizeof(strBuf), "\t\tcomment = %s\n", r->fields[12]);
+					data += strBuf;
+				}
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
 }
 
 int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
