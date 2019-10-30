@@ -5564,10 +5564,10 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					json j;
 					sess->generate_proxysql_internal_session_json(j);
 					if (mysql_thread___show_processlist_extended == 2) {
-						std::string s = j.dump(4);
+						std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
 						pta[15] = strdup(s.c_str());
 					} else {
-						std::string s = j.dump();
+						std::string s = j.dump(-1, ' ', false, json::error_handler_t::replace);
 						pta[15] = strdup(s.c_str());
 					}
 				}

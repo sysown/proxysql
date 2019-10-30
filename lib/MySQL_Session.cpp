@@ -1050,7 +1050,7 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 	if (pkt->size==(5+l) && strncasecmp((char *)"PROXYSQL INTERNAL SESSION", (char *)pkt->ptr+5, l)==0) {
 		json j;
 		generate_proxysql_internal_session_json(j);
-		std::string s = j.dump(4);
+		std::string s = j.dump(4, ' ', false, json::error_handler_t::replace);
 		SQLite3_result *resultset = new SQLite3_result(1);
 		resultset->add_column_definition(SQLITE_TEXT,"session_info");
 		char *pta[1];

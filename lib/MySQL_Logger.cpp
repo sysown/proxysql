@@ -229,7 +229,7 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
 	GloMyLogger->wrlock();
-	*f << j.dump() << std::endl;
+	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 }
 
 uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
@@ -402,7 +402,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	// right before the write to disk
 	GloMyLogger->wrlock();
 
-	*f << j.dump() << std::endl;
+	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 	return total_bytes; // always 0
 }
 
