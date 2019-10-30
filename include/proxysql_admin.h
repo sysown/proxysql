@@ -276,9 +276,13 @@ class ProxySQL_Admin {
 	int Read_Scheduler_from_configfile();
 	int Read_ProxySQL_Servers_from_configfile();
 
+	void addField(std::string& data, const char* name, const char* value, const char* dq="\"");
 	int Write_Global_Variables_to_configfile(std::string& data);
-	int Write_MySQL_Users_from_configfile(std::string& data);
-	int Write_MySQL_Query_Rules_from_configfile(std::string& data);
+	int Write_MySQL_Users_to_configfile(std::string& data);
+	int Write_MySQL_Query_Rules_to_configfile(std::string& data);
+	int Write_MySQL_Servers_to_configfile(std::string& data);
+	int Write_Scheduler_to_configfile(std::string& data);
+	int Write_ProxySQL_Servers_to_configfile(std::string& data);
 
 	void flush_error_log();
 	bool GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);

@@ -100,6 +100,36 @@ static char * load_file (const char *filename) {
 	return buffer;
 }
 
+const char* config_header = "########################################################################################\n"
+							"# This config file is parsed using libconfig , and its grammar is described in:\n"
+							"# http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar\n"
+							"# Grammar is also copied at the end of this file\n"
+							"########################################################################################\n"
+							"\n"
+							"########################################################################################\n"
+							"# IMPORTANT INFORMATION REGARDING THIS CONFIGURATION FILE:\n"
+							"########################################################################################\n"
+							"# On startup, ProxySQL reads its config file (if present) to determine its datadir.\n"
+							"# What happens next depends on if the database file (disk) is present in the defined\n"
+							"# datadir (i.e. \"/var/lib/proxysql/proxysql.db\").\n"
+							"#\n"
+							"# If the database file is found, ProxySQL initializes its in-memory configuration from\n"
+							"# the persisted on-disk database. So, disk configuration gets loaded into memory and\n"
+							"# then propagated towards the runtime configuration.\n"
+							"#\n"
+							"# If the database file is not found and a config file exists, the config file is parsed\n"
+							"# and its content is loaded into the in-memory database, to then be both saved on-disk\n"
+							"# database and loaded at runtime.\n"
+							"#\n"
+							"# IMPORTANT: If a database file is found, the config file is NOT parsed. In this case\n"
+							"#            ProxySQL initializes its in-memory configuration from the persisted on-disk\n"
+							"#            database ONLY. In other words, the configuration found in the proxysql.cnf\n"
+							"#            file is only used to initial the on-disk database read on the first startup.\n"
+							"#\n"
+							"# In order to FORCE a re-initialise of the on-disk database from the configuration file\n"
+							"# the ProxySQL service should be started with \"service proxysql initial\".\n"
+							"#\n"
+							"########################################################################################\n";
 
 /*
 int sqlite3_json_init(
@@ -3781,10 +3811,20 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		std::string data;
 		data.reserve(100000);
 		run_query = false;
+		data += config_header;
 		if (pa->Write_Global_Variables_to_configfile(data))
 			goto __run_query;
-		if (pa->Write_MySQL_Users_from_configfile(data))
+		if (pa->Write_MySQL_Users_to_configfile(data))
 			goto __run_query;
+		if (pa->Write_MySQL_Query_Rules_to_configfile(data))
+			goto __run_query;
+		if (pa->Write_MySQL_Servers_to_configfile(data))
+			goto __run_query;
+		if (pa->Write_Scheduler_to_configfile(data))
+			goto __run_query;
+		if (pa->Write_ProxySQL_Servers_to_configfile(data))
+			goto __run_query;
+		proxy_warning("TRACE: config is saved\n");
 		char *pta[1];
 		pta[0]=NULL;
 		pta[0]=(char*)data.c_str();
@@ -9684,6 +9724,13 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	return NULL;
 }
 
+void ProxySQL_Admin::addField(std::string& data, const char* name, const char* value, const char* dq) {
+	char strBuf[10000] = {0};
+	if (!value || !strlen(value)) return;
+	snprintf(strBuf, sizeof(strBuf), "\t\t%s=%s%s%s\n", name, dq, value, dq);
+	data += strBuf;
+}
+
 int ProxySQL_Admin::Write_Global_Variables_to_configfile(std::string& data) {
 	char* error = NULL;
 	int cols = 0;
@@ -9711,9 +9758,9 @@ int ProxySQL_Admin::Write_Global_Variables_to_configfile(std::string& data) {
 						data += "}\n\n" + prefix + "_variables = \n{\n";
 					}
 				}
-				if (strlen(r->fields[1])) {
-						char strBuf[256];
-						snprintf(strBuf, sizeof(strBuf), "\t%s = %s\n",r->fields[0] + p1.size() + 1, r->fields[1]);
+				if (r->fields[1] && strlen(r->fields[1])) {
+						char strBuf[10000];
+						snprintf(strBuf, sizeof(strBuf), "\t%s=\"%s\"\n",r->fields[0] + p1.size() + 1, r->fields[1]);
 						data += strBuf;
 				}
 			}
@@ -9760,6 +9807,7 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 		}
 		//fprintf(stderr,"%s = %s\n", n, value_string.c_str());
 		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
+		fprintf(stderr, "irefix %s, name %s, value %s\n", prefix, n, value_string.c_str());
 		sprintf(query,q, prefix, n, value_string.c_str());
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
@@ -9770,7 +9818,7 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 	return i;
 }
 
-int ProxySQL_Admin::Write_MySQL_Users_from_configfile(std::string& data) {
+int ProxySQL_Admin::Write_MySQL_Users_to_configfile(std::string& data) {
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -9779,7 +9827,7 @@ int ProxySQL_Admin::Write_MySQL_Users_from_configfile(std::string& data) {
 	char *query=(char *)"SELECT * FROM mysql_users";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
-		proxy_error("Error on read from global_variables : %s\n", error);
+		proxy_error("Error on read from mysql_users: %s\n", error);
 		return -1;
 	} else {
 		if (sqlite_resultset) {
@@ -9791,36 +9839,19 @@ int ProxySQL_Admin::Write_MySQL_Users_from_configfile(std::string& data) {
 				if (isNext)
 					data += ",\n";
 				data += "\t{\n";
-				snprintf(strBuf, sizeof(strBuf), "\t\tusername = \"%s\"\n", r->fields[0]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tpassword = \"%s\"\n", r->fields[1]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tactive = %s\n", r->fields[2]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tuse_ssl = %s\n", r->fields[3]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tdefault_hostgroup = %s\n", r->fields[4]);
-				data += strBuf;
-				if (strlen(r->fields[5])) {
-					snprintf(strBuf, sizeof(strBuf), "\t\tdefault_schema = %s\n", r->fields[5]);
-					data += strBuf;
-				}
-				snprintf(strBuf, sizeof(strBuf), "\t\tschema_locked = %s\n", r->fields[6]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\ttransaction_persistent = %s\n", r->fields[7]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tfast_forward = %s\n", r->fields[8]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tbackend = %s\n", r->fields[9]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tfrontend = %s\n", r->fields[10]);
-				data += strBuf;
-				snprintf(strBuf, sizeof(strBuf), "\t\tmax_connections = %s\n", r->fields[11]);
-				data += strBuf;
-				if (strlen(r->fields[12])) {
-					snprintf(strBuf, sizeof(strBuf), "\t\tcomment = %s\n", r->fields[12]);
-					data += strBuf;
-				}
+				addField(data, "username", r->fields[0]);
+				addField(data, "password", r->fields[1]);
+				addField(data, "active", r->fields[2], "");
+				addField(data, "use_ssl", r->fields[3], "");
+				addField(data, "default_hostgroup", r->fields[4], "");
+				addField(data, "default_schema", r->fields[5]);
+				addField(data, "schema_locked", r->fields[6], "");
+				addField(data, "transaction_persistent", r->fields[7], "");
+				addField(data, "fast_forward", r->fields[8], "");
+				addField(data, "backend", r->fields[9], "");
+				addField(data, "frontend", r->fields[10], "");
+				addField(data, "max_connections", r->fields[11], "");
+				addField(data, "comment", r->fields[12], "");
 				data += "\t}";
 				isNext = true;
 			}
@@ -9881,6 +9912,50 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
+}
+
+int ProxySQL_Admin::Write_Scheduler_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char *query=(char *)"SELECT * FROM scheduler";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from scheduler: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "scheduler:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "id", r->fields[0], "");
+				addField(data, "active", r->fields[1], "");
+				addField(data, "interval_ms", r->fields[2], "");
+				addField(data, "filename", r->fields[3]);
+				addField(data, "arg1", r->fields[4]);
+				addField(data, "arg2", r->fields[5]);
+				addField(data, "arg3", r->fields[6]);
+				addField(data, "arg4", r->fields[7]);
+				addField(data, "arg5", r->fields[8]);
+				addField(data, "comment", r->fields[9]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
 }
 
 int ProxySQL_Admin::Read_Scheduler_from_configfile() {
@@ -9981,6 +10056,74 @@ int ProxySQL_Admin::Read_Scheduler_from_configfile() {
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	return rows;
+}
+
+int ProxySQL_Admin::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char *query=(char *)"SELECT * FROM mysql_query_rules";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_query_rules : %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "mysql_query_rules:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "rule_id", r->fields[0], "");
+				addField(data, "active", r->fields[1], "");
+				addField(data, "username", r->fields[2]);
+				addField(data, "schemaname", r->fields[3]);
+				addField(data, "flagIN", r->fields[4], "");
+				addField(data, "client_addr", r->fields[5]);
+				addField(data, "proxy_addr", r->fields[6]);
+				addField(data, "proxy_port", r->fields[7], "");
+				addField(data, "digest", r->fields[8]);
+				addField(data, "match_digest", r->fields[9]);
+				addField(data, "match_pattern", r->fields[10]);
+				addField(data, "negate_match_pattern", r->fields[11], "");
+				addField(data, "re_modifiers", r->fields[12]);
+				addField(data, "flagOUT", r->fields[13], "");
+				addField(data, "replace_pattern", r->fields[14]);
+				addField(data, "destination_hostgroup", r->fields[15], "");
+				addField(data, "cache_ttl", r->fields[16], "");
+				addField(data, "cache_empty_result", r->fields[17], "");
+				addField(data, "cache_timeout", r->fields[18], "");
+				addField(data, "reconnect", r->fields[19], "");
+				addField(data, "timeout", r->fields[20], "");
+				addField(data, "retries", r->fields[21], "");
+				addField(data, "delay", r->fields[22], "");
+				addField(data, "next_query_flagIN", r->fields[23], "");
+				addField(data, "mirror_flagOUT", r->fields[24], "");
+				addField(data, "mirror_hostgroup", r->fields[25], "");
+				addField(data, "error_msg", r->fields[26]);
+				addField(data, "OK_msg", r->fields[27]);
+				addField(data, "sticky_conn", r->fields[28], "");
+				addField(data, "multiplex", r->fields[29], "");
+				addField(data, "gtid_from_hostgroup", r->fields[30], "");
+				addField(data, "log", r->fields[31], "");
+				addField(data, "apply", r->fields[32], "");
+				addField(data, "comment", r->fields[33]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
 }
 
 int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
@@ -10242,7 +10385,188 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
+	fprintf(stderr, "TRACE: rows %d\n", rows);
 	return rows;
+}
+
+int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char *query=(char *)"SELECT * FROM mysql_servers";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_query_rules : %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "mysql_servers:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "hostgroup_id", r->fields[0], "");
+				addField(data, "hostname", r->fields[1]);
+				addField(data, "port", r->fields[2], "");
+				addField(data, "gtid_port", r->fields[3], "");
+				addField(data, "status", r->fields[4]);
+				addField(data, "weight", r->fields[5], "");
+				addField(data, "compression", r->fields[6], "");
+				addField(data, "max_connections", r->fields[7], "");
+				addField(data, "max_replication_lag", r->fields[8], "");
+				addField(data, "use_ssl", r->fields[9], "");
+				addField(data, "max_latency_ms", r->fields[10], "");
+				addField(data, "comment", r->fields[11]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	query=(char *)"SELECT * FROM mysql_replication_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_replication_hostgroups : %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "mysql_replication_hostgroups:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "writer_hostgroup", r->fields[0], "");
+				addField(data, "reader_hostgroup", r->fields[1], "");
+				addField(data, "check_type", r->fields[2]);
+				addField(data, "comment", r->fields[3]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	query=(char *)"SELECT * FROM mysql_group_replication_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_group_replication_hostgroups : %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "mysql_group_replication_hostgroups:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "writer_hostgroup", r->fields[0], "");
+				addField(data, "backup_writer_hostgroup", r->fields[1], "");
+				addField(data, "reader_hostgroup", r->fields[2], "");
+				addField(data, "offline_hostgroup", r->fields[3], "");
+				addField(data, "active", r->fields[4], "");
+				addField(data, "max_writers", r->fields[5], "");
+				addField(data, "writer_is_also_reader", r->fields[6], "");
+				addField(data, "max_transactions_behind", r->fields[7], "");
+				addField(data, "comment", r->fields[8]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	query=(char *)"SELECT * FROM mysql_galera_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_galera_hostgroups: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "mysql_galera_hostgroups:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "writer_hostgroup", r->fields[0], "");
+				addField(data, "backup_writer_hostgroup", r->fields[1], "");
+				addField(data, "reader_hostgroup", r->fields[2], "");
+				addField(data, "offline_hostgroup", r->fields[3], "");
+				addField(data, "active", r->fields[4], "");
+				addField(data, "max_writers", r->fields[5], "");
+				addField(data, "writer_is_also_reader", r->fields[6], "");
+				addField(data, "max_transactions_behind", r->fields[7], "");
+				addField(data, "comment", r->fields[8]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	query=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from mysql_aws_aurora_hostgroups: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "mysql_aws_aurora_hostgroups:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "writer_hostgroup", r->fields[0], "");
+				addField(data, "reader_hostgroup", r->fields[1], "");
+				addField(data, "active", r->fields[2], "");
+				addField(data, "aurora_port", r->fields[3], "");
+				addField(data, "domain_name", r->fields[4]);
+				addField(data, "max_lag_ms", r->fields[5], "");
+				addField(data, "check_interval_ms", r->fields[6], "");
+				addField(data, "check_timeout_ms", r->fields[7], "");
+				addField(data, "writer_is_also_reader", r->fields[8], "");
+				addField(data, "new_reader_weight", r->fields[9], "");
+				addField(data, "comment", r->fields[10]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
+
 }
 
 int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
@@ -10271,6 +10595,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			std::string comment="";
 			if (server.lookupValue("address", address)==false) {
 				if (server.lookupValue("hostname", address)==false) {
+					proxy_warning("Mandatory field \"mysql_servers::hostname\" has not been found\n");
 					continue;
 				}
 			}
@@ -10278,6 +10603,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			server.lookupValue("gtid_port", gtid_port);
 			if (server.lookupValue("hostgroup", hostgroup)==false) {
 				if (server.lookupValue("hostgroup_id", hostgroup)==false) {
+					proxy_warning("Mandatory field \"mysql_servers::hostgroup_id\" has not been found\n");
 					continue;
 				}
 			}
@@ -10319,8 +10645,14 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			int reader_hostgroup;
 			std::string comment="";
 			std::string check_type="";
-			if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-			if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
+			if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+				proxy_warning("Mandatory field \"mysql_replication_hostgroups::writer_hostgroup\" has not been found\n");
+				continue;
+			}
+			if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+				proxy_warning("Mandatory field \"mysql_replication_hostgroups::reader_hostgroup\" has not been found\n");
+				continue;
+			}
 			line.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
@@ -10466,7 +10798,46 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
             }
     }
 	admindb->execute("PRAGMA foreign_keys = ON");
+	fprintf(stderr, "TRACE: mysql servers rows %d\n", rows);
 	return rows;
+}
+
+int ProxySQL_Admin::Write_ProxySQL_Servers_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char *query=(char *)"SELECT * FROM proxysql_servers";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from proxysql_servers: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			std::string prefix;
+			data += "proxysql_servers:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "hostname", r->fields[0]);
+				addField(data, "port", r->fields[1], "");
+				addField(data, "weight", r->fields[2], "");
+				addField(data, "comment", r->fields[3]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
 }
 
 int ProxySQL_Admin::Read_ProxySQL_Servers_from_configfile() {
