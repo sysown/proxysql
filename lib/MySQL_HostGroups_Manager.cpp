@@ -1025,14 +1025,15 @@ void MySQL_HostGroups_Manager::init() {
 	//pthread_create(&GTID_syncer_thread_id, NULL, GTID_syncer_run , NULL);
 }
 
-MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
+void MySQL_HostGroups_Manager::shutdown() {
 	queue.add(NULL);
 	HGCU_thread->join();
-	//pthread_join(HGCU_thread_id, NULL);
-	//pthread_join(GTID_syncer_thread_id, NULL);
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 	GTID_syncer_thread->join();
 	free(gtid_ev_async);
+}
+
+MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	while (MyHostGroups->len) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->remove_index_fast(0);
 		delete myhgc;
