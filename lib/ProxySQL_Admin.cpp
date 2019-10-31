@@ -9887,7 +9887,10 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 		int fast_forward=0;
 		int max_connections=10000;
 		std::string comment="";
-		if (user.lookupValue("username", username)==false) continue;
+		if (user.lookupValue("username", username)==false) {
+			proxy_error("Admin: detected a mysql_users in config file without a mandatory username\n");
+			continue;
+		}
 		user.lookupValue("password", password);
 		user.lookupValue("default_hostgroup", default_hostgroup);
 		user.lookupValue("active", active);
@@ -9991,10 +9994,16 @@ int ProxySQL_Admin::Read_Scheduler_from_configfile() {
 		std::string comment="";
 
 		// validate arguments
-		if (sched.lookupValue("id", id)==false) continue;
+		if (sched.lookupValue("id", id)==false) {
+			proxy_error("Admin: detected a scheduler in config file without a mandatory id\n");
+			continue;
+		}
 		sched.lookupValue("active", active);
 		sched.lookupValue("interval_ms", interval_ms);
-		if (sched.lookupValue("filename", filename)==false) continue;
+		if (sched.lookupValue("filename", filename)==false) {
+			proxy_error("Admin: detected a scheduler in config file without a mandatory filename\n");
+			continue;
+		}
 		if (sched.lookupValue("arg1", arg1)) arg1_exists=true;
 		if (sched.lookupValue("arg2", arg2)) arg2_exists=true;
 		if (sched.lookupValue("arg3", arg3)) arg3_exists=true;
@@ -10593,7 +10602,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			std::string comment="";
 			if (server.lookupValue("address", address)==false) {
 				if (server.lookupValue("hostname", address)==false) {
-					proxy_warning("Mandatory field \"mysql_servers::hostname\" has not been found\n");
+					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostname\n");
 					continue;
 				}
 			}
@@ -10601,7 +10610,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			server.lookupValue("gtid_port", gtid_port);
 			if (server.lookupValue("hostgroup", hostgroup)==false) {
 				if (server.lookupValue("hostgroup_id", hostgroup)==false) {
-					proxy_warning("Mandatory field \"mysql_servers::hostgroup_id\" has not been found\n");
+					proxy_error("Admin: detected a mysql_servers in config file without a mandatory hostgroup_id\n");
 					continue;
 				}
 			}
@@ -10644,11 +10653,11 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 			std::string comment="";
 			std::string check_type="";
 			if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
-				proxy_warning("Mandatory field \"mysql_replication_hostgroups::writer_hostgroup\" has not been found\n");
+				proxy_error("Admin: detected a mysql_replication_hostgroups in config file without a mandatory writer_hostgroup\n");
 				continue;
 			}
 			if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
-				proxy_warning("Mandatory field \"mysql_replication_hostgroups::reader_hostgroup\" has not been found\n");
+				proxy_error("Admin: detected a mysql_replication_hostgroups in config file without a mandatory reader_hostgroup\n");
 				continue;
 			}
 			line.lookupValue("comment", comment);
@@ -10691,10 +10700,22 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                         int writer_is_also_reader;
                         int max_transactions_behind;
                         std::string comment="";
-                        if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-                        if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) continue;
-                        if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
-                        if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) continue;
+                        if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory writer_hostgroup\n");
+                            continue;
+                        }
+                        if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) {
+                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory backup_writer_hostgroup\n");
+                            continue;
+                        }
+                        if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory reader_hostgroup\n");
+                            continue;
+                        }
+                        if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) {
+                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory offline_hostgroup\n");
+                            continue;
+                        }
 			if (line.lookupValue("max_writers", max_writers)==false) max_writers=1;
                         if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
 		        if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
@@ -10726,10 +10747,22 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                     int writer_is_also_reader;
                     int max_transactions_behind;
                     std::string comment="";
-                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-                    if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) continue;
-                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
-                    if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) continue;
+                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_galera_hostgroups in config file without a mandatory writer_hostgroup\n");
+                        continue;
+                    }
+                    if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_galera_hostgroups in config file without a mandatory backup_writer_hostgroup\n");
+                        continue;
+                    }
+                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_galera_hostgroups in config file without a mandatory reader_hostgroup\n");
+                        continue;
+                    }
+                    if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_galera_hostgroups in config file without a mandatory offline_hostgroup\n");
+                        continue;
+                    }
                     if (line.lookupValue("max_writers", max_writers)==false) max_writers=1;
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
                     if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
@@ -10766,8 +10799,14 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 					int new_reader_weight;
                     std::string comment="";
                     std::string domain_name="";
-                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
+                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_aws_aurora_hostgroups in config file without a mandatory writer_hostgroup\n");
+                        continue;
+                    }
+                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+                        proxy_error("Admin: detected a mysql_aws_aurora_hostgroups in config file without a mandatory reader_hostgroup\n");
+                        continue;
+                    }
                     if (line.lookupValue("aurora_port", aurora_port)==false) aurora_port=3306;
                     if (line.lookupValue("max_lag_ms", max_lag_ms)==false) max_lag_ms=600000;
                     if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
@@ -10855,10 +10894,14 @@ int ProxySQL_Admin::Read_ProxySQL_Servers_from_configfile() {
 			std::string comment="";
 			if (server.lookupValue("address", address)==false) {
 				if (server.lookupValue("hostname", address)==false) {
+					proxy_error("Admin: detected a proxysql_servers in config file without a mandatory hostname\n");
 					continue;
 				}
 			}
-			if (server.lookupValue("port", port)==false) continue;
+			if (server.lookupValue("port", port)==false) {
+				proxy_error("Admin: detected a proxysql_servers in config file without a mandatory port\n");
+				continue;
+			}
 			server.lookupValue("weight", weight);
 			server.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
