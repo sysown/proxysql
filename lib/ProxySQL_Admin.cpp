@@ -3824,7 +3824,6 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			goto __run_query;
 		if (pa->Write_ProxySQL_Servers_to_configfile(data))
 			goto __run_query;
-		proxy_warning("TRACE: config is saved\n");
 		char *pta[1];
 		pta[0]=NULL;
 		pta[0]=(char*)data.c_str();
@@ -10385,7 +10384,6 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
-	fprintf(stderr, "TRACE: rows %d\n", rows);
 	return rows;
 }
 
@@ -10798,7 +10796,6 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
             }
     }
 	admindb->execute("PRAGMA foreign_keys = ON");
-	fprintf(stderr, "TRACE: mysql servers rows %d\n", rows);
 	return rows;
 }
 

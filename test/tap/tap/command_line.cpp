@@ -37,6 +37,9 @@ int CommandLine::parse(int argc, char** argv) {
 			case 'p':
 				password = strdup(optarg);
 				break;
+			case 'A':
+				admin_port = atoi(optarg);
+				break;
 			case 'h':
 				host = strdup(optarg);
 				break;
@@ -50,7 +53,7 @@ int CommandLine::parse(int argc, char** argv) {
 				no_write = true;
 				break;
 			default: /* '?' */
-				fprintf(stderr, "Usage: %s -u username -p password -h host [ -P port ] [ -c ] [ -s ] [ -n ]\n", argv[0]);
+				fprintf(stderr, "Usage: %s -u username -p password -h host [ -P port ] [ -A port ] [ -c ] [ -s ] [ -n ]\n", argv[0]);
 				return 0;
 		}
 	}
@@ -85,6 +88,7 @@ int CommandLine::read(const std::string& file) {
 
 	host = strdup("127.0.0.1");
 	port = 6033;
+	admin_port = 6032;
 	username = strdup("root");
 	password = strdup("a");
 	return 0;
@@ -115,6 +119,12 @@ int CommandLine::getEnv() {
 		env_port=strtol(value, &endstr, 10);
 	if(env_port>0 && env_port<65536)
 		port=env_port;
+
+	value=getenv("TAP_ADMINPORT");
+	if(value)
+		env_port=strtol(value, &endstr, 10);
+	if(env_port>0 && env_port<65536)
+		admin_port=env_port;
 
 	return 0;
 }
