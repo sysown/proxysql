@@ -221,7 +221,7 @@ mysql_users:
 		backend=1
 		frontend=1
 		max_connections=10
-		comment=comm1
+		comment="comm1"
 	}
 )
 mysql_query_rules:

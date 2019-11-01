@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
 	if (!mysql)
 		return exit_status();
 	
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.admin_port, NULL, 0)) {
+	if (!mysql_real_connect(mysql, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
 
 	{
 		std::ifstream inFile;
-		inFile.open("./proxysql_reference_select_config_file.cnf"); //open the input file
+		inFile.open("./tests/proxysql_reference_select_config_file.cnf"); //open the input file
 
 		std::stringstream strStream;
 		strStream << inFile.rdbuf(); //read the file

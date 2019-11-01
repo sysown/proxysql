@@ -13,6 +13,8 @@ class CommandLine {
 	char* host;
 	char* username;
 	char* password;
+	char* admin_username;
+	char* admin_password;
 	int	 port;
 	int admin_port;
 

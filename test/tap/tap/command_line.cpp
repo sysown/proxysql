@@ -13,7 +13,7 @@
 using nlohmann::json;
 
 CommandLine::CommandLine() :
-	host(NULL), username(NULL), password(NULL) {}
+	host(NULL), username(NULL), password(NULL), admin_username(NULL), admin_password(NULL) {}
 
 CommandLine::~CommandLine() {
 	if (host)
@@ -22,6 +22,10 @@ CommandLine::~CommandLine() {
 		free(username);
 	if (password)
 		free(password);
+	if (admin_username)
+		free(admin_username);
+	if (admin_password)
+		free(admin_password);
 }
 
 int CommandLine::parse(int argc, char** argv) {
@@ -52,8 +56,14 @@ int CommandLine::parse(int argc, char** argv) {
 			case 'n':
 				no_write = true;
 				break;
+			case 'U':
+				admin_username = strdup(optarg);
+				break;
+			case 'S':
+				admin_password = strdup(optarg);
+				break;
 			default: /* '?' */
-				fprintf(stderr, "Usage: %s -u username -p password -h host [ -P port ] [ -A port ] [ -c ] [ -s ] [ -n ]\n", argv[0]);
+				fprintf(stderr, "Usage: %s -u username -p password -h host [ -P port ] [ -A port ] [ -U admin_username ] [ -S admin_password ] [ -c ] [ -s ] [ -n ]\n", argv[0]);
 				return 0;
 		}
 	}
@@ -109,6 +119,18 @@ int CommandLine::getEnv() {
 	if(!value) return -1;
 	password=strdup(value);
 
+	value=getenv("TAP_ADMINUSERNAME");
+	if(!value)
+		admin_username=strdup("admin");
+	else
+		admin_username=strdup(value);
+
+	value=getenv("TAP_ADMINPASSWORD");
+	if(!value)
+		admin_password=strdup("admin");
+	else
+		admin_password=strdup(value);
+
 	port=6033;
 	checksum=true;
 
@@ -117,12 +139,16 @@ int CommandLine::getEnv() {
 	value=getenv("TAP_PORT");
 	if(value)
 		env_port=strtol(value, &endstr, 10);
+	else
+		env_port=6033;
 	if(env_port>0 && env_port<65536)
 		port=env_port;
 
 	value=getenv("TAP_ADMINPORT");
 	if(value)
 		env_port=strtol(value, &endstr, 10);
+	else
+		env_port=6032;
 	if(env_port>0 && env_port<65536)
 		admin_port=env_port;
 

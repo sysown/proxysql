@@ -3810,28 +3810,28 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	if (query_no_space_length==strlen("SELECT CONFIG FILE") && !strncasecmp("SELECT CONFIG FILE", query_no_space, query_no_space_length)) {
 		std::string data;
 		data.reserve(100000);
-		run_query = false;
 		data += config_header;
-		if (pa->Write_Global_Variables_to_configfile(data))
-			goto __run_query;
-		if (pa->Write_MySQL_Users_to_configfile(data))
-			goto __run_query;
-		if (pa->Write_MySQL_Query_Rules_to_configfile(data))
-			goto __run_query;
-		if (pa->Write_MySQL_Servers_to_configfile(data))
-			goto __run_query;
-		if (pa->Write_Scheduler_to_configfile(data))
-			goto __run_query;
-		if (pa->Write_ProxySQL_Servers_to_configfile(data))
-			goto __run_query;
-		char *pta[1];
-		pta[0]=NULL;
-		pta[0]=(char*)data.c_str();
-		SQLite3_result* resultset = new SQLite3_result(1);
-		resultset->add_column_definition(SQLITE_TEXT,"Data");
-		resultset->add_row(pta);
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-		delete resultset;
+		int rc = pa->Write_Global_Variables_to_configfile(data);
+		rc = pa->Write_MySQL_Users_to_configfile(data);
+		rc = pa->Write_MySQL_Query_Rules_to_configfile(data);
+		rc = pa->Write_MySQL_Servers_to_configfile(data);
+		rc = pa->Write_Scheduler_to_configfile(data);
+		rc = pa->Write_ProxySQL_Servers_to_configfile(data);
+		if (rc) {
+			std::stringstream ss;
+			ss << "ProxySQL Admin Error: Cannot write proxysql.cnf";
+			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+		} else {
+			char *pta[1];
+			pta[0]=NULL;
+			pta[0]=(char*)data.c_str();
+			SQLite3_result* resultset = new SQLite3_result(1);
+			resultset->add_column_definition(SQLITE_TEXT,"Data");
+			resultset->add_row(pta);
+			sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+			delete resultset;
+		}
+		run_query = false;
 		goto __run_query;
 	}
 
@@ -9724,10 +9724,10 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 }
 
 void ProxySQL_Admin::addField(std::string& data, const char* name, const char* value, const char* dq) {
-	char strBuf[10000] = {0};
+	std::stringstream ss;
 	if (!value || !strlen(value)) return;
-	snprintf(strBuf, sizeof(strBuf), "\t\t%s=%s%s%s\n", name, dq, value, dq);
-	data += strBuf;
+	ss << "\t\t" << name << "=" << dq << value << dq << "\n";
+	data += ss.str();
 }
 
 int ProxySQL_Admin::Write_Global_Variables_to_configfile(std::string& data) {
@@ -9758,9 +9758,9 @@ int ProxySQL_Admin::Write_Global_Variables_to_configfile(std::string& data) {
 					}
 				}
 				if (r->fields[1] && strlen(r->fields[1])) {
-						char strBuf[10000];
-						snprintf(strBuf, sizeof(strBuf), "\t%s=\"%s\"\n",r->fields[0] + p1.size() + 1, r->fields[1]);
-						data += strBuf;
+					std::stringstream ss;
+					ss << "\t" << r->fields[0] + p1.size() + 1 << "=\"" << r->fields[1] << "\"\n";
+					data += ss.str();
 				}
 			}
 
@@ -9806,7 +9806,6 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 		}
 		//fprintf(stderr,"%s = %s\n", n, value_string.c_str());
 		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
-		fprintf(stderr, "irefix %s, name %s, value %s\n", prefix, n, value_string.c_str());
 		sprintf(query,q, prefix, n, value_string.c_str());
 		//fprintf(stderr, "%s\n", query);
   	admindb->execute(query);
@@ -9830,11 +9829,9 @@ int ProxySQL_Admin::Write_MySQL_Users_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "mysql_users:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
-				char strBuf[256] = {0};
 				if (isNext)
 					data += ",\n";
 				data += "\t{\n";
@@ -9850,7 +9847,7 @@ int ProxySQL_Admin::Write_MySQL_Users_to_configfile(std::string& data) {
 				addField(data, "backend", r->fields[9], "");
 				addField(data, "frontend", r->fields[10], "");
 				addField(data, "max_connections", r->fields[11], "");
-				addField(data, "comment", r->fields[12], "");
+				addField(data, "comment", r->fields[12]);
 				data += "\t}";
 				isNext = true;
 			}
@@ -9929,7 +9926,6 @@ int ProxySQL_Admin::Write_Scheduler_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "scheduler:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
@@ -10409,7 +10405,6 @@ int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "mysql_servers:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
@@ -10446,7 +10441,6 @@ int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "mysql_replication_hostgroups:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
@@ -10475,7 +10469,6 @@ int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "mysql_group_replication_hostgroups:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
@@ -10509,7 +10502,6 @@ int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "mysql_galera_hostgroups:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
@@ -10543,7 +10535,6 @@ int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "mysql_aws_aurora_hostgroups:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
@@ -10573,7 +10564,6 @@ int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
 		delete sqlite_resultset;
 
 	return 0;
-
 }
 
 int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
@@ -10851,7 +10841,6 @@ int ProxySQL_Admin::Write_ProxySQL_Servers_to_configfile(std::string& data) {
 		return -1;
 	} else {
 		if (sqlite_resultset) {
-			std::string prefix;
 			data += "proxysql_servers:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
