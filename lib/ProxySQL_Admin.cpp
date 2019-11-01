@@ -2997,6 +2997,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			!strncmp("/*!40101 SET ", query_no_space, 13) ||
 			!strncmp("/*!40103 SET ", query_no_space, 13) ||
 			!strncmp("/*!40111 SET ", query_no_space, 13) ||
+			!strncmp("/*!80000 SET ", query_no_space, 13) ||
 			!strncmp("/*!40000 ALTER TABLE", query_no_space, strlen("/*!40000 ALTER TABLE"))
 				||
 			!strncmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */"))
