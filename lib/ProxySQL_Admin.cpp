@@ -1,4 +1,5 @@
 #include <iostream>     // std::cout
+#include <fstream>
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
 #include "re2/re2.h"
@@ -3804,6 +3805,53 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			sprintf(query,q,tablename,checksum);
 			free(checksum);
 		}
+		goto __run_query;
+	}
+
+	if (!strncasecmp("SELECT CONFIG TO", query_no_space, strlen("SELECT CONFIG TO"))) {
+		std::string fileName = query_no_space + strlen("SELECT CONFIG TO");
+		fileName.erase(0, fileName.find_first_not_of("\t\n\v\f\r "));
+		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
+		if (fileName.size() == 0) {
+			std::stringstream ss;
+			ss << "ProxySQL Admin Error: empty file name";
+			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+		}
+		std::string data;
+		data.reserve(100000);
+		data += config_header;
+		int rc = pa->Write_Global_Variables_to_configfile(data);
+		rc = pa->Write_MySQL_Users_to_configfile(data);
+		rc = pa->Write_MySQL_Query_Rules_to_configfile(data);
+		rc = pa->Write_MySQL_Servers_to_configfile(data);
+		rc = pa->Write_Scheduler_to_configfile(data);
+		rc = pa->Write_ProxySQL_Servers_to_configfile(data);
+		if (rc) {
+			std::stringstream ss;
+			ss << "ProxySQL Admin Error: Cannot extract configuration";
+			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+		} else {
+			std::ofstream out;
+			out.open(fileName);
+			if (out.is_open()) {
+				out << data;
+				out.close();
+				if (!out) {
+					std::stringstream ss;
+					ss << "ProxySQL Admin Error: Error writing file " << fileName;
+					sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+				} else {
+					std::stringstream ss;
+					ss << "File " << fileName << " is saved.";
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, (char*)ss.str().c_str(), data.size());
+				}
+			} else {
+				std::stringstream ss;
+				ss << "ProxySQL Admin Error: Cannot open file " << fileName;
+				sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+			}
+		}
+		run_query = false;
 		goto __run_query;
 	}
 
