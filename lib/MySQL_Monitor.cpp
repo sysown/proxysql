@@ -906,7 +906,12 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		}
 		if (myrc==NULL) {
 			mysql_error_msg=strdup(mysql_error(mysql));
-			mysql_close(mysql);
+			int myerrno=mysql_errno(mysql);
+			if (myerrno < 2000) {
+				mysql_close(mysql);
+			} else {
+				close_mysql(mysql);
+			}
 			mysql = NULL;
 			return false;
 		} else {
