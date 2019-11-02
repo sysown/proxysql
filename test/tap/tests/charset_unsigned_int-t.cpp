@@ -51,6 +51,18 @@ int show_admin_global_variable(MYSQL *mysql, const std::string& var_name, std::s
 	mysql_free_result(result);
 }
 
+int set_admin_global_variable(MYSQL *mysql, const std::string& var_name, const std::string& var_value) {
+	char query[128];
+
+	snprintf(query, sizeof(query),"update global_variables set variable_value = '%s' where variable_name='%s'", var_value.c_str(), var_name.c_str());
+	if (mysql_query(mysql, query)) {
+		fprintf(stderr, "Failed to execute SHOW VARIABLES LIKE : no %d, %s\n",
+				mysql_errno(mysql), mysql_error(mysql));
+		return -1;
+	}
+}
+
+
 int get_server_version(MYSQL *mysql, std::string& version) {
 	char query[128];
 
@@ -84,6 +96,16 @@ int main(int argc, char** argv) {
 
 	std::string var_collation_connection = "collation_connection";
 	std::string var_value;
+
+	/* setup global variables
+	 * HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE
+	 */
+	MYSQL* mysqlAdmin = mysql_init(NULL);
+	if (!mysqlAdmin) return exit_status();
+	if (!mysql_real_connect(mysqlAdmin, cl.host, "admin", "admin", NULL, 6032, NULL, 0)) return exit_status();
+	set_admin_global_variable(mysqlAdmin, "mysql-handle_unknown_charset", "1");
+	if (mysql_query(mysqlAdmin, "load mysql variables to runtime")) return exit_status();
+	if (mysql_query(mysqlAdmin, "save mysql variables to disk")) return exit_status();
 
 	/* Check that set names can set collation > 255 */
 	MYSQL* mysql = mysql_init(NULL);
