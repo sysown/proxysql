@@ -672,6 +672,17 @@ void MySQL_STMT_Manager_v14::ref_count_server(uint64_t _stmt_id ,int _v, bool lo
 		pthread_rwlock_unlock(&rwlock_);
 }
 
+void MySQL_STMTs_local_v14::remove_stmt(MYSQL_STMT* stmt) {
+	auto a = backend_stmt_to_global_ids.find(stmt->stmt_id);
+	if (a == backend_stmt_to_global_ids.end()) return;
+
+	auto global_stmt_id = a->second;
+	global_stmt_to_backend_ids.erase(global_stmt_id);
+	global_stmt_to_backend_stmt.erase(global_stmt_id);
+	backend_stmt_to_global_ids.erase(global_stmt_id);
+	GloMyStmt->ref_count_server(global_stmt_id, -1);
+}
+
 MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 	// Note: we do not free the prepared statements because we assume that
 	// if we call this destructor the connection is being destroyed anyway
