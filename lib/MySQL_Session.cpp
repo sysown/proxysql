@@ -2474,7 +2474,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, ch
 				*_rc=-1;	// an error happened, we should destroy the Session
 				return ret;
 			} else {
-				proxy_warning("Error while setting %s: %d, %s\n", var_name, myerr, mysql_error(myconn->mysql));
+				proxy_warning("Error while setting %s to \"%s\": %d, %s\n", var_name, var_value, myerr, mysql_error(myconn->mysql));
 					// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
