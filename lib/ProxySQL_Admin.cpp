@@ -6512,6 +6512,8 @@ void ProxySQL_Admin::stats___mysql_free_connections() {
 		row_idx++;
 	}
 	statsdb->execute("COMMIT");
+	sqlite3_finalize(statement1);
+	sqlite3_finalize(statement32);
 	delete resultset;
 }
 
