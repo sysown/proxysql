@@ -7029,7 +7029,11 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 			if (known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest)) {
 				proxy_info("Setting lock_hostgroup for SET query: %s\n", nqn.c_str());
 			} else {
-				proxy_warning("Unable to parse unknown SET query. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n", nqn.c_str());
+				if (client_myds && client_myds->addr.addr) {
+					proxy_warning("Unable to parse unknown SET query from client %s:%d. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n", client_myds->addr.addr, client_myds->addr.port, nqn.c_str());
+				} else {
+					proxy_warning("Unable to parse unknown SET query. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n", nqn.c_str());
+				}
 			}
 			*lock_hostgroup = true;
 		} else {
@@ -7037,7 +7041,11 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 			if (known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest)) {
 				//proxy_info("Setting lock_hostgroup for SET query: %s\n", nqn.c_str());
 			} else {
-				proxy_warning("Unable to parse unknown SET query. Not setting lock_hostgroup because already set. Please report a bug for future enhancements: %s\n", nqn.c_str());
+				if (client_myds && client_myds->addr.addr) {
+					proxy_warning("Unable to parse unknown SET query from client %s:%d. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n", client_myds->addr.addr, client_myds->addr.port, nqn.c_str());
+				} else {
+					proxy_warning("Unable to parse unknown SET query. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n", nqn.c_str());
+				}
 			}
 		}
 	} else {
