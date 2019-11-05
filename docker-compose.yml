@@ -95,6 +95,47 @@ services:
       - PROXYSQL_BUILD_TYPE=clickhouse
     command:
       - /opt/entrypoint/entrypoint.bash
+  centos8_build:
+    image: proxysql/packaging:build-centos8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=centos8
+    command:
+      - /opt/entrypoint/entrypoint.bash
+  centos8_dbg_build:
+    image: proxysql/packaging:build-centos8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=dbg-centos8
+      - PROXYSQL_BUILD_TYPE=debug
+    command:
+      - /opt/entrypoint/entrypoint.bash
+  centos8_ch_build:
+    image: proxysql/packaging:build-centos8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=clickhouse-centos8
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command:
+      - /opt/entrypoint/entrypoint.bash
   fedora24_build:
     image: proxysql/packaging:build-fedora24
     volumes:
