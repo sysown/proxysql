@@ -2659,7 +2659,7 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 			if (!strcasecmp(key,"max_lag_ms")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
-					if (t > 0 && t <= 600000) {
+					if (t >= 0 && t <= 600000) {
 						qpo->max_lag_ms = t;
 					}
 				}
@@ -2671,7 +2671,7 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					long long now_ms_s = (long long)now_ms;
 					long long t=atoll(value);
 					long long diff = now_ms_s - t;
-					if (diff > 0 && diff <= 600000) {
+					if (diff >= 0 && diff <= 600000) {
 						qpo->max_lag_ms = diff;
 					}
 				}
