@@ -20,11 +20,6 @@
 #define QP_RE_MOD_CASELESS 1
 #define QP_RE_MOD_GLOBAL 2
 
-// Optimization introduced in 2.0.6
-// to avoid a lot of unnecessary copy
-#define DIGEST_STATS_FAST_1
-#define DIGEST_STATS_FAST_MINSIZE	100000
-#define DIGEST_STATS_FAST_THREADS	4
 
 #ifdef DIGEST_STATS_FAST_1
 #include <thread>
@@ -145,279 +140,235 @@ void my_itoa(char s[], unsigned long long n)
      reverse(s);
 }
 
-
-typedef struct _query_digest_stats_pointers_t {
-	char *pta[14];
-	char digest[24];
-	char count_star[24];
-	char first_seen[24];
-	char last_seen[24];
-	char sum_time[24];
-	char min_time[24];
-	char max_time[24];
-	char hid[24];
-	char rows_affected[24];
-	char rows_sent[24];
-} query_digest_stats_pointers_t;
 #endif
 
-class QP_query_digest_stats {
-	public:
-	uint64_t digest;
-	char *digest_text;
-	char *username;
-	char *schemaname;
-	char *client_address;
+QP_query_digest_stats::QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
+	digest=d;
+	digest_text=NULL;
+	if (dt) {
+		digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
+	}
 #ifdef DIGEST_STATS_FAST_1
-	char username_buf[24];
-	char schemaname_buf[24];
-	char client_address_buf[24];
-#endif
-	time_t first_seen;
-	time_t last_seen;
-	unsigned int count_star;
-	unsigned long long sum_time;
-	unsigned long long min_time;
-	unsigned long long max_time;
-	unsigned long long rows_affected;
-	unsigned long long rows_sent;
-	int hid;
-	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
-		digest=d;
-		digest_text=NULL;
-		if (dt) {
-			digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
-		}
-#ifdef DIGEST_STATS_FAST_1
-		if (strlen(u) < sizeof(username_buf)) {
-			strcpy(username_buf,u);
-			username = username_buf;
-		} else {
-			username=strdup(u);
-		}
-		if (strlen(s) < sizeof(schemaname_buf)) {
-			strcpy(schemaname_buf,s);
-			schemaname = schemaname_buf;
-		} else {
-			schemaname=strdup(s);
-		}
-		if (strlen(ca) < sizeof(client_address_buf)) {
-			strcpy(client_address_buf,ca);
-			client_address = client_address_buf;
-		} else {
-			client_address=strdup(ca);
-		}
-#else
+	if (strlen(u) < sizeof(username_buf)) {
+		strcpy(username_buf,u);
+		username = username_buf;
+	} else {
 		username=strdup(u);
+	}
+	if (strlen(s) < sizeof(schemaname_buf)) {
+		strcpy(schemaname_buf,s);
+		schemaname = schemaname_buf;
+	} else {
 		schemaname=strdup(s);
+	}
+	if (strlen(ca) < sizeof(client_address_buf)) {
+		strcpy(client_address_buf,ca);
+		client_address = client_address_buf;
+	} else {
 		client_address=strdup(ca);
-#endif
-		count_star=0;
-		first_seen=0;
-		last_seen=0;
-		sum_time=0;
-		min_time=0;
-		max_time=0;
-		rows_affected=0;
-		rows_sent=0;
-		hid=h;
 	}
-	void add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs) {
-		count_star++;
-		sum_time+=t;
-		rows_affected+=ra;
-		rows_sent+=rs;
-		if (t < min_time || min_time==0) {
-			if (t) min_time = t;
-		}
-		if (t > max_time) {
-			max_time = t;
-		}
-		if (first_seen==0) {
-			first_seen=n;
-		}
-		last_seen=n;
-	}
-	~QP_query_digest_stats() {
-		if (digest_text) {
-			free(digest_text);
-			digest_text=NULL;
-		}
-		if (username) {
-#ifdef DIGEST_STATS_FAST_1
-			if (username == username_buf) {
-			} else {
-				free(username);
-			}
 #else
+	username=strdup(u);
+	schemaname=strdup(s);
+	client_address=strdup(ca);
+#endif
+	count_star=0;
+	first_seen=0;
+	last_seen=0;
+	sum_time=0;
+	min_time=0;
+	max_time=0;
+	rows_affected=0;
+	rows_sent=0;
+	hid=h;
+}
+void QP_query_digest_stats::add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs) {
+	count_star++;
+	sum_time+=t;
+	rows_affected+=ra;
+	rows_sent+=rs;
+	if (t < min_time || min_time==0) {
+		if (t) min_time = t;
+	}
+	if (t > max_time) {
+		max_time = t;
+	}
+	if (first_seen==0) {
+		first_seen=n;
+	}
+	last_seen=n;
+}
+QP_query_digest_stats::~QP_query_digest_stats() {
+	if (digest_text) {
+		free(digest_text);
+		digest_text=NULL;
+	}
+	if (username) {
+#ifdef DIGEST_STATS_FAST_1
+		if (username == username_buf) {
+		} else {
 			free(username);
-#endif
-			username=NULL;
 		}
-		if (schemaname) {
-#ifdef DIGEST_STATS_FAST_1
-			if (schemaname == schemaname_buf) {
-			} else {
-				free(schemaname);
-			}
 #else
-			free(schemaname);
+		free(username);
 #endif
-			schemaname=NULL;
-		}
-		if (client_address) {
-#ifdef DIGEST_STATS_FAST_1
-			if (client_address == client_address_buf) {
-			} else {
-				free(client_address);
-			}
-#else
-			free(client_address);
-#endif
-			client_address=NULL;
-		}
+		username=NULL;
 	}
+	if (schemaname) {
 #ifdef DIGEST_STATS_FAST_1
-	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
-		char **pta=qdsp->pta;
+		if (schemaname == schemaname_buf) {
+		} else {
+			free(schemaname);
+		}
 #else
-	char **get_row(umap_query_digest_text *digest_text_umap) {
-		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*14);
+		free(schemaname);
+#endif
+		schemaname=NULL;
+	}
+	if (client_address) {
+#ifdef DIGEST_STATS_FAST_1
+		if (client_address == client_address_buf) {
+		} else {
+			free(client_address);
+		}
+#else
+		free(client_address);
+#endif
+		client_address=NULL;
+	}
+}
+#ifdef DIGEST_STATS_FAST_1
+char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
+	char **pta=qdsp->pta;
+#else
+char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap) {
+	char buf[128];
+	char **pta=(char **)malloc(sizeof(char *)*14);
 #endif
 
 #ifdef DIGEST_STATS_FAST_1
-		assert(schemaname);
-		pta[0]=schemaname;
-		assert(username);
-		pta[1]=username;
-		assert(client_address);
-		pta[2]=client_address;
+	assert(schemaname);
+	pta[0]=schemaname;
+	assert(username);
+	pta[1]=username;
+	assert(client_address);
+	pta[2]=client_address;
 #else
-		assert(schemaname);
-		pta[0]=strdup(schemaname);
-		assert(username);
-		pta[1]=strdup(username);
-		assert(client_address);
-		pta[2]=strdup(client_address);
+	assert(schemaname);
+	pta[0]=strdup(schemaname);
+	assert(username);
+	pta[1]=strdup(username);
+	assert(client_address);
+	pta[2]=strdup(client_address);
 #endif
 
 #ifdef DIGEST_STATS_FAST_1
-		sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
-		pta[3]=qdsp->digest;
+	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
+	pta[3]=qdsp->digest;
 #else
-		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
-		pta[3]=strdup(buf);
+	sprintf(buf,"0x%016llX", (long long unsigned int)digest);
+	pta[3]=strdup(buf);
 #endif
 
-		if (digest_text) {
+	if (digest_text) {
 #ifdef DIGEST_STATS_FAST_1
-			pta[4]=digest_text;
+		pta[4]=digest_text;
 #else
-			pta[4]=strdup(digest_text);
+		pta[4]=strdup(digest_text);
+#endif
+	} else {
+		std::unordered_map<uint64_t, char *>::iterator it;
+		it=digest_text_umap->find(digest);
+		if (it != digest_text_umap->end()) {
+#ifdef DIGEST_STATS_FAST_1
+			pta[4] = it->second;
+#else
+			pta[4] = strdup(it->second);
 #endif
 		} else {
-			std::unordered_map<uint64_t, char *>::iterator it;
-			it=digest_text_umap->find(digest);
-			if (it != digest_text_umap->end()) {
-#ifdef DIGEST_STATS_FAST_1
-				pta[4] = it->second;
-#else
-				pta[4] = strdup(it->second);
-#endif
-			} else {
-				assert(0);
-			}
+			assert(0);
 		}
-
-#ifdef DIGEST_STATS_FAST_1
-		//sprintf(qdsp->count_star,"%u",count_star);
-		my_itoa(qdsp->count_star, count_star);
-		pta[5]=qdsp->count_star;
-#else
-		sprintf(buf,"%u",count_star);
-		pta[5]=strdup(buf);
-#endif
-
-		time_t __now;
-		time(&__now);
-		unsigned long long curtime=monotonic_time();
-		time_t seen_time;
-		seen_time= __now - curtime/1000000 + first_seen/1000000;
-#ifdef DIGEST_STATS_FAST_1
-		//sprintf(qdsp->first_seen,"%ld", seen_time);
-		my_itoa(qdsp->first_seen, seen_time);
-		pta[6]=qdsp->first_seen;
-#else
-		sprintf(buf,"%ld", seen_time);
-		pta[6]=strdup(buf);
-#endif
-
-		seen_time= __now - curtime/1000000 + last_seen/1000000;
-#ifdef DIGEST_STATS_FAST_1
-		//sprintf(qdsp->last_seen,"%ld", seen_time);
-		my_itoa(qdsp->last_seen, seen_time);
-		pta[7]=qdsp->last_seen;
-		//sprintf(qdsp->sum_time,"%llu",sum_time);
-		my_itoa(qdsp->sum_time,sum_time);
-		pta[8]=qdsp->sum_time;
-		//sprintf(qdsp->min_time,"%llu",min_time);
-		my_itoa(qdsp->min_time,min_time);
-		pta[9]=qdsp->min_time;
-		//sprintf(qdsp->max_time,"%llu",max_time);
-		my_itoa(qdsp->max_time,max_time);
-		pta[10]=qdsp->max_time;
-		// we are reverting this back to the use of sprintf instead of my_itoa
-		// because with my_itoa we are losing the sign
-		// see issue #2285
-		sprintf(qdsp->hid,"%d",hid);
-		//my_itoa(qdsp->hid,hid);
-		pta[11]=qdsp->hid;
-		//sprintf(qdsp->rows_affected,"%llu",rows_affected);
-		my_itoa(qdsp->rows_affected,rows_affected);
-		pta[12]=qdsp->rows_affected;
-		//sprintf(qdsp->rows_sent,"%llu",rows_sent);
-		my_itoa(qdsp->rows_sent,rows_sent);
-		pta[13]=qdsp->rows_sent;
-#else
-		sprintf(buf,"%ld", seen_time);
-		pta[7]=strdup(buf);
-		sprintf(buf,"%llu",sum_time);
-		pta[8]=strdup(buf);
-		sprintf(buf,"%llu",min_time);
-		pta[9]=strdup(buf);
-		sprintf(buf,"%llu",max_time);
-		pta[10]=strdup(buf);
-		sprintf(buf,"%d",hid);
-		pta[11]=strdup(buf);
-		sprintf(buf,"%llu",rows_affected);
-		pta[12]=strdup(buf);
-		sprintf(buf,"%llu",rows_sent);
-		pta[13]=strdup(buf);
-#endif
-		return pta;
 	}
-/*
-	void free_row(query_digest_stats_pointers_t *qdsp) {
-		//free(qdsp->pta[0]);
-		//free(qdsp->pta[1]);
-		//free(qdsp->pta[2]);
-		//free(qdsp->pta[4]);
-	}
-*/
+
+#ifdef DIGEST_STATS_FAST_1
+	//sprintf(qdsp->count_star,"%u",count_star);
+	my_itoa(qdsp->count_star, count_star);
+	pta[5]=qdsp->count_star;
+#else
+	sprintf(buf,"%u",count_star);
+	pta[5]=strdup(buf);
+#endif
+
+	time_t __now;
+	time(&__now);
+	unsigned long long curtime=monotonic_time();
+	time_t seen_time;
+	seen_time= __now - curtime/1000000 + first_seen/1000000;
+#ifdef DIGEST_STATS_FAST_1
+	//sprintf(qdsp->first_seen,"%ld", seen_time);
+	my_itoa(qdsp->first_seen, seen_time);
+	pta[6]=qdsp->first_seen;
+#else
+	sprintf(buf,"%ld", seen_time);
+	pta[6]=strdup(buf);
+#endif
+
+	seen_time= __now - curtime/1000000 + last_seen/1000000;
+#ifdef DIGEST_STATS_FAST_1
+	//sprintf(qdsp->last_seen,"%ld", seen_time);
+	my_itoa(qdsp->last_seen, seen_time);
+	pta[7]=qdsp->last_seen;
+	//sprintf(qdsp->sum_time,"%llu",sum_time);
+	my_itoa(qdsp->sum_time,sum_time);
+	pta[8]=qdsp->sum_time;
+	//sprintf(qdsp->min_time,"%llu",min_time);
+	my_itoa(qdsp->min_time,min_time);
+	pta[9]=qdsp->min_time;
+	//sprintf(qdsp->max_time,"%llu",max_time);
+	my_itoa(qdsp->max_time,max_time);
+	pta[10]=qdsp->max_time;
+	// we are reverting this back to the use of sprintf instead of my_itoa
+	// because with my_itoa we are losing the sign
+	// see issue #2285
+	sprintf(qdsp->hid,"%d",hid);
+	//my_itoa(qdsp->hid,hid);
+	pta[11]=qdsp->hid;
+	//sprintf(qdsp->rows_affected,"%llu",rows_affected);
+	my_itoa(qdsp->rows_affected,rows_affected);
+	pta[12]=qdsp->rows_affected;
+	//sprintf(qdsp->rows_sent,"%llu",rows_sent);
+	my_itoa(qdsp->rows_sent,rows_sent);
+	pta[13]=qdsp->rows_sent;
+#else
+	sprintf(buf,"%ld", seen_time);
+	pta[7]=strdup(buf);
+	sprintf(buf,"%llu",sum_time);
+	pta[8]=strdup(buf);
+	sprintf(buf,"%llu",min_time);
+	pta[9]=strdup(buf);
+	sprintf(buf,"%llu",max_time);
+	pta[10]=strdup(buf);
+	sprintf(buf,"%d",hid);
+	pta[11]=strdup(buf);
+	sprintf(buf,"%llu",rows_affected);
+	pta[12]=strdup(buf);
+	sprintf(buf,"%llu",rows_sent);
+	pta[13]=strdup(buf);
+#endif
+	return pta;
+}
+
 #ifdef DIGEST_STATS_FAST_1
 #else
-	void free_row(char **pta) {
-		int i;
-		for (i=0;i<14;i++) {
-			assert(pta[i]);
-			free(pta[i]);
-		}
-		free(pta);
+void QP_query_digest_stats::free_row(char **pta) {
+	int i;
+	for (i=0;i<14;i++) {
+		assert(pta[i]);
+		free(pta[i]);
 	}
+	free(pta);
+}
 #endif
-};
-
 
 struct __RE2_objects_t {
 	pcrecpp::RE_Options *opt1;
@@ -1474,6 +1425,22 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	}
 #endif
 	return result;
+}
+
+
+void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&digest_rwlock);
+#else
+	spin_wrlock(&digest_rwlock);
+#endif
+	digest_umap.swap(*uqd);
+	digest_text_umap.swap(*uqdt);
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&digest_rwlock);
+#else
+	spin_wrunlock(&digest_rwlock);
+#endif
 }
 
 SQLite3_result * Query_Processor::get_query_digests_reset() {

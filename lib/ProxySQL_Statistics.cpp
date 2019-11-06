@@ -55,6 +55,7 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 	statsdb_disk->execute("PRAGMA synchronous=0");
 
 	next_timer_MySQL_Threads_Handler = 0;
+	next_timer_mysql_query_digest_to_disk = 0;
 	next_timer_system_cpu = 0;
 #ifndef NOJEM
 	next_timer_system_memory = 0;
@@ -100,10 +101,19 @@ void ProxySQL_Statistics::init() {
 	insert_into_tables_defs(tables_defs_statsdb_disk,"myhgm_connections_hour", STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_HOUR);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"myhgm_connections_day", STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_DAY);
 
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_digest", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_DIGEST);
+
 	disk_upgrade_mysql_connections();
 
 	check_and_build_standard_tables(statsdb_mem, tables_defs_statsdb_disk);
 	check_and_build_standard_tables(statsdb_disk, tables_defs_statsdb_disk);
+
+//	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_hostgroup ON history_mysql_query_digest (hostgroup)");
+//	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_username ON history_mysql_query_digest (username)");
+//	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_schemaname ON history_mysql_query_digest (schemaname)");
+//	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_digest ON history_mysql_query_digest (digest)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_first_seen ON history_mysql_query_digest (first_seen)");
+//	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_last_seen ON history_mysql_query_digest (last_seen)");
 }
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
@@ -195,6 +205,22 @@ bool ProxySQL_Statistics::MySQL_Query_Cache_timetoget(unsigned long long curtime
 		) {
 			next_timer_MySQL_Query_Cache = curtime/1000/1000 + i;
 			next_timer_MySQL_Query_Cache = next_timer_MySQL_Query_Cache * 1000 * 1000;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ProxySQL_Statistics::mysql_query_digest_to_disk_timetoget(unsigned long long curtime) {
+	unsigned int i = (unsigned int)variables.stats_mysql_query_digest_to_disk;
+	if (i) {
+		if (
+			( curtime > next_timer_mysql_query_digest_to_disk )
+			||
+			( curtime + i*1000*1000 < next_timer_mysql_query_digest_to_disk )
+		) {
+			next_timer_mysql_query_digest_to_disk = curtime/1000/1000 + i;
+			next_timer_mysql_query_digest_to_disk = next_timer_mysql_query_digest_to_disk * 1000 * 1000;
 			return true;
 		}
 	}

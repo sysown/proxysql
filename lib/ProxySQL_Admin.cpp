@@ -401,6 +401,7 @@ static char * admin_variables_names[]= {
 	(char *)"stats_mysql_connections",
 	(char *)"stats_mysql_connection_pool",
 	(char *)"stats_mysql_query_cache",
+	(char *)"stats_mysql_query_digest_to_disk",
 	(char *)"stats_system_cpu",
 	(char *)"stats_system_memory",
 	(char *)"mysql_ifaces",
@@ -439,18 +440,161 @@ static ProxySQL_Admin *SPA=NULL;
 static void * (*child_func[3]) (void *arg);
 
 
-int ProxySQL_Test___GetDigestTable(bool reset) {
+int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
 	if (!GloQPro) return 0;
-	SQLite3_result * resultset=NULL;
-	if (reset==true) {
-		resultset=GloQPro->get_query_digests_reset();
+	if (use_swap == false) {
+		SQLite3_result * resultset=NULL;
+		if (reset==true) {
+			resultset=GloQPro->get_query_digests_reset();
+		} else {
+			resultset=GloQPro->get_query_digests();
+		}
+		if (resultset==NULL) return 0;
+		r = resultset->rows_count;
+		delete resultset;
 	} else {
-		resultset=GloQPro->get_query_digests();
+		umap_query_digest uqd;
+		umap_query_digest_text uqdt;
+		GloQPro->get_query_digests_reset(&uqd, &uqdt);
+		r = uqd.size();
+		for (std::unordered_map<uint64_t, void *>::iterator it=uqd.begin(); it!=uqd.end(); ++it) {
+			QP_query_digest_stats * qds = (QP_query_digest_stats *)it->second;
+			delete qds;
+		}
+		uqd.erase(uqd.begin(),uqd.end());
+		for (std::unordered_map<uint64_t, char *>::iterator it=uqdt.begin(); it!=uqdt.end(); ++it) {
+			free(it->second);
+		}
+		uqdt.erase(uqdt.begin(),uqdt.end());
 	}
-	if (resultset==NULL) return 0;
-	r = resultset->rows_count;
-	delete resultset;
+	return r;
+}
+
+int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
+	int r = 0;
+	if (!GloQPro) return 0;
+	umap_query_digest uqd;
+	umap_query_digest_text uqdt;
+	GloQPro->get_query_digests_reset(&uqd, &uqdt);
+	r = uqd.size();
+	SQLite3DB * sdb = _db;
+	sdb->execute("BEGIN");
+	int rc;
+	sqlite3_stmt *statement1=NULL;
+	sqlite3_stmt *statement32=NULL;
+	char *query1=NULL;
+	char *query32=NULL;
+	query1=(char *)"INSERT INTO history_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+	query32=(char *)"INSERT INTO history_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14), (?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42), (?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56), (?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64, ?65, ?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80, ?81, ?82, ?83, ?84), (?85, ?86, ?87, ?88, ?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96, ?97, ?98), (?99, ?100, ?101, ?102, ?103, ?104, ?105, ?106, ?107, ?108, ?109, ?110, ?111, ?112), (?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120, ?121, ?122, ?123, ?124, ?125, ?126), (?127, ?128, ?129, ?130, ?131, ?132, ?133, ?134, ?135, ?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161, ?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176, ?177, ?178, ?179, ?180, ?181, ?182), (?183, ?184, ?185, ?186, ?187, ?188, ?189, ?190, ?191, ?192, ?193, ?194, ?195, ?196), (?197, ?198, ?199, ?200, ?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208, ?209, ?210), (?211, ?212, ?213, ?214, ?215, ?216, ?217, ?218, ?219, ?220, ?221, ?222, ?223, ?224), (?225, ?226, ?227, ?228, ?229, ?230, ?231, ?232, ?233, ?234, ?235, ?236, ?237, ?238), (?239, ?240, ?241, ?242, ?243, ?244, ?245, ?246, ?247, ?248, ?249, ?250, ?251, ?252), (?253, ?254, ?255, ?256, ?257, ?258, ?259, ?260, ?261, ?262, ?263, ?264, ?265, ?266), (?267, ?268, ?269, ?270, ?271, ?272, ?273, ?274, ?275, ?276, ?277, ?278, ?279, ?280), (?281, ?282, ?283, ?284, ?285, ?286, ?287, ?288, ?289, ?290, ?291, ?292, ?293, ?294), (?295, ?296, ?297, ?298, ?299, ?300, ?301, ?302, ?303, ?304, ?305, ?306, ?307, ?308), (?309, ?310, ?311, ?312, ?313, ?314, ?315, ?316, ?317, ?318, ?319, ?320, ?321, ?322), (?323, ?324, ?325, ?326, ?327, ?328, ?329, ?330, ?331, ?332, ?333, ?334, ?335, ?336), (?337, ?338, ?339, ?340, ?341, ?342, ?343, ?344, ?345, ?346, ?347, ?348, ?349, ?350), (?351, ?352, ?353, ?354, ?355, ?356, ?357, ?358, ?359, ?360, ?361, ?362, ?363, ?364), (?365, ?366, ?367, ?368, ?369, ?370, ?371, ?372, ?373, ?374, ?375, ?376, ?377, ?378), (?379, ?380, ?381, ?382, ?383, ?384, ?385, ?386, ?387, ?388, ?389, ?390, ?391, ?392), (?393, ?394, ?395, ?396, ?397, ?398, ?399, ?400, ?401, ?402, ?403, ?404, ?405, ?406), (?407, ?408, ?409, ?410, ?411, ?412, ?413, ?414, ?415, ?416, ?417, ?418, ?419, ?420), (?421, ?422, ?423, ?424, ?425, ?426, ?427, ?428, ?429, ?430, ?431, ?432, ?433, ?434), (?435, ?436, ?437, ?438, ?439, ?440, ?441, ?442, ?443, ?444, ?445, ?446, ?447, ?448)";
+	rc = sdb->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, sdb);
+	rc = sdb->prepare_v2(query32, &statement32);
+	ASSERT_SQLITE_OK(rc, sdb);
+	int row_idx=0;
+	int max_bulk_row_idx=r/32;
+	max_bulk_row_idx=max_bulk_row_idx*32;
+	query_digest_stats_pointers_t qdsp;
+	time_t __now;
+	time(&__now);
+	unsigned long long curtime=monotonic_time();
+	time_t seen_time;
+	for (std::unordered_map<uint64_t, void *>::iterator it=uqd.begin(); it!=uqd.end(); ++it) {
+		QP_query_digest_stats * qds = (QP_query_digest_stats *)it->second;
+		int idx=row_idx%32;
+		if (row_idx<max_bulk_row_idx) { // bulk
+			rc=sqlite3_bind_int64(statement32, (idx*14)+1, qds->hid); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+2, qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+3, qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_text(statement32, (idx*14)+4, qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			sprintf(qdsp.digest,"0x%016llX", (long long unsigned int)qds->digest);
+			rc=sqlite3_bind_text(statement32, (idx*14)+5, qdsp.digest, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			if (qds->digest_text) {
+				rc=sqlite3_bind_text(statement32, (idx*14)+6, qds->digest_text, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			} else {
+				std::unordered_map<uint64_t, char *>::iterator it2;
+				it2=uqdt.find(qds->digest);
+				if (it2 != uqdt.end()) {
+					rc=sqlite3_bind_text(statement32, (idx*14)+6, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+				} else {
+					assert(0);
+				}
+			}
+			rc=sqlite3_bind_int64(statement32, (idx*14)+7, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
+			{
+				seen_time = __now - curtime/1000000 + qds->first_seen/1000000;
+				rc=sqlite3_bind_int64(statement32, (idx*14)+8, seen_time); ASSERT_SQLITE_OK(rc, sdb);
+			}
+			{
+				seen_time = __now - curtime/1000000 + qds->last_seen/1000000;
+				rc=sqlite3_bind_int64(statement32, (idx*14)+9, seen_time); ASSERT_SQLITE_OK(rc, sdb);
+			}
+			rc=sqlite3_bind_int64(statement32, (idx*14)+10, qds->sum_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+11, qds->min_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+12, qds->max_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_int64(statement32, (idx*14)+13, qds->rows_affected); ASSERT_SQLITE_OK(rc, sdb); // rows affected
+			rc=sqlite3_bind_int64(statement32, (idx*14)+14, qds->rows_sent); ASSERT_SQLITE_OK(rc, sdb); // rows sent
+			if (idx==31) {
+				SAFE_SQLITE3_STEP2(statement32);
+				rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, sdb);
+				rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, sdb);
+				if (row_idx%100==0) {
+					sdb->execute("COMMIT");
+					sdb->execute("BEGIN");
+				}
+			}
+		} else { // single row
+			rc=sqlite3_bind_int64(statement1, 1, qds->hid); ASSERT_SQLITE_OK(rc, sdb);
+			assert(qds->schemaname);
+			rc=sqlite3_bind_text(statement1, 2, qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_text(statement1, 3, qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_text(statement1, 4, qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			sprintf(qdsp.digest,"0x%016llX", (long long unsigned int)qds->digest);
+			rc=sqlite3_bind_text(statement1, 5, qdsp.digest, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			if (qds->digest_text) {
+				rc=sqlite3_bind_text(statement1, 6, qds->digest_text, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			} else {
+				std::unordered_map<uint64_t, char *>::iterator it2;
+				it2=uqdt.find(qds->digest);
+				if (it2 != uqdt.end()) {
+					rc=sqlite3_bind_text(statement1, 6, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+				} else {
+					assert(0);
+				}
+			}
+			rc=sqlite3_bind_int64(statement1, 7, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
+			{
+				seen_time = __now - curtime/1000000 + qds->first_seen/1000000;
+				rc=sqlite3_bind_int64(statement1, 8, seen_time); ASSERT_SQLITE_OK(rc, sdb);
+			}
+			{
+				seen_time = __now - curtime/1000000 + qds->last_seen/1000000;
+				rc=sqlite3_bind_int64(statement1, 9, seen_time); ASSERT_SQLITE_OK(rc, sdb);
+			}
+			rc=sqlite3_bind_int64(statement1, 10, qds->sum_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_int64(statement1, 11, qds->min_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_int64(statement1, 12, qds->max_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_bind_int64(statement1, 13, qds->rows_affected); ASSERT_SQLITE_OK(rc, sdb); // rows affected
+			rc=sqlite3_bind_int64(statement1, 14, qds->rows_sent); ASSERT_SQLITE_OK(rc, sdb); // rows sent
+			SAFE_SQLITE3_STEP2(statement1);
+			rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, sdb);
+			rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, sdb);
+		}
+		row_idx++;
+	}
+	sqlite3_finalize(statement1);
+	sqlite3_finalize(statement32);
+	sdb->execute("COMMIT");
+
+	for (std::unordered_map<uint64_t, void *>::iterator it=uqd.begin(); it!=uqd.end(); ++it) {
+		QP_query_digest_stats * qds = (QP_query_digest_stats *)it->second;
+		delete qds;
+	}
+	uqd.erase(uqd.begin(),uqd.end());
+	for (std::unordered_map<uint64_t, char *>::iterator it=uqdt.begin(); it!=uqdt.end(); ++it) {
+		free(it->second);
+	}
+	uqdt.erase(uqdt.begin(),uqdt.end());
 	return r;
 }
 
@@ -1269,6 +1413,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 #endif /* PROXYSQLCLICKHOUSE */
 
+	if ((query_no_space_length>17) && ( (!strcasecmp("SAVE MYSQL DIGEST TO DISK", query_no_space) ) )) {
+		proxy_info("Received %s command\n", query_no_space);
+        unsigned long long curtime1=monotonic_time();
+		int r1 = SPA->FlushDigestTableToDisk(SPA->statsdb_disk);
+        unsigned long long curtime2=monotonic_time();
+        curtime1 = curtime1/1000;
+        curtime2 = curtime2/1000;
+		proxy_info("Saved stats_mysql_query_digest to disk: %llums to write %llu entries\n", curtime2-curtime1, r1);
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+		return false;
+	}
 	if ((query_no_space_length>17) && ( (!strncasecmp("SAVE MYSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD MYSQL USERS ", query_no_space, 17))) ) {
 
 		if (
@@ -2744,14 +2899,14 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 					case 2:
 						// get all the entries from the digest map, but without writing to DB
 						// it uses multiple threads
-						r1 = ProxySQL_Test___GetDigestTable(false);
+						r1 = ProxySQL_Test___GetDigestTable(false, false);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 3:
 						// get all the entries from the digest map and reset, but without writing to DB
 						// it uses multiple threads
-						r1 = ProxySQL_Test___GetDigestTable(true);
+						r1 = ProxySQL_Test___GetDigestTable(true, false);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
@@ -2772,6 +2927,20 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						r1 = ProxySQL_Test___PurgeDigestTable(true, false, &msg);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, r1);
 						free(msg);
+						run_query=false;
+						break;
+					case 7:
+						// get all the entries from the digest map and reset, but without writing to DB
+						// it uses multiple threads
+						// it locks for a very short time and doesn't use SQLite3_result, but swap
+						r1 = ProxySQL_Test___GetDigestTable(true, true);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 8:
+						// get all the entries from the digest map and reset, AND write to DB
+						r1 = SPA->FlushDigestTableToDisk(SPA->statsdb_disk);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 11:
@@ -3945,6 +4114,14 @@ __end_while_pool:
 					}
 				}
 			}
+			if (GloProxyStats->mysql_query_digest_to_disk_timetoget(curtime)) {
+				unsigned long long curtime1=monotonic_time();
+				int r1 = SPA->FlushDigestTableToDisk(SPA->statsdb_disk);
+				unsigned long long curtime2=monotonic_time();
+				curtime1 = curtime1/1000;
+				curtime2 = curtime2/1000;
+				proxy_info("Automatically saved stats_mysql_query_digest to disk: %llums to write %llu entries\n", curtime2-curtime1, r1);
+			}
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
 			}
@@ -4087,11 +4264,13 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.stats_mysql_connection_pool = 60;
 	variables.stats_mysql_connections = 60;
 	variables.stats_mysql_query_cache = 60;
+	variables.stats_mysql_query_digest_to_disk = 0;
 	variables.stats_system_cpu = 60;
 	variables.stats_system_memory = 60;
 	GloProxyStats->variables.stats_mysql_connection_pool = 60;
 	GloProxyStats->variables.stats_mysql_connections = 60;
 	GloProxyStats->variables.stats_mysql_query_cache = 60;
+	GloProxyStats->variables.stats_mysql_query_digest_to_disk = 0;
 	GloProxyStats->variables.stats_system_cpu = 60;
 #ifndef NOJEM
 	GloProxyStats->variables.stats_system_memory = 60;
@@ -5297,6 +5476,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 			sprintf(intbuf,"%d",variables.stats_mysql_query_cache);
 			return strdup(intbuf);
 		}
+		if (!strcasecmp(name,"stats_mysql_query_digest_to_disk")) {
+			sprintf(intbuf,"%d",variables.stats_mysql_query_digest_to_disk);
+			return strdup(intbuf);
+		}
 		if (!strcasecmp(name,"stats_system_cpu")) {
 			sprintf(intbuf,"%d",variables.stats_system_cpu);
 			return strdup(intbuf);
@@ -5578,6 +5761,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 				}
 				variables.stats_mysql_query_cache=intv;
 				GloProxyStats->variables.stats_mysql_query_cache=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"stats_mysql_query_digest_to_disk")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv < 24*3600) {
+				variables.stats_mysql_query_digest_to_disk=intv;
+				GloProxyStats->variables.stats_mysql_query_digest_to_disk=intv;
 				return true;
 			} else {
 				return false;
