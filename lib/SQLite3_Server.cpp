@@ -86,6 +86,7 @@ static char *s_strdup(char *s) {
 static int __SQLite3_Server_refresh_interval=1000;
 static bool testTimeoutSequence[] = {true, false, true, false, true, false, true, false};
 static int testIndex = 7;
+static int testLag = 10;
 
 extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;
@@ -516,7 +517,8 @@ __run_query:
 #ifdef TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
 				pthread_mutex_lock(&GloSQLite3Server->grouprep_mutex);
-				GloSQLite3Server->populate_grouprep_table(sess);
+				GloSQLite3Server->populate_grouprep_table(sess, testLag);
+				if (testLag > 0) testLag--;
 			}
 #endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
@@ -1026,7 +1028,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 #endif // TEST_AURORA
 
 #ifdef TEST_GROUPREP
-void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess) {
+void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind) {
 	// this function needs to be called with lock on mutex galera_mutex already acquired
 	//
 	sessdb->execute("DELETE FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
@@ -1034,8 +1036,11 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess) {
 	string server_id = myip.substr(8,1);
 	if (server_id == "1")
 		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'NO', 0)");
-	else
-		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'YES', 0)");
+	else {
+		std::stringstream ss;
+		ss << "INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'YES', " << txs_behind << ")";
+		sessdb->execute(ss.str().c_str());
+	}
 }
 #endif // TEST_GALERA
 

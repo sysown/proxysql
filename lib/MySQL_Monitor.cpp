@@ -1349,43 +1349,14 @@ __end_process_group_replication_result:
 		}
 		if (mmsd->mysql_error_msg) {
 			if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
-				int max_num_timeout = 10;
-				if (mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count < max_num_timeout) {
-					max_num_timeout = mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
-				}
-				unsigned long long start_times[max_num_timeout];
-				bool timeouts[max_num_timeout];
-				for (int i=0; i<max_num_timeout; i++) {
-					start_times[i]=0;
-					timeouts[i]=false;
-				}
-				for (int i=0; i<MyGR_Nentries; i++) {
-					if (node->last_entries[i].start_time) {
-						int smallidx = 0;
-						for (int j=0; j<max_num_timeout; j++) {
-							if (j!=smallidx) {
-								if (start_times[j] < start_times[smallidx]) {
-									smallidx = j;
-								}
-							}
-						}
-						if (start_times[smallidx] < node->last_entries[i].start_time) {
-							start_times[smallidx] = node->last_entries[i].start_time;
-							timeouts[smallidx] = false;
-							if (node->last_entries[i].error) {
-								if (strncasecmp(node->last_entries[i].error, (char *)"timeout", 7) == 0) {
-									timeouts[smallidx] = true;
-								}
-							}
-						}
-					}
-				}
-				for (int i=0; i<max_num_timeout; i++) {
-					if (timeouts[i]) {
-						num_timeouts++;
-					}
-				}
+				num_timeouts=node->get_timeout_count();
+				proxy_warning("%s:%d : group replication health check timeout count %d. Max threshold %d.\n", 
+					mmsd->hostname, mmsd->port, num_timeouts, mmsd->max_transactions_behind_count);
 			}
+		}
+		int lag_counts = 0;
+		if (read_only) {
+			lag_counts = node->get_lag_behind_count(mmsd->max_transactions_behind);
 		}
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 
@@ -1397,7 +1368,7 @@ __end_process_group_replication_result:
 			} else {
 				// it was a timeout. Check if we are having consecutive timeout
 				if (num_timeouts == mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count) {
-					proxy_error("Server %s:%d missed %d group replication checks. Number retires %d, Assuming offline\n",
+					proxy_error("Server %s:%d missed %d group replication checks. Number retries %d, Assuming offline\n",
 					mmsd->hostname, mmsd->port, num_timeouts, num_timeouts);
 					MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 				} else {
@@ -1409,7 +1380,7 @@ __end_process_group_replication_result:
 				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"viable_candidate=NO");
 			} else {
 				if (read_only==true) {
-					if (transactions_behind > mmsd->max_transactions_behind) {
+					if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
 						MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
 					} else {
 						MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
@@ -2716,6 +2687,7 @@ void * MySQL_Monitor::monitor_group_replication() {
 //		resultset = MyHGM->execute_query(query, &error);
 //		assert(resultset);
 		if (Group_Replication_Hosts_resultset==NULL) {
+				proxy_error("Group replication hosts result set is absent\n");
 				goto __end_monitor_group_replication_loop;
 //		}
 //		if (error) {
@@ -2723,6 +2695,7 @@ void * MySQL_Monitor::monitor_group_replication() {
 //			goto __end_monitor_read_only_loop;
 		} else {
 			if (Group_Replication_Hosts_resultset->rows_count==0) {
+				proxy_error("Group replication hosts result set is empty\n");
 				goto __end_monitor_group_replication_loop;
 			}
 			int us=100;
@@ -2738,6 +2711,7 @@ void * MySQL_Monitor::monitor_group_replication() {
 					mmsd->writer_hostgroup=atoi(r->fields[0]);
 					mmsd->writer_is_also_reader=atoi(r->fields[4]);
 					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->max_transactions_behind_count=mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 					mmsd->mondb=monitordb;
 					WorkItem* item;
 					item=new WorkItem(mmsd,monitor_group_replication_thread);
@@ -3208,6 +3182,85 @@ MyGR_monitor_node::~MyGR_monitor_node() {
 	if (addr) {
 		free(addr);
 	}
+}
+
+int MyGR_monitor_node::get_lag_behind_count(int txs_behind) {
+	int max_lag = 10;
+	if (mysql_thread___monitor_groupreplication_max_transactions_behind_count < max_lag)
+		max_lag = mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+	bool lags[max_lag];
+	unsigned long long start_times[max_lag];
+	int lag_counts=0;
+	for (int i=0; i<max_lag; i++) {
+		start_times[i]=0;
+		lags[i]=false;
+	}
+	for (int i=0; i<MyGR_Nentries; i++) {
+		if (last_entries[i].start_time) {
+			int smallidx = 0;
+			for (int j=0; j<max_lag; j++) {
+				if (j!=smallidx) {
+					if (start_times[j] < start_times[smallidx]) {
+						smallidx = j;
+					}
+				}
+			}
+			if (start_times[smallidx] < last_entries[i].start_time) {
+				start_times[smallidx] = last_entries[i].start_time;
+				lags[smallidx] = false;
+				if (last_entries[i].transactions_behind > txs_behind) {
+					lags[smallidx] = true;
+				}
+			}
+		}
+	}
+	for (int i=0; i<max_lag; i++) {
+		if (lags[i]) {
+			lag_counts++;
+		}
+	}
+
+	return lag_counts;
+}
+
+int MyGR_monitor_node::get_timeout_count() {
+	int num_timeouts = 0;
+	int max_num_timeout = 10;
+	if (mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count < max_num_timeout)
+		max_num_timeout = mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+	unsigned long long start_times[max_num_timeout];
+	bool timeouts[max_num_timeout];
+	for (int i=0; i<max_num_timeout; i++) {
+		start_times[i]=0;
+		timeouts[i]=false;
+	}
+	for (int i=0; i<MyGR_Nentries; i++) {
+		if (last_entries[i].start_time) {
+			int smallidx = 0;
+			for (int j=0; j<max_num_timeout; j++) {
+				if (j!=smallidx) {
+					if (start_times[j] < start_times[smallidx]) {
+						smallidx = j;
+					}
+				}
+			}
+			if (start_times[smallidx] < last_entries[i].start_time) {
+				start_times[smallidx] = last_entries[i].start_time;
+				timeouts[smallidx] = false;
+				if (last_entries[i].error) {
+					if (strncasecmp(last_entries[i].error, (char *)"timeout", 7) == 0) {
+						timeouts[smallidx] = true;
+					}
+				}
+			}
+		}
+	}
+	for (int i=0; i<max_num_timeout; i++) {
+		if (timeouts[i]) {
+			num_timeouts++;
+		}
+	}
+	return num_timeouts;
 }
 
 // return true if status changed
@@ -4694,3 +4747,5 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 	}
 #endif // TEST_AURORA
 }
+
+
