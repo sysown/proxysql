@@ -67,6 +67,7 @@ std::map<std::string,std::vector<string>> SetParser::parse1() {
     std::transform(key.begin(), key.end(), key.begin(), ::tolower);
     result[key] = op;
   }
+	delete opt2;
   return result;
 }
 
