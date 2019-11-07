@@ -1873,6 +1873,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		}
 		if (resultset) { delete resultset; resultset=NULL; }
 	}
+	delete lst;
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
