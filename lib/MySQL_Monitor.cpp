@@ -2695,7 +2695,6 @@ void * MySQL_Monitor::monitor_group_replication() {
 //			goto __end_monitor_read_only_loop;
 		} else {
 			if (Group_Replication_Hosts_resultset->rows_count==0) {
-				proxy_error("Group replication hosts result set is empty\n");
 				goto __end_monitor_group_replication_loop;
 			}
 			int us=100;
