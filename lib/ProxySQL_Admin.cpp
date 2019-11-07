@@ -4649,6 +4649,7 @@ void ProxySQL_Admin::admin_shutdown() {
 	delete statsdb;
 	delete configdb;
 	delete monitordb;
+	delete statsdb_disk;
 	sqlite3_shutdown();
 	if (main_poll_fds) {
 		for (i=0;i<main_poll_nfds;i++) {
