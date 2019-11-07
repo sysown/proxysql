@@ -694,9 +694,6 @@ void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset) {
 	int affected_rows;
 	char *error = NULL;
 	char *query = NULL;
-	query = (char *)"SELECT MAX(timestamp) FROM mysql_connections_hour";
-	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset2);
-
 	query = (char *)"SELECT MAX(timestamp) FROM myhgm_connections_hour";
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset2);
 	if (error) {
