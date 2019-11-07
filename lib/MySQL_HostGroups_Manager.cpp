@@ -1028,8 +1028,10 @@ void MySQL_HostGroups_Manager::init() {
 void MySQL_HostGroups_Manager::shutdown() {
 	queue.add(NULL);
 	HGCU_thread->join();
+	delete HGCU_thread;
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 	GTID_syncer_thread->join();
+	delete GTID_syncer_thread;
 	free(gtid_ev_async);
 }
 
