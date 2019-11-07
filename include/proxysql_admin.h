@@ -100,6 +100,7 @@ class ProxySQL_Admin {
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
+		int stats_mysql_query_digest_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
 		int mysql_show_processlist_extended;
@@ -309,7 +310,7 @@ class ProxySQL_Admin {
 #endif /* PROXYSQLCLICKHOUSE */
 
 	void vacuum_stats(bool);
-
+	int FlushDigestTableToDisk(SQLite3DB *);
 
 #ifdef TEST_AURORA
 	void enable_aurora_testing();

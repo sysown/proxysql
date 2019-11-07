@@ -3,6 +3,14 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+
+// Optimization introduced in 2.0.6
+// to avoid a lot of unnecessary copy
+#define DIGEST_STATS_FAST_1
+#define DIGEST_STATS_FAST_MINSIZE   100000
+#define DIGEST_STATS_FAST_THREADS   4
+
+
 #define FAST_ROUTING_NEW208
 
 
@@ -14,6 +22,60 @@ KHASH_MAP_INIT_STR(khStrInt, int)
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
+
+
+
+#ifdef DIGEST_STATS_FAST_1
+typedef struct _query_digest_stats_pointers_t {
+	char *pta[14];
+	char digest[24];
+	char count_star[24];
+	char first_seen[24];
+	char last_seen[24];
+	char sum_time[24];
+	char min_time[24];
+	char max_time[24];
+	char hid[24];
+	char rows_affected[24];
+	char rows_sent[24];
+} query_digest_stats_pointers_t;
+#endif
+
+
+class QP_query_digest_stats {
+	public:
+	uint64_t digest;
+	char *digest_text;
+	char *username;
+	char *schemaname;
+	char *client_address;
+#ifdef DIGEST_STATS_FAST_1
+	char username_buf[24];
+	char schemaname_buf[24];
+	char client_address_buf[24];
+#endif
+	time_t first_seen;
+	time_t last_seen;
+	unsigned int count_star;
+	unsigned long long sum_time;
+	unsigned long long min_time;
+	unsigned long long max_time;
+	unsigned long long rows_affected;
+	unsigned long long rows_sent;
+	int hid;
+	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca);
+	void add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs);
+	~QP_query_digest_stats();
+#ifdef DIGEST_STATS_FAST_1
+	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
+#else
+	char **get_row(umap_query_digest_text *digest_text_umap);
+#endif
+#ifdef DIGEST_STATS_FAST_1
+#else
+	void free_row(char **pta);
+#endif
+};
 
 struct _Query_Processor_rule_t {
 	int rule_id;
@@ -253,13 +315,13 @@ class Query_Processor {
 	SQLite3_result * get_stats_commands_counters();
 	SQLite3_result * get_query_digests();
 	SQLite3_result * get_query_digests_reset();
+	void get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt);
 	unsigned long long purge_query_digests(bool async_purge, bool parallel, char **msg);
 	unsigned long long purge_query_digests_async(char **msg);
 	unsigned long long purge_query_digests_sync(bool parallel);
 
 	unsigned long long get_query_digests_total_size();
 	unsigned long long get_rules_mem_used();
-
 
 	// fast routing
 	SQLite3_result * fast_routing_resultset;
