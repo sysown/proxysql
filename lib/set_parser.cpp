@@ -119,6 +119,8 @@ std::map<std::string,std::vector<string>> SetParser::parse2() {
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 		result[key] = op;
 	}
+
+	delete opt2;
 	return result;
 }
 
@@ -139,6 +141,8 @@ std::string SetParser::parse_character_set() {
 	string value1, value2, value3, value4;
 	re2::StringPiece input(query);
 	re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4);
+
+	delete opt2;
 	return value4;
 }
 
