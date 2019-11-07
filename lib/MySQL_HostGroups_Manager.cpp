@@ -640,12 +640,16 @@ static void * HGCU_thread_run() {
 		myconn = (MySQL_Connection *)MyHGM->queue.remove();
 		if (myconn==NULL) {
 			// intentionally exit immediately
+			delete conn_array;
 			return NULL;
 		}
 		conn_array->add(myconn);
 		while (MyHGM->queue.size()) {
 			myconn=(MySQL_Connection *)MyHGM->queue.remove();
-			if (myconn==NULL) return NULL;
+			if (myconn==NULL) {
+				delete conn_array;
+				return NULL;
+			}
 			conn_array->add(myconn);
 		}
 		unsigned int l=conn_array->len;
@@ -738,6 +742,7 @@ static void * HGCU_thread_run() {
 		free(errs);
 		free(ret);
 	}
+	delete conn_array;
 }
 
 
