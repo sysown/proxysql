@@ -155,6 +155,9 @@ class MyGR_monitor_node {
 	MyGR_monitor_node(char *_a, int _p, int _whg);
 	~MyGR_monitor_node();
 	bool add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, char *_error); // return true if status changed
+
+	int get_lag_behind_count(int txs_behind);
+	int get_timeout_count();
 };
 
 
@@ -183,6 +186,7 @@ class MySQL_Monitor_State_Data {
 	int writer_hostgroup; // used only by group replication
 	bool writer_is_also_reader; // used only by group replication
 	int  max_transactions_behind; // used only by group replication
+	int max_transactions_behind_count; // used only by group replication
 	int aws_aurora_max_lag_ms;
 	int aws_aurora_check_timeout_ms;
   bool use_ssl;
