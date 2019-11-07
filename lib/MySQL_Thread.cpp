@@ -3470,15 +3470,17 @@ bool MySQL_Thread::init() {
 	assert(mysql_sessions);
 
 #ifdef IDLE_THREADS
-	idle_mysql_sessions = new PtrArray();
-	resume_mysql_sessions = new PtrArray();
+	if (GloVars.global.idle_threads) {
+		idle_mysql_sessions = new PtrArray();
+		resume_mysql_sessions = new PtrArray();
 
-	myexchange.idle_mysql_sessions = new PtrArray();
-	myexchange.resume_mysql_sessions = new PtrArray();
-	pthread_mutex_init(&myexchange.mutex_idles,NULL);
-	pthread_mutex_init(&myexchange.mutex_resumes,NULL);
-	assert(idle_mysql_sessions);
-	assert(resume_mysql_sessions);
+		myexchange.idle_mysql_sessions = new PtrArray();
+		myexchange.resume_mysql_sessions = new PtrArray();
+		pthread_mutex_init(&myexchange.mutex_idles,NULL);
+		pthread_mutex_init(&myexchange.mutex_resumes,NULL);
+		assert(idle_mysql_sessions);
+		assert(resume_mysql_sessions);
+	}
 #endif // IDLE_THREADS
 
 	pthread_mutex_init(&kq.m,NULL);
