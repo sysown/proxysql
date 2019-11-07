@@ -840,6 +840,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 						autocommit=true;
 						client_myds->myconn->set_autocommit(autocommit);
 						autocommit_on_hostgroup=FindOneActiveTransaction();
+						free(_new_pkt.ptr);
 						return false;
 					} else {
 						// as there is no active transaction, we do no need to forward it
