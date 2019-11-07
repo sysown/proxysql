@@ -113,7 +113,7 @@ extern int gdbg;
 	do { \
 		if (rc!=SQLITE_OK) { \
 			proxy_error("SQLite3 error with return corde %d. Error message: %s. Shutting down.\n", rc, db?sqlite3_errmsg(db->get_db()):"The pointer to sqlite3 database is null. Cannot get error message."); \
-			exit(EXIT_FAILURE); \
+			assert(0); \
 		} \
 	} while(0)
 
