@@ -247,7 +247,7 @@ class MySQL_Monitor {
 	unsigned long long read_only_check_ERR;
 	unsigned long long replication_lag_check_OK;
 	unsigned long long replication_lag_check_ERR;
-	wqueue<WorkItem*> * queue = NULL;
+	std::unique_ptr<wqueue<WorkItem*>> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
 	bool shutdown;
 	pthread_mutex_t mon_en_mutex;

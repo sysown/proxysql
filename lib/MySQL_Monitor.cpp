@@ -522,7 +522,7 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	My_Conn_Pool=new MySQL_Monitor_Connection_Pool();
 
-	queue = new wqueue<WorkItem*>();
+	queue = std::unique_ptr<wqueue<WorkItem*>>(new wqueue<WorkItem*>());
 
 	pthread_mutex_init(&group_replication_mutex,NULL);
 	Group_Replication_Hosts_resultset=NULL;
