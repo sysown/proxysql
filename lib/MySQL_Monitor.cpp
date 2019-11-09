@@ -161,13 +161,13 @@ private:
 	PtrArray *conns;
 #endif // DEBUG
 //	std::map<std::pair<std::string, int>, std::vector<MYSQL*> > my_connections;
-	PtrArray *servers;
+	std::unique_ptr<PtrArray> servers;
 public:
 	MYSQL * get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd);
 	void put_connection(char *hostname, int port, MYSQL *my);
 	void purge_some_connections();
 	MySQL_Monitor_Connection_Pool() {
-		servers = new PtrArray();
+		servers = std::unique_ptr<PtrArray>(new PtrArray());
 #ifdef DEBUG
 		conns = new PtrArray();
 		pthread_mutex_init(&m2, NULL);
