@@ -4548,27 +4548,14 @@ bool ProxySQL_Admin::init() {
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial || admindb_file_exists==false) { // see #617
 		if (GloVars.configfile_open) {
-			if (GloVars.confFile->cfg) {
- 				Read_MySQL_Servers_from_configfile();
-				Read_Global_Variables_from_configfile("admin");
-				Read_Global_Variables_from_configfile("mysql");
-				Read_MySQL_Users_from_configfile();
-				Read_MySQL_Query_Rules_from_configfile();
-				Read_Scheduler_from_configfile();
-				Read_ProxySQL_Servers_from_configfile();
-				__insert_or_replace_disktable_select_maintable();
-			} else {
-				if (GloVars.confFile->OpenFile(GloVars.config_file)==true) {
- 					Read_MySQL_Servers_from_configfile();
-					Read_MySQL_Users_from_configfile();
-					Read_MySQL_Query_Rules_from_configfile();
-					Read_Global_Variables_from_configfile("admin");
-					Read_Global_Variables_from_configfile("mysql");
-					Read_Scheduler_from_configfile();
-					Read_ProxySQL_Servers_from_configfile();
-					__insert_or_replace_disktable_select_maintable();
-				}
-			}
+			Read_MySQL_Servers_from_configfile();
+			Read_MySQL_Users_from_configfile();
+			Read_MySQL_Query_Rules_from_configfile();
+			Read_Global_Variables_from_configfile("admin");
+			Read_Global_Variables_from_configfile("mysql");
+			Read_Scheduler_from_configfile();
+			Read_ProxySQL_Servers_from_configfile();
+			__insert_or_replace_disktable_select_maintable();
 		}
 	}
 	flush_admin_variables___database_to_runtime(admindb,true);
@@ -5187,7 +5174,6 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt) {
 	char *a = "INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
 	int rc;
-	unsigned int i=0;
 	sqlite3_stmt *statement1=NULL;
 	rc=admindb->prepare_v2(a, &statement1);
 	ASSERT_SQLITE_OK(rc, admindb);
@@ -9008,7 +8994,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 }
 
 int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
-	const Setting& root = GloVars.confFile->cfg->getRoot();
+	const Setting& root = GloVars.confFile->cfg.getRoot();
 	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
 	sprintf(groupname,"%s%s",prefix,"_variables");
 	if (root.exists(groupname)==false) {
@@ -9049,7 +9035,7 @@ int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
 }
 
 int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg->getRoot();
+	const Setting& root = GloVars.confFile->cfg.getRoot();
 	if (root.exists("mysql_users")==false) return 0;
 	const Setting &mysql_users = root["mysql_users"];
 	int count = mysql_users.getLength();
@@ -9098,7 +9084,7 @@ int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
 }
 
 int ProxySQL_Admin::Read_Scheduler_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg->getRoot();
+	const Setting& root = GloVars.confFile->cfg.getRoot();
 	if (root.exists("scheduler")==false) return 0;
 	const Setting &schedulers = root["scheduler"];
 	int count = schedulers.getLength();
@@ -9198,7 +9184,7 @@ int ProxySQL_Admin::Read_Scheduler_from_configfile() {
 }
 
 int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg->getRoot();
+	const Setting& root = GloVars.confFile->cfg.getRoot();
 	if (root.exists("mysql_query_rules")==false) return 0;
 	const Setting &mysql_query_rules = root["mysql_query_rules"];
 	int count = mysql_query_rules.getLength();
@@ -9460,7 +9446,7 @@ int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
 }
 
 int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg->getRoot();
+	const Setting& root = GloVars.confFile->cfg.getRoot();
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9678,7 +9664,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
 }
 
 int ProxySQL_Admin::Read_ProxySQL_Servers_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg->getRoot();
+	const Setting& root = GloVars.confFile->cfg.getRoot();
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
