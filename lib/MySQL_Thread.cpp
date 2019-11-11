@@ -466,7 +466,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.default_charset=33;
-	variables.handle_unknown_charset=0;
+	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
 	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
