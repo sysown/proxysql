@@ -189,6 +189,9 @@ class MySQL_Monitor_State_Data {
 	int max_transactions_behind_count; // used only by group replication
 	int aws_aurora_max_lag_ms;
 	int aws_aurora_check_timeout_ms;
+	int aws_aurora_add_lag_ms;
+	int aws_aurora_min_lag_ms;
+	int aws_aurora_lag_num_checks;
   bool use_ssl;
   MYSQL *mysql;
   MYSQL_RES *result;
