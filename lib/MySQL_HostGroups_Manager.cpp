@@ -2797,7 +2797,8 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 				switch (myerr) {
 					case 1231:
 						break;
-					default: {
+					default:
+					if (c->mysql->thread_id) {
 						MySQL_Connection_userinfo *ui=c->userinfo;
 						char *auth_password=NULL;
 						if (ui->password) {
@@ -2817,7 +2818,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 							proxy_error("Thread creation\n");
 							assert(0);
 						}
-						}
+					}
 						break;
 				}
 			}
