@@ -164,9 +164,8 @@ void * kill_query_thread(void *arg) {
 	}
 	// FIXME: these 2 calls are blocking, fortunately on their own thread
 	mysql_query(mysql,buf);
+	mysql_close(mysql);
 __exit_kill_query_thread:
-	if (mysql)
-		mysql_close(mysql);
 	delete ka;
 	return NULL;
 }
