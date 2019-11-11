@@ -38,7 +38,7 @@ static unsigned int near_pow_2 (unsigned int n) {
 }
 
 #ifdef IDLE_THREADS
-typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) _conn_exchange_t {
+typedef struct __attribute__((aligned(64))) _conn_exchange_t {
 	pthread_mutex_t mutex_idles;
 	PtrArray *idle_mysql_sessions;
 	pthread_mutex_t mutex_resumes;

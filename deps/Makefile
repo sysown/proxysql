@@ -95,8 +95,9 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
-	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.0.2-src.tar.gz
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.4-src.tar.gz
+	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
 	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
@@ -109,7 +110,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_alloc.c < ../ma_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
+#	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
@@ -156,6 +157,7 @@ pcre: pcre/pcre/.libs/libpcre.a
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
 	cd jemalloc && rm -rf jemalloc-4.2.1
 	cd sqlite3/sqlite3 && rm -rf *
 .PHONY: cleanpart
@@ -166,6 +168,7 @@ cleanall:
 	cd jemalloc && rm -rf jemalloc-5.2.0 || true
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2-2018-07-01
 	cd pcre && rm -rf pcre-8.39
