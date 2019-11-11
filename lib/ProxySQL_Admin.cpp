@@ -10705,9 +10705,9 @@ void ProxySQL_Admin::enable_aurora_testing() {
 		}
 	}
 	sqlite3_finalize(statement);
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 'Automated Aurora Testing Cluster 1')");
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 120, 90, 0, 1, 'Automated Aurora Testing Cluster 2')");
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) VALUES (1275, 1276, 1, '.aws.3.test.com', 25, 120, 90, 0, 2, 'Automated Aurora Testing Cluster 3')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment, add_lag_ms, min_lag_ms, lag_num_checks) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 'Automated Aurora Testing Cluster 1', 10, 20, 1)");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment, add_lag_ms, min_lag_ms, lag_num_checks) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 120, 90, 0, 1, 'Automated Aurora Testing Cluster 2', 10, 20, 1)");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment, add_lag_ms, min_lag_ms, lag_num_checks) VALUES (1275, 1276, 1, '.aws.3.test.com', 25, 120, 90, 0, 2, 'Automated Aurora Testing Cluster 3', 10, 20, 1)");
 	admindb->execute("UPDATE mysql_aws_aurora_hostgroups SET active=1");
 	//admindb->execute("update mysql_servers set max_replication_lag=20");
 	load_mysql_servers_to_runtime();
