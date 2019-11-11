@@ -640,12 +640,16 @@ static void * HGCU_thread_run() {
 		myconn = (MySQL_Connection *)MyHGM->queue.remove();
 		if (myconn==NULL) {
 			// intentionally exit immediately
+			delete conn_array;
 			return NULL;
 		}
 		conn_array->add(myconn);
 		while (MyHGM->queue.size()) {
 			myconn=(MySQL_Connection *)MyHGM->queue.remove();
-			if (myconn==NULL) return NULL;
+			if (myconn==NULL) {
+				delete conn_array;
+				return NULL;
+			}
 			conn_array->add(myconn);
 		}
 		unsigned int l=conn_array->len;
@@ -738,6 +742,7 @@ static void * HGCU_thread_run() {
 		free(errs);
 		free(ret);
 	}
+	delete conn_array;
 }
 
 
@@ -1028,8 +1033,10 @@ void MySQL_HostGroups_Manager::init() {
 void MySQL_HostGroups_Manager::shutdown() {
 	queue.add(NULL);
 	HGCU_thread->join();
+	delete HGCU_thread;
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 	GTID_syncer_thread->join();
+	delete GTID_syncer_thread;
 	free(gtid_ev_async);
 }
 
@@ -1866,6 +1873,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 		}
 		if (resultset) { delete resultset; resultset=NULL; }
 	}
+	delete lst;
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
