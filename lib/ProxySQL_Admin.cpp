@@ -3045,17 +3045,20 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							if (test_arg1==0) {
 								test_arg1=1;
 							}
-							if (test_arg1 > 2) {
+							if (test_arg1 > 3) {
 								test_arg1=1;
+							}
+							if (test_arg1 == 2 || test_arg1 == 3) {
+								if (test_arg2 == 0) {
+									test_arg2 = 1;
+								}
 							}
 							int ret1;
 							int ret2;
-							pthread_mutex_lock(&test_mysql_firewall_whitelist_mutex);
-							SPA->ProxySQL_Test___Load_MySQL_Whitelist(&ret1, &ret2, test_arg1);
-							pthread_mutex_unlock(&test_mysql_firewall_whitelist_mutex);
+							SPA->ProxySQL_Test___Load_MySQL_Whitelist(&ret1, &ret2, test_arg1, test_arg2);
 							if (test_arg1==1) {
 								SPA->send_MySQL_OK(&sess->client_myds->myprot, "Processed all rows from firewall whitelist", ret1);
-							} else if (test_arg1==2) {
+							} else if (test_arg1==2 || test_arg1==3) {
 								if (ret1 == ret2) {
 									SPA->send_MySQL_OK(&sess->client_myds->myprot, "Verified all rows from firewall whitelist", ret1);
 								} else {
@@ -5190,9 +5193,11 @@ void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB 
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
-bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, int cmd) {
-	// cmd == 1 : populate the structure
-	// cmd == 2 : perform look up
+bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, int cmd, int loops) {
+	// cmd == 1 : populate the structure with a global mutex
+	// cmd == 2 : perform lookup with a global mutex
+	// cmd == 3 : perform lookup with a mutex for each call
+	// cmd 2 and 3 accept an extra argument that defines the number of loops
 
 	char *q = (char *)"SELECT * FROM mysql_firewall_whitelist ORDER BY RANDOM()";
 	char *error=NULL;
@@ -5203,6 +5208,9 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 	bool ret = true;
 	int _ret1 = 0;
 	// cleanup
+	if (cmd == 1 || cmd == 2) {
+		pthread_mutex_lock(&test_mysql_firewall_whitelist_mutex);
+	}
 	if (cmd == 1) {
 		for (std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist.begin() ; it != map_test_mysql_firewall_whitelist.end(); ++it) {
 			PtrArray * myptrarray = (PtrArray *)it->second;
@@ -5216,47 +5224,60 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 		return false;
 	} else {
 		*ret1 = resultset->rows_count;
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			char * username = r->fields[0];
-			char * client_address = r->fields[1];
-			char * schemaname = r->fields[2];
-			char * flagIN = r->fields[3];
-			char * digest_hex = r->fields[4];
-			unsigned long long digest_num = strtoull(digest_hex,NULL,0);
-			string s = username;
-			s += rand_del;
-			s += client_address;
-			s += rand_del;
-			s += schemaname;
-			s += rand_del;
-			s += flagIN;
-			std::unordered_map<std::string, void *>:: iterator it2;
-			if (cmd == 1) {
-				it2 = map_test_mysql_firewall_whitelist.find(s);
-				if (it2 != map_test_mysql_firewall_whitelist.end()) {
-					PtrArray * myptrarray = (PtrArray *)it2->second;
-					myptrarray->add((void *)digest_num);
-				} else {
-					PtrArray * myptrarray = new PtrArray();
-					myptrarray->add((void *)digest_num);
-					map_test_mysql_firewall_whitelist[s] = (void *)myptrarray;
-					//proxy_info("Inserted key: %s\n" , s.c_str());
-				}
-			} else if (cmd == 2) {
-				it2 = map_test_mysql_firewall_whitelist.find(s);
-				if (it2 != map_test_mysql_firewall_whitelist.end()) {
-					PtrArray * myptrarray = (PtrArray *)it2->second;
-					void * r = bsearch(&digest_num, myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
-					if (r) _ret1++;
-				} else {
-					//proxy_error("Not found: %s %s %s %s\n", username, client_address, schemaname, flagIN);
-					proxy_error("Not found: %s\n", s.c_str());
+		int loop = 0;
+		if (cmd == 1) {
+			loop = loops -1;
+		}
+		for ( ; loop < loops ; loop++) {
+			_ret1 = 0;
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				char * username = r->fields[0];
+				char * client_address = r->fields[1];
+				char * schemaname = r->fields[2];
+				char * flagIN = r->fields[3];
+				char * digest_hex = r->fields[4];
+				unsigned long long digest_num = strtoull(digest_hex,NULL,0);
+				string s = username;
+				s += rand_del;
+				s += client_address;
+				s += rand_del;
+				s += schemaname;
+				s += rand_del;
+				s += flagIN;
+				std::unordered_map<std::string, void *>:: iterator it2;
+				if (cmd == 1) {
+					it2 = map_test_mysql_firewall_whitelist.find(s);
+					if (it2 != map_test_mysql_firewall_whitelist.end()) {
+						PtrArray * myptrarray = (PtrArray *)it2->second;
+						myptrarray->add((void *)digest_num);
+					} else {
+						PtrArray * myptrarray = new PtrArray();
+						myptrarray->add((void *)digest_num);
+						map_test_mysql_firewall_whitelist[s] = (void *)myptrarray;
+						//proxy_info("Inserted key: %s\n" , s.c_str());
+					}
+				} else if (cmd == 2 || cmd == 3) {
+					if (cmd == 3) {
+						pthread_mutex_lock(&test_mysql_firewall_whitelist_mutex);
+					}
+					it2 = map_test_mysql_firewall_whitelist.find(s);
+					if (it2 != map_test_mysql_firewall_whitelist.end()) {
+						PtrArray * myptrarray = (PtrArray *)it2->second;
+						void * r = bsearch(&digest_num, myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+						if (r) _ret1++;
+					} else {
+						//proxy_error("Not found: %s %s %s %s\n", username, client_address, schemaname, flagIN);
+						proxy_error("Not found: %s\n", s.c_str());
+					}
+					if (cmd == 3) {
+						pthread_mutex_unlock(&test_mysql_firewall_whitelist_mutex);
+					}
 				}
 			}
 		}
 	}
-	if (cmd == 2) {
+	if (cmd == 2 || cmd == 3) {
 		*ret2 = _ret1;
 	}
 	if (resultset) delete resultset;
@@ -5265,6 +5286,9 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 			PtrArray * myptrarray = (PtrArray *)it->second;
 			qsort(myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
 		}
+	}
+	if (cmd == 1 || cmd == 2) {
+		pthread_mutex_unlock(&test_mysql_firewall_whitelist_mutex);
 	}
 	return true;
 }

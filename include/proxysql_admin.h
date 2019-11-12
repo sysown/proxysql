@@ -312,7 +312,7 @@ class ProxySQL_Admin {
 	void vacuum_stats(bool);
 	int FlushDigestTableToDisk(SQLite3DB *);
 
-	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int);
+	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
 
 
 #ifdef TEST_AURORA
