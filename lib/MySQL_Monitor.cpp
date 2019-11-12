@@ -4695,7 +4695,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 							if (strcmp(prev_hse->server_id,hse->server_id)==0) {
 								bool prev_enabled = true;
 
-								unsigned int prev_lag_ms = std::min(((unsigned int)prev_hse->replica_lag_ms + add_lag_ms), min_lag_ms);
+								unsigned int prev_lag_ms = std::max(((unsigned int)prev_hse->replica_lag_ms + add_lag_ms), min_lag_ms);
 								if (prev_lag_ms > max_latency_ms) {
 									prev_enabled = false;
 								}
