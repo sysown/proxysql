@@ -701,7 +701,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	if (GloVars.confFile->OpenFile(GloVars.config_file) == true) {
 		GloVars.configfile_open=true;
 		proxy_info("Using config file %s\n", GloVars.config_file);
-		const Setting& root = GloVars.confFile->cfg->getRoot();
+		const Setting& root = GloVars.confFile->cfg.getRoot();
 		if (root.exists("restart_on_missing_heartbeats")==true) {
 			// restart_on_missing_heartbeats datadir from config file
 			int restart_on_missing_heartbeats;
@@ -748,7 +748,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
 		// datadir was not specified , try to read config file
 		if (GloVars.configfile_open==true) {
-			const Setting& root = GloVars.confFile->cfg->getRoot();
+			const Setting& root = GloVars.confFile->cfg.getRoot();
 			if (root.exists("datadir")==true) {
 				// reading datadir from config file
 				std::string datadir;
