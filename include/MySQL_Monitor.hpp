@@ -276,7 +276,8 @@ class MySQL_Monitor {
 	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);
 	// FIXME : add AWS Aurora actions
-	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms);
+	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
+	unsigned int estimate_lag(char* server_id, AWS_Aurora_status_entry** ase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
 };
 
