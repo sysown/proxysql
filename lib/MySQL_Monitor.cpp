@@ -3851,6 +3851,9 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	unsigned int max_lag_ms = 0;
 	unsigned int check_interval_ms = 0;
 	unsigned int check_timeout_ms = 0;
+	unsigned int add_lag_ms = 0;
+	unsigned int min_lag_ms = 0;
+	unsigned int lag_num_checks = 1;
 	//unsigned int i = 0;
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
@@ -3890,6 +3893,9 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			if (rHG == 0) {
 				rHG = atoi(r->fields[1]);
 			}
+			add_lag_ms = atoi(r->fields[8]);
+			min_lag_ms = atoi(r->fields[9]);
+			lag_num_checks = atoi(r->fields[10]);
 		}
 	}
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*num_hosts);
@@ -4153,7 +4159,7 @@ __exit_monitor_aws_aurora_HG_thread:
 				delete l_ase;
 			}
 			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms);
+			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
 			// remember that we call evaluate_aws_aurora_results()
 			// *before* shifting ase_idx
 			ase_idx++;
@@ -4201,17 +4207,6 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 			}
 		}
 	}
-__exit_monitor_AWS_Aurora_thread_HG_now:
-	if (mmsd) {
-		delete (mmsd);
-		mmsd = NULL;
-	for (unsigned int i=0; i<N_L_ASE; i++) {
-		if (lasts_ase[i]) {
-			delete lasts_ase[i];
-			lasts_ase[i] = NULL;
-		}
-	}
-	}
 /*
 		mmsd->writer_hostgroup=atoi(r->fields[0]);
 		mmsd->writer_is_also_reader=atoi(r->fields[4]);
@@ -4240,6 +4235,17 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 					mmsd->mondb=monitordb;
 		
 */
+	}
+__exit_monitor_AWS_Aurora_thread_HG_now:
+	if (mmsd) {
+		delete (mmsd);
+		mmsd = NULL;
+	for (unsigned int i=0; i<N_L_ASE; i++) {
+		if (lasts_ase[i]) {
+			delete lasts_ase[i];
+			lasts_ase[i] = NULL;
+		}
+	}
 	}
 
 	free(hpa);
@@ -4628,7 +4634,34 @@ __fast_exit_monitor_aws_aurora_thread:
 	return NULL;
 }
 
-void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms) {
+unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entry** aase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+	assert(aase);
+	assert(server_id);
+	assert(idx >= 0 && idx < N_L_ASE);
+	assert(lag_num_checks > 0 && lag_num_checks <= N_L_ASE);
+
+	unsigned int mlag = 0;
+	unsigned int lag = 0;
+
+
+	for (int i = 1; i <= lag_num_checks; i++) {
+		if (!aase[idx] || !aase[idx]->host_statuses)
+			continue;
+		for (auto hse : *(aase[idx]->host_statuses)) {
+			if (strcmp(server_id, hse->server_id)==0) {
+				unsigned int ms = std::max(((unsigned int)hse->replica_lag_ms + add_lag_ms), min_lag_ms);
+				if (ms > mlag) mlag = ms;
+				if (!lag) lag = ms;
+			}
+		}
+		if (idx == 0) idx = N_L_ASE;
+		idx--;
+	}
+
+	return mlag;
+}
+
+void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
 	unsigned int i = 0;
 #ifdef TEST_AURORA
 	bool verbose = false;
@@ -4672,7 +4705,8 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 				bool enable = true;
 				bool is_writer = false;
 				bool rla_rc = true;
-				if (hse->replica_lag_ms > max_latency_ms) {
+				unsigned int current_lag_ms = estimate_lag(hse->server_id, lasts_ase, ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+				if (current_lag_ms > max_latency_ms) {
 					enable = false;
 				}
 				if (strcmp(hse->session_id,"MASTER_SESSION_ID")==0) {
@@ -4685,7 +4719,9 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 							AWS_Aurora_replica_host_status_entry *prev_hse = *it4;
 							if (strcmp(prev_hse->server_id,hse->server_id)==0) {
 								bool prev_enabled = true;
-								if (prev_hse->replica_lag_ms > max_latency_ms) {
+
+								unsigned int prev_lag_ms = estimate_lag(hse->server_id, lasts_ase, ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+								if (prev_lag_ms > max_latency_ms) {
 									prev_enabled = false;
 								}
 								if (prev_enabled == enable) {
@@ -4701,15 +4737,15 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					action_yes++;
 					(enable ? enabling++ : disabling++);
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer, verbose);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer, verbose);
 #else
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
 #endif // TEST_AURORA
 #ifdef TEST_AURORA
 				} else {
 					action_no++;
 #endif // TEST_AURORA
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
 				}
 				//if (is_writer == true && rla_rc == false) {
 				if (rla_rc == false) {

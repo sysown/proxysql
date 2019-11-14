@@ -189,6 +189,9 @@ class MySQL_Monitor_State_Data {
 	int max_transactions_behind_count; // used only by group replication
 	int aws_aurora_max_lag_ms;
 	int aws_aurora_check_timeout_ms;
+	int aws_aurora_add_lag_ms;
+	int aws_aurora_min_lag_ms;
+	int aws_aurora_lag_num_checks;
   bool use_ssl;
   MYSQL *mysql;
   MYSQL_RES *result;
@@ -273,7 +276,8 @@ class MySQL_Monitor {
 	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);
 	// FIXME : add AWS Aurora actions
-	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms);
+	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
+	unsigned int estimate_lag(char* server_id, AWS_Aurora_status_entry** ase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
 };
 
