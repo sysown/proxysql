@@ -267,12 +267,18 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 #else
 	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
 #endif /* SO_REUSEPORT */
-	if (s==-1) return s;
+	if (s==-1) {
+		free(address);
+		free(port);
+		return s;
+	}
 	if (s>0) {
 		ioctl_FIONBIO(s,1);
 		iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
 		ifaces->add(ifi);
 	}
+	free(address);
+	free(port);
 	return s;
 }
 
