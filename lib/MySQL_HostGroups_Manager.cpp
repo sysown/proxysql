@@ -2168,7 +2168,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroup
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
-					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment,add_lag_ms,min_lag_ms,window_lag_num_checks FROM mysql_aws_aurora_hostgroups";
+					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment,add_lag_ms,min_lag_ms,lag_num_checks FROM mysql_aws_aurora_hostgroups";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();

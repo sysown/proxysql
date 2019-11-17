@@ -45,7 +45,7 @@
 										  "new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , " \
 										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms>= 0 AND add_lag_ms <= 600000) DEFAULT 30 , " \
 										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms>= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
-										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks>= 1 AND lag_num_checks <= 10) DEFAULT 1 , " \
+										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks>= 1 AND lag_num_checks <= 16) DEFAULT 1 , " \
 										  "UNIQUE (reader_hostgroup))"
 
 

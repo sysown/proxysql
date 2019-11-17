@@ -4638,15 +4638,16 @@ unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entr
 	assert(aase);
 	assert(server_id);
 	assert(idx >= 0 && idx < N_L_ASE);
-	assert(lag_num_checks > 0 && lag_num_checks <= N_L_ASE);
+
+	if (lag_num_checks > N_L_ASE) lag_num_checks = N_L_ASE;
+	if (lag_num_checks <= 0) lag_num_checks = 1;
 
 	unsigned int mlag = 0;
 	unsigned int lag = 0;
 
-
 	for (int i = 1; i <= lag_num_checks; i++) {
 		if (!aase[idx] || !aase[idx]->host_statuses)
-			continue;
+			break;
 		for (auto hse : *(aase[idx]->host_statuses)) {
 			if (strcmp(server_id, hse->server_id)==0) {
 				unsigned int ms = std::max(((unsigned int)hse->replica_lag_ms + add_lag_ms), min_lag_ms);
