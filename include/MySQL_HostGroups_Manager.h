@@ -42,10 +42,10 @@
 										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
 										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , " \
 										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
-										  "new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , " \
-										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms>= 0 AND add_lag_ms <= 600000) DEFAULT 30 , " \
-										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms>= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
-										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks>= 1 AND lag_num_checks <= 16) DEFAULT 1 , " \
+										  "new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , " \
+										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , " \
+										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
+										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR ," \
 										  "UNIQUE (reader_hostgroup))"
 
 
