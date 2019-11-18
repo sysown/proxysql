@@ -10,6 +10,14 @@
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
 
+enum MySerStatus {
+	MYSQL_SERVER_STATUS_ONLINE,
+	MYSQL_SERVER_STATUS_SHUNNED,
+	MYSQL_SERVER_STATUS_OFFLINE_SOFT,
+	MYSQL_SERVER_STATUS_OFFLINE_HARD,
+	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG
+};
+
 enum log_event_type {
 	PROXYSQL_COM_QUERY,
 	PROXYSQL_MYSQL_AUTH_OK,
@@ -392,6 +400,9 @@ class MySQL_STMTs_local_v14;
 class MySQL_STMT_Global_info;
 class StmtLongDataHandler;
 class ProxySQL_Cluster;
+class MySQL_ResultSet;
+class Query_Processor_Output;
+class MySrvC;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 

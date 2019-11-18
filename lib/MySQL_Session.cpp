@@ -5,9 +5,15 @@
 #include "SpookyV2.h"
 #include "set_parser.h"
 
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
 #include "StatCounters.h"
+#include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
+#include "MySQL_Protocol.h"
+#include "SQLite3_Server.h"
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -82,33 +88,25 @@ bool Session_Regex::match(char *m) {
 	return rc;
 }
 
-/*
-#define KILL_QUERY       1
-#define KILL_CONNECTION  2
 
-class KillArgs {
-	public:
-	char *username;
-	char *password;
-	char *hostname;
-	unsigned int port;
-	unsigned long id;
-	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt) {
-		username=strdup(u);
-		password=strdup(p);
-		hostname=strdup(h);
-		port=P;
-		id=i;
-		kill_type=kt;
-	};
-	~KillArgs() {
-		free(username);
-		free(password);
-		free(hostname);
-	};
-};
-*/
+KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt) {
+	username=strdup(u);
+	password=strdup(p);
+	hostname=strdup(h);
+	port=P;
+	id=i;
+	kill_type=kt;
+	mt=_mt;
+}
+
+KillArgs::~KillArgs() {
+	free(username);
+	free(password);
+	free(hostname);
+}
+
+
+
 void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
@@ -403,6 +401,21 @@ void * MySQL_Session::operator new(size_t size) {
 
 void MySQL_Session::operator delete(void *ptr) {
 	l_free(sizeof(MySQL_Session),ptr);
+}
+
+
+void MySQL_Session::set_status(enum session_status e) {
+	if (e==NONE) {
+		if (mybe) {
+			if (mybe->server_myds) {
+				assert(mybe->server_myds->myconn==0);
+				if (mybe->server_myds->myconn) {
+					assert(mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE);
+				}
+			}
+		}
+	}
+	status=e;
 }
 
 

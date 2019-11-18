@@ -7,6 +7,8 @@
 #include "cpp.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "ProxySQL_Statistics.hpp"
+#include "SQLite3_Server.h"
+#include "MySQL_Authentication.hpp"
 
 #include <search.h>
 #include <stdlib.h>

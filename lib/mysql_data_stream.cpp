@@ -6,6 +6,7 @@
 #endif 
 
 #include "MySQL_PreparedStatement.h"
+#include "MySQL_Data_Stream.h"
 
 struct bio_st {
 	const BIO_METHOD *method;

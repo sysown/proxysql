@@ -9,9 +9,11 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+#include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
-#include "StatCounters.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;

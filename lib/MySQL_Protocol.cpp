@@ -3,6 +3,9 @@
 #include "cpp.h"
 
 #include "MySQL_PreparedStatement.h"
+#include "MySQL_Data_Stream.h"
+#include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
 
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;

@@ -18,6 +18,7 @@
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
 #endif
+
 #define PROXYSQL_QPRO_PTHREAD_MUTEX
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;

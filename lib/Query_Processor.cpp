@@ -7,6 +7,8 @@
 #include "cpp.h"
 
 #include "MySQL_PreparedStatement.h"
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
 
 #include "SpookyV2.h"
 
@@ -28,6 +30,7 @@
 #include <future>
 extern MySQL_Threads_Handler *GloMTH;
 #endif
+
 
 class QP_rule_text_hitsonly {
 	public:

@@ -5,11 +5,17 @@
 #include "re2/regexp.h"
 #include "proxysql.h"
 #include "cpp.h"
+
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
+#include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
+#include "SQLite3_Server.h"
 
 #include <search.h>
 #include <stdlib.h>
