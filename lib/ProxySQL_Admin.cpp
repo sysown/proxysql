@@ -642,6 +642,7 @@ bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
 		mysql_thr->refresh_variables();
 	}
 	delete mysql_thr;
+	return true;
 }
 
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
@@ -661,7 +662,7 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	MySQL_Connection *myconn=new MySQL_Connection();
 	sess->client_myds->attach_connection(myconn);
 	myconn->set_is_client(); // this is used for prepared statements
-	unsigned long long cur = monotonic_time();
+	//unsigned long long cur = monotonic_time();
 	SQP_par_t qp;
 	qp.first_comment=NULL;
 	qp.query_prefix=NULL;
@@ -2993,7 +2994,6 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 				};
 				size_t l=sizeof(truncate_digest_table_queries)/sizeof(char *);
 				unsigned int i;
-				char **ret=(char **)malloc(sizeof(char *)*l);
 				for (i=0;i<l;i++) {
 					if (truncate_digest_table == false) {
 						if (strcasecmp(truncate_digest_table_queries[i], query_no_space)==0) {
@@ -3129,7 +3129,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							int ret1, ret2;
 							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1);
 							if (bret) {
-								SPA->send_MySQL_OK(&sess->client_myds->myprot, "Verified all rules in mysql_query_rules_fast_routing", ret1);
+								SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Verified all rules in mysql_query_rules_fast_routing", ret1);
 							} else {
 								if (ret1==-1) {
 									SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Severe error in verifying rules in mysql_query_rules_fast_routing");
@@ -3173,10 +3173,10 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							int ret2;
 							SPA->ProxySQL_Test___Load_MySQL_Whitelist(&ret1, &ret2, test_arg1, test_arg2);
 							if (test_arg1==1) {
-								SPA->send_MySQL_OK(&sess->client_myds->myprot, "Processed all rows from firewall whitelist", ret1);
+								SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Processed all rows from firewall whitelist", ret1);
 							} else if (test_arg1==2 || test_arg1==3) {
 								if (ret1 == ret2) {
-									SPA->send_MySQL_OK(&sess->client_myds->myprot, "Verified all rows from firewall whitelist", ret1);
+									SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Verified all rows from firewall whitelist", ret1);
 								} else {
 									msg = (char *)malloc(256);
 									sprintf(msg,"Error verifying firewall whitelist. Found %d entries out of %d", ret2, ret1);
@@ -4209,7 +4209,7 @@ static void * admin_main_loop(void *arg)
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
 		//int *client;
-		int client_t;
+		//int client_t;
 		//socklen_t addr_size = sizeof(addr);
 		pthread_t child;
 		size_t stacks;
@@ -5323,7 +5323,6 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	int matching_rows = 0;
 	bool ret = true;
 	int _ret1 = 0;
 	// cleanup
@@ -5409,7 +5408,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 	if (cmd == 1 || cmd == 2) {
 		pthread_mutex_unlock(&test_mysql_firewall_whitelist_mutex);
 	}
-	return true;
+	return ret;
 }
 
 bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt) {
@@ -5447,6 +5446,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 					SQLite3_row *r=*it;
 					int dest_HG = atoi(r->fields[3]);
 					int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+					assert(dest_HG==ret_HG);
 				}
 			}
 		}
@@ -5456,7 +5456,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 }
 
 unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt) {
-	char *a = "INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
+	char *a = (char *)"INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
 	int rc;
 	sqlite3_stmt *statement1=NULL;
 	rc=admindb->prepare_v2(a, &statement1);
@@ -5469,7 +5469,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	strcpy(username_buf,"user_name_");
 	strcpy(schemaname_buf,"shard_name_");
 	int _k;
-	for (int i=0; i<cnt; i++) {
+	for (unsigned int i=0; i<cnt; i++) {
 		_k = fastrand()%20 + 1;
 		for (int _i=0 ; _i<_k ; _i++) {
 			int b = fastrand()%10;
@@ -6512,7 +6512,7 @@ void ProxySQL_Admin::stats___memory_metrics() {
 	}
 	{
 		if (GloQPro) {
-			unsigned long mu = GloQPro->get_query_digests_total_size();
+			unsigned long long mu = GloQPro->get_query_digests_total_size();
 			vn=(char *)"query_digest_memory";
 			sprintf(bu,"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
