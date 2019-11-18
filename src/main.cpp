@@ -12,6 +12,7 @@
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
+#include "MySQL_Logger.hpp"
 
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>

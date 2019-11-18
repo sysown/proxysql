@@ -9,6 +9,7 @@
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
+#include "MySQL_Logger.hpp"
 
 #include <search.h>
 #include <stdlib.h>

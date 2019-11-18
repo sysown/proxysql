@@ -6,7 +6,7 @@
 #include "query_cache.hpp"
 #include "mysql_connection.h"
 #include "sqlite3db.h"
-#include "StatCounters.h"
+//#include "StatCounters.h"
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Protocol.h"
 #include "MySQL_Authentication.hpp"
@@ -23,7 +23,7 @@
 #include "ClickHouse_Server.h"
 #endif /* PROXYSQLCLICKHOUSE */
 #include "MySQL_HostGroups_Manager.h"
-#include "MySQL_Logger.hpp"
+//#include "MySQL_Logger.hpp"
 //#include "MySQL_PreparedStatement.h"
 //#include "ProxySQL_Cluster.hpp" // cluster
 //#include "ProxySQL_Statistics.hpp" // statistics

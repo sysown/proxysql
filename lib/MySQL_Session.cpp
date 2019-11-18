@@ -6,6 +6,8 @@
 #include "set_parser.h"
 
 #include "MySQL_PreparedStatement.h"
+#include "MySQL_Logger.hpp"
+#include "StatCounters.h"
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -410,11 +412,7 @@ MySQL_Session::MySQL_Session() {
 	pause_until=0;
 	qpo=new Query_Processor_Output();
 	start_time=0;
-#ifdef PROXYSQL_STATSCOUNTERS_NOLOCK
 	command_counters=new StatCounters(15,10);
-#else
-	command_counters=new StatCounters(15,10,false);
-#endif
 	healthy=1;
 	autocommit=true;
 	autocommit_handled=false;

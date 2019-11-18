@@ -6,6 +6,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_Logger.hpp"
+
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
