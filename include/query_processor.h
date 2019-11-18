@@ -277,6 +277,7 @@ class Query_Processor {
 	std::unordered_map<std::string,int> rules_fast_routing;
 #endif
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
+	std::unordered_map<std::string, void *> global_mysql_firewall_whitelist_rules;
 	volatile unsigned int version;
 	unsigned long long rules_mem_used;
 	public:

@@ -211,7 +211,7 @@ pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_mutex_t test_mysql_firewall_whitelist_mutex = PTHREAD_MUTEX_INITIALIZER;
-std::unordered_map<std::string, void *> map_test_mysql_firewall_whitelist;
+std::unordered_map<std::string, void *> map_test_mysql_firewall_whitelist_rules;
 char rand_del[6];
 
 static int http_handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr) {
@@ -5331,11 +5331,11 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 		pthread_mutex_lock(&test_mysql_firewall_whitelist_mutex);
 	}
 	if (cmd == 1) {
-		for (std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist.begin() ; it != map_test_mysql_firewall_whitelist.end(); ++it) {
+		for (std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist_rules.begin() ; it != map_test_mysql_firewall_whitelist_rules.end(); ++it) {
 			PtrArray * myptrarray = (PtrArray *)it->second;
 			delete myptrarray;
 		}
-		map_test_mysql_firewall_whitelist.clear();
+		map_test_mysql_firewall_whitelist_rules.clear();
 	}
 	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
 	if (error) {
@@ -5366,22 +5366,22 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 				s += flagIN;
 				std::unordered_map<std::string, void *>:: iterator it2;
 				if (cmd == 1) {
-					it2 = map_test_mysql_firewall_whitelist.find(s);
-					if (it2 != map_test_mysql_firewall_whitelist.end()) {
+					it2 = map_test_mysql_firewall_whitelist_rules.find(s);
+					if (it2 != map_test_mysql_firewall_whitelist_rules.end()) {
 						PtrArray * myptrarray = (PtrArray *)it2->second;
 						myptrarray->add((void *)digest_num);
 					} else {
 						PtrArray * myptrarray = new PtrArray();
 						myptrarray->add((void *)digest_num);
-						map_test_mysql_firewall_whitelist[s] = (void *)myptrarray;
+						map_test_mysql_firewall_whitelist_rules[s] = (void *)myptrarray;
 						//proxy_info("Inserted key: %s\n" , s.c_str());
 					}
 				} else if (cmd == 2 || cmd == 3) {
 					if (cmd == 3) {
 						pthread_mutex_lock(&test_mysql_firewall_whitelist_mutex);
 					}
-					it2 = map_test_mysql_firewall_whitelist.find(s);
-					if (it2 != map_test_mysql_firewall_whitelist.end()) {
+					it2 = map_test_mysql_firewall_whitelist_rules.find(s);
+					if (it2 != map_test_mysql_firewall_whitelist_rules.end()) {
 						PtrArray * myptrarray = (PtrArray *)it2->second;
 						void * r = bsearch(&digest_num, myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
 						if (r) _ret1++;
@@ -5401,7 +5401,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 	}
 	if (resultset) delete resultset;
 	if (cmd == 1) {
-		for (std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist.begin() ; it != map_test_mysql_firewall_whitelist.end(); ++it) {
+		for (std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist_rules.begin() ; it != map_test_mysql_firewall_whitelist_rules.end(); ++it) {
 			PtrArray * myptrarray = (PtrArray *)it->second;
 			qsort(myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
 		}
