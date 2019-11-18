@@ -350,6 +350,7 @@ class Query_Processor {
 	unsigned long long get_mysql_firewall_memory_users_config();
 	unsigned long long get_mysql_firewall_memory_rules_table();
 	unsigned long long get_mysql_firewall_memory_rules_config();
+	void get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r);
 };
 
 typedef Query_Processor * create_Query_Processor_t();

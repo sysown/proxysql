@@ -7522,7 +7522,24 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 }
 
 void ProxySQL_Admin::save_mysql_firewall_from_runtime(bool _runtime) {
-	// FIXME: to be completed
+	if (_runtime) {
+		admindb->execute("DELETE FROM runtime_mysql_firewall_whitelist_rules");
+		admindb->execute("DELETE FROM runtime_mysql_firewall_whitelist_users");
+	} else {
+		admindb->execute("DELETE FROM mysql_firewall_whitelist_rules");
+		admindb->execute("DELETE FROM mysql_firewall_whitelist_users");
+	}
+	SQLite3_result * resultset_rules = NULL;
+	SQLite3_result * resultset_users = NULL;
+
+	GloQPro->get_current_mysql_firewall_whitelist(&resultset_users, &resultset_rules);
+
+	if (resultset_users) {
+		delete resultset_users;
+	}
+	if (resultset_rules) {
+		delete resultset_rules;
+	}
 }
 
 void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {

@@ -2891,6 +2891,17 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 	return ret;
 }
 
+void Query_Processor::get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r) {
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	if (global_mysql_firewall_whitelist_rules_runtime) {
+		*r = new SQLite3_result(global_mysql_firewall_whitelist_rules_runtime);
+	}
+	if (global_mysql_firewall_whitelist_users_runtime) {
+		*u = new SQLite3_result(global_mysql_firewall_whitelist_users_runtime);
+	}
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+}
+
 void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r) {
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	if (global_mysql_firewall_whitelist_rules_runtime) {
