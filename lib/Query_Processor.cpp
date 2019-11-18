@@ -6,6 +6,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_PreparedStatement.h"
+
 #include "SpookyV2.h"
 
 #include "pcrecpp.h"
@@ -2780,4 +2782,9 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 	spin_rdunlock(&rwlock);
 #endif
 	return ret;
+}
+
+void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r) {
+	// TODO: complete
+	return;
 }

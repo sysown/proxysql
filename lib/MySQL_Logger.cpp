@@ -1,6 +1,8 @@
 #include <fstream>
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_PreparedStatement.h"
+
 #include <dirent.h>
 #include <libgen.h>
 

@@ -5,6 +5,8 @@
 #define UNIX_PATH_MAX    108
 #endif 
 
+#include "MySQL_PreparedStatement.h"
+
 struct bio_st {
 	const BIO_METHOD *method;
 	long (*callback) (struct bio_st *, int, const char *, int, long, long);

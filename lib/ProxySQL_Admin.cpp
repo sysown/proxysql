@@ -5,6 +5,10 @@
 #include "re2/regexp.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "ProxySQL_HTTP_Server.hpp" // HTTP server
+#include "MySQL_PreparedStatement.h"
+#include "ProxySQL_Cluster.hpp"
+#include "ProxySQL_Statistics.hpp"
 
 #include <search.h>
 #include <stdlib.h>
@@ -319,11 +323,17 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_SCHEDULER_V1_2_2c "CREATE TABLE scheduler (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '')"
 
 
-#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_v209 "CREATE TABLE mysql_firewall_whitelist (username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , digest VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address , schemaname , flagIN , digest) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS_v209 "CREATE TABLE mysql_firewall_whitelist_users (username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address) )"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_v209
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS_v209
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST "CREATE TABLE runtime_mysql_firewall_whitelist (username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , digest VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address , schemaname , flagIN , digest) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES_v209 "CREATE TABLE mysql_firewall_whitelist_rules (username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , digest VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address , schemaname , flagIN , digest) )"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES_v209
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_USERS "CREATE TABLE runtime_mysql_firewall_whitelist_users (username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address) )"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_RULES "CREATE TABLE runtime_mysql_firewall_whitelist_rules (username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , digest VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address , schemaname , flagIN , digest) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port AND gtid_port >= 0 AND gtid_port <= 65535) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
@@ -2117,6 +2127,105 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
+	}
+
+	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL FIREWALL ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL FIREWALL ", query_no_space, 23))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO MEMORY") && !strncasecmp("LOAD MYSQL FIREWALL TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO MEM") && !strncasecmp("LOAD MYSQL FIREWALL TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM DISK") && !strncasecmp("LOAD MYSQL FIREWALL FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_mysql_firewall__from_disk_to_memory();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to MEMORY\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM CONFIG") && !strncasecmp("LOAD MYSQL FIREWALL FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					int rows=0;
+					rows=SPA->Read_MySQL_Query_Rules_from_configfile();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM MEMORY") && !strncasecmp("SAVE MYSQL FIREWALL FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM MEM") && !strncasecmp("SAVE MYSQL FIREWALL FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO DISK") && !strncasecmp("SAVE MYSQL FIREWALL TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_mysql_firewall__from_memory_to_disk();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules to DISK\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM MEMORY") && !strncasecmp("LOAD MYSQL FIREWALL FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM MEM") && !strncasecmp("LOAD MYSQL FIREWALL FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO RUNTIME") && !strncasecmp("LOAD MYSQL FIREWALL TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO RUN") && !strncasecmp("LOAD MYSQL FIREWALL TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			char *err=SPA->load_mysql_firewall_to_runtime();
+			if (err==NULL) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
+				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			} else {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, err);
+			}
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO MEMORY") && !strncasecmp("SAVE MYSQL FIREWALL TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO MEM") && !strncasecmp("SAVE MYSQL FIREWALL TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM RUNTIME") && !strncasecmp("SAVE MYSQL FIREWALL FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM RUN") && !strncasecmp("SAVE MYSQL FIREWALL FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->save_mysql_firewall_from_runtime(false);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
 	}
 
 	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL QUERY RULES ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL QUERY RULES ", query_no_space, 23))) ) {
@@ -4495,8 +4604,10 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"runtime_scheduler", ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER);
-	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST);
-	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_firewall_whitelist", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST);
+	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_USERS);
+	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_RULES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -4520,7 +4631,8 @@ bool ProxySQL_Admin::init() {
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_config,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
-	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST);
+	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
+	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -5199,7 +5311,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 	// cmd == 3 : perform lookup with a mutex for each call
 	// cmd 2 and 3 accept an extra argument that defines the number of loops
 
-	char *q = (char *)"SELECT * FROM mysql_firewall_whitelist ORDER BY RANDOM()";
+	char *q = (char *)"SELECT * FROM mysql_firewall_whitelist_rules ORDER BY RANDOM()";
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -7341,6 +7453,10 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	delete resultset;
 }
 
+void ProxySQL_Admin::save_mysql_firewall_from_runtime(bool _runtime) {
+	// FIXME: to be completed
+}
+
 void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
@@ -7465,6 +7581,8 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR IGNORE INTO main.scheduler SELECT * FROM disk.scheduler");
 	admindb->execute("INSERT OR IGNORE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
@@ -7492,6 +7610,8 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
 	admindb->execute("INSERT OR REPLACE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
@@ -7518,6 +7638,8 @@ void ProxySQL_Admin::__delete_disktable() {
 	admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("DELETE FROM disk.mysql_query_rules");
 	admindb->execute("DELETE FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("DELETE FROM disk.global_variables");
 	admindb->execute("DELETE FROM disk.scheduler");
 	admindb->execute("DELETE FROM disk.proxysql_servers");
@@ -7543,6 +7665,8 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_users SELECT * FROM main.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_rules SELECT * FROM main.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO disk.scheduler SELECT * FROM main.scheduler");
 	admindb->execute("INSERT OR REPLACE INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
@@ -7654,6 +7778,28 @@ void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+void ProxySQL_Admin::flush_mysql_firewall__from_disk_to_memory() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM main.mysql_firewall_whitelist_rules");
+	admindb->execute("INSERT INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_query_rules");
+	admindb->execute("DELETE FROM main.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_query_users");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_mysql_firewall__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_rules");
+	admindb->execute("INSERT INTO disk.mysql_firewall_whitelist_rules SELECT * FROM main.mysql_query_rules");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT INTO disk.mysql_firewall_whitelist_users SELECT * FROM main.mysql_query_users");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
 void ProxySQL_Admin::flush_mysql_query_rules__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -7712,6 +7858,10 @@ void ProxySQL_Admin::init_proxysql_servers() {
 
 void ProxySQL_Admin::init_mysql_query_rules() {
 	load_mysql_query_rules_to_runtime();
+}
+
+void ProxySQL_Admin::init_mysql_firewall() {
+	load_mysql_firewall_to_runtime();
 }
 
 void ProxySQL_Admin::add_admin_users() {
@@ -9051,6 +9201,42 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	}
 }
 
+
+char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {
+//	NOTE: firewall is currently NOT part of Cluster
+	char *error_users=NULL;
+	int cols_users=0;
+	int affected_rows_users=0;
+	char *error_rules=NULL;
+	int cols_rules=0;
+	int affected_rows_rules=0;
+	bool success = false;
+	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
+	char *query_users = (char *)"SELECT ";
+	char *query_rules = (char *)"SELECT ";
+	SQLite3_result *resultset_users = NULL;
+	SQLite3_result *resultset_rules = NULL;
+	admindb->execute_statement(query_users, &error_users , &cols_users , &affected_rows_users , &resultset_users);
+	admindb->execute_statement(query_rules, &error_rules , &cols_rules , &affected_rows_rules , &resultset_rules);
+	if (error_users) {
+		proxy_error("Error on %s : %s\n", query_users, error_users);
+	} else if (error_rules) {
+		proxy_error("Error on %s : %s\n", query_rules, error_rules);
+	} else {
+		success = true;
+		GloQPro->load_mysql_firewall(resultset_users, resultset_rules);
+	}
+	if (success == false) {
+		// clean up
+		if (resultset_users) {
+			free(resultset_users);
+		}
+		if (resultset_rules) {
+			free(resultset_rules);
+		}
+	}
+	return NULL;
+}
 
 char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	char *error=NULL;

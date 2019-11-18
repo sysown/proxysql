@@ -9,6 +9,9 @@
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
 
+#include "ProxySQL_Statistics.hpp"
+#include "MySQL_PreparedStatement.h"
+#include "ProxySQL_Cluster.hpp"
 
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>

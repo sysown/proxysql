@@ -387,6 +387,11 @@ class SQLite3_result;
 class stmt_execute_metadata_t;
 class MySQL_STMTs_meta;
 class MySQL_HostGroups_Manager;
+class ProxySQL_HTTP_Server;
+class MySQL_STMTs_local_v14;
+class MySQL_STMT_Global_info;
+class StmtLongDataHandler;
+class ProxySQL_Cluster;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
