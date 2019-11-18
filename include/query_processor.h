@@ -3,6 +3,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include <set>
 
 // Optimization introduced in 2.0.6
 // to avoid a lot of unnecessary copy
@@ -277,7 +278,17 @@ class Query_Processor {
 	std::unordered_map<std::string,int> rules_fast_routing;
 #endif
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
+
+	// firewall
+	pthread_mutex_t global_mysql_firewall_whitelist_mutex;
+	std::set<std::string*> global_mysql_firewall_whitelist_users;
 	std::unordered_map<std::string, void *> global_mysql_firewall_whitelist_rules;
+	SQLite3_result * global_mysql_firewall_whitelist_users_runtime;
+	SQLite3_result * global_mysql_firewall_whitelist_rules_runtime;
+	unsigned long long global_mysql_firewall_whitelist_users_set___size;
+	unsigned long long global_mysql_firewall_whitelist_users_result___size;
+	unsigned long long global_mysql_firewall_whitelist_rules_map___size;
+	unsigned long long global_mysql_firewall_whitelist_rules_result___size;
 	volatile unsigned int version;
 	unsigned long long rules_mem_used;
 	public:
@@ -333,6 +344,12 @@ class Query_Processor {
 
 	// firewall
 	void load_mysql_firewall(SQLite3_result *u, SQLite3_result *r);
+	void load_mysql_firewall_users(SQLite3_result *);
+	void load_mysql_firewall_rules(SQLite3_result *);
+	unsigned long long get_mysql_firewall_memory_users_table();
+	unsigned long long get_mysql_firewall_memory_users_config();
+	unsigned long long get_mysql_firewall_memory_rules_table();
+	unsigned long long get_mysql_firewall_memory_rules_config();
 };
 
 typedef Query_Processor * create_Query_Processor_t();
