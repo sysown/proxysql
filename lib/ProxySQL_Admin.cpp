@@ -46,6 +46,50 @@ struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
 
+extern char *ssl_key_fp;
+extern char *ssl_cert_fp;
+extern char *ssl_ca_fp;
+
+
+static long
+get_file_size (const char *filename) {
+	FILE *fp;
+	fp = fopen (filename, "rb");
+	if (fp) {
+		long size;
+		if ((0 != fseek (fp, 0, SEEK_END)) || (-1 == (size = ftell (fp))))
+			size = 0;
+		fclose (fp);
+		return size;
+	} else
+		return 0;
+}
+
+static char * load_file (const char *filename) {
+	FILE *fp;
+	char *buffer;
+	long size;
+	size = get_file_size (filename);
+	if (0 == size)
+		return NULL;
+	fp = fopen (filename, "rb");
+	if (! fp)
+		return NULL;
+	buffer = (char *)malloc (size + 1);
+	if (! buffer) {
+		fclose (fp);
+		return NULL;
+	}
+	buffer[size] = '\0';
+	if (size != (long)fread (buffer, 1, size, fp)) {
+		free (buffer);
+		buffer = NULL;
+	}
+	fclose (fp);
+	return buffer;
+}
+
+
 /*
 int sqlite3_json_init(
   sqlite3 *db,
@@ -4787,12 +4831,18 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		{
 			if (variables.web_enabled != variables.web_enabled_old) {
 				if (variables.web_enabled) {
-					Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+					char *key_pem;
+					char *cert_pem;
+					key_pem = load_file(ssl_key_fp);
+					cert_pem = load_file(ssl_cert_fp);
+					Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
 						variables.web_port,
 						NULL, NULL, http_handler, NULL,
 						MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
 						MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
 						MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
+						MHD_OPTION_HTTPS_MEM_KEY, key_pem,
+						MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
 						MHD_OPTION_END);
 				} else {
 					MHD_stop_daemon(Admin_HTTP_Server);
@@ -4804,12 +4854,18 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					if (variables.web_enabled) {
 						MHD_stop_daemon(Admin_HTTP_Server);
 						Admin_HTTP_Server = NULL;
-						Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+						char *key_pem;
+						char *cert_pem;
+						key_pem = load_file(ssl_key_fp);
+						cert_pem = load_file(ssl_cert_fp);
+						Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
 							variables.web_port,
 							NULL, NULL, http_handler, NULL,
 							MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
 							MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
 							MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
+							MHD_OPTION_HTTPS_MEM_KEY, key_pem,
+							MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
 							MHD_OPTION_END);
 					}
 					variables.web_port_old = variables.web_port;

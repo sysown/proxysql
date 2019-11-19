@@ -28,6 +28,10 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
 void * __mysql_ldap_auth;
 
+// absolute path of ssl files
+char *ssl_key_fp = NULL;
+char *ssl_cert_fp = NULL;
+char *ssl_ca_fp = NULL;
 
 char *binary_sha1 = NULL;
 
@@ -353,11 +357,12 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
 	const char * ssl_cert_rp = (const char *)"proxysql-cert.pem";
 	const char * ssl_ca_rp = (const char *)"proxysql-ca.pem";
 
+/*
 	// absolute path of ssl files
 	char *ssl_key_fp = NULL;
 	char *ssl_cert_fp = NULL;
 	char *ssl_ca_fp = NULL;
-
+*/
 	// how many files exists ?
 	int nfiles = 0;
 	bool ssl_key_exists = true;

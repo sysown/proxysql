@@ -79,11 +79,14 @@ static char * check_latest_version() {
 	curl_global_init(CURL_GLOBAL_ALL);
 
 	curl_handle = curl_easy_init();
-	curl_easy_setopt(curl_handle, CURLOPT_URL, "http://www.proxysql.com/latest");
+	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
 
-	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "proxysql-agent/1.4.4");
+	string s = "proxysql-agent/";
+	s += PROXYSQL_VERSION;
+	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, s.c_str());
 	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 5);
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
 

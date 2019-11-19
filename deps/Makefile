@@ -24,6 +24,7 @@ libssl/openssl/libssl.a:
 	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
 	cd libssl/openssl  && ./config no-ssl3
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
+	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
 
 libev/libev/.libs/libev.a:
@@ -33,17 +34,17 @@ libev/libev/.libs/libev.a:
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
 ev: libev/libev/.libs/libev.a
 
-curl/curl/lib/.libs/libcurl.a: #libssl/openssl/libssl.a
+curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && rm -rf curl-7.57.0 || true
 	cd curl && tar -zxf curl-7.57.0.tar.gz
 	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
-	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-ssl && CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --with-ssl=$(shell pwd)/libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
 curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
-	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
-	cd libmicrohttpd/libmicrohttpd && ./configure --disable-https && CC=${CC} CXX=${CXX} ${MAKE}
+	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
+	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
+	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
 cityhash/cityhash/src/.libs/libcityhash.a:
@@ -168,7 +169,7 @@ cleanall:
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
-	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
+	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
 	cd curl && rm -rf curl-7.57.0 || true
 	cd libev && rm -rf libev-4.24 || true
 	cd libssl && rm -rf openssl-1.1.0h || true
