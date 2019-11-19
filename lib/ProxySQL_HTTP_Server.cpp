@@ -87,7 +87,7 @@ static char * check_latest_version() {
 	string s = "proxysql-agent/";
 	s += PROXYSQL_VERSION;
 	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, s.c_str());
-	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 5);
+	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 10);
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
 
 	res = curl_easy_perform(curl_handle);
