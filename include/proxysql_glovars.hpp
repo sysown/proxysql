@@ -62,6 +62,7 @@ class ProxySQL_GlobalVariables {
 		bool gdbg;
 		bool nostart;
 		bool monitor;
+		bool version_check;
 #ifdef SO_REUSEPORT
 		bool reuseport;
 #endif /* SO_REUSEPORT */

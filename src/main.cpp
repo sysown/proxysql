@@ -1680,8 +1680,7 @@ __start_label:
 #endif
 	}
 
-	//if (GloVars.check_for_new_version) {
-	if (0) {
+	if (GloVars.global.version_check) {
 		pthread_attr_t attr;
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

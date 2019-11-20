@@ -60,7 +60,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	statuses.stack_memory_admin_threads = 0;
 	statuses.stack_memory_cluster_threads = 0;
 
-
+	global.version_check = true;
 	global.gdbg=false;
 	global.nostart=false;
 	global.foreground=false;
@@ -114,6 +114,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 #ifdef IDLE_THREADS
 	opt->add((const char *)"",0,0,0,(const char *)"Create auxiliary threads to handle idle connections",(const char *)"--idle-threads");
 #endif /* IDLE_THREADS */
+	opt->add((const char *)"",0,0,0,(const char *)"Do not check for the latest version of ProxySQL",(const char *)"--no-version-check");
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
@@ -188,6 +189,10 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	}
 #endif /* IDLE_THREADS */
 
+	if (opt->isSet("--no-version-check")) {
+		global.version_check=false;
+		glovars.version_check=false;
+	}
 	if (opt->isSet("--sqlite3-server")) {
 		global.sqlite3_server=true;
 	}
