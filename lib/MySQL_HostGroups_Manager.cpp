@@ -2168,7 +2168,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroup
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
-					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment,add_lag_ms,min_lag_ms,window_lag_num_checks FROM mysql_aws_aurora_hostgroups";
+					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups";
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
@@ -5332,7 +5332,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	sqlite3_stmt *statement=NULL;
 	//sqlite3 *mydb3=mydb->get_db();
 	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,"
-					    "check_timeout_ms,writer_is_also_reader,new_reader_weight,comment,add_lag_ms,min_lag_ms,lag_num_checks) VALUES "
+					    "check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES "
 					    "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
 	//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 	rc = mydb->prepare_v2(query, &statement);
@@ -5355,11 +5355,11 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		int check_timeout_ms = atoi(r->fields[7]);
 		int writer_is_also_reader = atoi(r->fields[8]);
 		int new_reader_weight = atoi(r->fields[9]);
-		int add_lag_ms = atoi(r->fields[11]);
-		int min_lag_ms = atoi(r->fields[12]);
-		int lag_num_checks = atoi(r->fields[13]);
+		int add_lag_ms = atoi(r->fields[10]);
+		int min_lag_ms = atoi(r->fields[11]);
+		int lag_num_checks = atoi(r->fields[12]);
 		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,(active ? "on" : "off"),aurora_port,
-				   r->fields[4],max_lag_ms,add_lag_ms,min_lag_ms,lag_num_checks,check_interval_ms,check_timeout_ms,r->fields[10]);
+				   r->fields[4],max_lag_ms,add_lag_ms,min_lag_ms,lag_num_checks,check_interval_ms,check_timeout_ms,r->fields[13]);
 		rc=sqlite3_bind_int64(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc=sqlite3_bind_int64(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc=sqlite3_bind_int64(statement, 3, active); ASSERT_SQLITE_OK(rc, mydb);
@@ -5370,10 +5370,10 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		rc=sqlite3_bind_int64(statement, 8, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
 		rc=sqlite3_bind_int64(statement, 9, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
 		rc=sqlite3_bind_int64(statement, 10, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
-		rc=sqlite3_bind_text(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=sqlite3_bind_int64(statement, 12, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=sqlite3_bind_int64(statement, 13, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=sqlite3_bind_int64(statement, 14, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=sqlite3_bind_int64(statement, 11, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=sqlite3_bind_int64(statement, 12, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=sqlite3_bind_int64(statement, 13, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=sqlite3_bind_text(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -5418,7 +5418,9 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl , max_lag_ms , check_interval_ms , check_timeout_ms , add_lag_ms , min_lag_ms , lag_num_checks  FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
+		char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl , max_lag_ms , check_interval_ms , check_timeout_ms , "
+					        "add_lag_ms , min_lag_ms , lag_num_checks  FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR "
+					        "hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->AWS_Aurora_Hosts_resultset) {

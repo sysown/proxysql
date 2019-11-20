@@ -362,11 +362,13 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 // AWS Aurora
 
-#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_1_0a "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL CHECK (SUBSTR(domain_name,1,1) = '.') , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , add_lag_ms INT NOT NULL CHECK (add_lag_ms>= 0 AND add_lag_ms <= 600000) DEFAULT 30 , min_lag_ms INT NOT NULL CHECK (min_lag_ms>= 0 AND min_lag_ms <= 600000) DEFAULT 30 , lag_num_checks INT NOT NULL CHECK (lag_num_checks>= 1 AND lag_num_checks <= 10) DEFAULT 1 , UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_0_8 "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL CHECK (SUBSTR(domain_name,1,1) = '.') , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_1_0a
+#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_0_9 "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL CHECK (SUBSTR(domain_name,1,1) = '.') , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE runtime_mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL CHECK (SUBSTR(domain_name,1,1) = '.') , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , add_lag_ms INT NOT NULL CHECK (add_lag_ms>= 0 AND add_lag_ms <= 600000) DEFAULT 30 , min_lag_ms INT NOT NULL CHECK (min_lag_ms>= 0 AND min_lag_ms <= 600000) DEFAULT 30 , lag_num_checks INT NOT NULL CHECK (lag_num_checks>= 1 AND lag_num_checks <= 10) DEFAULT 1 , UNIQUE (reader_hostgroup))"
+#define ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_0_9
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE runtime_mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL CHECK (SUBSTR(domain_name,1,1) = '.') , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
 
 
 
@@ -8681,9 +8683,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		//sqlite3 *mydb3=admindb->get_db();
 		char *query=NULL;
 		if (_runtime) {
-			query=(char *)"INSERT INTO runtime_mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment,add_lag_ms,min_lag_ms,lag_num_checks) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+			query=(char *)"INSERT INTO runtime_mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
 		} else {
-			query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,comment,add_lag_ms,min_lag_ms,lag_num_checks) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+			query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
 		}
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = admindb->prepare_v2(query, &statement);
@@ -8701,10 +8703,10 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=sqlite3_bind_int64(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
 			rc=sqlite3_bind_int64(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
 			rc=sqlite3_bind_int64(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=sqlite3_bind_text(statement, 11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc=sqlite3_bind_int64(statement, 12, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=sqlite3_bind_int64(statement, 13, atoi(r->fields[13])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=sqlite3_bind_int64(statement, 14, atoi(r->fields[14])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 11, atoi(r->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 12, atoi(r->fields[11])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_int64(statement, 13, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=sqlite3_bind_text(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, admindb);
@@ -9624,7 +9626,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
     if (root.exists("mysql_aws_aurora_hostgroups")==true) {
             const Setting &mysql_aws_aurora_hostgroups = root["mysql_aws_aurora_hostgroups"];
             int count = mysql_aws_aurora_hostgroups.getLength();
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment, add_lag_ms, min_lag_ms, lag_num_checks ) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, '%s', %d, %d, %d)";
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment ) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
             for (i=0; i< count; i++) {
                     const Setting &line = mysql_aws_aurora_hostgroups[i];
                     int writer_hostgroup;
@@ -9659,7 +9661,7 @@ int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
                     char *p1=strdup(domain_name.c_str());
                     char *p=escape_string_single_quotes(p1, false);
                     char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, o, add_lag_ms, min_lag_ms, lag_num_checks);
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, o);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
@@ -10192,6 +10194,24 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		configdb->execute("INSERT INTO mysql_galera_hostgroups SELECT * FROM mysql_galera_hostgroups_v200a");
 	}
 
+	// upgrade mysql_aws_aurora_hostgroups
+	rci=configdb->check_table_structure((char *)"mysql_aws_aurora_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_0_8);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version pre-v2.0.9 of mysql_aws_aurora_hostgroups\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_aws_aurora_hostgroups in progress\n");
+		// drop mysql_aws_aurora_hostgroups table with suffix _v208
+		configdb->execute("DROP TABLE IF EXISTS mysql_aws_aurora_hostgroups_v208");
+		// rename current table to add suffix _v208
+		configdb->execute("ALTER TABLE mysql_aws_aurora_hostgroups RENAME TO mysql_aws_aurora_hostgroups_v208");
+		// create new table
+		configdb->build_table((char *)"mysql_aws_aurora_hostgroups",(char *)ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, "
+					      "max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) "
+					      "SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
+					      "check_timeout_ms, writer_is_also_reader, new_reader_weight, comment FROM mysql_aws_aurora_hostgroups_v208");
+	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
 
@@ -10705,9 +10725,9 @@ void ProxySQL_Admin::enable_aurora_testing() {
 		}
 	}
 	sqlite3_finalize(statement);
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment, add_lag_ms, min_lag_ms, lag_num_checks) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 'Automated Aurora Testing Cluster 1', 10, 20, 5)");
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment, add_lag_ms, min_lag_ms, lag_num_checks) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 120, 90, 0, 1, 'Automated Aurora Testing Cluster 2', 10, 20, 5)");
-	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment, add_lag_ms, min_lag_ms, lag_num_checks) VALUES (1275, 1276, 1, '.aws.3.test.com', 25, 120, 90, 0, 2, 'Automated Aurora Testing Cluster 3', 10, 20, 5)");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 1')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 120, 90, 0, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 2')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1275, 1276, 1, '.aws.3.test.com', 25, 120, 90, 0, 2, 10, 20, 5, 'Automated Aurora Testing Cluster 3')");
 	admindb->execute("UPDATE mysql_aws_aurora_hostgroups SET active=1");
 	//admindb->execute("update mysql_servers set max_replication_lag=20");
 	load_mysql_servers_to_runtime();

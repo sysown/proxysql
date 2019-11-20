@@ -7,7 +7,6 @@
 	0.2.0902
 		* original implementation
 */
-
 #include <map>
 #include <mutex>
 #include <thread>
@@ -3601,7 +3600,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
-	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 	sqlite3_stmt *statement1=NULL;
 	char *query2=NULL;
 	query2=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log (hostname, port, time_start_us, success_time_us, error) VALUES (?1, ?2, ?3, ?4, ?5)";
@@ -3639,7 +3638,8 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 							rc=sqlite3_bind_text(statement1, 7, hse->session_id , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 							rc=sqlite3_bind_text(statement1, 8, hse->last_update_timestamp , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 							rc=sqlite3_bind_double(statement1, 9, hse->replica_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_double(statement1, 10, hse->cpu ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=sqlite3_bind_int64(statement1, 10, hse->estimated_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=sqlite3_bind_double(statement1, 11, hse->cpu ); ASSERT_SQLITE_OK(rc, monitordb);
 							SAFE_SQLITE3_STEP2(statement1);
 							rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 							rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, monitordb);
@@ -4131,6 +4131,27 @@ __exit_monitor_aws_aurora_HG_thread:
 				mysql_free_result(mmsd->result);
 				mmsd->result=NULL;
 			}
+
+			if (lasts_ase[ase_idx]) {
+				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
+				delete l_ase;
+			}
+			lasts_ase[ase_idx] = ase_l;
+			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+			for (auto h : *(ase_l->host_statuses)) {
+				for (auto h2 : *(ase->host_statuses)) {
+					if (strcmp(h2->server_id, h->server_id) == 0) {
+						h2->estimated_lag_ms = h->estimated_lag_ms;
+					}
+				}
+			}
+			// remember that we call evaluate_aws_aurora_results()
+			// *before* shifting ase_idx
+			ase_idx++;
+			if (ase_idx == N_L_ASE) {
+				ase_idx = 0;
+			}
+
 //__end_process_aws_aurora_result:
 			if (mmsd->mysql_error_msg) {
 			}
@@ -4154,18 +4175,7 @@ __exit_monitor_aws_aurora_HG_thread:
 				free(s);
 			}
 			pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-			if (lasts_ase[ase_idx]) {
-				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
-				delete l_ase;
-			}
-			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
-			// remember that we call evaluate_aws_aurora_results()
-			// *before* shifting ase_idx
-			ase_idx++;
-			if (ase_idx == N_L_ASE) {
-				ase_idx = 0;
-			}
+
 		}
 		if (mmsd->interr || mmsd->async_exit_status) { // check failed
 		} else {
@@ -4638,15 +4648,16 @@ unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entr
 	assert(aase);
 	assert(server_id);
 	assert(idx >= 0 && idx < N_L_ASE);
-	assert(lag_num_checks > 0 && lag_num_checks <= N_L_ASE);
+
+	if (lag_num_checks > N_L_ASE) lag_num_checks = N_L_ASE;
+	if (lag_num_checks <= 0) lag_num_checks = 1;
 
 	unsigned int mlag = 0;
 	unsigned int lag = 0;
 
-
 	for (int i = 1; i <= lag_num_checks; i++) {
 		if (!aase[idx] || !aase[idx]->host_statuses)
-			continue;
+			break;
 		for (auto hse : *(aase[idx]->host_statuses)) {
 			if (strcmp(server_id, hse->server_id)==0) {
 				unsigned int ms = std::max(((unsigned int)hse->replica_lag_ms + add_lag_ms), min_lag_ms);
@@ -4706,6 +4717,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 				bool is_writer = false;
 				bool rla_rc = true;
 				unsigned int current_lag_ms = estimate_lag(hse->server_id, lasts_ase, ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+				hse->estimated_lag_ms = current_lag_ms;
 				if (current_lag_ms > max_latency_ms) {
 					enable = false;
 				}
