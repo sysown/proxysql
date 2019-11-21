@@ -96,8 +96,9 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysql, "insert into scheduler (id, active, interval_ms, filename, arg1, arg2, arg3, arg4, arg5, comment) values "
 					   " (1,1,1000,'filename','a1','a2','a3','a4','a5','comment');");
 	MYSQL_QUERY(mysql, "insert into mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, "
-					   " domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, comment) "
-					   " values (1,2,1,3,'.domain.net',20,106,107,1,9,'comment');");
+					   " domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, "
+					   " add_lag_ms, min_lag_ms, lag_num_checks, comment) "
+					   " values (1,2,1,3,'.domain.net',20,106,107,1,9,10,20,1,'comment');");
 	MYSQL_QUERY(mysql, "insert into mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, "
 					   " active, max_writers, writer_is_also_reader, max_transactions_behind, comment) values (1,2,3,4,1,23,1,1,'comment');");
 	MYSQL_QUERY(mysql, "insert into mysql_group_replication_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, "

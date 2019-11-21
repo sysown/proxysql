@@ -54,6 +54,7 @@ admin_variables =
 	stats_mysql_connection_pool="admin"
 	stats_mysql_connections="admin"
 	stats_mysql_query_cache="admin"
+	stats_mysql_query_digest_to_disk="admin"
 	stats_system_cpu="admin"
 	stats_system_memory="admin"
 	telnet_admin_ifaces="admin"
@@ -139,6 +140,7 @@ mysql_variables =
 	monitor_groupreplication_healthcheck_interval="mysql"
 	monitor_groupreplication_healthcheck_max_timeout_count="mysql"
 	monitor_groupreplication_healthcheck_timeout="mysql"
+	monitor_groupreplication_max_transactions_behind_count="mysql"
 	monitor_history="mysql"
 	monitor_password="mysql"
 	monitor_ping_interval="mysql"
@@ -330,6 +332,9 @@ mysql_aws_aurora_hostgroups:
 		check_timeout_ms=107
 		writer_is_also_reader=1
 		new_reader_weight=9
+		add_lag_ms=10
+		min_lag_ms=20
+		lag_num_checks=1
 		comment="comment"
 	}
 )

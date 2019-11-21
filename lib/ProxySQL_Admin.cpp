@@ -10599,7 +10599,10 @@ int ProxySQL_Admin::Write_MySQL_Servers_to_configfile(std::string& data) {
 				addField(data, "check_timeout_ms", r->fields[7], "");
 				addField(data, "writer_is_also_reader", r->fields[8], "");
 				addField(data, "new_reader_weight", r->fields[9], "");
-				addField(data, "comment", r->fields[10]);
+				addField(data, "add_lag_ms", r->fields[10], "");
+				addField(data, "min_lag_ms", r->fields[11], "");
+				addField(data, "lag_num_checks", r->fields[12], "");
+				addField(data, "comment", r->fields[13]);
 
 				data += "\t}";
 				isNext = true;
