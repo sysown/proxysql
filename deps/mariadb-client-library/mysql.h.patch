@@ -1,13 +1,13 @@
-@@ -490,7 +490,7 @@
+@@ -492,7 +492,7 @@
  unsigned long STDCALL mysql_thread_id(MYSQL *mysql);
  const char * STDCALL mysql_character_set_name(MYSQL *mysql);
  void STDCALL mysql_get_character_set_info(MYSQL *mysql, MY_CHARSET_INFO *cs);
 -int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname);
 +int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname, uint charsetnr);
  
- my_bool STDCALL mariadb_get_infov(MYSQL *mysql, enum mariadb_value value, void *arg, ...);
+ my_bool mariadb_get_infov(MYSQL *mysql, enum mariadb_value value, void *arg, ...);
  my_bool STDCALL mariadb_get_info(MYSQL *mysql, enum mariadb_value value, void *arg);
-@@ -509,6 +509,7 @@
+@@ -511,6 +511,7 @@
  					   const char *unix_socket,
  					   unsigned long clientflag);
  void		STDCALL mysql_close(MYSQL *sock);
@@ -15,7 +15,7 @@
  int		STDCALL mysql_select_db(MYSQL *mysql, const char *db);
  int		STDCALL mysql_query(MYSQL *mysql, const char *q);
  int		STDCALL mysql_send_query(MYSQL *mysql, const char *q,
-@@ -608,7 +609,7 @@
+@@ -610,7 +611,7 @@
  int STDCALL mysql_stmt_next_result_cont(int *ret, MYSQL_STMT *stmt, int status);
  
  int STDCALL mysql_set_character_set_start(int *ret, MYSQL *mysql,
