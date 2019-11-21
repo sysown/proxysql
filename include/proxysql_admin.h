@@ -9,7 +9,7 @@
 #include "ProxySQL_RESTAPI_Server.hpp"
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
-
+class ProxySQL_Config;
 
 class Scheduler_Row {
 	public:
@@ -269,20 +269,7 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 
-	int Read_Global_Variables_from_configfile(const char *prefix);
-	int Read_MySQL_Users_from_configfile();
-	int Read_MySQL_Query_Rules_from_configfile();
-	int Read_MySQL_Servers_from_configfile();
-	int Read_Scheduler_from_configfile();
-	int Read_ProxySQL_Servers_from_configfile();
-
-	void addField(std::string& data, const char* name, const char* value, const char* dq="\"");
-	int Write_Global_Variables_to_configfile(std::string& data);
-	int Write_MySQL_Users_to_configfile(std::string& data);
-	int Write_MySQL_Query_Rules_to_configfile(std::string& data);
-	int Write_MySQL_Servers_to_configfile(std::string& data);
-	int Write_Scheduler_to_configfile(std::string& data);
-	int Write_ProxySQL_Servers_to_configfile(std::string& data);
+	ProxySQL_Config& proxysql_config();
 
 	void flush_error_log();
 	bool GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
