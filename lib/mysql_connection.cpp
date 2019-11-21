@@ -2201,6 +2201,9 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 				const char *data;
 				size_t length;
 				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
+					if (length >= (sizeof(gtid_uuid) - 1)) {
+						length = sizeof(gtid_uuid) - 1;
+					}
 					if (memcmp(gtid_uuid,data,length)) {
 						// copy to local buffer in MySQL_Connection
 						memcpy(gtid_uuid,data,length);
