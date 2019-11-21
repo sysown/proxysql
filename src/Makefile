@@ -40,10 +40,6 @@ MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
 MICROHTTPD_IDIR=$(MICROHTTPD_DIR)/include
 MICROHTTPD_LDIR=$(MICROHTTPD_DIR)/microhttpd/.libs
 
-COREDUMPER_DIR=$(DEPS_PATH)/google-coredumper/google-coredumper
-COREDUMPER_IDIR=$(COREDUMPER_DIR)/src
-COREDUMPER_LDIR=$(COREDUMPER_DIR)/.libs
-
 CURL_DIR=$(DEPS_PATH)/curl/curl
 CURL_IDIR=$(CURL_DIR)/include
 CURL_LDIR=$(CURL_DIR)/lib/.libs
@@ -60,7 +56,7 @@ EV_LDIR=$(EV_DIR)/.libs
 IDIR=../include
 LDIR=../lib
 IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(COREDUMPER_LDIR) -L$(SSL_LDIR)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR)
 
 UNAME_S := $(shell uname -s)
 
@@ -81,9 +77,9 @@ MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_V
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lev -lcoredumper -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lev -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
 else
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lev -lcoredumper -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lev -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
 endif
 
 ifeq ($(UNAME_S),Darwin)
