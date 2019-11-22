@@ -471,6 +471,8 @@ static char * admin_variables_names[]= {
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
 	(char *)"checksum_mysql_users",
+	(char *)"restapi_enabled",
+	(char *)"restapi_port",
 	(char *)"web_enabled",
 	(char *)"web_port",
 #ifdef DEBUG
@@ -4313,6 +4315,10 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	GloProxyStats->variables.stats_system_memory = 60;
 #endif
 
+	variables.restapi_enabled = false;
+	variables.restapi_enabled_old = false;
+	variables.restapi_port = 6090;
+	variables.restapi_port_old = variables.restapi_port;
 	variables.web_enabled = false;
 	variables.web_enabled_old = false;
 	variables.web_port = 6080;
@@ -4389,6 +4395,12 @@ bool ProxySQL_Admin::init() {
 	AdminHTTPServer = new ProxySQL_HTTP_Server();
 	AdminHTTPServer->init();
 	AdminHTTPServer->print_version();
+
+	AdminRestApiServer = NULL;
+/*
+	AdminRestApiServer = new ProxySQL_RESTAPI_Server();
+	AdminRestApiServer->print_version();
+*/
 
 	child_func[0]=child_mysql;
 	child_func[1]=child_telnet;
@@ -4667,6 +4679,10 @@ void ProxySQL_Admin::admin_shutdown() {
 		}
 	}
 	delete AdminHTTPServer;
+	if (AdminRestApiServer) {
+		delete AdminRestApiServer;
+		AdminRestApiServer = NULL;
+	}
 	AdminHTTPServer = NULL;
 	pthread_join(admin_thr, NULL);
 	delete admindb;
@@ -4829,6 +4845,26 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		//commit(); NOT IMPLEMENTED
 		wrunlock();
 		{
+			if (variables.restapi_enabled != variables.restapi_enabled_old) {
+				if (variables.restapi_enabled) {
+					AdminRestApiServer = new ProxySQL_RESTAPI_Server(variables.restapi_port);
+				} else {
+					delete AdminRestApiServer;
+					AdminRestApiServer = NULL;
+				}
+				variables.restapi_enabled_old = variables.restapi_enabled;
+			} else {
+				if (variables.restapi_port != variables.restapi_port_old) {
+					if (AdminRestApiServer) {
+						delete AdminRestApiServer;
+						AdminRestApiServer = NULL;
+					}
+					if (variables.restapi_enabled) {
+						AdminRestApiServer = new ProxySQL_RESTAPI_Server(variables.restapi_port);
+					}
+					variables.restapi_port_old = variables.restapi_port;
+				}
+			}
 			if (variables.web_enabled != variables.web_enabled_old) {
 				if (variables.web_enabled) {
 					char *key_pem;
@@ -5587,6 +5623,13 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"checksum_mysql_users")) {
 		return strdup((checksum_variables.checksum_mysql_users ? "true" : "false"));
 	}
+	if (!strcasecmp(name,"restapi_enabled")) {
+		return strdup((variables.restapi_enabled ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"restapi_port")) {
+		sprintf(intbuf,"%d",variables.restapi_port);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"web_enabled")) {
 		return strdup((variables.web_enabled ? "true" : "false"));
 	}
@@ -6048,6 +6091,26 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			return true;
 		}
 		return false;
+	}
+	if (!strcasecmp(name,"restapi_enabled")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.restapi_enabled=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.restapi_enabled=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"restapi_port")) {
+		int intv=atoi(value);
+		if (intv > 0 && intv < 65535) {
+			variables.restapi_port=intv;
+			return true;
+		} else {
+			return false;
+		}
 	}
 	if (!strcasecmp(name,"web_enabled")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {

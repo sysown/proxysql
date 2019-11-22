@@ -11,9 +11,9 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver
 endif
 .PHONY: default
 
@@ -26,6 +26,14 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
+
+libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
+	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
+	cd libhttpserver && tar -zxf libhttpserver-master_20191121.tar.gz
+	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L=$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I=$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
+	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
+libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
 
 libev/libev/.libs/libev.a:
 	cd libev && rm -rf libev-4.24 || true
@@ -157,6 +165,7 @@ cleanpart:
 .PHONY: cleanpart
 
 cleanall:
+	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd jemalloc && rm -rf jemalloc-4.3.1 || true
 	cd jemalloc && rm -rf jemalloc-5.2.0 || true
