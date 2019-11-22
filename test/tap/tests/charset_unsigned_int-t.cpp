@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
 	}
 	else {
 		show_variable(mysql_b, var_collation_connection, var_value);
-		ok(var_value.compare("utf8mb4_0900_ai_ci") == 0, "Collation >255 is set"); // ok_5
+		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation >255 is set"); // ok_5
 	}
 	mysql_close(mysql_b);
 
@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
 	}
 	else {
 		show_variable(mysql_c, var_collation_connection, var_value);
-		ok(var_value.compare("utf8mb4_0900_ai_ci") == 0, "Collation >255 is set"); // ok_6
+		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation >255 is set"); // ok_6
 	}
 
 	mysql_close(mysql_c);
