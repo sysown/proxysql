@@ -522,7 +522,6 @@ struct _global_variables_t {
 
 	int merge_configfile_db;
 
-	int core_dump_file_size;
 	int stack_size;
 	char *proxy_admin_socket;
 	char *proxy_mysql_bind;
