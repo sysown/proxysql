@@ -2928,6 +2928,9 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	char msg[128];
+	const MARIADB_CHARSET_INFO *ci = NULL;
+	const char* replace_collation = "";
+	const char* not_supported_collation = "";
 
 	/* Validate that server can support client's charset */
 	if (client_myds->myconn->options.charset >= 255 && myconn->mysql->server_version[0] != '8') {
@@ -2941,8 +2944,16 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				*_rc=-1;
 				return false;
 			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
-				proxy_warning("Server doesn't support collation id %d. Replace it with default charset %d.\n",
-						client_myds->myconn->options.charset, mysql_thread___default_charset);
+				ci = proxysql_find_charset_nr(client_myds->myconn->options.charset);
+				if (ci)	not_supported_collation = ci->name;
+
+				ci = proxysql_find_charset_nr(mysql_thread___default_charset);
+				if (ci)	replace_collation = ci->name;
+
+				proxy_warning("Server doesn't support collation (%d) %s. Replacing it with the configured default (%d) %s.\n",
+						client_myds->myconn->options.charset, not_supported_collation, 
+						mysql_thread___default_charset, replace_collation);
+
 				client_myds->myconn->options.charset=mysql_thread___default_charset;
 				break;
 			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT:

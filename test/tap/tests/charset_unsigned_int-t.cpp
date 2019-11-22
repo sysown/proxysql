@@ -114,14 +114,14 @@ int main(int argc, char** argv) {
 
 	if (mysql_query(mysql, "set names 'utf8'")) return exit_status();
 	show_variable(mysql, var_collation_connection, var_value);
-	ok(var_value.compare("utf8_general_ci") == 0, "Initial client character set"); // ok_1
+	ok(var_value.compare("utf8_general_ci") == 0, "Initial client character set. Actual %s", var_value.c_str()); // ok_1
 
 	if (mysql_query(mysql, "set names utf8mb4 collate utf8mb4_croatian_ci")) return exit_status();
 	show_variable(mysql, var_collation_connection, var_value);
 	std::string version;
 	get_server_version(mysql, version);
 	if (version.data()[0] == '5') {
-		ok(var_value.compare("utf8mb4_general_ci") == 0, "Backend is mysql version < 8.0. Collation is reduced to utf8mb4_general_ci as expected"); // ok_2
+		ok(var_value.compare("utf8mb4_general_ci") == 0, "Backend is mysql version < 8.0. Actual collation %s", var_value.c_str()); // ok_2
 	} else {
 		ok(var_value.compare("utf8mb4_croatian_ci") == 0, "Backend is mysql version >= 8.0. Collation is set as expected to utf8mb4_croatian_ci"); // ok_2
 	}
@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
 	if (mysql_query(mysql_a, "save mysql variables to disk")) return exit_status();
 
 	show_admin_global_variable(mysql_a, var_name, var_value);
-	ok(var_value.compare("utf8mb4") == 0, "Default charset utf8mb4 is set in admin"); // ok_4
+	ok(var_value.compare("utf8mb4") == 0, "Default charset utf8mb4 is set in admin. Actual %s", var_value.c_str()); // ok_4
 
 	mysql_close(mysql_a);
 
@@ -159,11 +159,11 @@ int main(int argc, char** argv) {
 	get_server_version(mysql_b, version);
 	if (version.data()[0] == '5') {
 		show_variable(mysql_b, var_collation_connection, var_value);
-		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation 255 is set, because proxyserver changed it"); // ok_5
+		ok(var_value.compare("latin1_swedish_ci") == 0, "Collation <255 is set. Actual %s", var_value.c_str()); // ok_5
 	}
 	else {
 		show_variable(mysql_b, var_collation_connection, var_value);
-		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation >255 is set"); // ok_5
+		ok(var_value.compare("latin1_swedish_ci") == 0, "Collation >255 is set. Actual %s", var_value.c_str()); // ok_5
 	}
 	mysql_close(mysql_b);
 
@@ -177,11 +177,11 @@ int main(int argc, char** argv) {
 	if (get_server_version(mysql_c, version)) return exit_status();
 	if (version.data()[0] == '5') {
 		show_variable(mysql_c, var_collation_connection, var_value);
-		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation 255 is set, because proxyserver changed it"); // ok_6
+		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation <255 is set. Actual %s", var_value.c_str()); // ok_6
 	}
 	else {
 		show_variable(mysql_c, var_collation_connection, var_value);
-		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation >255 is set"); // ok_6
+		ok(var_value.compare("utf8mb4_general_ci") == 0, "Collation >255 is set. %s", var_value.c_str()); // ok_6
 	}
 
 	mysql_close(mysql_c);
