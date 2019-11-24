@@ -83,7 +83,7 @@ class SQLite3_Server {
 	bool init();
 	void wrlock();
 	void wrunlock();
-	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
+	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0, uint16_t status=2);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
 };
 #endif // CLASS_PROXYSQL_SQLITE3_SERVER_H

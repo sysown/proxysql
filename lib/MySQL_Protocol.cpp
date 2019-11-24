@@ -1747,10 +1747,10 @@ __do_auth:
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
 		|| 
 			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+//#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		|| 
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
-#endif // TEST_AURORA  || TEST_GALERA
+//#endif // TEST_AURORA  || TEST_GALERA
 		) {
 			if (strcmp((const char *)user,mysql_thread___monitor_username)==0) {
 				proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
