@@ -1053,6 +1053,8 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	if (admindb) {
 		delete admindb;
 	}
+	for (auto  info : AWS_Aurora_Info_Map)
+		delete info.second;
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
 #endif
