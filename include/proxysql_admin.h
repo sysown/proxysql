@@ -232,6 +232,8 @@ class ProxySQL_Admin {
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
 	char * load_mysql_firewall_to_runtime();
 	void save_mysql_firewall_from_runtime(bool);
+	void save_mysql_firewall_whitelist_users_from_runtime(bool, SQLite3_result *);
+	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
 
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);

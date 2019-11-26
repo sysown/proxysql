@@ -26,6 +26,11 @@ typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
 
 
+#define WUS_NOT_FOUND   0
+#define WUS_OFF         1
+#define WUS_DETECTING   2
+#define WUS_PROTECTING  3
+
 
 #ifdef DIGEST_STATS_FAST_1
 typedef struct _query_digest_stats_pointers_t {
@@ -145,6 +150,7 @@ class Query_Processor_Output {
 	int gtid_from_hostgroup;
 	long long max_lag_ms;
 	int log;
+	int firewall_whitelist_mode;
 	char *comment; // #643
 	std::string *new_query;
 	void * operator new(size_t size) {
@@ -182,6 +188,7 @@ class Query_Processor_Output {
 		error_msg=NULL;
 		OK_msg=NULL;
 		comment=NULL; // #643
+		firewall_whitelist_mode = WUS_OFF;
 	}
 	void destroy() {
 		if (error_msg) {
@@ -281,11 +288,11 @@ class Query_Processor {
 
 	// firewall
 	pthread_mutex_t global_mysql_firewall_whitelist_mutex;
-	std::set<std::string*> global_mysql_firewall_whitelist_users;
+	std::unordered_map<std::string, int>global_mysql_firewall_whitelist_users;
 	std::unordered_map<std::string, void *> global_mysql_firewall_whitelist_rules;
 	SQLite3_result * global_mysql_firewall_whitelist_users_runtime;
 	SQLite3_result * global_mysql_firewall_whitelist_rules_runtime;
-	unsigned long long global_mysql_firewall_whitelist_users_set___size;
+	unsigned long long global_mysql_firewall_whitelist_users_map___size;
 	unsigned long long global_mysql_firewall_whitelist_users_result___size;
 	unsigned long long global_mysql_firewall_whitelist_rules_map___size;
 	unsigned long long global_mysql_firewall_whitelist_rules_result___size;
@@ -351,6 +358,10 @@ class Query_Processor {
 	unsigned long long get_mysql_firewall_memory_rules_table();
 	unsigned long long get_mysql_firewall_memory_rules_config();
 	void get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r);
+	int find_firewall_whitelist_user(char *username, char *client);
+	bool find_firewall_whitelist_rule(char *username, char *client_address, char *schemaname, int flagIN, uint64_t digest);
+	SQLite3_result * get_mysql_firewall_whitelist_users();
+	SQLite3_result * get_mysql_firewall_whitelist_rules();
 };
 
 typedef Query_Processor * create_Query_Processor_t();
