@@ -3317,9 +3317,12 @@ __get_pkts_from_client:
 											libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
 											issqli = libinjection_is_sqli(&state);
 											if (issqli) {
+												thread->status_variables.automatic_detected_sqli++;
 												char * username = client_myds->myconn->userinfo->username;
 												char * client_address = client_myds->addr.addr;
-												proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s\n", state.fingerprint, username, client_address);
+												proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
+												fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+												fprintf(stderr,"\n");
 												handler_ret = -1;
 												return handler_ret;
 											}

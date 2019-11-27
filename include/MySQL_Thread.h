@@ -171,6 +171,7 @@ class MySQL_Thread
 		unsigned long long hostgroup_locked_set_cmds;
 		unsigned long long hostgroup_locked_queries;
 		unsigned long long aws_aurora_replicas_skipped_during_query;
+		unsigned long long automatic_detected_sqli;
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -478,6 +479,7 @@ class MySQL_Threads_Handler
 	unsigned long long get_hostgroup_locked_set_cmds();
 	unsigned long long get_hostgroup_locked_queries();
 	unsigned long long get_aws_aurora_replicas_skipped_during_query();
+	unsigned long long get_automatic_detected_sqli();
 	unsigned long long get_backend_lagging_during_query();
 	unsigned long long get_backend_offline_during_query();
 	unsigned long long get_queries_with_max_lag_ms();
