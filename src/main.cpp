@@ -26,6 +26,8 @@
 #include <libdaemon/dexec.h>
 #include "ev.h"
 
+#include "curl/curl.h"
+
 #include <sys/mman.h>
 
 /*
@@ -37,6 +39,10 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
 void * __mysql_ldap_auth;
 
+// absolute path of ssl files
+char *ssl_key_fp = NULL;
+char *ssl_cert_fp = NULL;
+char *ssl_ca_fp = NULL;
 
 char *binary_sha1 = NULL;
 
@@ -139,6 +145,77 @@ DH *get_dh2048()
 		{ DH_free(dh); return(NULL); }
 	return(dh);
 }
+
+struct MemoryStruct {
+	char *memory;
+	size_t size;
+};
+
+
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+	size_t realsize = size * nmemb;
+	struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+	mem->memory = (char *)realloc(mem->memory, mem->size + realsize + 1);
+	assert(mem->memory);
+	memcpy(&(mem->memory[mem->size]), contents, realsize);
+	mem->size += realsize;
+	mem->memory[mem->size] = 0;
+	return realsize;
+}
+
+
+static char * main_check_latest_version() {
+	CURL *curl_handle;
+	CURLcode res;
+	struct MemoryStruct chunk;
+	chunk.memory = (char *)malloc(1);
+	chunk.size = 0;
+	curl_global_init(CURL_GLOBAL_ALL);
+	curl_handle = curl_easy_init();
+	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
+	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
+
+	string s = "proxysql-agent/";
+	s += PROXYSQL_VERSION;
+	if (binary_sha1) {
+		s += " (" ;
+			s+= binary_sha1;
+		s += ")" ;
+	}
+	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, s.c_str());
+	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 10);
+	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
+
+	res = curl_easy_perform(curl_handle);
+
+	if (res != CURLE_OK) {
+		switch (res) {
+			case CURLE_COULDNT_RESOLVE_HOST:
+			case CURLE_COULDNT_CONNECT:
+			case CURLE_OPERATION_TIMEDOUT:
+				break;
+			default:
+				proxy_error("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+				break;
+		}
+		free(chunk.memory);
+		chunk.memory = NULL;
+	}
+	curl_easy_cleanup(curl_handle);
+	curl_global_cleanup();
+	return chunk.memory;
+}
+
+void * main_check_latest_version_thread(void *arg) {
+	char * latest_version = main_check_latest_version();
+	if (latest_version) {
+		proxy_info("Latest ProxySQL version available: %s\n", latest_version);
+	}
+	return NULL;
+}
+
 
 
 
@@ -362,11 +439,12 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
 	const char * ssl_cert_rp = (const char *)"proxysql-cert.pem";
 	const char * ssl_ca_rp = (const char *)"proxysql-ca.pem";
 
+/*
 	// absolute path of ssl files
 	char *ssl_key_fp = NULL;
 	char *ssl_cert_fp = NULL;
 	char *ssl_ca_fp = NULL;
-
+*/
 	// how many files exists ?
 	int nfiles = 0;
 	bool ssl_key_exists = true;
@@ -799,6 +877,9 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 
 	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
 	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
+
+	GloVars.sqlite3serverdb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"sqlite3server.db")+2);
+	sprintf(GloVars.sqlite3serverdb,"%s/%s",GloVars.datadir, (char *)"sqlite3server.db");
 
 	GloVars.statsdb_disk=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql_stats.db")+2);
 	sprintf(GloVars.statsdb_disk,"%s/%s",GloVars.datadir, (char *)"proxysql_stats.db");
@@ -1611,6 +1692,16 @@ __start_label:
 #endif
 	}
 
+	if (GloVars.global.version_check) {
+		pthread_attr_t attr;
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+		pthread_t thr;
+		if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) !=0 ) {
+			perror("Thread creation");
+			exit(EXIT_FAILURE);
+		}
+	}
 	{
 		unsigned int missed_heartbeats = 0;
 		unsigned long long previous_time = monotonic_time();

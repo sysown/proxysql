@@ -6,6 +6,8 @@
 #include "cpp.h"
 #include <vector>
 
+#include "ProxySQL_RESTAPI_Server.hpp"
+
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 
 
@@ -104,6 +106,10 @@ class ProxySQL_Admin {
 		int stats_system_cpu;
 		int stats_system_memory;
 		int mysql_show_processlist_extended;
+		bool restapi_enabled;
+		bool restapi_enabled_old;
+		int restapi_port;
+		int restapi_port_old;
 		bool web_enabled;
 		bool web_enabled_old;
 		int web_port;
@@ -304,6 +310,7 @@ class ProxySQL_Admin {
 	void save_sqliteserver_variables_from_runtime() { flush_sqliteserver_variables___runtime_to_database(admindb, true, true, false); }
 
 	ProxySQL_HTTP_Server *AdminHTTPServer;
+	ProxySQL_RESTAPI_Server *AdminRestApiServer;
 
 #ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse

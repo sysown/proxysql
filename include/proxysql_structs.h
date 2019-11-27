@@ -522,6 +522,7 @@ struct _global_variables_t {
 
 	bool has_debug;
 	bool idle_threads;
+	bool version_check;
 
 	volatile int shutdown;
 	bool nostart;

@@ -198,6 +198,10 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 	do {
 		rc = sqlite3_prepare_v2(db, str, -1, &statement, 0);
 		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
+			if (sqlite3_get_autocommit(db)==0) {
+				*error=strdup(sqlite3_errmsg(db));
+				goto __exit_execute_statement;
+			}
 			usleep(USLEEP_SQLITE_LOCKED);
 		}
 	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
@@ -213,6 +217,10 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 		do {
 			rc=sqlite3_step(statement);
 			if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
+				if (sqlite3_get_autocommit(db)==0) {
+					*error=strdup(sqlite3_errmsg(db));
+					goto __exit_execute_statement;
+				}
 				usleep(USLEEP_SQLITE_LOCKED);
 			}
 		} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
@@ -229,6 +237,7 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 		ret=true;
 	}
 __exit_execute_statement:
+	sqlite3_reset(statement);
 	sqlite3_finalize(statement);
 	return ret;
 }

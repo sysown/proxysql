@@ -205,5 +205,3 @@ bool ProxySQL_ConfigFile::configVariable(const char *group, const char *key, cha
 	}
 	return true;
 }
-
-

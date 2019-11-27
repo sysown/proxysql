@@ -36,6 +36,10 @@ LZ4_DIR=$(DEPS_PATH)/lz4/lz4
 
 CLICKHOUSE_CPP_DIR=$(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
 
+LIBHTTPSERVER_DIR=$(DEPS_PATH)/libhttpserver/libhttpserver
+LIBHTTPSERVER_IDIR=$(LIBHTTPSERVER_DIR)/src
+LIBHTTPSERVER_LDIR=$(LIBHTTPSERVER_DIR)/build/src/.libs/
+
 MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
 MICROHTTPD_IDIR=$(MICROHTTPD_DIR)/include
 MICROHTTPD_LDIR=$(MICROHTTPD_DIR)/microhttpd/.libs
@@ -55,8 +59,8 @@ EV_LDIR=$(EV_DIR)/.libs
 
 IDIR=../include
 LDIR=../lib
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR)
 
 UNAME_S := $(shell uname -s)
 
@@ -77,9 +81,9 @@ MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_V
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lev -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lhttpserver -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK)
 else
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lev -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK)
 endif
 
 ifeq ($(UNAME_S),Darwin)
@@ -98,7 +102,7 @@ endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
-	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o
+	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o
 endif
 
 LIBPROXYSQLAR+= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a

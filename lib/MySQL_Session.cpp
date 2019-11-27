@@ -4896,10 +4896,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=true;
 				switch (session_type) {
 					case PROXYSQL_SESSION_SQLITE:
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+//#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 						free_users=1;
 						break;
-#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
+//#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
 						if (ldap_ctx==NULL) {
@@ -6566,7 +6566,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 	}
 }
 
-void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
+void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot, bool in_transaction) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
@@ -6578,10 +6578,17 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 			sid++;
 		}
 		myds->DSS=STATE_COLUMN_DEFINITION;
-
-		unsigned int nTrx=NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		unsigned int nTrx = 0;
+		uint16_t setStatus = 0;
+		if (in_transaction == false) {
+			nTrx=NumActiveTransactions();
+			setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		} else {
+			// this is for SQLite3 Server
+			setStatus = SERVER_STATUS_AUTOCOMMIT;
+			setStatus |= SERVER_STATUS_IN_TRANS;
+		}
 		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus ); sid++;
 		char **p=(char **)malloc(sizeof(char*)*result->columns);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*result->columns);
@@ -6601,12 +6608,24 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 	} else { // no result set
 		if (error) {
 			// there was an error
-			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"28000",error);
+			if (strcmp(error,(char *)"database is locked")==0) {
+				myprot->generate_pkt_ERR(true,NULL,NULL,sid,1205,(char *)"HY000",error);
+			} else {
+				myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"28000",error);
+			}
 		} else {
 			// no error, DML succeeded
-			unsigned int nTrx=NumActiveTransactions();
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			unsigned int nTrx = 0;
+			uint16_t setStatus = 0;
+			if (in_transaction == false) {
+				nTrx=NumActiveTransactions();
+				setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			} else {
+				// this is for SQLite3 Server
+				setStatus = SERVER_STATUS_AUTOCOMMIT;
+				setStatus |= SERVER_STATUS_IN_TRANS;
+			}
 			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,setStatus,0,NULL);
 		}
 		myds->DSS=STATE_SLEEP;

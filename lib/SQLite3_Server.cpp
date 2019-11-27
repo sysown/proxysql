@@ -299,6 +299,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 
 	// fix bug #1047
 	if (
+/*
 		(!strncasecmp("BEGIN", query_no_space, strlen("BEGIN")))
 		||
 		(!strncasecmp("START TRANSACTION", query_no_space, strlen("START TRANSACTION")))
@@ -307,6 +308,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		||
 		(!strncasecmp("ROLLBACK", query_no_space, strlen("ROLLBACK")))
 		||
+*/
 		(!strncasecmp("SET character_set_results", query_no_space, strlen("SET character_set_results")))
 		||
 		(!strncasecmp("SET SQL_AUTO_IS_NULL", query_no_space, strlen("SET SQL_AUTO_IS_NULL")))
@@ -314,10 +316,44 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
 		||
 		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
+		||
+		(!strncasecmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */")))
+		||
+		(!strncasecmp("/*!40103 SET TIME_ZONE=", query_no_space, strlen("/*!40103 SET TIME_ZONE=")))
+		||
+		(!strncasecmp("/*!80000 SET SESSION", query_no_space, strlen("/*!80000 SET SESSION")))
+		||
+		(!strncasecmp("SET SESSION", query_no_space, strlen("SET SESSION")))
+		||
+		(!strncasecmp("SET wait_timeout", query_no_space, strlen("SET wait_timeout")))
 	) {
-		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		uint16_t status=2; // autocommit
+		if (sqlite3_get_autocommit(db)==0) {
+			status = 3; // autocommit + transaction
+		}
+		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
 		run_query=false;
 		goto __run_query;
+	}
+
+	if (query_no_space_length==17) {
+		if (!strncasecmp((char *)"START TRANSACTION", query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			query = l_strdup((char *)"BEGIN IMMEDIATE");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+	}
+
+	if (query_no_space_length==5) {
+		if (!strncasecmp((char *)"BEGIN", query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			query = l_strdup((char *)"BEGIN IMMEDIATE");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
 	}
 
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
@@ -586,7 +622,12 @@ __run_query:
 			}
 		}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		bool in_trans = false;
+		if (sqlite3_get_autocommit(db)==0) {
+			in_trans = true;
+		}
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans);
 		delete resultset;
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
@@ -595,8 +636,11 @@ __run_query:
 
 
 SQLite3_Session::SQLite3_Session() {
-	sessdb = new SQLite3DB();
-    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
+	sessdb=new SQLite3DB();
+    sessdb->open(GloVars.sqlite3serverdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sessdb->execute((char *)"PRAGMA journal_mode=WAL");
+	sessdb->execute((char *)"PRAGMA journal_size_limit=67108864");
+	sessdb->execute((char *)"PRAGMA synchronous=0");
 }
 
 SQLite3_Session::~SQLite3_Session() {
@@ -877,8 +921,11 @@ SQLite3_Server::SQLite3_Server() {
 	//Initialize locker
 	pthread_rwlock_init(&rwlock,NULL);
 
-	sessdb = new SQLite3DB();
-    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sessdb=new SQLite3DB();
+	sessdb->open(GloVars.sqlite3serverdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sessdb->execute((char *)"PRAGMA journal_mode=WAL");
+	sessdb->execute((char *)"PRAGMA journal_size_limit=67108864");
+	sessdb->execute((char *)"PRAGMA synchronous=0");
 
 	variables.read_only=false;
 
@@ -1215,11 +1262,11 @@ bool SQLite3_Server::set_variable(char *name, char *value) {  // this is the pub
 	return false;
 }
 
-void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
+void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows, uint16_t status) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
-	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg);
+	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,status,0,msg);
 	myds->DSS=STATE_SLEEP;
 }
 
