@@ -15,6 +15,10 @@
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
 
+
+#include "libinjection.h"
+#include "libinjection_sqli.h"
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
@@ -3304,6 +3308,23 @@ __get_pkts_from_client:
 									}
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
+									if (mirror==false) {
+										if (mysql_thread___automatic_detect_sqli) {
+											struct libinjection_sqli_state state;
+											int issqli;
+											const char * input = (char *)CurrentQuery.QueryPointer;
+											size_t slen = CurrentQuery.QueryLength;
+											libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
+											issqli = libinjection_is_sqli(&state);
+											if (issqli) {
+												char * username = client_myds->myconn->userinfo->username;
+												char * client_address = client_myds->addr.addr;
+												proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s\n", state.fingerprint, username, client_address);
+												handler_ret = -1;
+												return handler_ret;
+											}
+										}
+									}
 									if (rc_break==true) {
 										if (mirror==false) {
 											break;

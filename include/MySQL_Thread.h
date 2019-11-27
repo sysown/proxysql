@@ -331,6 +331,7 @@ class MySQL_Threads_Handler
 		bool autocommit_false_is_transaction;
 		bool verbose_query_error;
 		int max_allowed_packet;
+		bool automatic_detect_sqli;
 		bool firewall_whitelist_enabled;
 		bool use_tcp_keepalive;
 		int tcp_keepalive_time;
