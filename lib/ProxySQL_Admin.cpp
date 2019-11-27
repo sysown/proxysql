@@ -6,6 +6,17 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+#include "ProxySQL_HTTP_Server.hpp" // HTTP server
+#include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
+#include "MySQL_PreparedStatement.h"
+#include "ProxySQL_Cluster.hpp"
+#include "ProxySQL_Statistics.hpp"
+#include "MySQL_Logger.hpp"
+#include "SQLite3_Server.h"
+
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -107,6 +118,14 @@ void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
 	}
 }
 
+static int int_cmp(const void *a, const void *b) {
+	const unsigned long long *ia = (const unsigned long long *)a;
+	const unsigned long long *ib = (const unsigned long long *)b;
+	if (*ia < *ib) return -1;
+	if (*ia > *ib) return 1;
+	return 0;
+}
+
 struct cpu_timer
 {
 	cpu_timer() {
@@ -189,6 +208,9 @@ pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+pthread_mutex_t test_mysql_firewall_whitelist_mutex = PTHREAD_MUTEX_INITIALIZER;
+std::unordered_map<std::string, void *> map_test_mysql_firewall_whitelist_rules;
+char rand_del[6];
 
 static int http_handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr) {
 	return GloAdmin->AdminHTTPServer->handler(cls, connection, url, method, version, upload_data, upload_data_size, ptr);
@@ -304,6 +326,19 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_SCHEDULER_V1_2_2b "CREATE TABLE scheduler (id INTEGER NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY(id))" 
 
 #define ADMIN_SQLITE_TABLE_SCHEDULER_V1_2_2c "CREATE TABLE scheduler (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '')"
+
+
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS_v209 "CREATE TABLE mysql_firewall_whitelist_users (active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , mode VARCHAR CHECK (mode IN ('OFF','DETECTING','PROTECTING')) NOT NULL DEFAULT ('OFF') , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address) )"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS_v209
+
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES_v209 "CREATE TABLE mysql_firewall_whitelist_rules (active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , digest VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address, schemaname, flagIN, digest) )"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES_v209
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_USERS "CREATE TABLE runtime_mysql_firewall_whitelist_users (active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , mode VARCHAR CHECK (mode IN ('OFF','DETECTING','PROTECTING')) NOT NULL DEFAULT ('OFF') , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address) )"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_RULES "CREATE TABLE runtime_mysql_firewall_whitelist_rules (active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , digest VARCHAR NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, client_address, schemaname, flagIN, digest) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , gtid_port INT CHECK (gtid_port <> port AND gtid_port >= 0 AND gtid_port <= 65535) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
@@ -607,6 +642,7 @@ bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
 		mysql_thr->refresh_variables();
 	}
 	delete mysql_thr;
+	return true;
 }
 
 int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg) {
@@ -626,7 +662,7 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	MySQL_Connection *myconn=new MySQL_Connection();
 	sess->client_myds->attach_connection(myconn);
 	myconn->set_is_client(); // this is used for prepared statements
-	unsigned long long cur = monotonic_time();
+	//unsigned long long cur = monotonic_time();
 	SQP_par_t qp;
 	qp.first_comment=NULL;
 	qp.query_prefix=NULL;
@@ -651,9 +687,11 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 			qp.digest=SpookyHash::Hash64(qp.digest_text, digest_text_length, 0);
 			for (int k=0; k<10; k++) {
 				//sprintf(username_buf,"user_%d",k%10);
-				int _k = fastrand()%20;
+				int _a = fastrand();
+				int _k = _a%20;
+				int _j = _a%7;
 				for (int _i=0 ; _i<_k ; _i++) {
-					username_buf[10+_i]='0';
+					username_buf[10+_i]='0' + (_j+_i)%10;
 				}
 				username_buf[10+_k]='\0';
 				for (int l=0; l<10; l++) {
@@ -662,9 +700,11 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 					//} else {
 					//	sprintf(schemaname_buf,"shard_%d",l%10);
 					//}
-					int _k = fastrand()%30;
+					int _a = fastrand();
+					int _k = _a%30;
+					int _j = _a%11;
 					for (int _i=0 ; _i<_k ; _i++) {
-						schemaname_buf[11+_i]='0';
+						schemaname_buf[11+_i]='0' + (_j+_i)%10;
 					}
 					schemaname_buf[11+_k]='\0';
 					ui.set(username_buf, NULL, schemaname_buf, NULL);
@@ -2088,6 +2128,106 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	}
 
+	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MYSQL FIREWALL ", query_no_space, 20)) || (!strncasecmp("LOAD MYSQL FIREWALL ", query_no_space, 20))) ) {
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO MEMORY") && !strncasecmp("LOAD MYSQL FIREWALL TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO MEM") && !strncasecmp("LOAD MYSQL FIREWALL TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM DISK") && !strncasecmp("LOAD MYSQL FIREWALL FROM DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_mysql_firewall__from_disk_to_memory();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql firewall to MEMORY\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM CONFIG") && !strncasecmp("LOAD MYSQL FIREWALL FROM CONFIG",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			if (GloVars.configfile_open) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
+				if (GloVars.confFile->OpenFile(NULL)==true) {
+					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+					int rows=0;
+					// FIXME: not implemented yet
+					//rows=SPA->Read_MySQL_Firewall_from_configfile();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql firewall from CONFIG\n");
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
+					GloVars.confFile->CloseFile();
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
+					char *s=(char *)"Unable to open or parse config file %s";
+					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
+					sprintf(m,s,GloVars.config_file);
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
+					free(m);
+				}
+			} else {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
+			}
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM MEMORY") && !strncasecmp("SAVE MYSQL FIREWALL FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM MEM") && !strncasecmp("SAVE MYSQL FIREWALL FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO DISK") && !strncasecmp("SAVE MYSQL FIREWALL TO DISK",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->flush_mysql_firewall__from_memory_to_disk();
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql firewall to DISK\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM MEMORY") && !strncasecmp("LOAD MYSQL FIREWALL FROM MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM MEM") && !strncasecmp("LOAD MYSQL FIREWALL FROM MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO RUNTIME") && !strncasecmp("LOAD MYSQL FIREWALL TO RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO RUN") && !strncasecmp("LOAD MYSQL FIREWALL TO RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			char *err=SPA->load_mysql_firewall_to_runtime();
+			if (err==NULL) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql firewall to RUNTIME\n");
+				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			} else {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, err);
+			}
+			return false;
+		}
+
+		if (
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO MEMORY") && !strncasecmp("SAVE MYSQL FIREWALL TO MEMORY",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO MEM") && !strncasecmp("SAVE MYSQL FIREWALL TO MEM",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM RUNTIME") && !strncasecmp("SAVE MYSQL FIREWALL FROM RUNTIME",query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM RUN") && !strncasecmp("SAVE MYSQL FIREWALL FROM RUN",query_no_space, query_no_space_length))
+		) {
+			proxy_info("Received %s command\n", query_no_space);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->save_mysql_firewall_from_runtime(false);
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql firewall from RUNTIME\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
+		}
+	}
+
 	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL QUERY RULES ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL QUERY RULES ", query_no_space, 23))) ) {
 
 		if (
@@ -2319,6 +2459,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool runtime_scheduler=false;
 	bool runtime_mysql_users=false;
+	bool runtime_mysql_firewall=false;
 	bool runtime_mysql_ldap_mapping=false;
 	bool runtime_mysql_servers=false;
 	bool runtime_mysql_query_rules=false;
@@ -2427,6 +2568,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
 			) {
 				runtime_mysql_servers=true; refresh=true;
+			}
+			if (
+				strstr(query_no_space,"runtime_mysql_firewall_whitelist_rules")
+				||
+				strstr(query_no_space,"runtime_mysql_firewall_whitelist_users")
+			) {
+				runtime_mysql_firewall=true; refresh=true;
 			}
 			if (strstr(query_no_space,"runtime_mysql_users")) {
 				runtime_mysql_users=true; refresh=true;
@@ -2551,6 +2699,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (runtime_mysql_users) {
 				save_mysql_users_runtime_to_database(true);
+			}
+			if (runtime_mysql_firewall) {
+				save_mysql_firewall_from_runtime(true);
 			}
 			if (runtime_mysql_ldap_mapping) {
 				save_mysql_ldap_mapping_runtime_to_database(true);
@@ -2846,7 +2997,6 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 				};
 				size_t l=sizeof(truncate_digest_table_queries)/sizeof(char *);
 				unsigned int i;
-				char **ret=(char **)malloc(sizeof(char *)*l);
 				for (i=0;i<l;i++) {
 					if (truncate_digest_table == false) {
 						if (strcasecmp(truncate_digest_table_queries[i], query_no_space)==0) {
@@ -2982,7 +3132,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							int ret1, ret2;
 							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1);
 							if (bret) {
-								SPA->send_MySQL_OK(&sess->client_myds->myprot, "Verified all rules in mysql_query_rules_fast_routing", ret1);
+								SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Verified all rules in mysql_query_rules_fast_routing", ret1);
 							} else {
 								if (ret1==-1) {
 									SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Severe error in verifying rules in mysql_query_rules_fast_routing");
@@ -3008,6 +3158,39 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 						run_query=false;
 						free(msg);
+						break;
+					case 31:
+						{
+							if (test_arg1==0) {
+								test_arg1=1;
+							}
+							if (test_arg1 > 4) {
+								test_arg1=1;
+							}
+/*
+							if (test_arg1 == 2 || test_arg1 == 3) {
+								if (test_arg2 == 0) {
+									test_arg2 = 1;
+								}
+							}
+*/
+							int ret1;
+							int ret2;
+							SPA->ProxySQL_Test___Load_MySQL_Whitelist(&ret1, &ret2, test_arg1, test_arg2);
+							if (test_arg1==1 || test_arg1==4) {
+								SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Processed all rows from firewall whitelist", ret1);
+							} else if (test_arg1==2 || test_arg1==3) {
+								if (ret1 == ret2) {
+									SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Verified all rows from firewall whitelist", ret1);
+								} else {
+									msg = (char *)malloc(256);
+									sprintf(msg,"Error verifying firewall whitelist. Found %d entries out of %d", ret2, ret1);
+									SPA->send_MySQL_ERR(&sess->client_myds->myprot, msg);
+									free(msg);
+								}
+							}
+							run_query=false;
+						}
 						break;
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
@@ -4031,7 +4214,7 @@ static void * admin_main_loop(void *arg)
 	while (glovars.shutdown==0 && *shutdown==0)
 	{
 		//int *client;
-		int client_t;
+		//int client_t;
 		//socklen_t addr_size = sizeof(addr);
 		pthread_t child;
 		size_t stacks;
@@ -4288,6 +4471,13 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	match_regexes.re[1]=(RE2 *)new RE2("^SELECT\\s+@@[0-9A-Za-z_-]+\\s*", *opt2);
 	match_regexes.re[2]=(RE2 *)new RE2("SHOW\\s+VARIABLES\\s+WHERE", *opt2);
 	match_regexes.re[3]=(RE2 *)new RE2("SHOW\\s+VARIABLES\\s+LIKE", *opt2);
+	static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+	rand_del[0] = '-';
+	for (int i = 1; i < 4; i++) {
+		rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+	}
+	rand_del[4] = '-';
+	rand_del[5] = 0;
 };
 
 void ProxySQL_Admin::wrlock() {
@@ -4426,6 +4616,10 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"runtime_scheduler", ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER);
+	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_USERS);
+	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_RULES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -4449,6 +4643,8 @@ bool ProxySQL_Admin::init() {
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_config,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
+	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
+	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 #endif /* DEBUG */
@@ -5121,6 +5317,132 @@ void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB 
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
+bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, int cmd, int loops) {
+	// cmd == 1 : populate the structure with a global mutex
+	// cmd == 2 : perform lookup with a global mutex
+	// cmd == 3 : perform lookup with a mutex for each call
+	// cmd == 4 : populate the structure with a global mutex , but without cleaning up
+	// all accept an extra argument that is the number of loops
+	char *q = (char *)"SELECT * FROM mysql_firewall_whitelist_rules ORDER BY RANDOM()";
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	bool ret = true;
+	int _ret1 = 0;
+	// cleanup
+	if (cmd == 1 || cmd == 2 || cmd == 4) {
+		pthread_mutex_lock(&test_mysql_firewall_whitelist_mutex);
+	}
+	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+		return false;
+	} else {
+		*ret1 = resultset->rows_count;
+		int loop = 0;
+		//if (cmd == 1) {
+		//	loop = loops -1;
+		//}
+		for ( ; loop < loops ; loop++) {
+			_ret1 = 0;
+			if (cmd == 1) {
+				for (std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist_rules.begin() ; it != map_test_mysql_firewall_whitelist_rules.end(); ++it) {
+					PtrArray * myptrarray = (PtrArray *)it->second;
+					delete myptrarray;
+				}
+				map_test_mysql_firewall_whitelist_rules.clear();
+			}
+			if (cmd == 4) {
+				for (std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist_rules.begin() ; it != map_test_mysql_firewall_whitelist_rules.end(); ++it) {
+					PtrArray * myptrarray = (PtrArray *)it->second;
+					myptrarray->reset();
+				}
+			}
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				int active = atoi(r->fields[0]);
+				if (active == 0) {
+					continue;
+				}
+				char * username = r->fields[1];
+				char * client_address = r->fields[2];
+				char * schemaname = r->fields[3];
+				char * flagIN = r->fields[4];
+				char * digest_hex = r->fields[5];
+				unsigned long long digest_num = strtoull(digest_hex,NULL,0);
+				string s = username;
+				s += rand_del;
+				s += client_address;
+				s += rand_del;
+				s += schemaname;
+				s += rand_del;
+				s += flagIN;
+				std::unordered_map<std::string, void *>:: iterator it2;
+				if (cmd == 1 || cmd == 4) {
+					it2 = map_test_mysql_firewall_whitelist_rules.find(s);
+					if (it2 != map_test_mysql_firewall_whitelist_rules.end()) {
+						PtrArray * myptrarray = (PtrArray *)it2->second;
+						myptrarray->add((void *)digest_num);
+					} else {
+						PtrArray * myptrarray = new PtrArray();
+						myptrarray->add((void *)digest_num);
+						map_test_mysql_firewall_whitelist_rules[s] = (void *)myptrarray;
+						//proxy_info("Inserted key: %s\n" , s.c_str());
+					}
+				} else if (cmd == 2 || cmd == 3) {
+					if (cmd == 3) {
+						pthread_mutex_lock(&test_mysql_firewall_whitelist_mutex);
+					}
+					it2 = map_test_mysql_firewall_whitelist_rules.find(s);
+					if (it2 != map_test_mysql_firewall_whitelist_rules.end()) {
+						PtrArray * myptrarray = (PtrArray *)it2->second;
+						void * r = bsearch(&digest_num, myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+						if (r) _ret1++;
+					} else {
+						//proxy_error("Not found: %s %s %s %s\n", username, client_address, schemaname, flagIN);
+						proxy_error("Not found: %s\n", s.c_str());
+					}
+					if (cmd == 3) {
+						pthread_mutex_unlock(&test_mysql_firewall_whitelist_mutex);
+					}
+				}
+			}
+			if (cmd == 1 || cmd == 4) {
+				std::unordered_map<std::string, void *>::iterator it = map_test_mysql_firewall_whitelist_rules.begin();
+				while (it != map_test_mysql_firewall_whitelist_rules.end()) {
+					PtrArray * myptrarray = (PtrArray *)it->second;
+					switch (cmd) {
+						case 1:
+							qsort(myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+							it++;
+							break;
+						case 4:
+							if (myptrarray->len) {
+								qsort(myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+								it++;
+							} else {
+								delete myptrarray;
+								it = map_test_mysql_firewall_whitelist_rules.erase(it);
+							}
+							break;
+						default:
+							break;
+					}
+				}
+			}
+		}
+	}
+	if (cmd == 2 || cmd == 3) {
+		*ret2 = _ret1;
+	}
+	if (resultset) delete resultset;
+	if (cmd == 1 || cmd == 2 || cmd == 4) {
+		pthread_mutex_unlock(&test_mysql_firewall_whitelist_mutex);
+	}
+	return ret;
+}
+
 bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt) {
 	char *q = (char *)"SELECT username, schemaname, flagIN, destination_hostgroup FROM mysql_query_rules_fast_routing ORDER BY RANDOM()";
 	char *error=NULL;
@@ -5156,6 +5478,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 					SQLite3_row *r=*it;
 					int dest_HG = atoi(r->fields[3]);
 					int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+					assert(dest_HG==ret_HG);
 				}
 			}
 		}
@@ -5165,7 +5488,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 }
 
 unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt) {
-	char *a = "INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
+	char *a = (char *)"INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
 	int rc;
 	sqlite3_stmt *statement1=NULL;
 	rc=admindb->prepare_v2(a, &statement1);
@@ -5178,7 +5501,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	strcpy(username_buf,"user_name_");
 	strcpy(schemaname_buf,"shard_name_");
 	int _k;
-	for (int i=0; i<cnt; i++) {
+	for (unsigned int i=0; i<cnt; i++) {
 		_k = fastrand()%20 + 1;
 		for (int _i=0 ; _i<_k ; _i++) {
 			int b = fastrand()%10;
@@ -6221,7 +6544,7 @@ void ProxySQL_Admin::stats___memory_metrics() {
 	}
 	{
 		if (GloQPro) {
-			unsigned long mu = GloQPro->get_query_digests_total_size();
+			unsigned long long mu = GloQPro->get_query_digests_total_size();
 			vn=(char *)"query_digest_memory";
 			sprintf(bu,"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
@@ -6235,6 +6558,37 @@ void ProxySQL_Admin::stats___memory_metrics() {
 				mu += mu * GloMTH->num_threads;
 			}
 			vn=(char *)"mysql_query_rules_memory";
+			sprintf(bu,"%llu",mu);
+			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+		}
+		if (GloQPro) {
+			unsigned long long mu = 0;
+			mu = GloQPro->get_mysql_firewall_memory_users_table();
+			vn=(char *)"mysql_firewall_users_table";
+			sprintf(bu,"%llu",mu);
+			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+			mu = GloQPro->get_mysql_firewall_memory_users_config();
+			vn=(char *)"mysql_firewall_users_config";
+			sprintf(bu,"%llu",mu);
+			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+			mu = GloQPro->get_mysql_firewall_memory_rules_table();
+			vn=(char *)"mysql_firewall_rules_table";
+			sprintf(bu,"%llu",mu);
+			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+			mu = GloQPro->get_mysql_firewall_memory_rules_config();
+			vn=(char *)"mysql_firewall_rules_config";
 			sprintf(bu,"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query,a,vn,bu);
@@ -7169,6 +7523,139 @@ void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	delete resultset;
 }
 
+void ProxySQL_Admin::save_mysql_firewall_whitelist_users_from_runtime(bool _runtime, SQLite3_result *resultset) {
+	// NOTE: this function doesn't delete resultset. The caller must do it
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement1=NULL;
+		sqlite3_stmt *statement32=NULL;
+		char *query1=NULL;
+		char *query32=NULL;
+		if (_runtime) {
+			query1=(char *)"INSERT INTO runtime_mysql_firewall_whitelist_users VALUES (?1, ?2, ?3, ?4, ?5)";
+			query32=(char *)"INSERT INTO runtime_mysql_firewall_whitelist_users VALUES (?1, ?2, ?3, ?4, ?5), (?6, ?7, ?8, ?9, ?10), (?11, ?12, ?13, ?14, ?15), (?16, ?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24, ?25), (?26, ?27, ?28, ?29, ?30), (?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40), (?41, ?42, ?43, ?44, ?45), (?46, ?47, ?48, ?49, ?50), (?51, ?52, ?53, ?54, ?55), (?56, ?57, ?58, ?59, ?60), (?61, ?62, ?63, ?64, ?65), (?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75), (?76, ?77, ?78, ?79, ?80), (?81, ?82, ?83, ?84, ?85), (?86, ?87, ?88, ?89, ?90), (?91, ?92, ?93, ?94, ?95), (?96, ?97, ?98, ?99, ?100), (?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115), (?116, ?117, ?118, ?119, ?120), (?121, ?122, ?123, ?124, ?125), (?126, ?127, ?128, ?129, ?130), (?131, ?132, ?133, ?134, ?135), (?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145), (?146, ?147, ?148, ?149, ?150), (?151, ?152, ?153, ?154, ?155), (?156, ?157, ?158, ?159, ?160)";
+		} else {
+			query1=(char *)"INSERT INTO mysql_firewall_whitelist_users VALUES (?1, ?2, ?3, ?4, ?5)";
+			query32=(char *)"INSERT INTO mysql_firewall_whitelist_users VALUES (?1, ?2, ?3, ?4, ?5), (?6, ?7, ?8, ?9, ?10), (?11, ?12, ?13, ?14, ?15), (?16, ?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24, ?25), (?26, ?27, ?28, ?29, ?30), (?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40), (?41, ?42, ?43, ?44, ?45), (?46, ?47, ?48, ?49, ?50), (?51, ?52, ?53, ?54, ?55), (?56, ?57, ?58, ?59, ?60), (?61, ?62, ?63, ?64, ?65), (?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75), (?76, ?77, ?78, ?79, ?80), (?81, ?82, ?83, ?84, ?85), (?86, ?87, ?88, ?89, ?90), (?91, ?92, ?93, ?94, ?95), (?96, ?97, ?98, ?99, ?100), (?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110), (?111, ?112, ?113, ?114, ?115), (?116, ?117, ?118, ?119, ?120), (?121, ?122, ?123, ?124, ?125), (?126, ?127, ?128, ?129, ?130), (?131, ?132, ?133, ?134, ?135), (?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145), (?146, ?147, ?148, ?149, ?150), (?151, ?152, ?153, ?154, ?155), (?156, ?157, ?158, ?159, ?160)";
+		}
+		rc = admindb->prepare_v2(query1, &statement1);
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = admindb->prepare_v2(query32, &statement32);
+		ASSERT_SQLITE_OK(rc, admindb);
+		int row_idx=0;
+		int max_bulk_row_idx=resultset->rows_count/32;
+		max_bulk_row_idx=max_bulk_row_idx*32;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r1=*it;
+			int idx=row_idx%32;
+			if (row_idx<max_bulk_row_idx) { // bulk
+				rc=sqlite3_bind_int64(statement32, (idx*5)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*5)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*5)+3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*5)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*5)+5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				if (idx==31) {
+					SAFE_SQLITE3_STEP2(statement32);
+					rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, admindb);
+					rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, admindb);
+				}
+			} else { // single row
+				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 5, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				SAFE_SQLITE3_STEP2(statement1);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
+			}
+			row_idx++;
+		}
+		sqlite3_finalize(statement1);
+		sqlite3_finalize(statement32);
+	}
+}
+
+void ProxySQL_Admin::save_mysql_firewall_whitelist_rules_from_runtime(bool _runtime, SQLite3_result *resultset) {
+	// NOTE: this function doesn't delete resultset. The caller must do it
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement1=NULL;
+		sqlite3_stmt *statement32=NULL;
+		char *query1=NULL;
+		char *query32=NULL;
+		if (_runtime) {
+			query1=(char *)"INSERT INTO runtime_mysql_firewall_whitelist_rules VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+			query32=(char *)"INSERT INTO runtime_mysql_firewall_whitelist_rules VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7), (?8, ?9, ?10, ?11, ?12, ?13, ?14), (?15, ?16, ?17, ?18, ?19, ?20, ?21), (?22, ?23, ?24, ?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40, ?41, ?42), (?43, ?44, ?45, ?46, ?47, ?48, ?49), (?50, ?51, ?52, ?53, ?54, ?55, ?56), (?57, ?58, ?59, ?60, ?61, ?62, ?63), (?64, ?65, ?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75, ?76, ?77), (?78, ?79, ?80, ?81, ?82, ?83, ?84), (?85, ?86, ?87, ?88, ?89, ?90, ?91), (?92, ?93, ?94, ?95, ?96, ?97, ?98), (?99, ?100, ?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110, ?111, ?112), (?113, ?114, ?115, ?116, ?117, ?118, ?119), (?120, ?121, ?122, ?123, ?124, ?125, ?126), (?127, ?128, ?129, ?130, ?131, ?132, ?133), (?134, ?135, ?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145, ?146, ?147), (?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161), (?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175), (?176, ?177, ?178, ?179, ?180, ?181, ?182), (?183, ?184, ?185, ?186, ?187, ?188, ?189), (?190, ?191, ?192, ?193, ?194, ?195, ?196), (?197, ?198, ?199, ?200, ?201, ?202, ?203), (?204, ?205, ?206, ?207, ?208, ?209, ?210), (?211, ?212, ?213, ?214, ?215, ?216, ?217), (?218, ?219, ?220, ?221, ?222, ?223, ?224)";
+		} else {
+			query1=(char *)"INSERT INTO mysql_firewall_whitelist_rules VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+			query32=(char *)"INSERT INTO mysql_firewall_whitelist_rules VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7), (?8, ?9, ?10, ?11, ?12, ?13, ?14), (?15, ?16, ?17, ?18, ?19, ?20, ?21), (?22, ?23, ?24, ?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40, ?41, ?42), (?43, ?44, ?45, ?46, ?47, ?48, ?49), (?50, ?51, ?52, ?53, ?54, ?55, ?56), (?57, ?58, ?59, ?60, ?61, ?62, ?63), (?64, ?65, ?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75, ?76, ?77), (?78, ?79, ?80, ?81, ?82, ?83, ?84), (?85, ?86, ?87, ?88, ?89, ?90, ?91), (?92, ?93, ?94, ?95, ?96, ?97, ?98), (?99, ?100, ?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110, ?111, ?112), (?113, ?114, ?115, ?116, ?117, ?118, ?119), (?120, ?121, ?122, ?123, ?124, ?125, ?126), (?127, ?128, ?129, ?130, ?131, ?132, ?133), (?134, ?135, ?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145, ?146, ?147), (?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161), (?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175), (?176, ?177, ?178, ?179, ?180, ?181, ?182), (?183, ?184, ?185, ?186, ?187, ?188, ?189), (?190, ?191, ?192, ?193, ?194, ?195, ?196), (?197, ?198, ?199, ?200, ?201, ?202, ?203), (?204, ?205, ?206, ?207, ?208, ?209, ?210), (?211, ?212, ?213, ?214, ?215, ?216, ?217), (?218, ?219, ?220, ?221, ?222, ?223, ?224)";
+		}
+		rc = admindb->prepare_v2(query1, &statement1);
+		ASSERT_SQLITE_OK(rc, admindb);
+		rc = admindb->prepare_v2(query32, &statement32);
+		ASSERT_SQLITE_OK(rc, admindb);
+		int row_idx=0;
+		int max_bulk_row_idx=resultset->rows_count/32;
+		max_bulk_row_idx=max_bulk_row_idx*32;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r1=*it;
+			int idx=row_idx%32;
+			if (row_idx<max_bulk_row_idx) { // bulk
+				rc=sqlite3_bind_int64(statement32, (idx*7)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*7)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*7)+3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*7)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement32, (idx*7)+5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*7)+6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement32, (idx*7)+7, r1->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				if (idx==31) {
+					SAFE_SQLITE3_STEP2(statement32);
+					rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, admindb);
+					rc=sqlite3_reset(statement32); ASSERT_SQLITE_OK(rc, admindb);
+				}
+			} else { // single row
+				rc=sqlite3_bind_int64(statement1, 1, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 3, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_int64(statement1, 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 6, r1->fields[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_bind_text(statement1, 7, r1->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				SAFE_SQLITE3_STEP2(statement1);
+				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, admindb);
+				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, admindb);
+			}
+			row_idx++;
+		}
+		sqlite3_finalize(statement1);
+		sqlite3_finalize(statement32);
+	}
+}
+
+void ProxySQL_Admin::save_mysql_firewall_from_runtime(bool _runtime) {
+	if (_runtime) {
+		admindb->execute("DELETE FROM runtime_mysql_firewall_whitelist_rules");
+		admindb->execute("DELETE FROM runtime_mysql_firewall_whitelist_users");
+	} else {
+		admindb->execute("DELETE FROM mysql_firewall_whitelist_rules");
+		admindb->execute("DELETE FROM mysql_firewall_whitelist_users");
+	}
+	SQLite3_result * resultset_rules = NULL;
+	SQLite3_result * resultset_users = NULL;
+
+	GloQPro->get_current_mysql_firewall_whitelist(&resultset_users, &resultset_rules);
+
+	if (resultset_users) {
+		save_mysql_firewall_whitelist_users_from_runtime(_runtime, resultset_users);
+		delete resultset_users;
+	}
+	if (resultset_rules) {
+		save_mysql_firewall_whitelist_rules_from_runtime(_runtime, resultset_rules);
+		delete resultset_rules;
+	}
+}
+
 void ProxySQL_Admin::flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
 	if (onlyifempty) {
@@ -7293,6 +7780,8 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR IGNORE INTO main.scheduler SELECT * FROM disk.scheduler");
 	admindb->execute("INSERT OR IGNORE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
@@ -7320,6 +7809,8 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
 	admindb->execute("INSERT OR REPLACE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
@@ -7346,6 +7837,8 @@ void ProxySQL_Admin::__delete_disktable() {
 	admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("DELETE FROM disk.mysql_query_rules");
 	admindb->execute("DELETE FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("DELETE FROM disk.global_variables");
 	admindb->execute("DELETE FROM disk.scheduler");
 	admindb->execute("DELETE FROM disk.proxysql_servers");
@@ -7371,6 +7864,8 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_users SELECT * FROM main.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_rules SELECT * FROM main.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO disk.scheduler SELECT * FROM main.scheduler");
 	admindb->execute("INSERT OR REPLACE INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
@@ -7482,6 +7977,28 @@ void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+void ProxySQL_Admin::flush_mysql_firewall__from_disk_to_memory() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM main.mysql_firewall_whitelist_rules");
+	admindb->execute("INSERT INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
+	admindb->execute("DELETE FROM main.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_mysql_firewall__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_rules");
+	admindb->execute("INSERT INTO disk.mysql_firewall_whitelist_rules SELECT * FROM main.mysql_firewall_whitelist_rules");
+	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_users");
+	admindb->execute("INSERT INTO disk.mysql_firewall_whitelist_users SELECT * FROM main.mysql_firewall_whitelist_users");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
 void ProxySQL_Admin::flush_mysql_query_rules__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -7540,6 +8057,10 @@ void ProxySQL_Admin::init_proxysql_servers() {
 
 void ProxySQL_Admin::init_mysql_query_rules() {
 	load_mysql_query_rules_to_runtime();
+}
+
+void ProxySQL_Admin::init_mysql_firewall() {
+	load_mysql_firewall_to_runtime();
 }
 
 void ProxySQL_Admin::add_admin_users() {
@@ -8882,6 +9403,42 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	}
 }
 
+
+char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {
+//	NOTE: firewall is currently NOT part of Cluster
+	char *error_users=NULL;
+	int cols_users=0;
+	int affected_rows_users=0;
+	char *error_rules=NULL;
+	int cols_rules=0;
+	int affected_rows_rules=0;
+	bool success = false;
+	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
+	char *query_users = (char *)"SELECT * FROM mysql_firewall_whitelist_users";
+	char *query_rules = (char *)"SELECT * FROM mysql_firewall_whitelist_rules";
+	SQLite3_result *resultset_users = NULL;
+	SQLite3_result *resultset_rules = NULL;
+	admindb->execute_statement(query_users, &error_users , &cols_users , &affected_rows_users , &resultset_users);
+	admindb->execute_statement(query_rules, &error_rules , &cols_rules , &affected_rows_rules , &resultset_rules);
+	if (error_users) {
+		proxy_error("Error on %s : %s\n", query_users, error_users);
+	} else if (error_rules) {
+		proxy_error("Error on %s : %s\n", query_rules, error_rules);
+	} else {
+		success = true;
+		GloQPro->load_mysql_firewall(resultset_users, resultset_rules);
+	}
+	if (success == false) {
+		// clean up
+		if (resultset_users) {
+			free(resultset_users);
+		}
+		if (resultset_rules) {
+			free(resultset_rules);
+		}
+	}
+	return NULL;
+}
 
 char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	char *error=NULL;

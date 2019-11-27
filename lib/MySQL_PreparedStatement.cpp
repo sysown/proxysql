@@ -3,6 +3,8 @@
 
 #include "SpookyV2.h"
 
+#include "MySQL_PreparedStatement.h"
+
 //extern MySQL_STMT_Manager *GloMyStmt;
 //static uint32_t add_prepared_statement_calls = 0;
 //static uint32_t find_prepared_statement_by_hash_calls = 0;

@@ -1,5 +1,10 @@
 #include "proxysql.h"
-#include "cpp.h"
+//#include "cpp.h"
+#undef swap
+#undef min
+#undef max
+
+#include "fileutils.hpp"
 
 #include <iostream>
 

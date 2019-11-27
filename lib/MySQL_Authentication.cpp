@@ -2,6 +2,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_atomic.h"
+
+#include "MySQL_Authentication.hpp"
+
 #include "SpookyV2.h"
 
 MySQL_Authentication::MySQL_Authentication() {

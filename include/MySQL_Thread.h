@@ -31,12 +31,6 @@
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
 #define MYSQL_DEFAULT_MAX_JOIN_SIZE	"18446744073709551615"
 
-static unsigned int near_pow_2 (unsigned int n) {
-  unsigned int i = 1;
-  while (i < n) i <<= 1;
-  return i ? i : n;
-}
-
 #ifdef IDLE_THREADS
 typedef struct __attribute__((aligned(64))) _conn_exchange_t {
 	pthread_mutex_t mutex_idles;
@@ -58,119 +52,28 @@ typedef struct _kill_queue_t {
 } kill_queue_t;
 
 class ProxySQL_Poll {
+	private:
+	void shrink();
+	void expand(unsigned int more);
 
-  private:
-  void shrink() {
-    unsigned int new_size=near_pow_2(len+1);
-    fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-    myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-		last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
-		last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
-    size=new_size;
-  };
-  void expand(unsigned int more) {
-    if ( (len+more) > size ) {
-      unsigned int new_size=near_pow_2(len+more);
-      fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-      myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-			last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
-			last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
-      size=new_size;
-    }
-  };
-
-  public:
+	public:
 	unsigned int poll_timeout;
 	unsigned long loops;
 	StatCounters *loop_counters;
-  unsigned int len;
-  unsigned int size;
-  struct pollfd *fds;
-  MySQL_Data_Stream **myds;
+	unsigned int len;
+	unsigned int size;
+	struct pollfd *fds;
+	MySQL_Data_Stream **myds;
 	unsigned long long *last_recv;
 	unsigned long long *last_sent;
 	volatile int pending_listener_add;
 	volatile int pending_listener_del;
 
-  ProxySQL_Poll() {
-#ifdef PROXYSQL_STATSCOUNTERS_NOLOCK
-		loop_counters=new StatCounters(15,10);
-#else
-		loop_counters=new StatCounters(15,10,false);
-#endif
-		poll_timeout=0;
-		loops=0;
-		len=0;
-		pending_listener_add=0;
-		pending_listener_del=0;
-    size=MIN_POLL_LEN;
-    fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
-    myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
-		last_recv=(unsigned long long *)malloc(size*sizeof(unsigned long long));
-		last_sent=(unsigned long long *)malloc(size*sizeof(unsigned long long));
-  };
-
-  ~ProxySQL_Poll() {
-    unsigned int i;
-    for (i=0;i<len;i++) {
-      if (
-				myds[i] && // fix bug #278 . This should be caused by not initialized datastreams used to ping the backend
-				myds[i]->myds_type==MYDS_LISTENER) {
-        delete myds[i];
-      }
-    }
-    free(myds);
-    free(fds);
-		free(last_recv);
-		free(last_sent);
-		delete loop_counters;
-  };
-
-  void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
-    if (len==size) {
-      expand(1);
-    }
-    myds[len]=_myds;
-    fds[len].fd=_fd;
-    fds[len].events=_events;
-    fds[len].revents=0;
-		if (_myds) {
-			_myds->mypolls=this;
-			_myds->poll_fds_idx=len;  // fix a serious bug
-		}
-    last_recv[len]=monotonic_time();
-    last_sent[len]=sent_time;
-    len++;
-  };
-
-  void remove_index_fast(unsigned int i) {
-		if ((int)i==-1) return;
-		myds[i]->poll_fds_idx=-1; // this prevents further delete
-    if (i != (len-1)) {
-      myds[i]=myds[len-1];
-      fds[i].fd=fds[len-1].fd;
-      fds[i].events=fds[len-1].events;
-      fds[i].revents=fds[len-1].revents;
-			myds[i]->poll_fds_idx=i;  // fix a serious bug
-    	last_recv[i]=last_recv[len-1];
-    	last_sent[i]=last_sent[len-1];
-    }
-    len--;
-    if ( ( len>MIN_POLL_LEN ) && ( size > len*MIN_POLL_DELETE_RATIO ) ) {
-      shrink();
-    }
-  };  
-
-	int find_index(int fd) {
-		unsigned int i;
-		for (i=0; i<len; i++) {
-			if (fds[i].fd==fd) {
-				return i;
-			}
-		}
-		return -1;
-	}
-
+	ProxySQL_Poll();
+	~ProxySQL_Poll();
+	void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time);
+	void remove_index_fast(unsigned int i);
+	int find_index(int fd);
 };
 
 
@@ -428,6 +331,7 @@ class MySQL_Threads_Handler
 		bool autocommit_false_is_transaction;
 		bool verbose_query_error;
 		int max_allowed_packet;
+		bool firewall_whitelist_enabled;
 		bool use_tcp_keepalive;
 		int tcp_keepalive_time;
 		int throttle_connections_per_sec_to_hostgroup;
@@ -471,6 +375,7 @@ class MySQL_Threads_Handler
 		char *default_collation_connection;
 		char *default_net_write_timeout;
 		char *default_max_join_size;
+		char *firewall_whitelist_errormsg;
 #ifdef DEBUG
 		bool session_debug;
 #endif /* DEBUG */

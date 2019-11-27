@@ -5,6 +5,16 @@
 #include "SpookyV2.h"
 #include "set_parser.h"
 
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_Logger.hpp"
+#include "StatCounters.h"
+#include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
+#include "MySQL_Protocol.h"
+#include "SQLite3_Server.h"
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
@@ -78,33 +88,25 @@ bool Session_Regex::match(char *m) {
 	return rc;
 }
 
-/*
-#define KILL_QUERY       1
-#define KILL_CONNECTION  2
 
-class KillArgs {
-	public:
-	char *username;
-	char *password;
-	char *hostname;
-	unsigned int port;
-	unsigned long id;
-	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt) {
-		username=strdup(u);
-		password=strdup(p);
-		hostname=strdup(h);
-		port=P;
-		id=i;
-		kill_type=kt;
-	};
-	~KillArgs() {
-		free(username);
-		free(password);
-		free(hostname);
-	};
-};
-*/
+KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt) {
+	username=strdup(u);
+	password=strdup(p);
+	hostname=strdup(h);
+	port=P;
+	id=i;
+	kill_type=kt;
+	mt=_mt;
+}
+
+KillArgs::~KillArgs() {
+	free(username);
+	free(password);
+	free(hostname);
+}
+
+
+
 void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
@@ -403,17 +405,28 @@ void MySQL_Session::operator delete(void *ptr) {
 }
 
 
+void MySQL_Session::set_status(enum session_status e) {
+	if (e==NONE) {
+		if (mybe) {
+			if (mybe->server_myds) {
+				assert(mybe->server_myds->myconn==0);
+				if (mybe->server_myds->myconn) {
+					assert(mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE);
+				}
+			}
+		}
+	}
+	status=e;
+}
+
+
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	handler_ret = 0;
 	pause_until=0;
 	qpo=new Query_Processor_Output();
 	start_time=0;
-#ifdef PROXYSQL_STATSCOUNTERS_NOLOCK
 	command_counters=new StatCounters(15,10);
-#else
-	command_counters=new StatCounters(15,10,false);
-#endif
 	healthy=1;
 	autocommit=true;
 	autocommit_handled=false;

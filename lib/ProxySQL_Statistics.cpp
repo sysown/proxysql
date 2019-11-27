@@ -4,6 +4,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "ProxySQL_Statistics.hpp"
+
 //#include "thread.h"
 //#include "wqueue.h"
 

@@ -2,6 +2,9 @@
 #include "cpp.h"
 #include "SpookyV2.h"
 
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_Data_Stream.h"
+
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
 
