@@ -11,11 +11,18 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver libinjection
 endif
 .PHONY: default
+
+
+libinjection/libinjection/src/libinjection.a:
+	cd libinjection && rm -rf libinjection-3.10.0 || true
+	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
+	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
+libinjection: libinjection/libinjection/src/libinjection.a
 
 libssl/openssl/libssl.a:
 #	cd libssl && rm -rf openssl-1.1.0h || true
@@ -165,6 +172,7 @@ cleanpart:
 .PHONY: cleanpart
 
 cleanall:
+	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd jemalloc && rm -rf jemalloc-4.3.1 || true

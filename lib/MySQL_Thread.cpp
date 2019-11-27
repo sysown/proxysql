@@ -379,6 +379,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"max_allowed_packet",
 	(char *)"tcp_keepalive_time",
 	(char *)"use_tcp_keepalive",
+	(char *)"automatic_detect_sqli",
 	(char *)"firewall_whitelist_enabled",
 	(char *)"firewall_whitelist_errormsg",
 	(char *)"throttle_connections_per_sec_to_hostgroup",
@@ -532,6 +533,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
 	variables.max_allowed_packet=64*1024*1024;
+	variables.automatic_detect_sqli=false;
 	variables.firewall_whitelist_enabled=false;
 	variables.firewall_whitelist_errormsg = strdup((char *)"Firewall blocked this query");
 	variables.use_tcp_keepalive=false;
@@ -947,6 +949,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"auto_increment_delay_multiplex")) return (int)variables.auto_increment_delay_multiplex;
 			if (!strcmp(name,"autocommit_false_is_transaction")) return (int)variables.autocommit_false_is_transaction;
 			if (!strcmp(name,"autocommit_false_not_reusable")) return (int)variables.autocommit_false_not_reusable;
+			if (!strcmp(name,"automatic_detect_sqli")) return (int)variables.automatic_detect_sqli;
 			break;
 		case 'b':
 			if (!strcmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
@@ -1452,6 +1455,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"firewall_whitelist_enabled")) {
 		sprintf(intbuf,"%d",variables.firewall_whitelist_enabled);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"automatic_detect_sqli")) {
+		sprintf(intbuf,"%d",variables.automatic_detect_sqli);
 		return strdup(intbuf);
 	}
 
@@ -2155,6 +2162,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.firewall_whitelist_enabled=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"automatic_detect_sqli")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.automatic_detect_sqli=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.automatic_detect_sqli=false;
 			return true;
 		}
 		return false;
@@ -4607,6 +4625,7 @@ void MySQL_Thread::refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
 	mysql_thread___max_allowed_packet=GloMTH->get_variable_int((char *)"max_allowed_packet");
+	mysql_thread___automatic_detect_sqli=(bool)GloMTH->get_variable_int((char *)"automatic_detect_sqli");
 	mysql_thread___firewall_whitelist_enabled=(bool)GloMTH->get_variable_int((char *)"firewall_whitelist_enabled");
 	mysql_thread___use_tcp_keepalive=(bool)GloMTH->get_variable_int((char *)"use_tcp_keepalive");
 	mysql_thread___tcp_keepalive_time=GloMTH->get_variable_int((char *)"tcp_keepalive_time");
@@ -4867,6 +4886,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.hostgroup_locked_set_cmds = 0;
 	status_variables.hostgroup_locked_queries = 0;
 	status_variables.aws_aurora_replicas_skipped_during_query = 0;
+	status_variables.automatic_detected_sqli = 0;
 
 	match_regexes=NULL;
 
@@ -5440,6 +5460,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// AWS Aurora replicas skipped during query
 		pta[0]=(char *)"aws_aurora_replicas_skipped_during_query";
 		sprintf(buf,"%llu",get_aws_aurora_replicas_skipped_during_query());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// AWS Aurora replicas skipped during query
+		pta[0]=(char *)"automatic_detected_sql_injection";
+		sprintf(buf,"%llu",get_automatic_detected_sqli());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -6544,6 +6570,19 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_packet() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.unexpected_packet,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_automatic_detected_sqli() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.automatic_detected_sqli,0);
 		}
 	}
 	return q;
