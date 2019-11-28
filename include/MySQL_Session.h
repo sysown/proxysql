@@ -204,6 +204,7 @@ class MySQL_Session
 	bool autocommit;
 	bool autocommit_handled;
 	bool killed;
+	bool locked_on_hostgroup_and_all_variables_set;
 	//bool admin;
 	bool max_connections_reached;
 	bool client_authenticated;
