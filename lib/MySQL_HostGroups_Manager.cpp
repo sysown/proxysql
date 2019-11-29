@@ -1255,19 +1255,6 @@ bool MySQL_HostGroups_Manager::commit() {
 			proxy_info("Dumping mysql_servers LEFT JOIN mysql_servers_incoming\n");
 			resultset->dump_to_stderr();
 		}
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			long long ptr=atoll(r->fields[0]);
-			proxy_warning("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
-			MySrvC *mysrvc=(MySrvC *)ptr;
-			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
-			mysrvc->ConnectionsFree->drop_all_connections();
-			char *q1=(char *)"DELETE FROM mysql_servers WHERE mem_pointer=%lld";
-			char *q2=(char *)malloc(strlen(q1)+32);
-			sprintf(q2,q1,ptr);
-			mydb->execute(q2);
-			free(q2);
-		}
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 
