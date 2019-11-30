@@ -65,6 +65,7 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
                 }
         }
 
+	freeaddrinfo(ai);
 	// return the socket
 	return sd;
 }
