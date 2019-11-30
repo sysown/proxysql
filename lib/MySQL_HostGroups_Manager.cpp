@@ -620,7 +620,6 @@ static void * GTID_syncer_run() {
 		proxy_error("could not initialise GTID sync loop\n");
 		exit(EXIT_FAILURE);
 	}
-	MyHGM->gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
 	//ev_async_init(gtid_ev_async, gtid_async_cb);
 	//ev_async_start(gtid_ev_loop, gtid_ev_async);
 	MyHGM->gtid_ev_timer = (struct ev_timer *)malloc(sizeof(struct ev_timer));
@@ -1040,7 +1039,6 @@ void MySQL_HostGroups_Manager::shutdown() {
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 	GTID_syncer_thread->join();
 	delete GTID_syncer_thread;
-	free(gtid_ev_async);
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
@@ -1055,6 +1053,7 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	}
 	for (auto  info : AWS_Aurora_Info_Map)
 		delete info.second;
+	free(gtid_ev_async);
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
 #endif
