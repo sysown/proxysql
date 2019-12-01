@@ -213,6 +213,7 @@ void * main_check_latest_version_thread(void *arg) {
 	if (latest_version) {
 		proxy_info("Latest ProxySQL version available: %s\n", latest_version);
 	}
+	free(latest_version);
 	return NULL;
 }
 
