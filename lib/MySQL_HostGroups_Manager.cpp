@@ -1006,6 +1006,8 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_aws_aurora_hostgroups = NULL;
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
+	gtid_ev_loop=NULL;
+	gtid_ev_timer=NULL;
 	gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
 
 	{
@@ -1054,6 +1056,10 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	for (auto  info : AWS_Aurora_Info_Map)
 		delete info.second;
 	free(gtid_ev_async);
+	if (gtid_ev_loop)
+		ev_loop_destroy(gtid_ev_loop);
+	if (gtid_ev_timer)
+		free(gtid_ev_timer);
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
 #endif
