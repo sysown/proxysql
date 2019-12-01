@@ -460,6 +460,7 @@ MySQL_Session::MySQL_Session() {
 	current_hostgroup=-1;
 	default_hostgroup=-1;
 	locked_on_hostgroup=-1;
+	locked_on_hostgroup_and_all_variables_set=false;
 	next_query_flagIN=-1;
 	mirror_hostgroup=-1;
 	mirror_flagOUT=-1;
@@ -502,6 +503,7 @@ void MySQL_Session::reset() {
 	current_hostgroup=-1;
 	default_hostgroup=-1;
 	locked_on_hostgroup=-1;
+	locked_on_hostgroup_and_all_variables_set=false;
 	if (sess_STMTs_meta) {
 		delete sess_STMTs_meta;
 		sess_STMTs_meta=NULL;
@@ -3910,7 +3912,7 @@ handler_again:
 							if (handler_again___verify_backend_autocommit()) {
 								goto handler_again;
 							}
-							if (locked_on_hostgroup == -1) {
+							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 								if (handler_again___verify_backend_charset()) {
 									goto handler_again;
 								}
@@ -3955,6 +3957,9 @@ handler_again:
 								}
 								if (handler_again___verify_backend_max_join_size()) {
 									goto handler_again;
+								}
+								if (locked_on_hostgroup != -1) {
+									locked_on_hostgroup_and_all_variables_set=true;
 								}
 							}
 						}
@@ -7060,6 +7065,7 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 		case 15991633859978935883ULL: // "SET @MYSQLDUMP_TEMP_LOG_BIN = @@SESSION.SQL_LOG_BIN"
 		case 10636751085721966716ULL: // "SET @@GLOBAL.GTID_PURGED=?"
 		case 15976043181199829579ULL: // "SET SQL_QUOTE_SHOW_CREATE=?"
+		case 12094956190640701942ULL: // "SET SESSION information_schema_stats_expiry=0"
 /*
 		case ULL: // 
 		case ULL: // 
