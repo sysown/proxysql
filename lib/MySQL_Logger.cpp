@@ -265,7 +265,8 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
-	GloMyLogger->wrlock();
+	//GloMyLogger->wrlock();
+        //move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
 
 	// write total length , fixed size
 	f->write((const char *)&total_bytes,sizeof(uint64_t));
@@ -406,7 +407,8 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
-	GloMyLogger->wrlock();
+	//GloMyLogger->wrlock();
+        //move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
 
 	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 	return total_bytes; // always 0
@@ -713,6 +715,9 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
 	//wrlock();
+	
+	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
+        GloMyLogger->wrlock();
 
 	me.write(events.logfile, sess);
 
@@ -866,6 +871,8 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	// right before the write to disk
 	//wrlock();
 
+	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
+        GloMyLogger->wrlock();
 	me.write(audit.logfile, sess);
 
 
