@@ -2937,8 +2937,8 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 		switch(mysql_thread___handle_unknown_charset) {
 			case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
 				snprintf(msg,sizeof(msg),"Can't initialize character set %d",client_myds->myconn->options.charset);
-				proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing connection.\n",
-						myconn->parent->address, myconn->parent->port, 2019, msg);
+				proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing client connection %s:%d.\n",
+						myconn->parent->address, myconn->parent->port, 2019, msg, client_myds->addr.addr, client_myds->addr.port);
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd=0;
 				*_rc=-1;
@@ -2950,9 +2950,9 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				ci = proxysql_find_charset_nr(mysql_thread___default_charset);
 				if (ci)	replace_collation = ci->name;
 
-				proxy_warning("Server doesn't support collation (%d) %s. Replacing it with the configured default (%d) %s.\n",
+				proxy_warning("Server doesn't support collation (%d) %s. Replacing it with the configured default (%d) %s. Client %s:%d\n",
 						client_myds->myconn->options.charset, not_supported_collation, 
-						mysql_thread___default_charset, replace_collation);
+						mysql_thread___default_charset, replace_collation, client_myds->addr.addr, client_myds->addr.port);
 
 				client_myds->myconn->options.charset=mysql_thread___default_charset;
 				break;
