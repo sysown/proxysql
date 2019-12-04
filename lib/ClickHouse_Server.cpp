@@ -141,6 +141,12 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				case clickhouse::Type::Code::Float64:
 					s=std::to_string(block[i]->As<ColumnFloat64>()->At(r));
 					break;
+				case clickhouse::Type::Code::Enum8:
+					s=block[i]->As<ColumnEnum8>()->NameAt(r);;
+					break;
+				case clickhouse::Type::Code::Enum16:
+					s=block[i]->As<ColumnEnum16>()->NameAt(r);;
+					break;
 				case clickhouse::Type::Code::String:
 					s=block[i]->As<ColumnString>()->At(r);
 					break;
