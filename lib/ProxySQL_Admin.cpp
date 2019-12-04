@@ -4500,7 +4500,7 @@ ProxySQL_Admin::ProxySQL_Admin() {
 
 	variables.restapi_enabled = false;
 	variables.restapi_enabled_old = false;
-	variables.restapi_port = 6090;
+	variables.restapi_port = 6070;
 	variables.restapi_port_old = variables.restapi_port;
 	variables.web_enabled = false;
 	variables.web_enabled_old = false;
