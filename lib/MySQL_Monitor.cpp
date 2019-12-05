@@ -4753,11 +4753,14 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #else
 					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
 #endif // TEST_AURORA
-#ifdef TEST_AURORA
 				} else {
+#ifdef TEST_AURORA
 					action_no++;
 #endif // TEST_AURORA
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+					if (is_writer ) {
+						// if the server is a writer we run it anyway. This will perform some sanity check
+						rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+					}
 				}
 				//if (is_writer == true && rla_rc == false) {
 				if (rla_rc == false) {

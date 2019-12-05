@@ -5519,6 +5519,15 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 						}
 					}
 				}
+				if (ret==false)
+					if (is_writer==true)
+						if (enable==true)
+							if (_whid==(int)myhgc->hid)
+								if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+									mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+									proxy_warning("Re-enabling server %s:%d from HG %u because it is a writer\n", address, port, myhgc->hid);
+									ret = true;
+								}
 				//goto __exit_aws_aurora_replication_lag_action;
 			}
 		}
