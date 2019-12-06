@@ -956,6 +956,7 @@ SQLite3_Server::SQLite3_Server() {
 #ifdef TEST_GALERA
 void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex galera_mutex already acquired
+	proxy_warning("TRACE : populate galera table\n");
 	sessdb->execute("BEGIN TRANSACTION");
 	char *error=NULL;
 	int cols=0;
@@ -969,15 +970,18 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	int hg_id = 2270+(cluster_id*10)+1;
 	char buf[1024];
 	sprintf(buf, (char *)"SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
+	proxy_warning("TRACE : buf %s\n", buf);
 	sessdb->execute_statement(buf, &error , &cols , &affected_rows , &resultset);
+	proxy_warning("TRACE : count %d\n", resultset->rows_count);
 	if (resultset->rows_count==0) {
 		//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
 		sqlite3_stmt *statement=NULL;
 		int rc;
-		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = sessdb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, sessdb);
+		proxy_warning("TRACE : num servers%d\n", num_galera_servers[cluster_id]);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
 			string serverid = "";
 			serverid = "127.1." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
@@ -993,6 +997,11 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 			rc=sqlite3_bind_text(statement, 8, (char *)"NONE", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_bind_int64(statement, 9, 0); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_bind_text(statement, 10, (char *)"Primary", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+
+			char *pxt_maint_mode = rand()%2==0?(char*)"ENABLED":(char*)"DISABLED";
+			rc=sqlite3_bind_text(statement, 11, pxt_maint_mode, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+
+			proxy_warning("TRACE : maint mode %s\n", pxt_maint_mode);
 			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
@@ -1158,7 +1167,7 @@ bool SQLite3_Server::init() {
 	tables_defs_galera = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_galera,
 		(const char *)"HOST_STATUS_GALERA",
-		(const char *)"CREATE TABLE HOST_STATUS_GALERA (hostgroup_id INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , wsrep_local_state VARCHAR , read_only VARCHAR , wsrep_local_recv_queue VARCHAR , wsrep_desync VARCHAR , wsrep_reject_queries VARCHAR , wsrep_sst_donor_rejects_queries VARCHAR , wsrep_cluster_status VARCHAR , PRIMARY KEY (hostgroup_id, hostname, port))");
+		(const char *)"CREATE TABLE HOST_STATUS_GALERA (hostgroup_id INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , wsrep_local_state VARCHAR , read_only VARCHAR , wsrep_local_recv_queue VARCHAR , wsrep_desync VARCHAR , wsrep_reject_queries VARCHAR , wsrep_sst_donor_rejects_queries VARCHAR , wsrep_cluster_status VARCHAR , pxc_maint_mode VARCHAR , PRIMARY KEY (hostgroup_id, hostname, port))");
 	check_and_build_standard_tables(sessdb, tables_defs_galera);
 	GloAdmin->enable_galera_testing();
 #endif // TEST_GALERA
