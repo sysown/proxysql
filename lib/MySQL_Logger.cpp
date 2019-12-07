@@ -234,7 +234,8 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 	}
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
-	GloMyLogger->wrlock();
+	//GloMyLogger->wrlock();
+	//move wrlock() function to log_audit_entry() function, avoid to get a null pointer in a multithreaded environment
 	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
 }
 
