@@ -49,6 +49,7 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
 extern SQLite3_Server *GloSQLite3Server;
+extern MySQL_HostGroups_Manager *MyHGM;
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -70,6 +71,26 @@ extern SQLite3_Server *GloSQLite3Server;
 } while (0)
 
 
+void SQLite3_Server::init_galera_ifaces_string(std::string& s) {
+	if(!s.empty())
+		s += ";";
+	pthread_mutex_init(&galera_mutex,NULL);
+	unsigned int ngs = time(NULL);
+	ngs = ngs % 3; // range
+	ngs += 5; // min
+	max_num_galera_servers = 1; // hypothetical maximum number of nodes
+	for (unsigned int j=1; j<4; j++) {
+		//cur_aurora_writer[j-1] = 0;
+		num_galera_servers[j-1] = ngs;
+		for (unsigned int i=11; i<max_num_galera_servers+11 ; i++) {
+			s += "127.1." + std::to_string(j) + "." + std::to_string(i) + ":3306";
+			if ( j!=3 || (j==3 && i<max_num_galera_servers+11-1) ) {
+				s += ";";
+			}
+		}
+	}
+}
+
 void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex galera_mutex already acquired
 	sessdb->execute("BEGIN TRANSACTION");
@@ -90,14 +111,13 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 		//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
 		sqlite3_stmt *statement=NULL;
 		int rc;
-		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = sessdb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, sessdb);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
 			string serverid = "";
 			serverid = "127.1." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
-//			fprintf(stderr,"%d , %s:3306 \n", hg_id , serverid.c_str());
 
 			rc=sqlite3_bind_int64(statement, 1, hg_id); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_bind_text(statement, 2, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
@@ -109,9 +129,6 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 			rc=sqlite3_bind_text(statement, 8, (char *)"NONE", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_bind_int64(statement, 9, 0); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_bind_text(statement, 10, (char *)"Primary", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
-
-			char *pxt_maint_mode = rand()%2==0?(char*)"ENABLED":(char*)"DISABLED";
-			rc=sqlite3_bind_text(statement, 11, pxt_maint_mode, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
@@ -133,10 +150,16 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	char *strB=NULL;
 	int strAl, strBl;
 	char *query=NULL;
+
+	plan(12);
+	diag("Testing GALERA timeout offline");
+
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
 	query=(char *)l_alloc(query_length);
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
 	query[query_length-1]=0;
+
+	static int num_delays=0;
 
 	if (sess->client_myds->proxy_addr.addr == NULL) {
 		struct sockaddr addr;
@@ -212,17 +235,43 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 				}
 			}
 
+			if (!strcmp(sess->client_myds->proxy_addr.addr, "127.1.1.11")) {
+				sleep(2);
+				num_delays++;
+			}
 
 			GloMyMon->populate_monitor_mysql_server_galera_log();
 			char *error=NULL;
 			int cols=0;
 			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			std::stringstream ss;
-			ss << "SELECT * FROM mysql_server_galera_log WHERE hostname = '" << sess->client_myds->proxy_addr.addr << "'";
-			GloMyMon->monitordb->execute_statement(ss.str().c_str(), &error, &cols, &affected_rows, &resultset);
-			resultset->dump_to_stderr();
-			ok(true, "Success %s\n", sess->client_myds->proxy_addr.addr);
+			SQLite3_result *rs1=NULL;
+
+			GloMyMon->monitordb->execute_statement("SELECT * FROM mysql_server_galera_log WHERE hostname = '127.1.1.11'", &error, &cols, &affected_rows, &rs1);
+			int actual_delays=0;
+			for (auto r : rs1->rows) {
+				if (!strcmp(r->fields[11],"timeout check")) {
+					actual_delays++;
+				}
+			}
+			delete rs1;
+
+			if (!strcmp(sess->client_myds->proxy_addr.addr, "127.1.1.11"))
+				ok(actual_delays == num_delays, "Timeout processed %d %d", num_delays, actual_delays);
+
+			std::unique_ptr<SQLite3_result> rs = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql_servers());
+			for (auto r : rs->rows) {
+				if (!strcmp(r->fields[1], "127.1.1.11") && !strcmp(r->fields[0],"2274") && actual_delays == 3 && num_delays == 3) {
+					ok(true, "Server moved to offline mode");
+					exit_status();
+					exit(0);
+				}
+			}
+
+			ok(num_delays < 4 && actual_delays < 4, "Continue test untill 127.1.1.11 go offline");
+			if (num_delays > 3 || actual_delays > 3) {
+				exit_status();
+				exit(3);
+			}
 		}
 		sqlite3 *db = sqlite_sess->sessdb->get_db();
 		bool in_trans = false;

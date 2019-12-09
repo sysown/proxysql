@@ -479,28 +479,6 @@ void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
 }
 #endif
 
-#ifdef TEST_GALERA
-void SQLite3_Server::init_galera_ifaces_string(std::string& s) {
-	if(!s.empty())
-		s += ";";
-	pthread_mutex_init(&galera_mutex,NULL);
-	unsigned int ngs = time(NULL);
-	ngs = ngs % 3; // range
-	ngs += 5; // min
-	max_num_galera_servers = 10; // hypothetical maximum number of nodes
-	for (unsigned int j=1; j<4; j++) {
-		//cur_aurora_writer[j-1] = 0;
-		num_galera_servers[j-1] = ngs;
-		for (unsigned int i=11; i<max_num_galera_servers+11 ; i++) {
-			s += "127.1." + std::to_string(j) + "." + std::to_string(i) + ":3306";
-			if ( j!=3 || (j==3 && i<max_num_galera_servers+11-1) ) {
-				s += ";";
-			}
-		}
-	}
-}
-#endif // TEST_GALERA
-
 #ifdef TEST_GROUPREP
 void SQLite3_Server::init_grouprep_ifaces_string(std::string& s) {
 	pthread_mutex_init(&grouprep_mutex,NULL);
