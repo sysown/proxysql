@@ -41,6 +41,14 @@
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 
 extern SQLite3_Server *GloSQLite3Server;
+extern Query_Cache *GloQC;
+extern MySQL_Authentication *GloMyAuth;
+extern ProxySQL_Admin *GloAdmin;
+extern Query_Processor *GloQPro;
+extern MySQL_Threads_Handler *GloMTH;
+extern MySQL_Logger *GloMyLogger;
+extern MySQL_Monitor *GloMyMon;
+extern SQLite3_Server *GloSQLite3Server;
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -171,244 +179,6 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_no_space[query_no_space_length]=0;
 	}
 
-	// fix bug #1047
-	if (
-/*
-		(!strncasecmp("BEGIN", query_no_space, strlen("BEGIN")))
-		||
-		(!strncasecmp("START TRANSACTION", query_no_space, strlen("START TRANSACTION")))
-		||
-		(!strncasecmp("COMMIT", query_no_space, strlen("COMMIT")))
-		||
-		(!strncasecmp("ROLLBACK", query_no_space, strlen("ROLLBACK")))
-		||
-*/
-		(!strncasecmp("SET character_set_results", query_no_space, strlen("SET character_set_results")))
-		||
-		(!strncasecmp("SET SQL_AUTO_IS_NULL", query_no_space, strlen("SET SQL_AUTO_IS_NULL")))
-		||
-		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
-		||
-		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
-		||
-		(!strncasecmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */")))
-		||
-		(!strncasecmp("/*!40103 SET TIME_ZONE=", query_no_space, strlen("/*!40103 SET TIME_ZONE=")))
-		||
-		(!strncasecmp("/*!80000 SET SESSION", query_no_space, strlen("/*!80000 SET SESSION")))
-		||
-		(!strncasecmp("SET SESSION", query_no_space, strlen("SET SESSION")))
-		||
-		(!strncasecmp("SET wait_timeout", query_no_space, strlen("SET wait_timeout")))
-	) {
-		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
-		sqlite3 *db = sqlite_sess->sessdb->get_db();
-		uint16_t status=2; // autocommit
-		if (sqlite3_get_autocommit(db)==0) {
-			status = 3; // autocommit + transaction
-		}
-		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
-		run_query=false;
-		goto __run_query;
-	}
-
-	if (query_no_space_length==17) {
-		if (!strncasecmp((char *)"START TRANSACTION", query_no_space, query_no_space_length)) {
-			l_free(query_length,query);
-			query = l_strdup((char *)"BEGIN IMMEDIATE");
-			query_length=strlen(query)+1;
-			goto __run_query;
-		}
-	}
-
-	if (query_no_space_length==5) {
-		if (!strncasecmp((char *)"BEGIN", query_no_space, query_no_space_length)) {
-			l_free(query_length,query);
-			query = l_strdup((char *)"BEGIN IMMEDIATE");
-			query_length=strlen(query)+1;
-			goto __run_query;
-		}
-	}
-
-	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
-		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
-			l_free(query_length,query);
-			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
-			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
-			sprintf(query,a,sess->client_myds->proxy_addr.addr);
-			query_length=strlen(query)+1;
-			goto __run_query;
-		}
-	}
-
-	if (query_no_space_length==SELECT_DB_USER_LEN) {
-		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
-			l_free(query_length,query);
-			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
-			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
-			query=l_strdup(query2);
-			query_length=strlen(query2)+1;
-			free(query2);
-			goto __run_query;
-		}
-	}
-
-	if (query_no_space_length==SELECT_CHARSET_VARIOUS_LEN) {
-		if (!strncasecmp(SELECT_CHARSET_VARIOUS, query_no_space, query_no_space_length)) {
-			l_free(query_length,query);
-			char *query1=(char *)"select 'utf8' as '@@character_set_client', 'utf8' as '@@character_set_connection', 'utf8' as '@@character_set_server', 'utf8' as '@@character_set_database' limit 1";
-			query=l_strdup(query1);
-			query_length=strlen(query1)+1;
-			goto __run_query;
-		}
-	}
-
-	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS '@@version'";
-		query_length=strlen(q)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
-
-	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS 'version()'";
-		query_length=strlen(q)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
-
-	if (strncasecmp("SHOW ", query_no_space, 5)) {
-		goto __end_show_commands; // in the next block there are only SHOW commands
-	}
-
-	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
-		l_free(query_length,query);
-		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name");
-		query_length=strlen(query)+1;
-		goto __run_query;
-	}
-
-	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
-		strA=query_no_space+17;
-		strAl=strlen(strA);
-		strB=(char *)"SELECT name AS tables FROM %s.sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name";
-		strBl=strlen(strB);
-		int l=strBl+strAl-2;
-		char *b=(char *)l_alloc(l+1);
-		snprintf(b,l+1,strB,strA);
-		b[l]=0;
-		l_free(query_length,query);
-		query=b;
-		query_length=l+1;
-		goto __run_query;
-	}
-
-	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES LIKE ", query_no_space, 17))) {
-		strA=query_no_space+17;
-		strAl=strlen(strA);
-		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
-		strBl=strlen(strB);
-		char *tn=NULL; // tablename
-		tn=(char *)malloc(strlen(strA));
-		unsigned int i=0, j=0;
-		while (i<strlen(strA)) {
-			if (strA[i]!='\\' && strA[i]!='`' && strA[i]!='\'') {
-				tn[j]=strA[i];
-				j++;
-			}
-			i++;
-		}
-		tn[j]=0;
-		int l=strBl+strlen(tn)-2;
-		char *b=(char *)l_alloc(l+1);
-		snprintf(b,l+1,strB,tn);
-		b[l]=0;
-		free(tn);
-		l_free(query_length,query);
-		query=b;
-		query_length=l+1;
-		goto __run_query;
-	}
-
-	strA=(char *)"SHOW CREATE TABLE ";
-	strB=(char *)"SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),'CREATE TABLE %s (','CREATE TABLE %s ('||X'0A20202020') AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";
-	strAl=strlen(strA);
-  if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
-		strBl=strlen(strB);
-		char *dbh=NULL;
-		char *tbh=NULL;
-		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
-
-		if (strlen(tbh)==0) {
-			free(tbh);
-			tbh=dbh;
-			dbh=strdup("main");
-		}
-		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
-			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
-			strncpy(tbh_tmp,tbh+1,strlen(tbh)-2);
-			tbh_tmp[strlen(tbh)-2]=0;
-			free(tbh);
-			tbh=tbh_tmp;
-		}
-		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
-		char *buff=(char *)l_alloc(l+1);
-		snprintf(buff,l+1,strB,tbh,tbh,dbh,tbh);
-		buff[l]=0;
-		free(tbh);
-		free(dbh);
-		l_free(query_length,query);
-		query=buff;
-		query_length=l+1;
-		goto __run_query;
-	}
-
-	if (
-		(query_no_space_length==strlen("SHOW DATABASES") && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
-		||
-		(query_no_space_length==strlen("SHOW SCHEMAS") && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
-	) {
-		l_free(query_length,query);
-		query=l_strdup("PRAGMA DATABASE_LIST");
-		query_length=strlen(query)+1;
-		goto __run_query;
-	}
-
-__end_show_commands:
-
-	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
-		l_free(query_length,query);
-		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
-		query_length=strlen(query)+1;
-		goto __run_query;
-	}
-
-	// see issue #1022
-	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
-		l_free(query_length,query);
-		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
-		query_length=strlen(query)+1;
-		goto __run_query;
-	}
-
-	if (sess->session_type == PROXYSQL_SESSION_SQLITE) { // no admin
-		if (
-			(strncasecmp("PRAGMA",query_no_space,6)==0)
-			||
-			(strncasecmp("ATTACH",query_no_space,6)==0)
-		) {
-			proxy_error("[WARNING]: Commands executed from stats interface in Admin Module: \"%s\"\n", query_no_space);
-			GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Command not allowed");
-			run_query=false;
-		}
-	}
-
-__run_query:
 	if (run_query) {
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
 			if (strstr(query_no_space,(char *)"HOST_STATUS_GALERA")) {
@@ -441,8 +211,18 @@ __run_query:
 					sleep(2);
 				}
 			}
-			ok(true, "Success");
-			exit(0);
+
+
+			GloMyMon->populate_monitor_mysql_server_galera_log();
+			char *error=NULL;
+			int cols=0;
+			int affected_rows=0;
+			SQLite3_result *resultset=NULL;
+			std::stringstream ss;
+			ss << "SELECT * FROM mysql_server_galera_log WHERE hostname = '" << sess->client_myds->proxy_addr.addr << "'";
+			GloMyMon->monitordb->execute_statement(ss.str().c_str(), &error, &cols, &affected_rows, &resultset);
+			resultset->dump_to_stderr();
+			ok(true, "Success %s\n", sess->client_myds->proxy_addr.addr);
 		}
 		sqlite3 *db = sqlite_sess->sessdb->get_db();
 		bool in_trans = false;
