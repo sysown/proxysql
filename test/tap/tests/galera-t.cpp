@@ -203,9 +203,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		}
 	}
 
-	if (strncmp("127.1.", sess->client_myds->proxy_addr.addr, 6)) {
-		return;
-	}
+	if (strncmp("127.1.", sess->client_myds->proxy_addr.addr, 6)) return;
 
 	plan(12);
 	diag("Testing GALERA timeout offline");
@@ -283,7 +281,8 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 
 			std::unique_ptr<SQLite3_result> rs = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql_servers());
 			for (auto r : rs->rows) {
-				if (!strcmp(r->fields[1], "127.1.1.11") && !strcmp(r->fields[0],"2274") && actual_delays == 3 && num_delays == 3) {
+				auto max_delays = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
+				if (!strcmp(r->fields[1], "127.1.1.11") && !strcmp(r->fields[0],"2274") && actual_delays == max_delays && num_delays == max_delays) {
 					ok(true, "Server moved to offline mode");
 					exit_status();
 					exit(0);
