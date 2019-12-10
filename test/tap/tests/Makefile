@@ -90,20 +90,16 @@ basic-t: $(TAP_LIBDIR)/libtap.a
 	g++ basic-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -o basic-t
 
 set_character_set-t: set_character_set-t.cpp $(TAP_LIBDIR)/libtap.a
-	cd ../../.. && make clean && make -j 8
 	g++ set_character_set-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o set_character_set-t
 
 charset_unsigned_int-t: charset_unsigned_int-t.cpp $(TAP_LIBDIR)/libtap.a
-	cd ../../.. && make clean && make -j 8
 	g++ charset_unsigned_int-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o charset_unsigned_int-t
 
 galera-t: galera-t.cpp $(TAP_LIBDIR)/libtap.a
-	cd ../../.. && make clean && make -j 8 testgalera
-	g++ -DTEST_GALERA -DDEBUG galera-t.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera-t -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG galera-t.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 aurora-t: aurora-t.cpp $(TAP_LIBDIR)/libtap.a
-	cd ../../.. && make clean && make -j 8 testaurora
-	g++ -DTEST_AURORA -DDEBUG aurora-t.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o aurora-t -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG aurora-t.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o aurora-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 select_config_file-t: select_config_file-t.cpp $(LIBDIR)/libtap.a
 	g++ select_config_file-t.cpp -I$(INCLUDEDIR) -L$(LIBDIR) -std=c++11 `mysql_config --include --libs` -lmysqlclient -ltap -o select_config_file-t

@@ -71,6 +71,26 @@ extern MySQL_HostGroups_Manager *MyHGM;
 } while (0)
 
 
+void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
+	if(!s.empty())
+		s += ";";
+	pthread_mutex_init(&aurora_mutex,NULL);
+	unsigned int nas = time(NULL);
+	nas = nas % 3; // range
+	nas += 4; // min
+	max_num_aurora_servers = 10; // hypothetical maximum number of nodes
+	for (unsigned int j=1; j<4; j++) {
+		cur_aurora_writer[j-1] = 0;
+		num_aurora_servers[j-1] = nas;
+		for (unsigned int i=11; i<max_num_aurora_servers+11 ; i++) {
+			s += "127.0." + std::to_string(j) + "." + std::to_string(i) + ":3306";
+			if ( j!=3 || (j==3 && i<max_num_aurora_servers+11-1) ) {
+				s += ";";
+			}
+		}
+	}
+}
+
 void SQLite3_Server::init_galera_ifaces_string(std::string& s) {
 	if(!s.empty())
 		s += ";";
@@ -150,15 +170,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	char *strB=NULL;
 	int strAl, strBl;
 	char *query=NULL;
-
-	plan(12);
-	diag("Testing GALERA timeout offline");
-
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
-	query=(char *)l_alloc(query_length);
-	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
-	query[query_length-1]=0;
-
 	static int num_delays=0;
 
 	if (sess->client_myds->proxy_addr.addr == NULL) {
@@ -190,6 +202,17 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 			sess->client_myds->proxy_addr.addr = strdup("unknown");
 		}
 	}
+
+	if (strncmp("127.1.", sess->client_myds->proxy_addr.addr, 6)) {
+		return;
+	}
+
+	plan(12);
+	diag("Testing GALERA timeout offline");
+
+	query=(char *)l_alloc(query_length);
+	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
+	query[query_length-1]=0;
 
 	char *query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
