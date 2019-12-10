@@ -51,6 +51,8 @@ extern MySQL_Monitor *GloMyMon;
 extern SQLite3_Server *GloSQLite3Server;
 extern MySQL_HostGroups_Manager *MyHGM;
 
+static bool init_tap=false;
+
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
     rc=sqlite3_step(_stmt);\
@@ -171,7 +173,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	int strAl, strBl;
 	char *query=NULL;
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
-	static int num_delays=0;
+	static int num_timeouts=0;
 
 	if (sess->client_myds->proxy_addr.addr == NULL) {
 		struct sockaddr addr;
@@ -205,8 +207,11 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 
 	if (strncmp("127.1.", sess->client_myds->proxy_addr.addr, 6)) return;
 
-	plan(12);
-	diag("Testing GALERA timeout offline");
+	if (!init_tap) {
+		plan(12);
+		diag("Testing GALERA timeout offline");
+		init_tap=true;
+	}
 
 	query=(char *)l_alloc(query_length);
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
@@ -258,7 +263,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 
 			if (!strcmp(sess->client_myds->proxy_addr.addr, "127.1.1.11")) {
 				sleep(2);
-				num_delays++;
+				num_timeouts++;
 			}
 
 			GloMyMon->populate_monitor_mysql_server_galera_log();
@@ -268,29 +273,29 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 			SQLite3_result *rs1=NULL;
 
 			GloMyMon->monitordb->execute_statement("SELECT * FROM mysql_server_galera_log WHERE hostname = '127.1.1.11'", &error, &cols, &affected_rows, &rs1);
-			int actual_delays=0;
+			int actual_timeouts=0;
 			for (auto r : rs1->rows) {
 				if (!strcmp(r->fields[11],"timeout check")) {
-					actual_delays++;
+					actual_timeouts++;
 				}
 			}
 			delete rs1;
 
 			if (!strcmp(sess->client_myds->proxy_addr.addr, "127.1.1.11"))
-				ok(actual_delays == num_delays, "Timeout processed %d %d", num_delays, actual_delays);
+				ok(actual_timeouts == num_timeouts, "Another timeout processed. Number expected timeouts is equal to number of actual timeouts. Expected [%d]. Actual [%d]", num_timeouts, actual_timeouts);
 
+			auto max_timeouts = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
 			std::unique_ptr<SQLite3_result> rs = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql_servers());
 			for (auto r : rs->rows) {
-				auto max_delays = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
-				if (!strcmp(r->fields[1], "127.1.1.11") && !strcmp(r->fields[0],"2274") && actual_delays == max_delays && num_delays == max_delays) {
-					ok(true, "Server moved to offline mode");
+				if (!strcmp(r->fields[1], "127.1.1.11") && !strcmp(r->fields[0],"2274") && actual_timeouts == max_timeouts && num_timeouts == max_timeouts) {
+					ok(true, "Number of max timeouts reached. Host goes offline. Max timouts count %d, actual number of timeouts %d", max_timeouts, actual_timeouts);
 					exit_status();
 					exit(0);
 				}
 			}
 
-			ok(num_delays < 4 && actual_delays < 4, "Continue test untill 127.1.1.11 go offline");
-			if (num_delays > 3 || actual_delays > 3) {
+			ok(num_timeouts < 4 && actual_timeouts < 4, "Another timeout processed. Server is still online. Max count [%d], Detected timeouts [%d]", max_timeouts, actual_timeouts);
+			if (num_timeouts > 3 || actual_timeouts > 3) {
 				exit_status();
 				exit(3);
 			}
