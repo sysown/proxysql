@@ -163,3 +163,6 @@ heaptrack.*
 .cproject
 .project
 .settings/
+
+#tap tests
+*-t
