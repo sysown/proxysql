@@ -2077,7 +2077,7 @@ __exit_process_mysql_query:
 			proxy_error("Firewall problem: unknown user\n");
 			assert(0);
 		}
-	} else {		
+	} else {
 		ret->firewall_whitelist_mode = WUS_NOT_FOUND;
 	}
 	return ret;

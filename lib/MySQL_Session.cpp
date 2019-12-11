@@ -3158,9 +3158,7 @@ __get_pkts_from_client:
 	for (j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
-			//proxy_info("pkt = %s\n", (char *)pkt.ptr+5); // 20191211 -- DELETEME
 		}
-		//proxy_info("status = %d\n", status); // 20191211 -- DELETEME
 		switch (status) {
 
 			case CONNECTING_CLIENT:
@@ -3195,7 +3193,6 @@ __get_pkts_from_client:
 							break;
 					}
 				}
-				//proxy_info("client_myds->DSS = %d\n", client_myds->DSS); // 20191211 -- DELETEME
 				switch (client_myds->DSS) {
 					case STATE_SLEEP_MULTI_PACKET:
 						if (client_myds->multi_pkt.ptr==NULL) {
@@ -3288,7 +3285,6 @@ __get_pkts_from_client:
 							case _MYSQL_COM_QUERY:
 								__sync_add_and_fetch(&thread->status_variables.queries,1);
 								if (session_type == PROXYSQL_SESSION_MYSQL) {
-									//proxy_info("query = %s\n", (char *)pkt.ptr+5); // 20191211 -- DELETEME
 									bool rc_break=false;
 									bool lock_hostgroup = false;
 									if (session_fast_forward==false) {
