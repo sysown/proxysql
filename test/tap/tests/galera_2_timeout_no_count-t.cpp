@@ -52,6 +52,7 @@ extern SQLite3_Server *GloSQLite3Server;
 extern MySQL_HostGroups_Manager *MyHGM;
 
 static bool init_tap=false;
+static std::vector<int> timeouts;
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -174,6 +175,8 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	char *query=NULL;
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
 	static int num_timeouts=0;
+	static int iteration=0;
+	auto max_timeouts = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
 
 	if (sess->client_myds->proxy_addr.addr == NULL) {
 		struct sockaddr addr;
@@ -208,9 +211,16 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (strncmp("127.1.", sess->client_myds->proxy_addr.addr, 6)) return;
 
 	if (!init_tap) {
-		plan(12);
+		plan(13);
 		diag("Testing GALERA timeout offline");
 		init_tap=true;
+
+		for (auto i=0; i<max_timeouts-1; i++)
+			timeouts.push_back(1);
+		timeouts.push_back(0);
+		for (auto i=0; i<max_timeouts-1; i++)
+			timeouts.push_back(1);
+		timeouts.push_back(0);
 	}
 
 	query=(char *)l_alloc(query_length);
@@ -249,55 +259,49 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 				if (resultset->rows_count == 0) {
 					PROXY_TRACE();
 				}
-				if (rand() % 20 == 0) {
-					// randomly add some latency on 5% of the traffic
-					sleep(2);
-				}
-			}
-			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				if (rand() % 10 == 0) {
-					// randomly add some latency on 10% of the traffic
-					sleep(2);
-				}
 			}
 
 			if (!strcmp(sess->client_myds->proxy_addr.addr, "127.1.1.11")) {
-				sleep(2);
-				num_timeouts++;
-			}
-
-			GloMyMon->populate_monitor_mysql_server_galera_log();
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *rs1=NULL;
-
-			GloMyMon->monitordb->execute_statement("SELECT * FROM mysql_server_galera_log WHERE hostname = '127.1.1.11'", &error, &cols, &affected_rows, &rs1);
-			int actual_timeouts=0;
-			for (auto r : rs1->rows) {
-				if (!strcmp(r->fields[11],"timeout check")) {
-					actual_timeouts++;
+				if (timeouts[iteration]) {
+					sleep(2);
+					num_timeouts++;
 				}
-			}
-			delete rs1;
+				iteration++;
 
-			if (!strcmp(sess->client_myds->proxy_addr.addr, "127.1.1.11"))
-				ok(actual_timeouts == num_timeouts, "Another timeout processed. Number expected timeouts is equal to number of actual timeouts. Expected [%d]. Actual [%d]", num_timeouts, actual_timeouts);
+				GloMyMon->populate_monitor_mysql_server_galera_log();
+				char *error=NULL;
+				int cols=0;
+				int affected_rows=0;
+				SQLite3_result *rs1=NULL;
 
-			auto max_timeouts = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
-			std::unique_ptr<SQLite3_result> rs = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql_servers());
-			for (auto r : rs->rows) {
-				if (!strcmp(r->fields[1], "127.1.1.11") && !strcmp(r->fields[0],"2274") && actual_timeouts == max_timeouts && num_timeouts == max_timeouts) {
-					ok(true, "Number of max timeouts reached. Host goes offline. Max timouts count %d, actual number of timeouts %d", max_timeouts, actual_timeouts);
+				GloMyMon->monitordb->execute_statement("SELECT * FROM mysql_server_galera_log WHERE hostname = '127.1.1.11'", &error, &cols, &affected_rows, &rs1);
+				rs1->dump_to_stderr();
+				int actual_timeouts=0;
+				for (auto r : rs1->rows) {
+					if (r->fields[11] && !strcmp(r->fields[11],"timeout check") ) {
+						actual_timeouts++;
+					}
+					else {
+						actual_timeouts=0;
+					}
+				}
+				delete rs1;
+
+				std::unique_ptr<SQLite3_result> rs = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql_servers());
+				for (auto r : rs->rows) {
+					if (r->fields[0] && r->fields[1] && !strcmp(r->fields[1], "127.1.1.11") && strcmp(r->fields[0],"2274")) {
+						ok(true, "Host stays online. Max timeouts count [%d], number of timeouts in a row [%d], generated timeouts [%d]", max_timeouts, actual_timeouts, num_timeouts);
+						if (iteration == timeouts.size()) {
+							exit_status();
+							exit(0);
+						}
+					}
+				}
+				ok(iteration < timeouts.size(), "Continue iteration. Still have data in timeouts vector.");
+				if (iteration >= timeouts.size()) {
 					exit_status();
-					exit(0);
+					exit(3);
 				}
-			}
-
-			ok(num_timeouts < 4 && actual_timeouts < 4, "Another timeout processed. Server is still online. Max count [%d], Detected timeouts [%d]", max_timeouts, actual_timeouts);
-			if (num_timeouts > 3 || actual_timeouts > 3) {
-				exit_status();
-				exit(3);
 			}
 		}
 		sqlite3 *db = sqlite_sess->sessdb->get_db();

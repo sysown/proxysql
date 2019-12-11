@@ -589,7 +589,7 @@ bool SQLite3_Server::init() {
 	tables_defs_galera = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_galera,
 		(const char *)"HOST_STATUS_GALERA",
-		(const char *)"CREATE TABLE HOST_STATUS_GALERA (hostgroup_id INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , wsrep_local_state VARCHAR , read_only VARCHAR , wsrep_local_recv_queue VARCHAR , wsrep_desync VARCHAR , wsrep_reject_queries VARCHAR , wsrep_sst_donor_rejects_queries VARCHAR , wsrep_cluster_status VARCHAR , pxc_maint_mode VARCHAR , PRIMARY KEY (hostgroup_id, hostname, port))");
+		(const char *)"CREATE TABLE HOST_STATUS_GALERA (hostgroup_id INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , wsrep_local_state VARCHAR , read_only VARCHAR , wsrep_local_recv_queue VARCHAR , wsrep_desync VARCHAR , wsrep_reject_queries VARCHAR , wsrep_sst_donor_rejects_queries VARCHAR , wsrep_cluster_status VARCHAR , PRIMARY KEY (hostgroup_id, hostname, port))");
 	check_and_build_standard_tables(sessdb, tables_defs_galera);
 	GloAdmin->enable_galera_testing();
 #endif // TEST_GALERA
