@@ -250,6 +250,7 @@ void Query_Info::end() {
 			free(stmt_meta->pkt);
 			stmt_meta->pkt=NULL;
 		}
+		stmt_meta = NULL;
 	}
 }
 
@@ -3157,7 +3158,9 @@ __get_pkts_from_client:
 	for (j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
+			//proxy_info("pkt = %s\n", (char *)pkt.ptr+5); // 20191211 -- DELETEME
 		}
+		//proxy_info("status = %d\n", status); // 20191211 -- DELETEME
 		switch (status) {
 
 			case CONNECTING_CLIENT:
@@ -3192,6 +3195,7 @@ __get_pkts_from_client:
 							break;
 					}
 				}
+				//proxy_info("client_myds->DSS = %d\n", client_myds->DSS); // 20191211 -- DELETEME
 				switch (client_myds->DSS) {
 					case STATE_SLEEP_MULTI_PACKET:
 						if (client_myds->multi_pkt.ptr==NULL) {
@@ -3284,6 +3288,7 @@ __get_pkts_from_client:
 							case _MYSQL_COM_QUERY:
 								__sync_add_and_fetch(&thread->status_variables.queries,1);
 								if (session_type == PROXYSQL_SESSION_MYSQL) {
+									//proxy_info("query = %s\n", (char *)pkt.ptr+5); // 20191211 -- DELETEME
 									bool rc_break=false;
 									bool lock_hostgroup = false;
 									if (session_fast_forward==false) {
@@ -3323,21 +3328,32 @@ __get_pkts_from_client:
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (mirror==false) {
 										if (mysql_thread___automatic_detect_sqli) {
-											struct libinjection_sqli_state state;
-											int issqli;
-											const char * input = (char *)CurrentQuery.QueryPointer;
-											size_t slen = CurrentQuery.QueryLength;
-											libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
-											issqli = libinjection_is_sqli(&state);
-											if (issqli) {
-												thread->status_variables.automatic_detected_sqli++;
-												char * username = client_myds->myconn->userinfo->username;
-												char * client_address = client_myds->addr.addr;
-												proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
-												fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
-												fprintf(stderr,"\n");
-												handler_ret = -1;
-												return handler_ret;
+											if (client_myds->com_field_list == false) {
+												if (qpo->firewall_whitelist_mode != WUS_OFF) {
+													struct libinjection_sqli_state state;
+													int issqli;
+													const char * input = (char *)CurrentQuery.QueryPointer;
+													size_t slen = CurrentQuery.QueryLength;
+													libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
+													issqli = libinjection_is_sqli(&state);
+													if (issqli) {
+														bool allow_sqli = false;
+														allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
+														if (allow_sqli) {
+															thread->status_variables.whitelisted_sqli_fingerprint++;
+														} else {
+															thread->status_variables.automatic_detected_sqli++;
+															char * username = client_myds->myconn->userinfo->username;
+															char * client_address = client_myds->addr.addr;
+															proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
+															fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+															fprintf(stderr,"\n");
+															handler_ret = -1;
+															RequestEnd(NULL);
+															return handler_ret;
+														}
+													}
+												}
 											}
 										}
 									}
