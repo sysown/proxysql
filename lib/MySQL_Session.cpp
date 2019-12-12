@@ -250,6 +250,7 @@ void Query_Info::end() {
 			free(stmt_meta->pkt);
 			stmt_meta->pkt=NULL;
 		}
+		stmt_meta = NULL;
 	}
 }
 
@@ -3323,21 +3324,32 @@ __get_pkts_from_client:
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (mirror==false) {
 										if (mysql_thread___automatic_detect_sqli) {
-											struct libinjection_sqli_state state;
-											int issqli;
-											const char * input = (char *)CurrentQuery.QueryPointer;
-											size_t slen = CurrentQuery.QueryLength;
-											libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
-											issqli = libinjection_is_sqli(&state);
-											if (issqli) {
-												thread->status_variables.automatic_detected_sqli++;
-												char * username = client_myds->myconn->userinfo->username;
-												char * client_address = client_myds->addr.addr;
-												proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
-												fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
-												fprintf(stderr,"\n");
-												handler_ret = -1;
-												return handler_ret;
+											if (client_myds->com_field_list == false) {
+												if (qpo->firewall_whitelist_mode != WUS_OFF) {
+													struct libinjection_sqli_state state;
+													int issqli;
+													const char * input = (char *)CurrentQuery.QueryPointer;
+													size_t slen = CurrentQuery.QueryLength;
+													libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
+													issqli = libinjection_is_sqli(&state);
+													if (issqli) {
+														bool allow_sqli = false;
+														allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
+														if (allow_sqli) {
+															thread->status_variables.whitelisted_sqli_fingerprint++;
+														} else {
+															thread->status_variables.automatic_detected_sqli++;
+															char * username = client_myds->myconn->userinfo->username;
+															char * client_address = client_myds->addr.addr;
+															proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
+															fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+															fprintf(stderr,"\n");
+															handler_ret = -1;
+															RequestEnd(NULL);
+															return handler_ret;
+														}
+													}
+												}
 											}
 										}
 									}

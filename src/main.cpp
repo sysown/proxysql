@@ -961,8 +961,9 @@ void ProxySQL_Main_init_Auth_module() {
 
 void ProxySQL_Main_init_Query_module() {
 	GloQPro = new Query_Processor();
-  GloQPro->print_version();
+	GloQPro->print_version();
 	GloAdmin->init_mysql_query_rules();
+	GloAdmin->init_mysql_firewall();
 }
 
 void ProxySQL_Main_init_MySQL_Threads_Handler_module() {

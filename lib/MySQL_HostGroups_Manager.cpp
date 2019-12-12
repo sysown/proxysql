@@ -1619,7 +1619,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
-	proxy_info("MySQL_HostGroups_Manager::commit() locked for %lluus\n", curtime2-curtime1);
+	proxy_info("MySQL_HostGroups_Manager::commit() locked for %llums\n", curtime2-curtime1);
 
 	if (GloMTH) {
 		GloMTH->signal_all_threads(1);
