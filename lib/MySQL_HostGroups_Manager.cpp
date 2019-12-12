@@ -2090,7 +2090,9 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup GROUP BY hostgroup_id, hostname, port";
+		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind "
+			" FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR "
+			" hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE active=1 GROUP BY hostgroup_id, hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->Galera_Hosts_resultset) {
