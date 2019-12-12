@@ -1,9 +1,11 @@
 #include <iostream>     // std::cout
+#include <fstream>
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
+#include "proxysql_config.h"
 #include "cpp.h"
 
 #include "MySQL_Data_Stream.h"
@@ -100,6 +102,36 @@ static char * load_file (const char *filename) {
 	return buffer;
 }
 
+const char* config_header = "########################################################################################\n"
+							"# This config file is parsed using libconfig , and its grammar is described in:\n"
+							"# http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar\n"
+							"# Grammar is also copied at the end of this file\n"
+							"########################################################################################\n"
+							"\n"
+							"########################################################################################\n"
+							"# IMPORTANT INFORMATION REGARDING THIS CONFIGURATION FILE:\n"
+							"########################################################################################\n"
+							"# On startup, ProxySQL reads its config file (if present) to determine its datadir.\n"
+							"# What happens next depends on if the database file (disk) is present in the defined\n"
+							"# datadir (i.e. \"/var/lib/proxysql/proxysql.db\").\n"
+							"#\n"
+							"# If the database file is found, ProxySQL initializes its in-memory configuration from\n"
+							"# the persisted on-disk database. So, disk configuration gets loaded into memory and\n"
+							"# then propagated towards the runtime configuration.\n"
+							"#\n"
+							"# If the database file is not found and a config file exists, the config file is parsed\n"
+							"# and its content is loaded into the in-memory database, to then be both saved on-disk\n"
+							"# database and loaded at runtime.\n"
+							"#\n"
+							"# IMPORTANT: If a database file is found, the config file is NOT parsed. In this case\n"
+							"#            ProxySQL initializes its in-memory configuration from the persisted on-disk\n"
+							"#            database ONLY. In other words, the configuration found in the proxysql.cnf\n"
+							"#            file is only used to initial the on-disk database read on the first startup.\n"
+							"#\n"
+							"# In order to FORCE a re-initialise of the on-disk database from the configuration file\n"
+							"# the ProxySQL service should be started with \"service proxysql initial\".\n"
+							"#\n"
+							"########################################################################################\n";
 
 /*
 int sqlite3_json_init(
@@ -556,6 +588,11 @@ int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 		uqdt.erase(uqdt.begin(),uqdt.end());
 	}
 	return r;
+}
+
+ProxySQL_Config& ProxySQL_Admin::proxysql_config() {
+	static ProxySQL_Config instance = ProxySQL_Config(admindb);
+	return instance;
 }
 
 int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
@@ -1348,7 +1385,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					rows=SPA->Read_Scheduler_from_configfile();
+					rows=SPA->proxysql_config().Read_Scheduler_from_configfile();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded scheduler from CONFIG\n");
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
@@ -1567,7 +1604,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					rows=SPA->Read_MySQL_Users_from_configfile();
+					rows=SPA->proxysql_config().Read_MySQL_Users_from_configfile();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users from CONFIG\n");
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
@@ -1945,7 +1982,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					int rows=0;
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-					rows=SPA->Read_Global_Variables_from_configfile("mysql");
+					rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("mysql");
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
@@ -2043,7 +2080,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					rows=SPA->Read_MySQL_Servers_from_configfile();
+					rows=SPA->proxysql_config().Read_MySQL_Servers_from_configfile();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers from CONFIG\n");
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
@@ -2159,7 +2196,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					rows=SPA->Read_ProxySQL_Servers_from_configfile();
+					rows=SPA->proxysql_config().Read_ProxySQL_Servers_from_configfile();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers from CONFIG\n");
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
@@ -2306,7 +2343,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					rows=SPA->Read_MySQL_Query_Rules_from_configfile();
+					rows=SPA->proxysql_config().Read_MySQL_Query_Rules_from_configfile();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules from CONFIG\n");
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
@@ -2436,7 +2473,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					int rows=0;
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-					rows=SPA->Read_Global_Variables_from_configfile("admin");
+					rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("admin");
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables from CONFIG\n");
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
 					GloVars.confFile->CloseFile();
@@ -3785,6 +3822,81 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (!strncasecmp("SELECT CONFIG TO", query_no_space, strlen("SELECT CONFIG TO"))) {
+		std::string fileName = query_no_space + strlen("SELECT CONFIG TO");
+		fileName.erase(0, fileName.find_first_not_of("\t\n\v\f\r "));
+		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
+		if (fileName.size() == 0) {
+			std::stringstream ss;
+			ss << "ProxySQL Admin Error: empty file name";
+			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+		}
+		std::string data;
+		data.reserve(100000);
+		data += config_header;
+		int rc = pa->proxysql_config().Write_Global_Variables_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Users_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Query_Rules_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Servers_to_configfile(data);
+		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
+		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc) {
+			std::stringstream ss;
+			ss << "ProxySQL Admin Error: Cannot extract configuration";
+			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+		} else {
+			std::ofstream out;
+			out.open(fileName);
+			if (out.is_open()) {
+				out << data;
+				out.close();
+				if (!out) {
+					std::stringstream ss;
+					ss << "ProxySQL Admin Error: Error writing file " << fileName;
+					sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+				} else {
+					std::stringstream ss;
+					ss << "File " << fileName << " is saved.";
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, (char*)ss.str().c_str(), data.size());
+				}
+			} else {
+				std::stringstream ss;
+				ss << "ProxySQL Admin Error: Cannot open file " << fileName;
+				sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+			}
+		}
+		run_query = false;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SELECT CONFIG FILE") && !strncasecmp("SELECT CONFIG FILE", query_no_space, query_no_space_length)) {
+		std::string data;
+		data.reserve(100000);
+		data += config_header;
+		int rc = pa->proxysql_config().Write_Global_Variables_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Users_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Query_Rules_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Servers_to_configfile(data);
+		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
+		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc) {
+			std::stringstream ss;
+			ss << "ProxySQL Admin Error: Cannot write proxysql.cnf";
+			sess->SQLite3_to_MySQL(resultset, (char*)ss.str().c_str(), affected_rows, &sess->client_myds->myprot);
+		} else {
+			char *pta[1];
+			pta[0]=NULL;
+			pta[0]=(char*)data.c_str();
+			SQLite3_result* resultset = new SQLite3_result(1);
+			resultset->add_column_definition(SQLITE_TEXT,"Data");
+			resultset->add_row(pta);
+			sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+			delete resultset;
+		}
+		run_query = false;
+		goto __run_query;
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
@@ -4804,13 +4916,13 @@ bool ProxySQL_Admin::init() {
 
 	if (GloVars.__cmd_proxysql_reload || GloVars.__cmd_proxysql_initial || admindb_file_exists==false) { // see #617
 		if (GloVars.configfile_open) {
-			Read_MySQL_Servers_from_configfile();
-			Read_MySQL_Users_from_configfile();
-			Read_MySQL_Query_Rules_from_configfile();
-			Read_Global_Variables_from_configfile("admin");
-			Read_Global_Variables_from_configfile("mysql");
-			Read_Scheduler_from_configfile();
-			Read_ProxySQL_Servers_from_configfile();
+			proxysql_config().Read_MySQL_Servers_from_configfile();
+			proxysql_config().Read_MySQL_Users_from_configfile();
+			proxysql_config().Read_MySQL_Query_Rules_from_configfile();
+			proxysql_config().Read_Global_Variables_from_configfile("admin");
+			proxysql_config().Read_Global_Variables_from_configfile("mysql");
+			proxysql_config().Read_Scheduler_from_configfile();
+			proxysql_config().Read_ProxySQL_Servers_from_configfile();
 			__insert_or_replace_disktable_select_maintable();
 		}
 	}
@@ -9762,723 +9874,6 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	if (resultset) delete resultset;
 	// if (resultset2) delete resultset2; // never delete it. GloQPro saves it
 	return NULL;
-}
-
-int ProxySQL_Admin::Read_Global_Variables_from_configfile(const char *prefix) {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
-	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
-	sprintf(groupname,"%s%s",prefix,"_variables");
-	if (root.exists(groupname)==false) {
-		free(groupname);
-		return 0;
-	}
-	const Setting &group = root[(const char *)groupname];
-	int count = group.getLength();
-	//fprintf(stderr, "Found %d %s_variables\n",count, prefix);
-	int i;
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO global_variables VALUES (\"%s-%s\", \"%s\")";
-	for (i=0; i< count; i++) {
-		const Setting &sett = group[i];
-		const char *n=sett.getName();
-		bool value_bool;
-		int value_int;
-		std::string value_string="";
-		if (group.lookupValue(n, value_bool)) {
-			value_string = (value_bool ? "true" : "false");
-		} else {
-			if (group.lookupValue(n, value_int)) {
-				value_string = std::to_string(value_int);
-			} else {
-				group.lookupValue(n, value_string);
-			}
-		}
-		//fprintf(stderr,"%s = %s\n", n, value_string.c_str());
-		char *query=(char *)malloc(strlen(q)+strlen(prefix)+strlen(n)+strlen(value_string.c_str()));
-		sprintf(query,q, prefix, n, value_string.c_str());
-		//fprintf(stderr, "%s\n", query);
-  	admindb->execute(query);
-		free(query);
-	}
-	admindb->execute("PRAGMA foreign_keys = ON");
-	free(groupname);
-	return i;
-}
-
-int ProxySQL_Admin::Read_MySQL_Users_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
-	if (root.exists("mysql_users")==false) return 0;
-	const Setting &mysql_users = root["mysql_users"];
-	int count = mysql_users.getLength();
-	//fprintf(stderr, "Found %d users\n",count);
-	int i;
-	int rows=0;
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s')";
-	for (i=0; i< count; i++) {
-		const Setting &user = mysql_users[i];
-		std::string username;
-		std::string password="";
-		int active=1;
-		int use_ssl=0;
-		int default_hostgroup=0;
-		std::string default_schema="";
-		int schema_locked=0;
-		int transaction_persistent=1;
-		int fast_forward=0;
-		int max_connections=10000;
-		std::string comment="";
-		if (user.lookupValue("username", username)==false) continue;
-		user.lookupValue("password", password);
-		user.lookupValue("default_hostgroup", default_hostgroup);
-		user.lookupValue("active", active);
-		user.lookupValue("use_ssl", use_ssl);
-		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
-		user.lookupValue("default_schema", default_schema);
-		user.lookupValue("schema_locked", schema_locked);
-		user.lookupValue("transaction_persistent", transaction_persistent);
-		user.lookupValue("fast_forward", fast_forward);
-		user.lookupValue("max_connections", max_connections);
-		user.lookupValue("comment", comment);
-		char *o1=strdup(comment.c_str());
-		char *o=escape_string_single_quotes(o1, false);
-		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, o);
-		admindb->execute(query);
-		if (o!=o1) free(o);
-		free(o1);
-		free(query);
-		rows++;
-	}
-	admindb->execute("PRAGMA foreign_keys = ON");
-	return rows;
-}
-
-int ProxySQL_Admin::Read_Scheduler_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
-	if (root.exists("scheduler")==false) return 0;
-	const Setting &schedulers = root["scheduler"];
-	int count = schedulers.getLength();
-	//fprintf(stderr, "Found %d users\n",count);
-	int i;
-	int rows=0;
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO scheduler (id, active, interval_ms, filename, arg1, arg2, arg3, arg4, arg5, comment) VALUES (%d, %d, %d, '%s', %s, %s, %s, %s, %s, '%s')";
-	for (i=0; i< count; i++) {
-		const Setting &sched = schedulers[i];
-		int id;
-		int active=1;
-
-		std::string filename;
-
-		bool arg1_exists=false;
-		std::string arg1;
-		bool arg2_exists=false;
-		std::string arg2;
-		bool arg3_exists=false;
-		std::string arg3;
-		bool arg4_exists=false;
-		std::string arg4;
-		bool arg5_exists=false;
-		std::string arg5;
-
-		// variable for parsing interval_ms
-		int interval_ms=0;
-
-		std::string comment="";
-
-		// validate arguments
-		if (sched.lookupValue("id", id)==false) continue;
-		sched.lookupValue("active", active);
-		sched.lookupValue("interval_ms", interval_ms);
-		if (sched.lookupValue("filename", filename)==false) continue;
-		if (sched.lookupValue("arg1", arg1)) arg1_exists=true;
-		if (sched.lookupValue("arg2", arg2)) arg2_exists=true;
-		if (sched.lookupValue("arg3", arg3)) arg3_exists=true;
-		if (sched.lookupValue("arg4", arg4)) arg4_exists=true;
-		if (sched.lookupValue("arg5", arg5)) arg5_exists=true;
-		sched.lookupValue("comment", comment);
-
-
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(std::to_string(id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			strlen(std::to_string(interval_ms).c_str()) +
-			strlen(filename.c_str()) +
-			( arg1_exists ? strlen(arg1.c_str()) : 0 ) + 4 +
-			( arg2_exists ? strlen(arg2.c_str()) : 0 ) + 4 +
-			( arg3_exists ? strlen(arg3.c_str()) : 0 ) + 4 +
-			( arg4_exists ? strlen(arg4.c_str()) : 0 ) + 4 +
-			( arg5_exists ? strlen(arg5.c_str()) : 0 ) + 4 +
-			strlen(comment.c_str()) +
-			40;
-		char *query=(char *)malloc(query_len);
-		if (arg1_exists)
-			arg1="\'" + arg1 + "\'";
-		else
-			arg1 = "NULL";
-		if (arg2_exists)
-			arg2="\'" + arg2 + "\'";
-		else
-			arg2 = "NULL";
-		if (arg3_exists)
-			arg3="\'" + arg3 + "\'";
-		else
-			arg3 = "NULL";
-		if (arg4_exists)
-			arg4="\'" + arg4 + "\'";
-		else
-			arg4 = "NULL";
-		if (arg5_exists)
-			arg5="\'" + arg5 + "\'";
-		else
-			arg5 = "NULL";
-
-		sprintf(query, q,
-			id, active,
-			interval_ms,
-			filename.c_str(),
-			arg1.c_str(),
-			arg2.c_str(),
-			arg3.c_str(),
-			arg4.c_str(),
-			arg5.c_str(),
-			comment.c_str()
-		);
-		admindb->execute(query);
-		free(query);
-		rows++;
-	}
-	admindb->execute("PRAGMA foreign_keys = ON");
-	return rows;
-}
-
-int ProxySQL_Admin::Read_MySQL_Query_Rules_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
-	if (root.exists("mysql_query_rules")==false) return 0;
-	const Setting &mysql_query_rules = root["mysql_query_rules"];
-	int count = mysql_query_rules.getLength();
-	//fprintf(stderr, "Found %d users\n",count);
-	int i;
-	int rows=0;
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s)";
-	for (i=0; i< count; i++) {
-		const Setting &rule = mysql_query_rules[i];
-		int rule_id;
-		int active=1;
-		bool username_exists=false;
-		std::string username;
-		bool schemaname_exists=false;
-		std::string schemaname;
-		int flagIN=0;
-
-		// variables for parsing client_addr
-		bool client_addr_exists=false;
-		std::string client_addr;
-
-		// variables for parsing proxy_addr
-		bool proxy_addr_exists=false;
-		std::string proxy_addr;
-
-		// variable for parsing proxy_port
-		int proxy_port=-1;
-
-		// variables for parsing digest
-		bool digest_exists=false;
-		std::string digest;
-
-
-		bool match_digest_exists=false;
-		std::string match_digest;
-		bool match_pattern_exists=false;
-		std::string match_pattern;
-		int negate_match_pattern=0;
-
-		bool re_modifiers_exists=false;
-		std::string re_modifiers;
-
-		int flagOUT=-1;
-		bool replace_pattern_exists=false;
-		std::string replace_pattern;
-		int destination_hostgroup=-1;
-		int next_query_flagIN=-1;
-		int mirror_flagOUT=-1;
-		int mirror_hostgroup=-1;
-		int cache_ttl=-1;
-		int cache_empty_result=-1;
-		int cache_timeout=-1;
-		int reconnect=-1;
-		int timeout=-1;
-		int retries=-1;
-		int delay=-1;
-		bool error_msg_exists=false;
-		std::string error_msg;
-		bool OK_msg_exists=false;
-		std::string OK_msg;
-
-		int sticky_conn=-1;
-		int multiplex=-1;
-		int gtid_from_hostgroup = -1;
-
-		// variable for parsing log
-		int log=-1;
-
-		int apply=0;
-
-		bool comment_exists=false;
-		std::string comment;
-
-		// validate arguments
-		if (rule.lookupValue("rule_id", rule_id)==false) {
-			proxy_error("Admin: detected a mysql_query_rules in config file without a mandatory rule_id\n");
-			continue;
-		}
-		rule.lookupValue("active", active);
-		if (rule.lookupValue("username", username)) username_exists=true;
-		if (rule.lookupValue("schemaname", schemaname)) schemaname_exists=true;
-		rule.lookupValue("flagIN", flagIN);
-
-		if (rule.lookupValue("client_addr", client_addr)) client_addr_exists=true;
-		if (rule.lookupValue("proxy_addr", proxy_addr)) proxy_addr_exists=true;
-		rule.lookupValue("proxy_port", proxy_port);
-		if (rule.lookupValue("digest", digest)) digest_exists=true;
-
-		if (rule.lookupValue("match_digest", match_digest)) match_digest_exists=true;
-		if (rule.lookupValue("match_pattern", match_pattern)) match_pattern_exists=true;
-		rule.lookupValue("negate_match_pattern", negate_match_pattern);
-		if (rule.lookupValue("re_modifiers", re_modifiers)) {
-		} else {
-			re_modifiers = "CASELESS";
-		}
-		re_modifiers_exists=true;
-		rule.lookupValue("flagOUT", flagOUT);
-		if (rule.lookupValue("replace_pattern", replace_pattern)) replace_pattern_exists=true;
-		rule.lookupValue("destination_hostgroup", destination_hostgroup);
-		rule.lookupValue("next_query_flagIN", next_query_flagIN);
-		rule.lookupValue("mirror_flagOUT", mirror_flagOUT);
-		rule.lookupValue("mirror_hostgroup", mirror_hostgroup);
-		rule.lookupValue("cache_ttl", cache_ttl);
-		rule.lookupValue("cache_empty_result", cache_empty_result);
-		rule.lookupValue("cache_timeout", cache_timeout);
-		rule.lookupValue("reconnect", reconnect);
-		rule.lookupValue("timeout", timeout);
-		rule.lookupValue("retries", retries);
-		rule.lookupValue("delay", delay);
-
-		if (rule.lookupValue("error_msg", error_msg)) error_msg_exists=true;
-		if (rule.lookupValue("OK_msg", OK_msg)) OK_msg_exists=true;
-
-		rule.lookupValue("sticky_conn", sticky_conn);
-		rule.lookupValue("multiplex", multiplex);
-		rule.lookupValue("gtid_from_hostgroup", gtid_from_hostgroup);
-
-		rule.lookupValue("log", log);
-
-		rule.lookupValue("apply", apply);
-		if (rule.lookupValue("comment", comment)) comment_exists=true;
-
-
-		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(std::to_string(rule_id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			( username_exists ? strlen(username.c_str()) : 0 ) + 4 +
-			( schemaname_exists ? strlen(schemaname.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(flagIN).c_str()) + 4 +
-
-			( client_addr_exists ? strlen(client_addr.c_str()) : 0 ) + 4 +
-			( proxy_addr_exists ? strlen(proxy_addr.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(proxy_port).c_str()) + 4 +
-
-			( match_digest_exists ? strlen(match_digest.c_str()) : 0 ) + 4 +
-			( match_pattern_exists ? strlen(match_pattern.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
-			( re_modifiers_exists ? strlen(re_modifiers.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(flagOUT).c_str()) + 4 +
-			( replace_pattern_exists ? strlen(replace_pattern.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(destination_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(cache_ttl).c_str()) + 4 +
-			strlen(std::to_string(cache_empty_result).c_str()) + 4 +
-			strlen(std::to_string(cache_timeout).c_str()) + 4 +
-			strlen(std::to_string(reconnect).c_str()) + 4 +
-			strlen(std::to_string(timeout).c_str()) + 4 +
-			strlen(std::to_string(next_query_flagIN).c_str()) + 4 +
-			strlen(std::to_string(mirror_flagOUT).c_str()) + 4 +
-			strlen(std::to_string(mirror_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(retries).c_str()) + 4 +
-			strlen(std::to_string(delay).c_str()) + 4 +
-			( error_msg_exists ? strlen(error_msg.c_str()) : 0 ) + 4 +
-			( OK_msg_exists ? strlen(OK_msg.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(sticky_conn).c_str()) + 4 +
-			strlen(std::to_string(multiplex).c_str()) + 4 +
-			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(log).c_str()) + 4 +
-			strlen(std::to_string(apply).c_str()) + 4 +
-			( comment_exists ? strlen(comment.c_str()) : 0 ) + 4 +
-			64;
-		char *query=(char *)malloc(query_len);
-		if (username_exists)
-			username="\"" + username + "\"";
-		else
-			username = "NULL";
-		if (schemaname_exists)
-			schemaname="\"" + schemaname + "\"";
-		else
-			schemaname = "NULL";
-
-		if (client_addr_exists)
-			client_addr="\"" + client_addr + "\"";
-		else
-			client_addr = "NULL";
-		if (proxy_addr_exists)
-			proxy_addr="\"" + proxy_addr + "\"";
-		else
-			proxy_addr = "NULL";
-		if (digest_exists)
-			digest="\"" + digest + "\"";
-		else
-			digest = "NULL";
-
-		if (match_digest_exists)
-			match_digest="\"" + match_digest + "\"";
-		else
-			match_digest = "NULL";
-		if (match_pattern_exists)
-			match_pattern="\"" + match_pattern + "\"";
-		else
-			match_pattern = "NULL";
-		if (replace_pattern_exists)
-			replace_pattern="\"" + replace_pattern + "\"";
-		else
-			replace_pattern = "NULL";
-		if (error_msg_exists)
-			error_msg="\"" + error_msg + "\"";
-		else
-			error_msg = "NULL";
-		if (OK_msg_exists)
-			OK_msg="\"" + OK_msg + "\"";
-		else
-			OK_msg = "NULL";
-		if (re_modifiers_exists)
-			re_modifiers="\"" + re_modifiers + "\"";
-		else
-			re_modifiers = "NULL";
-		if (comment_exists)
-			comment="\"" + comment + "\"";
-		else
-			comment = "NULL";
-
-
-		sprintf(query, q,
-			rule_id, active,
-			username.c_str(),
-			schemaname.c_str(),
-			( flagIN >= 0 ? std::to_string(flagIN).c_str() : "NULL") ,
-			client_addr.c_str(),
-			proxy_addr.c_str(),
-			( proxy_port >= 0 ? std::to_string(proxy_port).c_str() : "NULL") ,
-			digest.c_str(),
-			match_digest.c_str(),
-			match_pattern.c_str(),
-			( negate_match_pattern == 0 ? 0 : 1) ,
-			re_modifiers.c_str(),
-			( flagOUT >= 0 ? std::to_string(flagOUT).c_str() : "NULL") ,
-			replace_pattern.c_str(),
-			( destination_hostgroup >= 0 ? std::to_string(destination_hostgroup).c_str() : "NULL") ,
-			( cache_ttl >= 0 ? std::to_string(cache_ttl).c_str() : "NULL") ,
-			( cache_empty_result >= 0 ? std::to_string(cache_empty_result).c_str() : "NULL") ,
-			( cache_timeout >= 0 ? std::to_string(cache_timeout).c_str() : "NULL") ,
-			( reconnect >= 0 ? std::to_string(reconnect).c_str() : "NULL") ,
-			( timeout >= 0 ? std::to_string(timeout).c_str() : "NULL") ,
-			( retries >= 0 ? std::to_string(retries).c_str() : "NULL") ,
-			( delay >= 0 ? std::to_string(delay).c_str() : "NULL") ,
-			( next_query_flagIN >= 0 ? std::to_string(next_query_flagIN).c_str() : "NULL") ,
-			( mirror_flagOUT >= 0 ? std::to_string(mirror_flagOUT).c_str() : "NULL") ,
-			( mirror_hostgroup >= 0 ? std::to_string(mirror_hostgroup).c_str() : "NULL") ,
-			error_msg.c_str(),
-			OK_msg.c_str(),
-			( sticky_conn >= 0 ? std::to_string(sticky_conn).c_str() : "NULL") ,
-			( multiplex >= 0 ? std::to_string(multiplex).c_str() : "NULL") ,
-			( gtid_from_hostgroup >= 0 ? std::to_string(gtid_from_hostgroup).c_str() : "NULL") ,
-			( log >= 0 ? std::to_string(log).c_str() : "NULL") ,
-			( apply == 0 ? 0 : 1) ,
-			comment.c_str()
-		);
-		//fprintf(stderr, "%s\n", query);
-		admindb->execute(query);
-		free(query);
-		rows++;
-	}
-	admindb->execute("PRAGMA foreign_keys = ON");
-	return rows;
-}
-
-int ProxySQL_Admin::Read_MySQL_Servers_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
-	int i;
-	int rows=0;
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	if (root.exists("mysql_servers")==true) {
-		const Setting &mysql_servers = root["mysql_servers"];
-		int count = mysql_servers.getLength();
-		//fprintf(stderr, "Found %d servers\n",count);
-		char *q=(char *)"INSERT OR REPLACE INTO mysql_servers (hostname, port, gtid_port, hostgroup_id, compression, weight, status, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (\"%s\", %d, %d, %d, %d, %d, \"%s\", %d, %d, %d, %d, '%s')";
-		for (i=0; i< count; i++) {
-			const Setting &server = mysql_servers[i];
-			std::string address;
-			std::string status="ONLINE";
-			int port=3306;
-			int gtid_port=0;
-			int hostgroup;
-			int weight=1;
-			int compression=0;
-			int max_connections=1000; // default
-			int max_replication_lag=0; // default
-			int use_ssl=0;
-			int max_latency_ms=0;
-			std::string comment="";
-			if (server.lookupValue("address", address)==false) {
-				if (server.lookupValue("hostname", address)==false) {
-					continue;
-				}
-			}
-			server.lookupValue("port", port);
-			server.lookupValue("gtid_port", gtid_port);
-			if (server.lookupValue("hostgroup", hostgroup)==false) {
-				if (server.lookupValue("hostgroup_id", hostgroup)==false) {
-					continue;
-				}
-			}
-			server.lookupValue("status", status);
-			if (
-				(strcasecmp(status.c_str(),(char *)"ONLINE"))
-				&& (strcasecmp(status.c_str(),(char *)"SHUNNED"))
-				&& (strcasecmp(status.c_str(),(char *)"OFFLINE_SOFT"))
-				&& (strcasecmp(status.c_str(),(char *)"OFFLINE_HARD"))
-			) {
-					status="ONLINE";
-			}
-			server.lookupValue("compression", compression);
-			server.lookupValue("weight", weight);
-			server.lookupValue("max_connections", max_connections);
-			server.lookupValue("max_replication_lag", max_replication_lag);
-			server.lookupValue("use_ssl", use_ssl);
-			server.lookupValue("max_latency_ms", max_latency_ms);
-			server.lookupValue("comment", comment);
-			char *o1=strdup(comment.c_str());
-			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+strlen(o)+128);
-			sprintf(query,q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
-			//fprintf(stderr, "%s\n", query);
-			admindb->execute(query);
-			if (o!=o1) free(o);
-			free(o1);
-			free(query);
-			rows++;
-		}
-	}
-	if (root.exists("mysql_replication_hostgroups")==true) {
-		const Setting &mysql_replication_hostgroups = root["mysql_replication_hostgroups"];
-		int count = mysql_replication_hostgroups.getLength();
-		char *q=(char *)"INSERT OR REPLACE INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment, check_type) VALUES (%d, %d, '%s', '%s')";
-		for (i=0; i< count; i++) {
-			const Setting &line = mysql_replication_hostgroups[i];
-			int writer_hostgroup;
-			int reader_hostgroup;
-			std::string comment="";
-			std::string check_type="";
-			if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-			if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
-			line.lookupValue("comment", comment);
-			char *o1=strdup(comment.c_str());
-			char *o=escape_string_single_quotes(o1, false);
-			line.lookupValue("check_type", check_type);
-			if (
-				(strcasecmp(check_type.c_str(),(char *)"read_only"))
-				&& (strcasecmp(check_type.c_str(),(char *)"innodb_read_only"))
-				&& (strcasecmp(check_type.c_str(),(char *)"super_read_only"))
-			) {
-				check_type="read_only";
-			}
-			char *t1=strdup(check_type.c_str());
-			char *t=escape_string_single_quotes(t1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(t)+32);
-			sprintf(query,q, writer_hostgroup, reader_hostgroup, o, t);
-			//fprintf(stderr, "%s\n", query);
-			admindb->execute(query);
-			if (o!=o1) free(o);
-			free(o1);
-			if (t!=t1) free(t);
-			free(t1);
-			free(query);
-			rows++;
-		}
-	}
-        if (root.exists("mysql_group_replication_hostgroups")==true) {
-                const Setting &mysql_group_replication_hostgroups = root["mysql_group_replication_hostgroups"];
-                int count = mysql_group_replication_hostgroups.getLength();
-                char *q=(char *)"INSERT OR REPLACE INTO mysql_group_replication_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (%d, %d, %d, %d, %d, %d, %d, %d, '%s')";
-                for (i=0; i< count; i++) {
-                        const Setting &line = mysql_group_replication_hostgroups[i];
-                        int writer_hostgroup;
-                        int backup_writer_hostgroup;
-                        int reader_hostgroup;
-                        int offline_hostgroup;
-                        int active=1; // default
-                        int max_writers;
-                        int writer_is_also_reader;
-                        int max_transactions_behind;
-                        std::string comment="";
-                        if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-                        if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) continue;
-                        if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
-                        if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) continue;
-			if (line.lookupValue("max_writers", max_writers)==false) max_writers=1;
-                        if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
-		        if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
-                        line.lookupValue("comment", comment);
-                        char *o1=strdup(comment.c_str());
-                        char *o=escape_string_single_quotes(o1, false);
-                        char *query=(char *)malloc(strlen(q)+strlen(o)+128); // 128 vs sizeof(int)*8
-                        sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, o);
-                        //fprintf(stderr, "%s\n", query);
-                        admindb->execute(query);
-                        if (o!=o1) free(o);
-                        free(o1);
-                        free(query);
-                        rows++;
-                }
-        }
-    if (root.exists("mysql_galera_hostgroups")==true) {
-            const Setting &mysql_galera_hostgroups = root["mysql_galera_hostgroups"];
-            int count = mysql_galera_hostgroups.getLength();
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_galera_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (%d, %d, %d, %d, %d, %d, %d, %d, '%s')";
-            for (i=0; i< count; i++) {
-                    const Setting &line = mysql_galera_hostgroups[i];
-                    int writer_hostgroup;
-                    int backup_writer_hostgroup;
-                    int reader_hostgroup;
-                    int offline_hostgroup;
-                    int active=1; // default
-                    int max_writers;
-                    int writer_is_also_reader;
-                    int max_transactions_behind;
-                    std::string comment="";
-                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-                    if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) continue;
-                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
-                    if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) continue;
-                    if (line.lookupValue("max_writers", max_writers)==false) max_writers=1;
-                    if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
-                    if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
-                    line.lookupValue("comment", comment);
-                    char *o1=strdup(comment.c_str());
-                    char *o=escape_string_single_quotes(o1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+128); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, o);
-                    //fprintf(stderr, "%s\n", query);
-                    admindb->execute(query);
-                    if (o!=o1) free(o);
-                    free(o1);
-                    free(query);
-                    rows++;
-            }
-    }
-    if (root.exists("mysql_aws_aurora_hostgroups")==true) {
-            const Setting &mysql_aws_aurora_hostgroups = root["mysql_aws_aurora_hostgroups"];
-            int count = mysql_aws_aurora_hostgroups.getLength();
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment ) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
-            for (i=0; i< count; i++) {
-                    const Setting &line = mysql_aws_aurora_hostgroups[i];
-                    int writer_hostgroup;
-                    int reader_hostgroup;
-                    int active=1; // default
-					int aurora_port;
-                    int max_lag_ms;
-                    int add_lag_ms;
-                    int min_lag_ms;
-                    int lag_num_checks;
-                    int check_interval_ms;
-                    int check_timeout_ms;
-                    int writer_is_also_reader;
-					int new_reader_weight;
-                    std::string comment="";
-                    std::string domain_name="";
-                    if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) continue;
-                    if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) continue;
-                    if (line.lookupValue("aurora_port", aurora_port)==false) aurora_port=3306;
-                    if (line.lookupValue("max_lag_ms", max_lag_ms)==false) max_lag_ms=600000;
-                    if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
-                    if (line.lookupValue("check_timeout_ms", check_timeout_ms)==false) check_timeout_ms=1000;
-                    if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
-                    if (line.lookupValue("new_reader_weight", new_reader_weight)==false) new_reader_weight=1;
-                    if (line.lookupValue("add_lag_ms", add_lag_ms)==false) add_lag_ms=30;
-                    if (line.lookupValue("min_lag_ms", min_lag_ms)==false) min_lag_ms=30;
-                    if (line.lookupValue("lag_num_checks", lag_num_checks)==false) lag_num_checks=1;
-                    line.lookupValue("comment", comment);
-                    line.lookupValue("domain_name", domain_name);
-                    char *o1=strdup(comment.c_str());
-                    char *o=escape_string_single_quotes(o1, false);
-                    char *p1=strdup(domain_name.c_str());
-                    char *p=escape_string_single_quotes(p1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, o);
-                    //fprintf(stderr, "%s\n", query);
-                    admindb->execute(query);
-                    if (o!=o1) free(o);
-                    free(o1);
-                    if (p!=p1) free(p);
-                    free(p1);
-                    free(query);
-                    rows++;
-            }
-    }
-	admindb->execute("PRAGMA foreign_keys = ON");
-	return rows;
-}
-
-int ProxySQL_Admin::Read_ProxySQL_Servers_from_configfile() {
-	const Setting& root = GloVars.confFile->cfg.getRoot();
-	int i;
-	int rows=0;
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	if (root.exists("proxysql_servers")==true) {
-		const Setting &mysql_servers = root["proxysql_servers"];
-		int count = mysql_servers.getLength();
-		//fprintf(stderr, "Found %d servers\n",count);
-		char *q=(char *)"INSERT OR REPLACE INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %d, %d, '%s')";
-		for (i=0; i< count; i++) {
-			const Setting &server = mysql_servers[i];
-			std::string address;
-			int port;
-			int weight=0;
-			std::string comment="";
-			if (server.lookupValue("address", address)==false) {
-				if (server.lookupValue("hostname", address)==false) {
-					continue;
-				}
-			}
-			if (server.lookupValue("port", port)==false) continue;
-			server.lookupValue("weight", weight);
-			server.lookupValue("comment", comment);
-			char *o1=strdup(comment.c_str());
-			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(address.c_str())+strlen(o)+128);
-			sprintf(query, q, address.c_str(), port, weight, o);
-			proxy_info("Cluster: Adding ProxySQL Servers %s:%d from config file\n", address.c_str(), port);
-			//fprintf(stderr, "%s\n", query);
-			admindb->execute(query);
-			if (o!=o1) free(o);
-			free(o1);
-			free(query);
-			rows++;
-		}
-	}
-	admindb->execute("PRAGMA foreign_keys = ON");
-	return rows;
 }
 
 extern "C" ProxySQL_Admin * create_ProxySQL_Admin_func() {
