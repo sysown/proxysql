@@ -1863,6 +1863,33 @@ bool MySQL_Session::handler_again___verify_backend_net_write_timeout() {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___verify_backend_multi_statement() {
+	if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS != mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) {
+
+		if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)
+			mybe->server_myds->myconn->options.client_flag |= CLIENT_MULTI_STATEMENTS;
+		else
+			mybe->server_myds->myconn->options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
+
+		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				previous_status.push(PROCESSING_QUERY);
+				break;
+				case PROCESSING_STMT_PREPARE:
+			previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+				case PROCESSING_STMT_EXECUTE:
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		NEXT_IMMEDIATE_NEW(SETTING_MULTI_STMT);
+	}
+	return false;
+}
+
 bool MySQL_Session::handler_again___verify_backend_max_join_size() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.max_join_size, mybe->server_myds->myconn->options.max_join_size);
@@ -2551,6 +2578,28 @@ bool MySQL_Session::handler_again___status_SETTING_ISOLATION_LEVEL(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION TRANSACTION ISOLATION LEVEL", mybe->server_myds->myconn->options.isolation_level, false, true);
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	enum session_status st=status;
+	bool ret = false;
+
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	int rc=myconn->async_set_option(myds->revents, myconn->options.client_flag & CLIENT_MULTI_STATEMENTS);
+	if (rc==0) {
+		myds->DSS = STATE_MARIADB_GENERIC;
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		proxy_error("Error setting multistatemnt on server\n");
+	}
 	return ret;
 }
 
@@ -3981,6 +4030,9 @@ handler_again:
 								if (handler_again___verify_backend_max_join_size()) {
 									goto handler_again;
 								}
+								if (handler_again___verify_backend_multi_statement()) {
+									goto handler_again;
+								}
 								if (locked_on_hostgroup != -1) {
 									locked_on_hostgroup_and_all_variables_set=true;
 								}
@@ -4485,6 +4537,18 @@ handler_again:
 			{
 				int rc=0;
 				if (handler_again___status_SETTING_CHARSET(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_MULTI_STMT:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_MULTI_STMT(&rc))
 					goto handler_again;	// we changed status
 				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
