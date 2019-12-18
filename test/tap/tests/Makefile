@@ -94,6 +94,9 @@ set_character_set-t: set_character_set-t.cpp $(TAP_LIBDIR)/libtap.a
 charset_unsigned_int-t: charset_unsigned_int-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ charset_unsigned_int-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o charset_unsigned_int-t
 
+select_config_file-t: select_config_file-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ select_config_file-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o select_config_file-t
+
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
 
@@ -102,7 +105,4 @@ galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
 
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
-
-select_config_file-t: select_config_file-t.cpp $(LIBDIR)/libtap.a
-	g++ select_config_file-t.cpp -I$(INCLUDEDIR) -L$(LIBDIR) -std=c++11 `mysql_config --include --libs` -lmysqlclient -ltap -o select_config_file-t
 
