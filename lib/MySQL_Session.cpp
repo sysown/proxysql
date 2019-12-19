@@ -4284,7 +4284,6 @@ handler_again:
 										break;
 									}
 									break;
-								case 1290: // read-only
 								case 1047: // WSREP has not yet prepared node for application use
 								case 1053: // Server shutdown in progress
 									myconn->parent->connect_error(myerr);
