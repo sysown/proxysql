@@ -102,37 +102,6 @@ static char * load_file (const char *filename) {
 	return buffer;
 }
 
-const char* config_header = "########################################################################################\n"
-							"# This config file is parsed using libconfig , and its grammar is described in:\n"
-							"# http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar\n"
-							"# Grammar is also copied at the end of this file\n"
-							"########################################################################################\n"
-							"\n"
-							"########################################################################################\n"
-							"# IMPORTANT INFORMATION REGARDING THIS CONFIGURATION FILE:\n"
-							"########################################################################################\n"
-							"# On startup, ProxySQL reads its config file (if present) to determine its datadir.\n"
-							"# What happens next depends on if the database file (disk) is present in the defined\n"
-							"# datadir (i.e. \"/var/lib/proxysql/proxysql.db\").\n"
-							"#\n"
-							"# If the database file is found, ProxySQL initializes its in-memory configuration from\n"
-							"# the persisted on-disk database. So, disk configuration gets loaded into memory and\n"
-							"# then propagated towards the runtime configuration.\n"
-							"#\n"
-							"# If the database file is not found and a config file exists, the config file is parsed\n"
-							"# and its content is loaded into the in-memory database, to then be both saved on-disk\n"
-							"# database and loaded at runtime.\n"
-							"#\n"
-							"# IMPORTANT: If a database file is found, the config file is NOT parsed. In this case\n"
-							"#            ProxySQL initializes its in-memory configuration from the persisted on-disk\n"
-							"#            database ONLY. In other words, the configuration found in the proxysql.cnf\n"
-							"#            file is only used to initial the on-disk database read on the first startup.\n"
-							"#\n"
-							"# In order to FORCE a re-initialise of the on-disk database from the configuration file\n"
-							"# the ProxySQL service should be started with \"service proxysql initial\".\n"
-							"#\n"
-							"########################################################################################\n";
-
 /*
 int sqlite3_json_init(
   sqlite3 *db,
