@@ -2,6 +2,9 @@
 #include "cpp.h"
 #include "httpserver.hpp"
 
+#include <sstream>
+
+
 #include "ProxySQL_RESTAPI_Server.hpp"
 using namespace httpserver;
 
@@ -12,6 +15,8 @@ using namespace httpserver;
 #define DEB ""
 #endif /* DEBUG */
 #define PROXYSQL_RESTAPI_SERVER_VERSION "2.0.1121" DEB
+
+extern ProxySQL_Admin *GloAdmin;
 
 class hello_world_resource : public http_resource {
 public:
@@ -32,14 +37,46 @@ public:
 			return std::shared_ptr<http_response>(new string_response("{\"error\":\"Cannot fork.\"}"));
 		}
 
-		char buf[1024];
+		// validate json correctness
+		try {
+			nlohmann::json valid=nlohmann::json::parse(req.get_content());
+		}
+		catch(nlohmann::json::exception& e) {
+			std::stringstream ss;
+			ss << "{\"type\":\"in\", \"error\":\"" << e.what() << "\"}";
+			return std::shared_ptr<http_response>(new string_response(ss.str()));
+		}
+
+
+		char buf[1024] = {0};
 		if (pid == 0) {
 			dup2(pipefd[1], STDOUT_FILENO);
 			close(pipefd[0]);
 			close(pipefd[1]);
-			char* args[] = {"a", (char*)req.get_content().data(), NULL};
-			if (execve("/home/val/workspace/script.py", args, NULL) == -1) {
-				return std::shared_ptr<http_response>(new string_response("{\"error\":\"Error calling execve().\"}"));
+
+			SQLite3_result *resultset=NULL;
+			int affected_rows;
+			int cols;
+			char *error=NULL;
+			std::stringstream ss;
+			ss << "SELECT * FROM restapi_routes WHERE uri='" << req.get_path_piece(1) << "'";
+			bool rc=GloAdmin->admindb->execute_statement(ss.str().c_str(), &error, &cols, &affected_rows, &resultset);
+			if (!rc) {
+				proxy_error("Cannot query script for given path [%s]\n", req.get_path_piece(1));
+			}
+			if (!resultset || resultset->rows_count == 0) {
+				std::stringstream ss;
+				ss << "{\"error\":\"The script for route [" << req.get_path() << "] was not found.\"}";
+				return std::shared_ptr<http_response>(new string_response(ss.str()));
+			}
+			std::string script = resultset->rows[0]->fields[4];
+			char* const args[] = {const_cast<char* const>("a"), const_cast<char* const>(req.get_content().c_str()), NULL};
+			if (execve(resultset->rows[0]->fields[4], args, NULL) == -1) {
+				char path_buffer[PATH_MAX];
+				char* cwd = getcwd(path_buffer, sizeof(path_buffer)-1);
+				std::stringstream ss;
+				ss << "{\"error\":\"Error calling execve().\", \"cwd\":\"" << cwd << "\", \"file\":\"" << resultset->rows[0]->fields[4] << "\"}";
+				return std::shared_ptr<http_response>(new string_response(ss.str()));
 			}
 			exit(EXIT_SUCCESS);
 		}
@@ -49,7 +86,18 @@ public:
 			if (nbytes == -1) {
 				return std::shared_ptr<http_response>(new string_response("{\"error\":\"Error reading pipe.\"}"));
 			}
-			//TODO : validate json correctness in the buf
+
+			// validate json correctness
+			try {
+				nlohmann::json j=nlohmann::json::parse(buf);
+			}
+			catch(nlohmann::json::exception& e) {
+				std::stringstream ss;
+				ss << "{\"type\":\"out\", \"error\":\"" << e.what() << "\"}";
+				proxy_error("Error parsing script output. %s\n", buf);
+				return std::shared_ptr<http_response>(new string_response(ss.str()));
+			}
+
 			close(pipefd[0]);
 			wait(NULL);
 		}
@@ -76,7 +124,7 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(int p) {
 	hr = new hello_world_resource();
 
     //ws->register_resource("/hello", &hwr);
-    ws->register_resource("/hello", hr);
+    ws->register_resource("/hello", hr, true);
 	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws) !=0 ) {
             perror("Thread creation");
             exit(EXIT_FAILURE);

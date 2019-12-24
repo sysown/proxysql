@@ -17,6 +17,7 @@ public:
 	int Read_MySQL_Query_Rules_from_configfile();
 	int Read_MySQL_Servers_from_configfile();
 	int Read_Scheduler_from_configfile();
+	int Read_Restapi_from_configfile();
 	int Read_ProxySQL_Servers_from_configfile();
 
 	void addField(std::string& data, const char* name, const char* value, const char* dq="\"");
@@ -25,6 +26,7 @@ public:
 	int Write_MySQL_Query_Rules_to_configfile(std::string& data);
 	int Write_MySQL_Servers_to_configfile(std::string& data);
 	int Write_Scheduler_to_configfile(std::string& data);
+	int Write_Restapi_to_configfile(std::string& data);
 	int Write_ProxySQL_Servers_to_configfile(std::string& data);
 };
 

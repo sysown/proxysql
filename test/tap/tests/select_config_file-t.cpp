@@ -62,11 +62,14 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysql, "delete from mysql_galera_hostgroups");
 	MYSQL_QUERY(mysql, "delete from mysql_aws_aurora_hostgroups");
 	MYSQL_QUERY(mysql, "delete from scheduler");
+	MYSQL_QUERY(mysql, "delete from restapi_routes");
 	MYSQL_QUERY(mysql, "delete from proxysql_servers");
 
 	MYSQL_QUERY(mysql, "insert into proxysql_servers (hostname, port, weight, comment) values ('hostname', 3333, 12, 'comment');");
 	MYSQL_QUERY(mysql, "insert into scheduler (id, active, interval_ms, filename, arg1, arg2, arg3, arg4, arg5, comment) values "
 					   " (1,1,1000,'filename','a1','a2','a3','a4','a5','comment');");
+	MYSQL_QUERY(mysql, "insert into restapi_routes (id, active, interval_ms, uri, script, comment) values "
+					   " (1,1,1000,'test','/script.py','comment');");
 	MYSQL_QUERY(mysql, "insert into mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, "
 					   " domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, "
 					   " add_lag_ms, min_lag_ms, lag_num_checks, comment) "
@@ -107,6 +110,13 @@ int main(int argc, char** argv) {
 		std::string str = strStream.str(); //str holds the content of the file
 
 		ok(!str.compare(resultset), "Files are equal");
+#if 0
+		std::ofstream f;
+		f.open("out.txt", std::ios::out);
+		f << resultset;
+		f.close();
+#endif
+
 	}
 
 	MYSQL_QUERY(mysql, "load mysql variables from disk");
@@ -114,6 +124,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysql, "load mysql users from disk");
 	MYSQL_QUERY(mysql, "load mysql servers from disk");
 	MYSQL_QUERY(mysql, "load scheduler from disk");
+	MYSQL_QUERY(mysql, "load restapi from disk");
 	MYSQL_QUERY(mysql, "load proxysql servers from disk");
 
 	mysql_close(mysql);

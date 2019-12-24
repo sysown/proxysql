@@ -358,6 +358,17 @@ scheduler:
 		comment="comment"
 	}
 )
+restapi:
+(
+	{
+		id=1
+		active=1
+		interval_ms=1000
+		uri="test"
+		script="/script.py"
+		comment="comment"
+	}
+)
 proxysql_servers:
 (
 	{

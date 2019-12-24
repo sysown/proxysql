@@ -10,6 +10,7 @@
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
+class ProxySQL_Restapi;
 
 class Scheduler_Row {
 	public:
@@ -271,6 +272,7 @@ class ProxySQL_Admin {
 	void stats___mysql_gtid_executed();
 
 	ProxySQL_Config& proxysql_config();
+	ProxySQL_Restapi& proxysql_restapi();
 
 	void flush_error_log();
 	bool GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
