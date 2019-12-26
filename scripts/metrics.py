@@ -4,7 +4,6 @@ import sys
 import subprocess
 import json
 
-
 if len(sys.argv) > 1:
   params=json.loads(sys.argv[1])
   out=''
