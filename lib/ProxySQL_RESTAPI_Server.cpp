@@ -26,28 +26,28 @@ private:
 		int cols;
 		char *error=NULL;
 		std::stringstream ss;
-		ss << "SELECT * FROM restapi_routes WHERE uri='" << req.get_path_piece(1) << "' and active=1";
+		ss << "SELECT * FROM restapi_routes WHERE uri='" << req.get_path_piece(1) << "' and method='" << req.get_method() << "' and active=1";
 		bool rc=GloAdmin->admindb->execute_statement(ss.str().c_str(), &error, &cols, &affected_rows, &resultset);
 		if (!rc) {
-			proxy_error("Cannot query script for given path [%s]\n", req.get_path_piece(1));
+			proxy_error("Cannot query script for given method [%s] and uri [%s]\n", req.get_method().c_str(), req.get_path_piece(1).c_str());
 			std::stringstream ss;
 			if (error) {
-				ss << "{\"error\":\"The script for route [" << req.get_path() << "] was not found. Error: " << error << "Error: \"}";
+				ss << "{\"error\":\"The script for method [" << req.get_method() << "] and route [" << req.get_path() << "] was not found. Error: " << error << "Error: \"}";
 				proxy_error("Path %s, error %s\n", req.get_path().c_str(), error);
 			}
 			else {
-				ss << "{\"error\":\"The script for route [" << req.get_path() << "] was not found.\"}";
+				ss << "{\"error\":\"The script for method [" << req.get_method() << "] and route [" << req.get_path() << "] was not found.\"}";
 				proxy_error("Path %s\n", req.get_path().c_str());
 			}
 			return std::shared_ptr<http_response>(new string_response(ss.str()));
 		}
 		if (resultset && resultset->rows_count != 1) {
 			std::stringstream ss;
-			ss << "{\"error\":\"The script for route [" << req.get_path() << "] was not found. count = " << resultset->rows_count << "\" }";
-			proxy_error("Script for route %s was not found\n", req.get_path().c_str());
+			ss << "{\"error\":\"The script for method [" << req.get_method() << "] and route [" << req.get_path() << "] was not found. Rows count returned [" << resultset->rows_count << "]\" }";
+			proxy_error("Script for method [%s] and route [%s] was not found\n", req.get_method().c_str(), req.get_path().c_str());
 			return std::shared_ptr<http_response>(new string_response(ss.str()));
 		}
-		script = resultset->rows[0]->fields[4];
+		script = resultset->rows[0]->fields[5];
 		interval_ms = atoi(resultset->rows[0]->fields[2]);
 		if (resultset) {delete resultset; resultset=NULL;}
 		return std::shared_ptr<http_response>(nullptr);
