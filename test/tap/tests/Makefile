@@ -74,13 +74,13 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
+	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t || true
 
 OPT=-O2
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp
+SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp
 
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t 
+tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -98,6 +98,9 @@ charset_unsigned_int-t: charset_unsigned_int-t.cpp $(TAP_LIBDIR)/libtap.a
 
 select_config_file-t: select_config_file-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ select_config_file-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o select_config_file-t
+
+test_set_character_results-t: test_set_character_results-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_set_character_results-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -lssl -lcrypto -ldl -lpthread -o test_set_character_results-t
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_GALERA -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"

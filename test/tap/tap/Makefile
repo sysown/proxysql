@@ -9,7 +9,7 @@ clean:
 
 OPT=-O2
 
-libtap.a: tap.cpp tap.h command_line.cpp command_line.h
-	g++ -c tap.cpp command_line.cpp  -std=c++11 -I$(INCLUDE) $(OPT)
-	ar rcs libtap.a tap.o command_line.o
+libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h
+	g++ -c tap.cpp command_line.cpp utils.cpp -std=c++11 -I$(INCLUDE) $(OPT)
+	ar rcs libtap.a tap.o command_line.o utils.o
 
