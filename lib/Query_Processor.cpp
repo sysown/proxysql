@@ -2779,6 +2779,15 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					}
 				}
 			}
+			if (!strcasecmp(key,"min_gtid")) {
+				size_t vs = strlen(value);
+				if (vs > 0) {
+					char *buf=(char*)malloc(vs);
+					strncpy(buf, value, vs - 1);
+					buf[vs - 1] = '\0';
+					qpo->min_gtid = buf;
+				}
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
