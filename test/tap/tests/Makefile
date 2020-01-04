@@ -12,6 +12,7 @@ PROXYSQL_PATH=../../..
 PROXYSQL_IDIR=$(PROXYSQL_PATH)/include
 
 SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
+JSON_IDIR=$(DEPS_PATH)/json
 
 RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
@@ -74,11 +75,11 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t test_ps_large_result-t || true
+	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t test_ps_large_result-t set_testing-t || true
 
 OPT=-O2
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp
+SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp set_testing-t.cpp
 
 tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
@@ -114,3 +115,5 @@ galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
+set_testing-t: set_testing-t.cpp $(LIBDIR)/libtap.a
+	g++ set_testing-t.cpp -Wall -I$(INCLUDEDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -L$(LIBDIR) $(OPT) -std=c++11 $(STATIC_LIBS) -ltap -pthread -O0 -ggdb -ldl -lssl -lcrypto -o set_testing-t

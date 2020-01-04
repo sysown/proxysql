@@ -14,6 +14,7 @@
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
+#include "MySQL_Variables.h"
 
 
 #include "libinjection.h"
@@ -495,6 +496,7 @@ void MySQL_Session::init() {
 	mybes= new PtrArray(4);
 	sess_STMTs_meta=new MySQL_STMTs_meta();
 	SLDH=new StmtLongDataHandler();
+	mysql_variables = std::unique_ptr<MySQL_Variables>(new MySQL_Variables(this));
 }
 
 void MySQL_Session::reset() {
@@ -948,6 +950,9 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["client"]["DSS"] = client_myds->DSS;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["transaction_persistent"] = transaction_persistent;
+	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
+		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
+	}
 	j["conn"]["sql_mode"] = ( client_myds->myconn->options.sql_mode ? client_myds->myconn->options.sql_mode : "") ;
 	j["conn"]["time_zone"] = ( client_myds->myconn->options.time_zone ? client_myds->myconn->options.time_zone : "") ;
 	j["conn"]["isolation_level"] = ( client_myds->myconn->options.isolation_level ? client_myds->myconn->options.isolation_level : "") ;
@@ -956,8 +961,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["character_set_results"] = ( client_myds->myconn->options.character_set_results ? client_myds->myconn->options.character_set_results : "") ;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	j["conn"]["sql_auto_is_null"] = ( client_myds->myconn->options.sql_auto_is_null ? client_myds->myconn->options.sql_auto_is_null : "") ;
-	j["conn"]["sql_select_limit"] = ( client_myds->myconn->options.sql_select_limit ? client_myds->myconn->options.sql_select_limit : "") ;
-	j["conn"]["sql_safe_updates"] = ( client_myds->myconn->options.sql_safe_updates ? client_myds->myconn->options.sql_safe_updates : "") ;
 	j["conn"]["collation_connection"] = ( client_myds->myconn->options.collation_connection ? client_myds->myconn->options.collation_connection : "") ;
 	j["conn"]["net_write_timeout"] = ( client_myds->myconn->options.net_write_timeout ? client_myds->myconn->options.net_write_timeout : "") ;
 	j["conn"]["max_join_size"] = ( client_myds->myconn->options.max_join_size ? client_myds->myconn->options.max_join_size : "") ;
@@ -994,6 +997,9 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["backends"][i]["stream"]["DSS"] = _myds->DSS;
 			if (_myds->myconn) {
 				MySQL_Connection * _myconn = _myds->myconn;
+				for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
+					_myconn->variables[idx].fill_server_internal_session(j, i, idx);
+				}
 				sprintf(buff,"%p",_myconn);
 				j["backends"][i]["conn"]["address"] = buff;
 				j["backends"][i]["conn"]["auto_increment_delay_token"] = _myconn->auto_increment_delay_token;
@@ -1011,8 +1017,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["character_set_results"] = ( _myconn->options.character_set_results ? _myconn->options.character_set_results : "") ;
 				j["backends"][i]["conn"]["session_track_gtids"] = ( _myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "") ;
 				j["backends"][i]["conn"]["sql_auto_is_null"] = ( _myconn->options.sql_auto_is_null ? _myconn->options.sql_auto_is_null : "") ;
-				j["backends"][i]["conn"]["sql_select_limit"] = ( _myconn->options.sql_select_limit ? _myconn->options.sql_select_limit : "") ;
-				j["backends"][i]["conn"]["sql_safe_updates"] = ( _myconn->options.sql_safe_updates ? _myconn->options.sql_safe_updates : "") ;
 				j["backends"][i]["conn"]["collation_connection"] = ( _myconn->options.collation_connection ? _myconn->options.collation_connection : "") ;
 				j["backends"][i]["conn"]["net_write_timeout"] = ( _myconn->options.net_write_timeout ? _myconn->options.net_write_timeout : "") ;
                 j["backends"][i]["conn"]["max_join_size"] = ( _myconn->options.max_join_size ? _myconn->options.max_join_size : "") ;
@@ -1807,31 +1811,10 @@ bool MySQL_Session::handler_again___verify_backend_sql_auto_is_null() {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___verify_backend_sql_select_limit() {
+bool MySQL_Session::handler_again___verify_backend(int var) {
 	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.sql_select_limit, mybe->server_myds->myconn->options.sql_select_limit);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.sql_select_limit_int,
-		&mybe->server_myds->myconn->options.sql_select_limit,
-		mysql_thread___default_sql_select_limit,
-		&client_myds->myconn->options.sql_select_limit_int,
-		client_myds->myconn->options.sql_select_limit,
-		SETTING_SQL_SELECT_LIMIT
-	);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___verify_backend_sql_safe_updates() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.sql_safe_updates, mybe->server_myds->myconn->options.sql_safe_updates);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.sql_safe_updates_int,
-		&mybe->server_myds->myconn->options.sql_safe_updates,
-		mysql_thread___default_sql_safe_updates,
-		&client_myds->myconn->options.sql_safe_updates_int,
-		client_myds->myconn->options.sql_safe_updates,
-		SETTING_SQL_SAFE_UPDATES
-	);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, mysql_variables->client_get_value(var), mysql_variables->server_get_value(var));
+	ret = mysql_variables->verify_generic_variable(var);
 	return ret;
 }
 
@@ -2444,7 +2427,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
 }
 */
 
-bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, char *var_name, char *var_value, bool no_quote, bool set_transaction) {
+bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote, bool set_transaction) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -2650,14 +2633,14 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *_rc) {
 bool MySQL_Session::handler_again___status_SETTING_SQL_SELECT_LIMIT(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SELECT_LIMIT", mybe->server_myds->myconn->options.sql_select_limit, true);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SELECT_LIMIT", mysql_variables->server_get_value(SQL_SELECT_LIMIT), true);
 	return ret;
 }
 
 bool MySQL_Session::handler_again___status_SETTING_SQL_SAFE_UPDATES(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SAFE_UPDATES", mybe->server_myds->myconn->options.sql_safe_updates, true);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SAFE_UPDATES", mysql_variables->server_get_value(SQL_SAFE_UPDATES), true);
 	return ret;
 }
 
@@ -3985,6 +3968,12 @@ handler_again:
 								goto handler_again;
 							}
 							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
+
+								for (auto i = 0; i < SQL_NAME_LAST; i++) {
+									if(mysql_variables->verify_generic_variable(i))
+										goto handler_again;
+								}
+
 								if (handler_again___verify_backend_charset()) {
 									goto handler_again;
 								}
@@ -4013,12 +4002,6 @@ handler_again:
 									goto handler_again;
 								}
 								if (handler_again___verify_backend_sql_auto_is_null()) {
-									goto handler_again;
-								}
-								if (handler_again___verify_backend_sql_select_limit()) {
-									goto handler_again;
-								}
-								if (handler_again___verify_backend_sql_safe_updates()) {
 									goto handler_again;
 								}
 								if (handler_again___verify_backend_collation_connection()) {
@@ -5699,13 +5682,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (__tmp_value >= 0) {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET sql_safe_updates value %s\n", value1.c_str());
 							uint32_t sql_safe_updates_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (client_myds->myconn->options.sql_safe_updates_int != sql_safe_updates_int) {
-								client_myds->myconn->options.sql_safe_updates_int = sql_safe_updates_int;
-								if (client_myds->myconn->options.sql_safe_updates) {
-									free(client_myds->myconn->options.sql_safe_updates);
-								}
+							if (mysql_variables->client_get_hash(SQL_SAFE_UPDATES) != sql_safe_updates_int) {
+								mysql_variables->client_set_value(SQL_SAFE_UPDATES, value1.c_str());
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection sql_safe_updates to %s\n", value1.c_str());
-								client_myds->myconn->options.sql_safe_updates=strdup(value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {
@@ -5876,13 +5855,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (only_digit_chars) {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET sql_select_limit value %s\n", value1.c_str());
 							uint32_t sql_select_limit_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (client_myds->myconn->options.sql_select_limit_int != sql_select_limit_int) {
-								client_myds->myconn->options.sql_select_limit_int = sql_select_limit_int;
-								if (client_myds->myconn->options.sql_select_limit) {
-									free(client_myds->myconn->options.sql_select_limit);
-								}
+							if (mysql_variables->client_get_hash(SQL_SELECT_LIMIT) != sql_select_limit_int) {
+								mysql_variables->client_set_value(SQL_SELECT_LIMIT, value1.c_str());
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection sql_select_limit to %s\n", value1.c_str());
-								client_myds->myconn->options.sql_select_limit=strdup(value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {

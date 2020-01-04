@@ -14,6 +14,7 @@
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+#include "MySQL_Variables.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -3608,19 +3609,8 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	}
 	sess->client_myds->myconn->options.sql_auto_is_null=strdup(mysql_thread___default_sql_auto_is_null);
 
-	uint32_t sql_select_limit_int=SpookyHash::Hash32(mysql_thread___default_sql_select_limit,strlen(mysql_thread___default_sql_select_limit),10);
-	sess->client_myds->myconn->options.sql_select_limit_int = sql_select_limit_int;
-	if (sess->client_myds->myconn->options.sql_select_limit) {
-		free(sess->client_myds->myconn->options.sql_select_limit);
-	}
-	sess->client_myds->myconn->options.sql_select_limit=strdup(mysql_thread___default_sql_select_limit);
-
-	uint32_t sql_safe_updates_int=SpookyHash::Hash32(mysql_thread___default_sql_safe_updates,strlen(mysql_thread___default_sql_safe_updates),10);
-	sess->client_myds->myconn->options.sql_safe_updates_int = sql_safe_updates_int;
-	if (sess->client_myds->myconn->options.sql_safe_updates) {
-		free(sess->client_myds->myconn->options.sql_safe_updates);
-	}
-	sess->client_myds->myconn->options.sql_safe_updates=strdup(mysql_thread___default_sql_safe_updates);
+	sess->mysql_variables->client_set_value(SQL_SELECT_LIMIT, mysql_thread___default_sql_select_limit);
+	sess->mysql_variables->client_set_value(SQL_SAFE_UPDATES, mysql_thread___default_sql_safe_updates);
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;
