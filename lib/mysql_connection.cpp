@@ -9,6 +9,16 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
+const char Variable::name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit"};
+
+void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
+	j["backends"][conn_num]["conn"][Variable::name[idx]] = std::string(value);
+}
+
+void Variable::fill_client_internal_session(json &j, int idx) {
+	j["conn"][Variable::name[idx]] = value;
+}
+
 #define PROXYSQL_USE_RESULT
 
 static int
@@ -202,6 +212,12 @@ MySQL_Connection::MySQL_Connection() {
 	fd=-1;
 	status_flags=0;
 	last_time_used=0;
+
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		variables[i].value = NULL;
+		variables[i].hash = 0;
+	}
+
 	options.client_flag = 0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
@@ -216,8 +232,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.transaction_read = NULL;
 	options.session_track_gtids = NULL;
 	options.sql_auto_is_null = NULL;
-	options.sql_select_limit = NULL;
-	options.sql_safe_updates = NULL;
 	options.collation_connection = NULL;
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
@@ -227,8 +241,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.character_set_results_sent = false;
 	options.session_track_gtids_sent = false;
 	options.sql_auto_is_null_sent = false;
-	options.sql_select_limit_sent = false;
-	options.sql_safe_updates_sent = false;
 	options.collation_connection_sent = false;
 	options.net_write_timeout_sent = false;
 	options.max_join_size_sent = false;
@@ -247,8 +259,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.character_set_results_int=0;
 	options.session_track_gtids_int=0;
 	options.sql_auto_is_null_int=0;
-	options.sql_select_limit_int=0;
-	options.sql_safe_updates_int=0;
 	options.collation_connection_int=0;
 	options.net_write_timeout_int=0;
 	options.max_join_size_int=0;
@@ -322,6 +332,14 @@ MySQL_Connection::~MySQL_Connection() {
 	if (query.stmt) {
 		query.stmt=NULL;
 	}
+
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		if (variables[i].value) {
+			free(variables[i].value);
+			variables[i].value = NULL;
+		}
+	}
+
 	if (options.sql_mode) {
 		free(options.sql_mode);
 		options.sql_mode=NULL;
@@ -353,14 +371,6 @@ MySQL_Connection::~MySQL_Connection() {
 	if (options.sql_auto_is_null) {
 		free(options.sql_auto_is_null);
 		options.sql_auto_is_null=NULL;
-	}
-	if (options.sql_select_limit) {
-		free(options.sql_select_limit);
-		options.sql_select_limit=NULL;
-	}
-	if (options.sql_safe_updates) {
-		free(options.sql_safe_updates);
-		options.sql_safe_updates=NULL;
 	}
 	if (options.collation_connection) {
 		free(options.collation_connection);
@@ -2193,6 +2203,15 @@ void MySQL_Connection::reset() {
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
+
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		variables[i].hash = 0;
+		if (variables[i].value) {
+			free(variables[i].value);
+			variables[i].value = NULL;
+		}
+	}
+
 	options.isolation_level_int = 0;
 	if (options.isolation_level) {
 		free (options.isolation_level);
@@ -2228,18 +2247,6 @@ void MySQL_Connection::reset() {
 		free (options.sql_auto_is_null);
 		options.sql_auto_is_null = NULL;
 		options.sql_auto_is_null_sent = false;
-	}
-	options.sql_select_limit_int = 0;
-	if (options.sql_select_limit) {
-		free (options.sql_select_limit);
-		options.sql_select_limit = NULL;
-		options.sql_select_limit_sent = false;
-	}
-	options.sql_safe_updates_int = 0;
-	if (options.sql_safe_updates) {
-		free (options.sql_safe_updates);
-		options.sql_safe_updates = NULL;
-		options.sql_safe_updates_sent = false;
 	}
 	options.collation_connection_int = 0;
 	if (options.collation_connection) {

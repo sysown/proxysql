@@ -4,6 +4,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+
 #define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001
 #define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
@@ -15,6 +18,15 @@
 #define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 #define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
+
+class Variable {
+public:
+	char *value;
+	uint32_t hash;
+	void fill_server_internal_session(json &j, int conn_num, int idx);
+	void fill_client_internal_session(json &j, int idx);
+	static const char name[SQL_NAME_LAST][64];
+};
 
 enum charset_action {
 	UNKNOWN,
@@ -56,8 +68,6 @@ class MySQL_Connection {
 		uint32_t tx_isolation_int;
 		uint32_t session_track_gtids_int;
 		uint32_t sql_auto_is_null_int;
-		uint32_t sql_select_limit_int;
-		uint32_t sql_safe_updates_int;
 		uint32_t collation_connection_int;
 		uint32_t net_write_timeout_int;
 		uint32_t max_join_size_int;
@@ -73,8 +83,6 @@ class MySQL_Connection {
 		char * tx_isolation;
 		char * session_track_gtids;
 		char * sql_auto_is_null;
-		char * sql_select_limit;
-		char * sql_safe_updates;
 		char * collation_connection;
 		char * net_write_timeout;
 		char * max_join_size;
@@ -84,8 +92,6 @@ class MySQL_Connection {
 		bool character_set_results_sent;
 		bool session_track_gtids_sent;
 		bool sql_auto_is_null_sent;
-		bool sql_select_limit_sent;
-		bool sql_safe_updates_sent;
 		bool collation_connection_sent;
 		bool net_write_timeout_sent;
 		bool max_join_size_sent;
@@ -101,6 +107,7 @@ class MySQL_Connection {
 		bool autocommit;
 		bool no_backslash_escapes;
 	} options;
+	Variable variables[SQL_NAME_LAST];
 	struct {
 		unsigned long length;
 		char *ptr;
