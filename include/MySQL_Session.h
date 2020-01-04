@@ -6,6 +6,8 @@
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 
+class MySQL_Variables;
+
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
 	PROXYSQL_SESSION_ADMIN,
@@ -70,7 +72,6 @@ class MySQL_Session
 {
 	private:
 	int handler_ret;
-	std::stack<enum session_status> previous_status;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
@@ -106,6 +107,7 @@ class MySQL_Session
 	int handler_again___status_RESETTING_CONNECTION();
 	void handler_again___new_thread_to_kill_connection();
 
+	bool handler_again___verify_backend(int var);
 	bool handler_again___verify_backend_charset();
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_ldap_user_variable();
@@ -120,8 +122,6 @@ class MySQL_Session
 	bool handler_again___verify_backend_character_set_results();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_sql_auto_is_null();
-	bool handler_again___verify_backend_sql_select_limit();
-	bool handler_again___verify_backend_sql_safe_updates();
 	bool handler_again___verify_backend_collation_connection();
 	bool handler_again___verify_backend_net_write_timeout();
 	bool handler_again___verify_backend_max_join_size();
@@ -145,7 +145,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_COLLATION_CONNECTION(int *);
 	bool handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *);
 	bool handler_again___status_SETTING_MAX_JOIN_SIZE(int *);
-	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, char *var_name, char *var_value, bool no_quote=false, bool set_transaction=false);
+	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
@@ -157,6 +157,7 @@ class MySQL_Session
 
 
 	public:
+	std::stack<enum session_status> previous_status;
 	void * operator new(size_t);
 	void operator delete(void *);
 
@@ -178,6 +179,7 @@ class MySQL_Session
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
 	char * default_schema;
+	std::unique_ptr<MySQL_Variables> mysql_variables;
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
