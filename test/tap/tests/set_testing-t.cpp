@@ -195,7 +195,6 @@ void queryVariables(MYSQL *mysql, json& j) {
 void queryInternalStatus(MYSQL *mysql, json& j) {
 	char *query = (char*)"PROXYSQL INTERNAL SESSION";
 
-	//fprintf(stderr, "TRACE : QUERY 4 : variables %s\n", query);
 	if (mysql_query(mysql, query)) {
 		if (silent==0) {
 			fprintf(stderr,"%s\n", mysql_error(mysql));
@@ -506,7 +505,6 @@ void * my_conn_thread(void *arg) {
 
 	return NULL;
 }
-
 
 int main(int argc, char *argv[]) {
 	CommandLine cl;

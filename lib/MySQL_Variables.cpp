@@ -370,3 +370,4 @@ bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 	return session->handler_again___status_SETTING_SQL_LOG_BIN(&_rc);
 }
 
+

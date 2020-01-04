@@ -64,3 +64,4 @@
 "set max_join_size=20000", "{'max_join_size':'20000'}"
 "set max_join_size=10000", "{'max_join_size':'10000'}"
 "set max_join_size=18446744073709551615", "{'max_join_size':'18446744073709551615'}"
+

@@ -146,8 +146,6 @@ enum MySQL_DS_type {
 };
 
 
-<<<<<<< HEAD
-=======
 enum variable_name {
 	SQL_CHARACTER_SET,
 	SQL_CHARACTER_ACTION,
@@ -172,7 +170,6 @@ enum variable_name {
 	SQL_NAME_LAST
 };
 
->>>>>>> added variable: WSREP_SYNC_WAIT
 enum session_status {
 	CONNECTING_CLIENT,
 	CONNECTING_SERVER,
@@ -195,7 +192,6 @@ enum session_status {
 	SETTING_TIME_ZONE,
 	SETTING_ISOLATION_LEVEL,
 	SETTING_TRANSACTION_READ,
-	SETTING_TX_ISOLATION,
 	SETTING_CHARACTER_SET_RESULTS,
 	SETTING_SESSION_TRACK_GTIDS,
 	SETTING_SQL_AUTO_IS_NULL,
