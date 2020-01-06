@@ -335,6 +335,7 @@ class Query_Processor {
 	void query_parser_free(SQP_par_t *qp);
 	char * get_digest_text(SQP_par_t *qp);
 	uint64_t get_digest(SQP_par_t *qp);
+	bool is_valid_gtid(char *gtid, size_t gtid_len);
 
 	void update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, MySQL_Session *sess);
 

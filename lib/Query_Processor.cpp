@@ -2780,12 +2780,14 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 				}
 			}
 			if (!strcasecmp(key,"min_gtid")) {
-				size_t vs = strlen(value);
-				if (vs > 0) {
-					char *buf=(char*)malloc(vs);
-					strncpy(buf, value, vs - 1);
-					buf[vs - 1] = '\0';
+				size_t l = strlen(value);
+				if (is_valid_gtid(value, l)) {
+					char *buf=(char*)malloc(l+1);
+					strncpy(buf, value, l);
+					buf[l+1] = '\0';
 					qpo->min_gtid = buf;
+				} else {
+					proxy_warning("Invalid gtid value=%s\n", value);
 				}
 			}
 		}
@@ -2796,6 +2798,24 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 	}
 	free_tokenizer( &tok );
 	return ret;
+}
+
+bool Query_Processor::is_valid_gtid(char *gtid, size_t gtid_len) {
+	if (gtid_len < 3) {
+		return false;
+	}
+	char *sep_pos = index(gtid, ':');
+	if (sep_pos == NULL) {
+		return false;
+	}
+	size_t uuid_len = sep_pos - gtid;
+	if (uuid_len < 1) {
+		return false;
+	}
+	if (gtid_len < uuid_len + 2) {
+		return false;
+	}
+	return true;
 }
 
 void Query_Processor::query_parser_free(SQP_par_t *qp) {
