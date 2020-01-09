@@ -26,7 +26,10 @@ class MySQL_Variables {
 	MySQL_Session* session;
 public:
 	bool verify_generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
-	static int session_statuses[SQL_NAME_LAST];
+	static int session_by_var[SQL_NAME_LAST];
+	static int var_by_session[NONE];
+	static bool quotes[SQL_NAME_LAST];
+	static bool set_transaction[SQL_NAME_LAST];
 	Updater* updaters[SQL_NAME_LAST];
 
 	MySQL_Variables(MySQL_Session* session);
@@ -40,7 +43,8 @@ public:
 	const char* server_get_value(int idx);
 	uint32_t server_get_hash(int idx);
 
-	bool verify_generic_variable(int idx);
+	bool verify_variable(int idx);
+	bool update_variable(int &_rc);
 
 };
 

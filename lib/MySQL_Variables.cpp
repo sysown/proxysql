@@ -5,9 +5,59 @@
 #include "MySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
-int MySQL_Variables::session_statuses[SQL_NAME_LAST] = {
+int MySQL_Variables::session_by_var[SQL_NAME_LAST] = {
 	SETTING_SQL_SAFE_UPDATES,
-	SETTING_SQL_SELECT_LIMIT
+	SETTING_SQL_SELECT_LIMIT,
+	SETTING_SQL_MODE
+};
+
+bool MySQL_Variables::quotes[SQL_NAME_LAST] = {
+	true,
+	true,
+	false
+};
+
+bool MySQL_Variables::set_transaction[SQL_NAME_LAST] = {
+	false,
+	false,
+	false
+};
+
+int MySQL_Variables::var_by_session[NONE] = {
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_SQL_MODE,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_SELECT_LIMIT,
+	SQL_SAFE_UPDATES,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST
 };
 
 MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
@@ -18,6 +68,7 @@ MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 		switch(i) {
 		case SQL_SAFE_UPDATES:
 		case SQL_SELECT_LIMIT:
+		case SQL_SQL_MODE:
 			updaters[i] = new Generic_Updater();
 			break;
 		default:
@@ -115,8 +166,15 @@ bool MySQL_Variables::verify_generic_variable(uint32_t *be_int, char **be_var, c
 	return false;
 }
 
-bool MySQL_Variables::verify_generic_variable(int idx) {
-	return updaters[idx]->verify_variables(session, idx);
+bool MySQL_Variables::update_variable(int &_rc) {
+	auto idx = MySQL_Variables::var_by_session[session->status];
+	updaters[idx]->update_server_variable(session, idx, _rc);
+}
+
+bool MySQL_Variables::verify_variable(int idx) {
+	int rc = 0;
+	auto ret = updaters[idx]->verify_variables(session, idx);
+	return ret;
 }
 
 bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
@@ -126,9 +184,13 @@ bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
 		mysql_thread___default_sql_safe_updates,
 		&session->client_myds->myconn->variables[idx].hash,
 		session->client_myds->myconn->variables[idx].value,
-		static_cast<session_status>(MySQL_Variables::session_statuses[idx])
+		static_cast<session_status>(MySQL_Variables::session_by_var[idx])
 	);
 }
 
 bool Generic_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
+	bool q = MySQL_Variables::quotes[idx];
+	bool st = MySQL_Variables::set_transaction[idx];
+	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, Variable::name[idx], session->mysql_variables->server_get_value(idx), q, st);
+	return ret;
 }

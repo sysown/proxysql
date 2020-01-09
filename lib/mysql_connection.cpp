@@ -9,7 +9,7 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
-const char Variable::name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit"};
+const char Variable::name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode"};
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 	j["backends"][conn_num]["conn"][Variable::name[idx]] = std::string(value);
@@ -244,13 +244,10 @@ MySQL_Connection::MySQL_Connection() {
 	options.collation_connection_sent = false;
 	options.net_write_timeout_sent = false;
 	options.max_join_size_sent = false;
-	options.sql_mode_sent=false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
-	options.sql_mode=NULL;	// #509
-	options.sql_mode_int=0;	// #509
 	options.time_zone=NULL;	// #819
 	options.time_zone_int=0;	// #819
 	options.isolation_level_int=0;
@@ -340,10 +337,6 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
-	if (options.sql_mode) {
-		free(options.sql_mode);
-		options.sql_mode=NULL;
-	}
 	if (options.time_zone) {
 		free(options.time_zone);
 		options.time_zone=NULL;
@@ -2187,13 +2180,6 @@ void MySQL_Connection::reset() {
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
 	{ // bug #1160
-		options.sql_mode_int = 0;
-		if (options.sql_mode) {
-			free(options.sql_mode);
-			options.sql_mode = NULL;
-			options.sql_mode_sent = false;
-			
-		}
 		options.time_zone_int = 0;
 		if (options.time_zone) {
 			free(options.time_zone);

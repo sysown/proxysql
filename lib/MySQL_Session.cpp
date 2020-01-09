@@ -953,7 +953,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
-	j["conn"]["sql_mode"] = ( client_myds->myconn->options.sql_mode ? client_myds->myconn->options.sql_mode : "") ;
 	j["conn"]["time_zone"] = ( client_myds->myconn->options.time_zone ? client_myds->myconn->options.time_zone : "") ;
 	j["conn"]["isolation_level"] = ( client_myds->myconn->options.isolation_level ? client_myds->myconn->options.isolation_level : "") ;
 	j["conn"]["transaction_read"] = ( client_myds->myconn->options.transaction_read ? client_myds->myconn->options.transaction_read : "") ;
@@ -1008,8 +1007,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
-				j["backends"][i]["conn"]["sql_mode"] = ( _myconn->options.sql_mode ? _myconn->options.sql_mode : "") ;
-				j["backends"][i]["conn"]["sql_mode_sent"] = _myds->myconn->options.sql_mode_sent;
 				j["backends"][i]["conn"]["time_zone"] = ( _myconn->options.time_zone ? _myconn->options.time_zone : "") ;
 				j["backends"][i]["conn"]["isolation_level"] = ( _myconn->options.isolation_level ? _myconn->options.isolation_level : "") ;
 				j["backends"][i]["conn"]["tx_isolation"] = ( _myconn->options.tx_isolation ? _myconn->options.tx_isolation : "") ;
@@ -1640,31 +1637,6 @@ bool MySQL_Session::handler_again___verify_backend_sql_log_bin() {
 	return false;
 }
 
-bool MySQL_Session::handler_again___verify_backend_sql_mode() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.sql_mode, mybe->server_myds->myconn->options.sql_mode);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.sql_mode_int,
-		&mybe->server_myds->myconn->options.sql_mode,
-		mysql_thread___default_sql_mode,
-		&client_myds->myconn->options.sql_mode_int,
-		client_myds->myconn->options.sql_mode,
-		SETTING_SQL_MODE
-	);
-	return ret;
-/*
-	// for sql_mode we also set sql_mode_sent . Doesn't seem used tho.
-	// snippet, for reference
-		if (
-			(client_myds->myconn->options.sql_mode_int != mybe->server_myds->myconn->options.sql_mode_int)
-			||
-			(mybe->server_myds->myconn->options.sql_mode_sent == false)
-		) {
-			mybe->server_myds->myconn->options.sql_mode_sent = true;
-*/
-
-}
-
 bool MySQL_Session::handler_again___verify_backend_time_zone() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.time_zone, mybe->server_myds->myconn->options.time_zone);
@@ -1814,7 +1786,7 @@ bool MySQL_Session::handler_again___verify_backend_sql_auto_is_null() {
 bool MySQL_Session::handler_again___verify_backend(int var) {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, mysql_variables->client_get_value(var), mysql_variables->server_get_value(var));
-	ret = mysql_variables->verify_generic_variable(var);
+	ret = mysql_variables->verify_variable(var);
 	return ret;
 }
 
@@ -2311,13 +2283,6 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 			// rc==1 , nothing to do for now
 		}
 	}
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_SQL_MODE(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_MODE", mybe->server_myds->myconn->options.sql_mode);
 	return ret;
 }
 
@@ -3970,7 +3935,7 @@ handler_again:
 							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
-									if(mysql_variables->verify_generic_variable(i))
+									if(mysql_variables->verify_variable(i))
 										goto handler_again;
 								}
 
@@ -3978,9 +3943,6 @@ handler_again:
 									goto handler_again;
 								}
 								if (handler_again___verify_backend_sql_log_bin()) {
-									goto handler_again;
-								}
-								if (handler_again___verify_backend_sql_mode()) {
 									goto handler_again;
 								}
 								if (handler_again___verify_backend_time_zone()) {
@@ -4551,18 +4513,6 @@ handler_again:
 			}
 			break;
 
-		case SETTING_SQL_MODE:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_SQL_MODE(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_TIME_ZONE:
 			{
 				int rc=0;
@@ -4648,24 +4598,15 @@ handler_again:
 			}
 			break;
 
+		case SETTING_SQL_MODE:
 		case SETTING_SQL_SELECT_LIMIT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_SQL_SELECT_LIMIT(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_SQL_SAFE_UPDATES:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_SQL_SAFE_UPDATES(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
+			for (auto i = 0; i < SQL_NAME_LAST; i++) {
+				int rc = 0;
+				if (mysql_variables->update_variable(rc)) {
+					goto handler_again;
+				}
+				if (rc == -1) {
 					handler_ret = -1;
 					return handler_ret;
 				}
@@ -5612,17 +5553,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SQL Mode value %s\n", value1.c_str());
 						uint32_t sql_mode_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (client_myds->myconn->options.sql_mode_int != sql_mode_int) {
-							//fprintf(stderr,"sql_mode_int='%u'\n", sql_mode_int);
-							client_myds->myconn->options.sql_mode_int = sql_mode_int;
-							if (client_myds->myconn->options.sql_mode) {
-								free(client_myds->myconn->options.sql_mode);
-							}
+						if (mysql_variables->client_get_hash(SQL_SQL_MODE) != sql_mode_int) {
+							mysql_variables->client_set_value(SQL_SQL_MODE, value1.c_str());
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
-							client_myds->myconn->options.sql_mode=strdup(value1.c_str());
-							if (strcasestr(value1.c_str(), (char *)"NO_BACKSLASH_ESCAPES")) {
-								//goto __exit_set_destination_hostgroup;
-							}
 						}
 						exit_after_SetParse = true;
 					} else if (var == "sql_auto_is_null") {
@@ -6012,12 +5945,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					delete opt2;
 					if (rc) {
 						uint32_t sql_mode_int=SpookyHash::Hash32(s1.c_str(),s1.length(),10);
-						if (client_myds->myconn->options.sql_mode_int != sql_mode_int) {
-							client_myds->myconn->options.sql_mode_int = sql_mode_int;
-							if (client_myds->myconn->options.sql_mode) {
-								free(client_myds->myconn->options.sql_mode);
-							}
-							client_myds->myconn->options.sql_mode=strdup(s1.c_str());
+						if (mysql_variables->client_get_hash(SQL_SQL_MODE) != sql_mode_int) {
+							mysql_variables->client_set_value(SQL_SQL_MODE, s1.c_str());
 							std::size_t found_at = s1.find("@");
 							if (found_at != std::string::npos) {
 								char *v1 = strdup(s1.c_str());
