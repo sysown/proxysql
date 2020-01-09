@@ -9,9 +9,9 @@ int MySQL_Variables::session_by_var[SQL_NAME_LAST] = {
 	SETTING_SQL_SAFE_UPDATES,
 	SETTING_SQL_SELECT_LIMIT,
 	SETTING_SQL_MODE,
-	SETTING_TIME_ZONE
-/*	SETTING_CHARACTER_SET_RESULTS,
-	SETTING_ISOLATION_LEVEL,
+	SETTING_TIME_ZONE,
+	SETTING_CHARACTER_SET_RESULTS
+/*	SETTING_ISOLATION_LEVEL,
 	SETTING_TRANSACTION_READ,
 	SETTING_TX_ISOLATION,
 	SETTING_SESSION_TRACK_GTIDS,
@@ -25,9 +25,9 @@ bool MySQL_Variables::quotes[SQL_NAME_LAST] = {
 	true,  // SQL_SAFE_UPDATES
 	true,  // SQL_SELECT_LIMIT
 	false, // SQL_MODE
-	false  // SQL_TIME_ZONE
-/*	true,  // CHARACTER_SET_RESULTS
-    false, // ISOLATION_LEVEL	
+	false, // SQL_TIME_ZONE
+	true   // CHARACTER_SET_RESULTS
+/*  false, // ISOLATION_LEVEL	
     false, // TRANSACTION_READ
     false, // TX_ISOLATION
     true,  // SESSION_TRACK_GTIDS
@@ -41,9 +41,9 @@ bool MySQL_Variables::set_transaction[SQL_NAME_LAST] = {
 	false, // SQL_SAFE_UPDATES
 	false, // SQL_SELECT_LIMIT
 	false, // SQL_MODE
-	false  // SQL_TIME_ZONE
-/*	false, // CHARACTER_SET_RESULTS
-	true,  // ISOLATION_LEVEL
+	false, // SQL_TIME_ZONE
+	false  // CHARACTER_SET_RESULTS
+/*	true,  // ISOLATION_LEVEL
 	true,  // TRANSACTION_READ
 	false, // TX_ISOLATION
 	false, // SESSION_TRACK_GTIDS
@@ -76,7 +76,7 @@ int MySQL_Variables::var_by_session[NONE] = {
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
-	SQL_NAME_LAST,
+	SQL_CHARACTER_SET_RESULTS,
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
 	SQL_SELECT_LIMIT,
@@ -100,6 +100,7 @@ MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 		case SQL_SELECT_LIMIT:
 		case SQL_SQL_MODE:
 		case SQL_TIME_ZONE:
+		case SQL_CHARACTER_SET_RESULTS:
 			updaters[i] = new Generic_Updater();
 			break;
 		default:
@@ -205,6 +206,8 @@ bool MySQL_Variables::update_variable(int &_rc) {
 bool MySQL_Variables::verify_variable(int idx) {
 	int rc = 0;
 	auto ret = updaters[idx]->verify_variables(session, idx);
+	if (ret)
+		update_variable(rc);
 	return ret;
 }
 
