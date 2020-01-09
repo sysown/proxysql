@@ -3559,13 +3559,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-	// fix bug 1253 : initialize time_zone
-	uint32_t time_zone_int=SpookyHash::Hash32(mysql_thread___default_time_zone,strlen(mysql_thread___default_time_zone),10);
-	sess->client_myds->myconn->options.time_zone_int = time_zone_int;
-	if (sess->client_myds->myconn->options.time_zone) {
-		free(sess->client_myds->myconn->options.time_zone);
-	}
-	sess->client_myds->myconn->options.time_zone=strdup(mysql_thread___default_time_zone);
 
 	uint32_t isolation_level_int=SpookyHash::Hash32(mysql_thread___default_isolation_level,strlen(mysql_thread___default_isolation_level),10);
 	sess->client_myds->myconn->options.isolation_level_int = isolation_level_int;
@@ -3612,6 +3605,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	sess->mysql_variables->client_set_value(SQL_SELECT_LIMIT, mysql_thread___default_sql_select_limit);
 	sess->mysql_variables->client_set_value(SQL_SAFE_UPDATES, mysql_thread___default_sql_safe_updates);
 	sess->mysql_variables->client_set_value(SQL_SQL_MODE, mysql_thread___default_sql_mode);
+	sess->mysql_variables->client_set_value(SQL_TIME_ZONE, mysql_thread___default_time_zone);
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;
