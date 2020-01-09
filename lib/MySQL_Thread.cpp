@@ -3611,6 +3611,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->mysql_variables->client_set_value(SQL_SELECT_LIMIT, mysql_thread___default_sql_select_limit);
 	sess->mysql_variables->client_set_value(SQL_SAFE_UPDATES, mysql_thread___default_sql_safe_updates);
+	sess->mysql_variables->client_set_value(SQL_SQL_MODE, mysql_thread___default_sql_mode);
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;
