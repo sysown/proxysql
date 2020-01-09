@@ -327,7 +327,7 @@ void * my_conn_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
 	CommandLine cl;
-	std::string fileName("./tests/a.csv");
+	std::string fileName("./tests/set_testing-t.csv");
 
 	if(cl.getEnv())
 		return exit_status();

@@ -58,9 +58,7 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-		char *sql_mode;
 		char *time_zone;
-		uint32_t sql_mode_int;
 		uint32_t time_zone_int;
 		uint32_t character_set_results_int;
 		uint32_t isolation_level_int;
@@ -95,7 +93,6 @@ class MySQL_Connection {
 		bool collation_connection_sent;
 		bool net_write_timeout_sent;
 		bool max_join_size_sent;
-		bool sql_mode_sent;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
 		bool ldap_user_variable_sent;

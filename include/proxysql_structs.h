@@ -149,6 +149,7 @@ enum MySQL_DS_type {
 enum variable_name {
 	SQL_SAFE_UPDATES,
 	SQL_SELECT_LIMIT,
+	SQL_SQL_MODE,
 	SQL_NAME_LAST
 };
 
