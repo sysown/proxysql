@@ -58,8 +58,6 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-		char *time_zone;
-		uint32_t time_zone_int;
 		uint32_t character_set_results_int;
 		uint32_t isolation_level_int;
 		uint32_t transaction_read_int;
