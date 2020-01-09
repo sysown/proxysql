@@ -58,7 +58,6 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-		uint32_t character_set_results_int;
 		uint32_t isolation_level_int;
 		uint32_t transaction_read_int;
 		uint32_t tx_isolation_int;
@@ -73,7 +72,6 @@ class MySQL_Connection {
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
-		char * character_set_results;
 		char * isolation_level;
 		char * transaction_read;
 		char * tx_isolation;
@@ -85,7 +83,6 @@ class MySQL_Connection {
 		bool isolation_level_sent;
 		bool tx_isolation_sent;
 		bool transaction_read_sent;
-		bool character_set_results_sent;
 		bool session_track_gtids_sent;
 		bool sql_auto_is_null_sent;
 		bool collation_connection_sent;
