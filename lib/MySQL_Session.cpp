@@ -953,7 +953,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
-	j["conn"]["time_zone"] = ( client_myds->myconn->options.time_zone ? client_myds->myconn->options.time_zone : "") ;
 	j["conn"]["isolation_level"] = ( client_myds->myconn->options.isolation_level ? client_myds->myconn->options.isolation_level : "") ;
 	j["conn"]["transaction_read"] = ( client_myds->myconn->options.transaction_read ? client_myds->myconn->options.transaction_read : "") ;
 	j["conn"]["tx_isolation"] = ( client_myds->myconn->options.tx_isolation ? client_myds->myconn->options.tx_isolation : "") ;
@@ -1007,7 +1006,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
-				j["backends"][i]["conn"]["time_zone"] = ( _myconn->options.time_zone ? _myconn->options.time_zone : "") ;
 				j["backends"][i]["conn"]["isolation_level"] = ( _myconn->options.isolation_level ? _myconn->options.isolation_level : "") ;
 				j["backends"][i]["conn"]["tx_isolation"] = ( _myconn->options.tx_isolation ? _myconn->options.tx_isolation : "") ;
 				j["backends"][i]["conn"]["transaction_read"] = ( _myconn->options.transaction_read ? _myconn->options.transaction_read : "") ;
@@ -1635,20 +1633,6 @@ bool MySQL_Session::handler_again___verify_backend_sql_log_bin() {
 		NEXT_IMMEDIATE_NEW(SETTING_SQL_LOG_BIN);
 	}
 	return false;
-}
-
-bool MySQL_Session::handler_again___verify_backend_time_zone() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.time_zone, mybe->server_myds->myconn->options.time_zone);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.time_zone_int,
-		&mybe->server_myds->myconn->options.time_zone,
-		mysql_thread___default_time_zone,
-		&client_myds->myconn->options.time_zone_int,
-		client_myds->myconn->options.time_zone,
-		SETTING_TIME_ZONE
-	);
-	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status) {
@@ -2512,13 +2496,6 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			// rc==1 , nothing to do for now
 		}
 	}
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_TIME_ZONE(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"TIME_ZONE", mybe->server_myds->myconn->options.time_zone);
 	return ret;
 }
 
@@ -3945,9 +3922,6 @@ handler_again:
 								if (handler_again___verify_backend_sql_log_bin()) {
 									goto handler_again;
 								}
-								if (handler_again___verify_backend_time_zone()) {
-									goto handler_again;
-								}
 								if (handler_again___verify_backend_isolation_level()) {
 									goto handler_again;
 								}
@@ -4513,18 +4487,6 @@ handler_again:
 			}
 			break;
 
-		case SETTING_TIME_ZONE:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_TIME_ZONE(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_ISOLATION_LEVEL:
 			{
 				int rc=0;
@@ -4601,6 +4563,7 @@ handler_again:
 		case SETTING_SQL_MODE:
 		case SETTING_SQL_SELECT_LIMIT:
 		case SETTING_SQL_SAFE_UPDATES:
+		case SETTING_TIME_ZONE:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
 				if (mysql_variables->update_variable(rc)) {
@@ -5690,14 +5653,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET Time Zone value %s\n", value1.c_str());
 						uint32_t time_zone_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (client_myds->myconn->options.time_zone_int != time_zone_int) {
-							//fprintf(stderr,"time_zone_int='%u'\n", time_zone_int);
-							client_myds->myconn->options.time_zone_int = time_zone_int;
-							if (client_myds->myconn->options.time_zone) {
-								free(client_myds->myconn->options.time_zone);
-							}
+						if (mysql_variables->client_get_hash(SQL_TIME_ZONE) != time_zone_int) {
+							mysql_variables->client_set_value(SQL_TIME_ZONE, value1.c_str());
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection Time zone to %s\n", value1.c_str());
-							client_myds->myconn->options.time_zone=strdup(value1.c_str());
 						}
 						exit_after_SetParse = true;
 					} else if (var == "session_track_gtids") {
