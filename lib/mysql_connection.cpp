@@ -9,7 +9,7 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
-const char Variable::name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone"};
+const char Variable::name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results"};
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 	j["backends"][conn_num]["conn"][Variable::name[idx]] = std::string(value);
@@ -226,7 +226,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
-	options.character_set_results = NULL;
 	options.isolation_level = NULL;
 	options.tx_isolation = NULL;
 	options.transaction_read = NULL;
@@ -238,7 +237,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.isolation_level_sent = false;
 	options.tx_isolation_sent = false;
 	options.transaction_read_sent = false;
-	options.character_set_results_sent = false;
 	options.session_track_gtids_sent = false;
 	options.sql_auto_is_null_sent = false;
 	options.collation_connection_sent = false;
@@ -251,7 +249,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.isolation_level_int=0;
 	options.tx_isolation_int=0;
 	options.transaction_read_int=0;
-	options.character_set_results_int=0;
 	options.session_track_gtids_int=0;
 	options.sql_auto_is_null_int=0;
 	options.collation_connection_int=0;
@@ -346,10 +343,6 @@ MySQL_Connection::~MySQL_Connection() {
 	if (options.transaction_read) {
 		free(options.transaction_read);
 		options.transaction_read=NULL;
-	}
-	if (options.character_set_results) {
-		free(options.character_set_results);
-		options.character_set_results=NULL;
 	}
 	if (options.session_track_gtids) {
 		free(options.session_track_gtids);
@@ -2203,12 +2196,6 @@ void MySQL_Connection::reset() {
 		free (options.transaction_read);
 		options.transaction_read = NULL;
 		options.transaction_read_sent = false;
-	}
-	options.character_set_results_int = 0;
-	if (options.character_set_results) {
-		free (options.character_set_results);
-		options.character_set_results = NULL;
-		options.character_set_results_sent = false;
 	}
 	options.session_track_gtids_int = 0;
 	if (options.session_track_gtids) {

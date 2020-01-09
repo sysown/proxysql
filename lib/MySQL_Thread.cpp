@@ -3581,13 +3581,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	}
 	sess->client_myds->myconn->options.transaction_read=strdup(mysql_thread___default_transaction_read);
 
-	uint32_t character_set_results_int=SpookyHash::Hash32(mysql_thread___default_character_set_results,strlen(mysql_thread___default_character_set_results),10);
-	sess->client_myds->myconn->options.character_set_results_int = character_set_results_int;
-	if (sess->client_myds->myconn->options.character_set_results) {
-		free(sess->client_myds->myconn->options.character_set_results);
-	}
-	sess->client_myds->myconn->options.character_set_results=strdup(mysql_thread___default_character_set_results);
-
 	uint32_t session_track_gtids_int=SpookyHash::Hash32(mysql_thread___default_session_track_gtids,strlen(mysql_thread___default_session_track_gtids),10);
 	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
 	if (sess->client_myds->myconn->options.session_track_gtids) {
@@ -3606,6 +3599,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	sess->mysql_variables->client_set_value(SQL_SAFE_UPDATES, mysql_thread___default_sql_safe_updates);
 	sess->mysql_variables->client_set_value(SQL_SQL_MODE, mysql_thread___default_sql_mode);
 	sess->mysql_variables->client_set_value(SQL_TIME_ZONE, mysql_thread___default_time_zone);
+	sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, mysql_thread___default_character_set_results);
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;

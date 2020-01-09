@@ -142,7 +142,7 @@ void queryVariables(MYSQL *mysql, json& j) {
     char *query = (char*)"SELECT * FROM performance_schema.session_variables WHERE variable_name IN "
                          " ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
                          " 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
-                         " 'sql_select_limit');";
+                         " 'sql_select_limit', 'character_set_results');";
     if (mysql_query(mysql, query)) {
         if (silent==0) {
             fprintf(stderr,"%s\n", mysql_error(mysql));
@@ -333,7 +333,7 @@ int main(int argc, char *argv[]) {
 		return exit_status();
 
 	num_threads = 10;
-	queries = 10;
+	queries = 100;
 	queries_per_connections = 10;
 	count = 10;
 	username = cl.username;

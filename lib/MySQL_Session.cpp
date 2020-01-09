@@ -956,7 +956,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["isolation_level"] = ( client_myds->myconn->options.isolation_level ? client_myds->myconn->options.isolation_level : "") ;
 	j["conn"]["transaction_read"] = ( client_myds->myconn->options.transaction_read ? client_myds->myconn->options.transaction_read : "") ;
 	j["conn"]["tx_isolation"] = ( client_myds->myconn->options.tx_isolation ? client_myds->myconn->options.tx_isolation : "") ;
-	j["conn"]["character_set_results"] = ( client_myds->myconn->options.character_set_results ? client_myds->myconn->options.character_set_results : "") ;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	j["conn"]["sql_auto_is_null"] = ( client_myds->myconn->options.sql_auto_is_null ? client_myds->myconn->options.sql_auto_is_null : "") ;
 	j["conn"]["collation_connection"] = ( client_myds->myconn->options.collation_connection ? client_myds->myconn->options.collation_connection : "") ;
@@ -1009,7 +1008,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["isolation_level"] = ( _myconn->options.isolation_level ? _myconn->options.isolation_level : "") ;
 				j["backends"][i]["conn"]["tx_isolation"] = ( _myconn->options.tx_isolation ? _myconn->options.tx_isolation : "") ;
 				j["backends"][i]["conn"]["transaction_read"] = ( _myconn->options.transaction_read ? _myconn->options.transaction_read : "") ;
-				j["backends"][i]["conn"]["character_set_results"] = ( _myconn->options.character_set_results ? _myconn->options.character_set_results : "") ;
 				j["backends"][i]["conn"]["session_track_gtids"] = ( _myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "") ;
 				j["backends"][i]["conn"]["sql_auto_is_null"] = ( _myconn->options.sql_auto_is_null ? _myconn->options.sql_auto_is_null : "") ;
 				j["backends"][i]["conn"]["collation_connection"] = ( _myconn->options.collation_connection ? _myconn->options.collation_connection : "") ;
@@ -1721,20 +1719,6 @@ bool MySQL_Session::handler_again___verify_backend_tx_isolation() {
 		&client_myds->myconn->options.tx_isolation_int,
 		client_myds->myconn->options.tx_isolation,
 		SETTING_TX_ISOLATION
-	);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___verify_backend_character_set_results() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.character_set_results, mybe->server_myds->myconn->options.character_set_results);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.character_set_results_int,
-		&mybe->server_myds->myconn->options.character_set_results,
-		mysql_thread___default_character_set_results,
-		&client_myds->myconn->options.character_set_results_int,
-		client_myds->myconn->options.character_set_results,
-		SETTING_CHARACTER_SET_RESULTS
 	);
 	return ret;
 }
@@ -2548,13 +2532,6 @@ bool MySQL_Session::handler_again___status_SETTING_TX_ISOLATION(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"TX_ISOLATION", mybe->server_myds->myconn->options.tx_isolation, false, false);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARACTER_SET_RESULTS", mybe->server_myds->myconn->options.character_set_results, true);
 	return ret;
 }
 
@@ -3911,14 +3888,15 @@ handler_again:
 							}
 							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 
+								if (handler_again___verify_backend_charset()) {
+									goto handler_again;
+								}
+
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
 									if(mysql_variables->verify_variable(i))
 										goto handler_again;
 								}
 
-								if (handler_again___verify_backend_charset()) {
-									goto handler_again;
-								}
 								if (handler_again___verify_backend_sql_log_bin()) {
 									goto handler_again;
 								}
@@ -3929,9 +3907,6 @@ handler_again:
 									goto handler_again;
 								}
 								if (handler_again___verify_backend_tx_isolation()) {
-									goto handler_again;
-								}
-								if (handler_again___verify_backend_character_set_results()) {
 									goto handler_again;
 								}
 								if (handler_again___verify_backend_session_track_gtids()) {
@@ -4524,18 +4499,6 @@ handler_again:
 			break;
 
 
-		case SETTING_CHARACTER_SET_RESULTS:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_CHARACTER_SET_RESULTS(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_SESSION_TRACK_GTIDS:
 			{
 				int rc=0;
@@ -4564,6 +4527,7 @@ handler_again:
 		case SETTING_SQL_SELECT_LIMIT:
 		case SETTING_SQL_SAFE_UPDATES:
 		case SETTING_TIME_ZONE:
+		case SETTING_CHARACTER_SET_RESULTS:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
 				if (mysql_variables->update_variable(rc)) {
@@ -5794,13 +5758,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (only_normal_chars) {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET character_set_results value %s\n", value1.c_str());
 							uint32_t character_set_results_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (client_myds->myconn->options.character_set_results_int != character_set_results_int) {
-								client_myds->myconn->options.character_set_results_int = character_set_results_int;
-								if (client_myds->myconn->options.character_set_results) {
-									free(client_myds->myconn->options.character_set_results);
-								}
+							if (mysql_variables->client_get_hash(SQL_CHARACTER_SET_RESULTS) != character_set_results_int) {
+								mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, value1.c_str());
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection character_set_results to %s\n", value1.c_str());
-								client_myds->myconn->options.character_set_results=strdup(value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {
