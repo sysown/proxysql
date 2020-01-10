@@ -4,6 +4,7 @@
 #include <string>
 
 class SQLite3DB;
+extern const char* config_header;
 
 class ProxySQL_Config {
 	SQLite3DB* admindb;
