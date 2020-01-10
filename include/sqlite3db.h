@@ -1,7 +1,10 @@
 #ifndef __CLASS_SQLITE3DB_H
 #define __CLASS_SQLITE3DB_H
-#include "proxysql.h"
-#include "cpp.h"
+#include "sqlite3.h"
+#undef swap
+#undef min
+#undef max
+#include <vector>
 #define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 
 class SQLite3_row {
@@ -70,6 +73,7 @@ class SQLite3DB {
 
 	bool execute(const char *);
 	bool execute_statement(const char *, char **, int *, int *, SQLite3_result **);
+	SQLite3_result* execute_statement(const char *, char **_error=NULL, int *_cols=NULL, int *_affected_rows=NULL);
 	bool execute_statement_raw(const char *, char **, int *, int *, sqlite3_stmt **);
 	int return_one_int(const char *);
 	int check_table_structure(char *table_name, char *table_def);
