@@ -6420,9 +6420,18 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					}
 				}
 			}
+
+			char *sep_pos = NULL;
 			if (gtid_uuid != NULL) {
-				int l = index(gtid_uuid,':') - gtid_uuid;
-				trxid = strtoull(index(gtid_uuid,':')+1, NULL, 10);
+				sep_pos = index(gtid_uuid,':');
+				if (sep_pos == NULL) {
+					gtid_uuid = NULL; // gtid is invalid
+				}
+			}
+
+			if (gtid_uuid != NULL) {
+				int l = sep_pos - gtid_uuid;
+				trxid = strtoull(sep_pos+1, NULL, 10);
 				int m;
 				int n=0;
 				for (m=0; m<l; m++) {
