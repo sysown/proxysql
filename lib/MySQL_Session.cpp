@@ -953,7 +953,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
-	j["conn"]["isolation_level"] = ( client_myds->myconn->options.isolation_level ? client_myds->myconn->options.isolation_level : "") ;
 	j["conn"]["transaction_read"] = ( client_myds->myconn->options.transaction_read ? client_myds->myconn->options.transaction_read : "") ;
 	j["conn"]["tx_isolation"] = ( client_myds->myconn->options.tx_isolation ? client_myds->myconn->options.tx_isolation : "") ;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
@@ -1005,7 +1004,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
-				j["backends"][i]["conn"]["isolation_level"] = ( _myconn->options.isolation_level ? _myconn->options.isolation_level : "") ;
 				j["backends"][i]["conn"]["tx_isolation"] = ( _myconn->options.tx_isolation ? _myconn->options.tx_isolation : "") ;
 				j["backends"][i]["conn"]["transaction_read"] = ( _myconn->options.transaction_read ? _myconn->options.transaction_read : "") ;
 				j["backends"][i]["conn"]["session_track_gtids"] = ( _myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "") ;
@@ -1679,20 +1677,6 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 		}
 	}
 	return false;
-}
-
-bool MySQL_Session::handler_again___verify_backend_isolation_level() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.isolation_level, mybe->server_myds->myconn->options.isolation_level);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.isolation_level_int,
-		&mybe->server_myds->myconn->options.isolation_level,
-		mysql_thread___default_isolation_level,
-		&client_myds->myconn->options.isolation_level_int,
-		client_myds->myconn->options.isolation_level,
-		SETTING_ISOLATION_LEVEL
-	);
-	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_backend_transaction_read() {
@@ -2480,13 +2464,6 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			// rc==1 , nothing to do for now
 		}
 	}
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_ISOLATION_LEVEL(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION TRANSACTION ISOLATION LEVEL", mybe->server_myds->myconn->options.isolation_level, false, true);
 	return ret;
 }
 
@@ -3900,9 +3877,6 @@ handler_again:
 								if (handler_again___verify_backend_sql_log_bin()) {
 									goto handler_again;
 								}
-								if (handler_again___verify_backend_isolation_level()) {
-									goto handler_again;
-								}
 								if (handler_again___verify_backend_transaction_read()) {
 									goto handler_again;
 								}
@@ -4462,18 +4436,6 @@ handler_again:
 			}
 			break;
 
-		case SETTING_ISOLATION_LEVEL:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_ISOLATION_LEVEL(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_TRANSACTION_READ:
 			{
 				int rc=0;
@@ -4528,6 +4490,7 @@ handler_again:
 		case SETTING_SQL_SAFE_UPDATES:
 		case SETTING_TIME_ZONE:
 		case SETTING_CHARACTER_SET_RESULTS:
+		case SETTING_ISOLATION_LEVEL:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
 				if (mysql_variables->update_variable(rc)) {
@@ -5931,13 +5894,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						std::string value1 = *values;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SESSION TRANSACTION ISOLATION LEVEL value %s\n", value1.c_str());
 						uint32_t isolation_level_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (client_myds->myconn->options.isolation_level_int != isolation_level_int) {
-							client_myds->myconn->options.isolation_level_int = isolation_level_int;
-							if (client_myds->myconn->options.isolation_level) {
-								free(client_myds->myconn->options.isolation_level);
-							}
+						if (mysql_variables->client_get_hash(SQL_ISOLATION_LEVEL) != isolation_level_int) {
+							mysql_variables->client_set_value(SQL_ISOLATION_LEVEL, value1.c_str());
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
-							client_myds->myconn->options.isolation_level=strdup(value1.c_str());
 						}
 						exit_after_SetParse = true;
 					} else if (var == "read") {
