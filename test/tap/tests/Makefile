@@ -63,7 +63,7 @@ EXECUTABLE=proxysql
 
 OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o
 
-INCLUDEDIR=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR)
+INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR)
 
 MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK)
@@ -80,29 +80,30 @@ OPT=-O2
 
 SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp
 
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t  galera_1_timeout_count galera_2_timeout_no_count aurora
+tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t 
+tests-monitor: galera_1_timeout_count galera_2_timeout_no_count aurora
 
-sqlite3-t: $(LIBDIR)/libtap.a sqlite3-t.cpp
-	g++ sqlite3-t.cpp -I$(INCLUDEDIR) -I$(PROXYSQL_IDIR) -I$(MARIADB_IDIR) -I$(SQLITE3_DIR) -L$(LIBDIR) $(OPT) ../../../lib/libproxysql.a -lpthread -ldl -std=c++11 -ltap -o sqlite3-t
+sqlite3-t: $(TAP_LIBDIR)/libtap.a sqlite3-t.cpp
+	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) ../../../lib/libproxysql.a -lpthread -ldl -std=c++11 -ltap -o sqlite3-t
 
 basic-t: $(TAP_LIBDIR)/libtap.a
-	g++ basic-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -o basic-t
+	g++ basic-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -o basic-t
 
 set_character_set-t: set_character_set-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ set_character_set-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o set_character_set-t
+	g++ set_character_set-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o set_character_set-t
 
 charset_unsigned_int-t: charset_unsigned_int-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ charset_unsigned_int-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o charset_unsigned_int-t
+	g++ charset_unsigned_int-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o charset_unsigned_int-t
 
 select_config_file-t: select_config_file-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ select_config_file-t.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o select_config_file-t
+	g++ select_config_file-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) -o select_config_file-t
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
 
 galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG galera_2_timeout_no_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera_2_timeout_no_count -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG galera_2_timeout_no_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera_2_timeout_no_count -DGITVERSION=\"$(GIT_VERSION)\"
 
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIR) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_GALERA -DTEST_AURORA -DTEST_GROUPREP -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
