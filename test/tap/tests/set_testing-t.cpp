@@ -21,8 +21,8 @@
 using nlohmann::json;
 
 struct TestCase {
-    std::string command;
-    json expected_vars;
+	std::string command;
+	json expected_vars;
 };
 
 std::vector<TestCase> testCases;
@@ -30,25 +30,25 @@ std::vector<TestCase> testCases;
 #define MAX_LINE 1024
 
 int readTestCases(const std::string& fileName) {
-    FILE* fp = fopen(fileName.c_str(), "r");
-    if (!fp) return 0;
+	FILE* fp = fopen(fileName.c_str(), "r");
+	if (!fp) return 0;
 
-    char buf[MAX_LINE], col1[MAX_LINE], col2[MAX_LINE];
-    int n = 0;
-    for(;;) {
-        if (fgets(buf, sizeof(buf), fp) == NULL) break;
-        n = sscanf(buf, " \"%[^\"]\", \"%[^\"]\"", col1, col2);
-        if (n == 0) break;
+	char buf[MAX_LINE], col1[MAX_LINE], col2[MAX_LINE];
+	int n = 0;
+	for(;;) {
+		if (fgets(buf, sizeof(buf), fp) == NULL) break;
+		n = sscanf(buf, " \"%[^\"]\", \"%[^\"]\"", col1, col2);
+		if (n == 0) break;
 
-        char *p = col2;
-        while(*p++) if(*p == '\'') *p = '\"';
+		char *p = col2;
+		while(*p++) if(*p == '\'') *p = '\"';
 
-        json vars = json::parse(col2);
-        testCases.push_back({col1, vars});
-    }
+		json vars = json::parse(col2);
+		testCases.push_back({col1, vars});
+	}
 
-    fclose(fp);
-    return 1;
+	fclose(fp);
+	return 1;
 }
 
 unsigned long long monotonic_time() {
@@ -107,85 +107,85 @@ inline int fastrand() {
 }
 
 void parseResultJsonColumn(MYSQL_RES *result, json& j) {
-        if(!result) return;
-        MYSQL_ROW row;
+	if(!result) return;
+	MYSQL_ROW row;
 
-        while ((row = mysql_fetch_row(result)))
-            j = json::parse(row[0]);
+	while ((row = mysql_fetch_row(result)))
+		j = json::parse(row[0]);
 }
 
 void parseResult(MYSQL_RES *result, json& j) {
-        if(!result) return;
-        MYSQL_ROW row;
+	if(!result) return;
+	MYSQL_ROW row;
 
-        while ((row = mysql_fetch_row(result)))
-            j[row[0]] = row[1];
- }
+	while ((row = mysql_fetch_row(result)))
+		j[row[0]] = row[1];
+}
 
 void dumpResult(MYSQL_RES *result) {
-        if(!result) return;
-        MYSQL_ROW row;
+	if(!result) return;
+	MYSQL_ROW row;
 
-        int num_fields = mysql_num_fields(result);
+	int num_fields = mysql_num_fields(result);
 
-        while ((row = mysql_fetch_row(result)))
-        {
-            for(int i = 0; i < num_fields; i++)
-            {
-                printf("%s ", row[i] ? row[i] : "NULL");
-            }
-            printf("\n");
-        }
- }
+	while ((row = mysql_fetch_row(result)))
+	{
+		for(int i = 0; i < num_fields; i++)
+		{
+			printf("%s ", row[i] ? row[i] : "NULL");
+		}
+		printf("\n");
+	}
+}
 
 void queryVariables(MYSQL *mysql, json& j) {
-    char *query = (char*)"SELECT * FROM performance_schema.session_variables WHERE variable_name IN "
-                         " ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
-                         " 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
-                         " 'sql_select_limit', 'character_set_results');";
-    if (mysql_query(mysql, query)) {
-        if (silent==0) {
-            fprintf(stderr,"%s\n", mysql_error(mysql));
-        }
-    } else {
-        MYSQL_RES *result = mysql_store_result(mysql);
-        parseResult(result, j);
+	char *query = (char*)"SELECT * FROM performance_schema.session_variables WHERE variable_name IN "
+		" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+		" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
+		" 'sql_select_limit', 'character_set_results', 'transaction_isolation');";
+	if (mysql_query(mysql, query)) {
+		if (silent==0) {
+			fprintf(stderr,"%s\n", mysql_error(mysql));
+		}
+	} else {
+		MYSQL_RES *result = mysql_store_result(mysql);
+		parseResult(result, j);
 
-        mysql_free_result(result);
-        __sync_fetch_and_add(&g_select_OK,1);
-    }
+		mysql_free_result(result);
+		__sync_fetch_and_add(&g_select_OK,1);
+	}
 }
 
 void queryInternalStatus(MYSQL *mysql, json& j) {
-    char *query = (char*)"PROXYSQL INTERNAL SESSION";
+	char *query = (char*)"PROXYSQL INTERNAL SESSION";
 
-    if (mysql_query(mysql, query)) {
-        if (silent==0) {
-            fprintf(stderr,"%s\n", mysql_error(mysql));
-        }
-    } else {
-        MYSQL_RES *result = mysql_store_result(mysql);
-        parseResultJsonColumn(result, j);
+	if (mysql_query(mysql, query)) {
+		if (silent==0) {
+			fprintf(stderr,"%s\n", mysql_error(mysql));
+		}
+	} else {
+		MYSQL_RES *result = mysql_store_result(mysql);
+		parseResultJsonColumn(result, j);
 
-        mysql_free_result(result);
-        __sync_fetch_and_add(&g_select_OK,1);
-    }
+		mysql_free_result(result);
+		__sync_fetch_and_add(&g_select_OK,1);
+	}
 
-    // value types in mysql and in proxysql are different
-    // we should convert proxysql values to mysql format to compare
-    for (auto& el : j.items()) {
-        if (el.key() == "conn") {
-            std::string sql_log_bin_value;
+	// value types in mysql and in proxysql are different
+	// we should convert proxysql values to mysql format to compare
+	for (auto& el : j.items()) {
+		if (el.key() == "conn") {
+			std::string sql_log_bin_value;
 
-            // sql_log_bin {0|1}
-            if (el.value()["sql_log_bin"] == 1) {
-                el.value().erase("sql_log_bin");
-                j["conn"]["sql_log_bin"] = "ON";
-            }
-            else if (el.value()["sql_log_bin"] == 0) {
-                el.value().erase("sql_log_bin");
-                j["conn"]["sql_log_bin"] = "OFF";
-            }
+			// sql_log_bin {0|1}
+			if (el.value()["sql_log_bin"] == 1) {
+				el.value().erase("sql_log_bin");
+				j["conn"]["sql_log_bin"] = "ON";
+			}
+			else if (el.value()["sql_log_bin"] == 0) {
+				el.value().erase("sql_log_bin");
+				j["conn"]["sql_log_bin"] = "OFF";
+			}
 
 			// autocommit {true|false}
 			if (!el.value()["autocommit"].dump().compare("ON") ||
@@ -226,8 +226,23 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				el.value().erase("sql_select_limit");
 				j["conn"]["sql_select_limit"] = strdup(ss.str().c_str());
 			}
-     }
-    }
+
+
+			// transaction_isolation (level)
+			if (!el.value()["transaction_isolation"].dump().compare("\"REPEATABLE READ\"")) {
+				el.value().erase("transaction_isolation");
+				j["conn"]["transaction_isolation"] = "REPEATABLE-READ";
+			}
+			else if (!el.value()["transaction_isolation"].dump().compare("\"READ COMMITTED\"")) {
+				el.value().erase("transaction_isolation");
+				j["conn"]["transaction_isolation"] = "READ-COMMITTED";
+			}
+			else if (!el.value()["transaction_isolation"].dump().compare("\"READ UNCOMMITTED\"")) {
+				el.value().erase("transaction_isolation");
+				j["conn"]["transaction_isolation"] = "READ-UNCOMMITTED";
+			}
+		}
+	}
 }
 
 void * my_conn_thread(void *arg) {
@@ -265,26 +280,26 @@ void * my_conn_thread(void *arg) {
 	for (j=0; j<queries; j++) {
 		int fr = fastrand();
 		int r1=fr%count;
-        int r2=fastrand()%testCases.size();
+		int r2=fastrand()%testCases.size();
 
 		if (j%queries_per_connections==0) {
 			mysql=mysqlconns[r1];
 			vars = varsperconn[r1];
 		}
 
-        if (mysql_query(mysql, testCases[r2].command.c_str())) {
-            if (silent==0) {
-                fprintf(stderr,"%s\n", mysql_error(mysql));
-            }
+		if (mysql_query(mysql, testCases[r2].command.c_str())) {
+			if (silent==0) {
+				fprintf(stderr,"%s\n", mysql_error(mysql));
+			}
 		} else {
 			MYSQL_RES *result = mysql_store_result(mysql);
 			mysql_free_result(result);
 			select_OK++;
 			__sync_fetch_and_add(&g_select_OK,1);
 		}
-        for (auto& el : testCases[r2].expected_vars.items()) {
-            vars[el.key()] = el.value();
-        }
+		for (auto& el : testCases[r2].expected_vars.items()) {
+			vars[el.key()] = el.value();
+		}
 
 		int sleepDelay = fastrand()%100;
 		usleep(sleepDelay * 1000);
@@ -292,7 +307,7 @@ void * my_conn_thread(void *arg) {
 		char query[128];
 		sprintf(query, "SELECT %d;", sleepDelay);
 		if (mysql_query(mysql,query)) {
-            select_ERR++;
+			select_ERR++;
 			__sync_fetch_and_add(&g_select_ERR,1);
 		} else {
 			MYSQL_RES *result = mysql_store_result(mysql);
@@ -303,22 +318,32 @@ void * my_conn_thread(void *arg) {
 
 
 		json mysql_vars;
-        queryVariables(mysql, mysql_vars);
+		queryVariables(mysql, mysql_vars);
 
-        json proxysql_vars;
-        queryInternalStatus(mysql, proxysql_vars);
+		json proxysql_vars;
+		queryInternalStatus(mysql, proxysql_vars);
 
 		bool testPassed = true;
-        for (auto& el : vars.items()) {
-            auto k = mysql_vars.find(el.key());
-            auto s = proxysql_vars["conn"].find(el.key());
+		for (auto& el : vars.items()) {
+			auto k = mysql_vars.find(el.key());
+			auto s = proxysql_vars["conn"].find(el.key());
 
-            if (k.value() != el.value() || s.value() != el.value()) {
-                __sync_fetch_and_add(&g_failed, 1);
+			if (k == mysql_vars.end())
+				fprintf(stderr, "Variable %s->%s in mysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
+						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
+
+			if (s == proxysql_vars["conn"].end())
+				fprintf(stderr, "Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
+						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
+
+			if (k.value() != el.value() || s.value() != el.value()) {
+				__sync_fetch_and_add(&g_failed, 1);
 				testPassed = false;
-            }
-        }
-        ok(testPassed, "Test passed");
+				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
+						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
+			}
+		}
+		ok(testPassed, "Test passed");
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
 
@@ -342,10 +367,10 @@ int main(int argc, char *argv[]) {
 	port = cl.port;
 
 	plan(queries * num_threads);
-    if (!readTestCases(fileName)) {
-        fprintf(stderr, "Cannot read %s\n", fileName.c_str());
+	if (!readTestCases(fileName)) {
+		fprintf(stderr, "Cannot read %s\n", fileName.c_str());
 		return exit_status();
-    }
+	}
 
 	if (strcmp(host,"localhost")==0) {
 		local = 1;

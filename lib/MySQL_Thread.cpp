@@ -3559,14 +3559,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-
-	uint32_t isolation_level_int=SpookyHash::Hash32(mysql_thread___default_isolation_level,strlen(mysql_thread___default_isolation_level),10);
-	sess->client_myds->myconn->options.isolation_level_int = isolation_level_int;
-	if (sess->client_myds->myconn->options.isolation_level) {
-		free(sess->client_myds->myconn->options.isolation_level);
-	}
-	sess->client_myds->myconn->options.isolation_level=strdup(mysql_thread___default_isolation_level);
-
 	uint32_t tx_isolation_int=SpookyHash::Hash32(mysql_thread___default_tx_isolation,strlen(mysql_thread___default_tx_isolation),10);
 	sess->client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
 	if (sess->client_myds->myconn->options.tx_isolation) {
@@ -3600,6 +3592,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	sess->mysql_variables->client_set_value(SQL_SQL_MODE, mysql_thread___default_sql_mode);
 	sess->mysql_variables->client_set_value(SQL_TIME_ZONE, mysql_thread___default_time_zone);
 	sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, mysql_thread___default_character_set_results);
+	sess->mysql_variables->client_set_value(SQL_ISOLATION_LEVEL, mysql_thread___default_isolation_level);
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;
