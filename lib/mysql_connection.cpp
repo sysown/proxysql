@@ -9,8 +9,10 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
-const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level"};
-const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "transaction_isolation"};
+const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level",
+	"session transaction read"};
+const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "transaction_isolation",
+	"transaction_read"};
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 	j["backends"][conn_num]["conn"][Variable::proxysql_internal_session_name[idx]] = std::string(value);
@@ -228,14 +230,12 @@ MySQL_Connection::MySQL_Connection() {
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
 	options.tx_isolation = NULL;
-	options.transaction_read = NULL;
 	options.session_track_gtids = NULL;
 	options.sql_auto_is_null = NULL;
 	options.collation_connection = NULL;
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
 	options.tx_isolation_sent = false;
-	options.transaction_read_sent = false;
 	options.session_track_gtids_sent = false;
 	options.sql_auto_is_null_sent = false;
 	options.collation_connection_sent = false;
@@ -246,7 +246,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
 	options.tx_isolation_int=0;
-	options.transaction_read_int=0;
 	options.session_track_gtids_int=0;
 	options.sql_auto_is_null_int=0;
 	options.collation_connection_int=0;
@@ -333,10 +332,6 @@ MySQL_Connection::~MySQL_Connection() {
 	if (options.tx_isolation) {
 		free(options.tx_isolation);
 		options.tx_isolation=NULL;
-	}
-	if (options.transaction_read) {
-		free(options.transaction_read);
-		options.transaction_read=NULL;
 	}
 	if (options.session_track_gtids) {
 		free(options.session_track_gtids);
@@ -2178,12 +2173,6 @@ void MySQL_Connection::reset() {
 		free (options.tx_isolation);
 		options.tx_isolation = NULL;
 		options.tx_isolation_sent = false;
-	}
-	options.transaction_read_int = 0;
-	if (options.transaction_read) {
-		free (options.transaction_read);
-		options.transaction_read = NULL;
-		options.transaction_read_sent = false;
 	}
 	options.session_track_gtids_int = 0;
 	if (options.session_track_gtids) {

@@ -11,9 +11,9 @@ int MySQL_Variables::session_by_var[SQL_NAME_LAST] = {
 	SETTING_SQL_MODE,
 	SETTING_TIME_ZONE,
 	SETTING_CHARACTER_SET_RESULTS,
-	SETTING_ISOLATION_LEVEL
-/*	SETTING_TRANSACTION_READ,
-	SETTING_TX_ISOLATION,ME
+	SETTING_ISOLATION_LEVEL,
+	SETTING_TRANSACTION_READ
+/*	SETTING_TX_ISOLATION,
 	SETTING_SESSION_TRACK_GTIDS,
 	SETTING_SQL_AUTO_IS_NULL,
 	SETTING_COLLATION_CONNECTION,
@@ -27,14 +27,14 @@ bool MySQL_Variables::quotes[SQL_NAME_LAST] = {
 	false, // SQL_MODE
 	false, // SQL_TIME_ZONE
 	true,  // CHARACTER_SET_RESULTS
-    false // ISOLATION_LEVEL	
-/*    false, // TRANSACTION_READ
-    false, // TX_ISOLATION
-    true,  // SESSION_TRACK_GTIDS
-    true,  // SQL_AUTO_IS_NULL
-    false, // COLLATION_CONNECTION
-    true,  // NET_WRITE_TIMEOUT
-    true   // MAX_JOIN_SIZE*/
+	false, // ISOLATION_LEVEL
+	false  // TRANSACTION_READ
+/*  false, // TX_ISOLATION
+	true,  // SESSION_TRACK_GTIDS
+	true,  // SQL_AUTO_IS_NULL
+	false, // COLLATION_CONNECTION
+	true,  // NET_WRITE_TIMEOUT
+	true   // MAX_JOIN_SIZE*/
 };
 
 bool MySQL_Variables::set_transaction[SQL_NAME_LAST] = {
@@ -42,10 +42,10 @@ bool MySQL_Variables::set_transaction[SQL_NAME_LAST] = {
 	false, // SQL_SELECT_LIMIT
 	false, // SQL_MODE
 	false, // SQL_TIME_ZONE
-	false,  // CHARACTER_SET_RESULTS
-	true  // ISOLATION_LEVEL
-/*	true,  // TRANSACTION_READ
-	false, // TX_ISOLATION
+	false, // CHARACTER_SET_RESULTS
+	true,  // ISOLATION_LEVEL
+	true   // TRANSACTION_READ
+/*	false, // TX_ISOLATION
 	false, // SESSION_TRACK_GTIDS
 	false, // SQL_AUTO_IS_NULL
 	false, // COLLATION_CONNECTION
@@ -74,7 +74,7 @@ int MySQL_Variables::var_by_session[NONE] = {
 	SQL_SQL_MODE,
 	SQL_TIME_ZONE,
 	SQL_ISOLATION_LEVEL,
-	SQL_NAME_LAST,
+	SQL_TRANSACTION_READ,
 	SQL_NAME_LAST,
 	SQL_CHARACTER_SET_RESULTS,
 	SQL_NAME_LAST,
@@ -102,6 +102,7 @@ MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 		case SQL_TIME_ZONE:
 		case SQL_CHARACTER_SET_RESULTS:
 		case SQL_ISOLATION_LEVEL:
+		case SQL_TRANSACTION_READ:
 			updaters[i] = new Generic_Updater();
 			break;
 		default:

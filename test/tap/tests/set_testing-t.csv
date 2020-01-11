@@ -16,3 +16,5 @@
 "SET character_set_results='latin1'", "{'character_set_results':'latin1'}"
 "SET character_set_results='utf8'", "{'character_set_results':'utf8'}"
 "SET character_set_results='utf8mb4'", "{'character_set_results':'utf8mb4'}"
+"SET session transaction read only", "{'transaction_read_only':'ON'}"
+"SET session transaction read write", "{'transaction_read_only':'OFF'}"
