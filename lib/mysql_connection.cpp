@@ -9,14 +9,15 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
-const char Variable::name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results"};
+const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level"};
+const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "transaction_isolation"};
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
-	j["backends"][conn_num]["conn"][Variable::name[idx]] = std::string(value);
+	j["backends"][conn_num]["conn"][Variable::proxysql_internal_session_name[idx]] = std::string(value);
 }
 
 void Variable::fill_client_internal_session(json &j, int idx) {
-	j["conn"][Variable::name[idx]] = value;
+	j["conn"][Variable::proxysql_internal_session_name[idx]] = value;
 }
 
 #define PROXYSQL_USE_RESULT
@@ -226,7 +227,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
-	options.isolation_level = NULL;
 	options.tx_isolation = NULL;
 	options.transaction_read = NULL;
 	options.session_track_gtids = NULL;
@@ -234,7 +234,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.collation_connection = NULL;
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
-	options.isolation_level_sent = false;
 	options.tx_isolation_sent = false;
 	options.transaction_read_sent = false;
 	options.session_track_gtids_sent = false;
@@ -246,7 +245,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
-	options.isolation_level_int=0;
 	options.tx_isolation_int=0;
 	options.transaction_read_int=0;
 	options.session_track_gtids_int=0;
@@ -332,10 +330,6 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
-	if (options.isolation_level) {
-		free(options.isolation_level);
-		options.isolation_level=NULL;
-	}
 	if (options.tx_isolation) {
 		free(options.tx_isolation);
 		options.tx_isolation=NULL;
@@ -2179,12 +2173,6 @@ void MySQL_Connection::reset() {
 		}
 	}
 
-	options.isolation_level_int = 0;
-	if (options.isolation_level) {
-		free (options.isolation_level);
-		options.isolation_level = NULL;
-		options.isolation_level_sent = false;
-	}
 	options.tx_isolation_int = 0;
 	if (options.tx_isolation) {
 		free (options.tx_isolation);

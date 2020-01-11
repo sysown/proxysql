@@ -25,7 +25,8 @@ public:
 	uint32_t hash;
 	void fill_server_internal_session(json &j, int conn_num, int idx);
 	void fill_client_internal_session(json &j, int idx);
-	static const char name[SQL_NAME_LAST][64];
+	static const char set_name[SQL_NAME_LAST][64];
+	static const char proxysql_internal_session_name[SQL_NAME_LAST][64];
 };
 
 enum charset_action {
@@ -58,7 +59,6 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-		uint32_t isolation_level_int;
 		uint32_t transaction_read_int;
 		uint32_t tx_isolation_int;
 		uint32_t session_track_gtids_int;
@@ -72,7 +72,6 @@ class MySQL_Connection {
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
-		char * isolation_level;
 		char * transaction_read;
 		char * tx_isolation;
 		char * session_track_gtids;
@@ -80,7 +79,6 @@ class MySQL_Connection {
 		char * collation_connection;
 		char * net_write_timeout;
 		char * max_join_size;
-		bool isolation_level_sent;
 		bool tx_isolation_sent;
 		bool transaction_read_sent;
 		bool session_track_gtids_sent;

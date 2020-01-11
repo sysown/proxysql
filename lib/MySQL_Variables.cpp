@@ -10,10 +10,10 @@ int MySQL_Variables::session_by_var[SQL_NAME_LAST] = {
 	SETTING_SQL_SELECT_LIMIT,
 	SETTING_SQL_MODE,
 	SETTING_TIME_ZONE,
-	SETTING_CHARACTER_SET_RESULTS
-/*	SETTING_ISOLATION_LEVEL,
-	SETTING_TRANSACTION_READ,
-	SETTING_TX_ISOLATION,
+	SETTING_CHARACTER_SET_RESULTS,
+	SETTING_ISOLATION_LEVEL
+/*	SETTING_TRANSACTION_READ,
+	SETTING_TX_ISOLATION,ME
 	SETTING_SESSION_TRACK_GTIDS,
 	SETTING_SQL_AUTO_IS_NULL,
 	SETTING_COLLATION_CONNECTION,
@@ -26,9 +26,9 @@ bool MySQL_Variables::quotes[SQL_NAME_LAST] = {
 	true,  // SQL_SELECT_LIMIT
 	false, // SQL_MODE
 	false, // SQL_TIME_ZONE
-	true   // CHARACTER_SET_RESULTS
-/*  false, // ISOLATION_LEVEL	
-    false, // TRANSACTION_READ
+	true,  // CHARACTER_SET_RESULTS
+    false // ISOLATION_LEVEL	
+/*    false, // TRANSACTION_READ
     false, // TX_ISOLATION
     true,  // SESSION_TRACK_GTIDS
     true,  // SQL_AUTO_IS_NULL
@@ -42,9 +42,9 @@ bool MySQL_Variables::set_transaction[SQL_NAME_LAST] = {
 	false, // SQL_SELECT_LIMIT
 	false, // SQL_MODE
 	false, // SQL_TIME_ZONE
-	false  // CHARACTER_SET_RESULTS
-/*	true,  // ISOLATION_LEVEL
-	true,  // TRANSACTION_READ
+	false,  // CHARACTER_SET_RESULTS
+	true  // ISOLATION_LEVEL
+/*	true,  // TRANSACTION_READ
 	false, // TX_ISOLATION
 	false, // SESSION_TRACK_GTIDS
 	false, // SQL_AUTO_IS_NULL
@@ -73,7 +73,7 @@ int MySQL_Variables::var_by_session[NONE] = {
 	SQL_NAME_LAST,
 	SQL_SQL_MODE,
 	SQL_TIME_ZONE,
-	SQL_NAME_LAST,
+	SQL_ISOLATION_LEVEL,
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
 	SQL_CHARACTER_SET_RESULTS,
@@ -101,6 +101,7 @@ MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 		case SQL_SQL_MODE:
 		case SQL_TIME_ZONE:
 		case SQL_CHARACTER_SET_RESULTS:
+		case SQL_ISOLATION_LEVEL:
 			updaters[i] = new Generic_Updater();
 			break;
 		default:
@@ -225,6 +226,6 @@ bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
 bool Generic_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 	bool q = MySQL_Variables::quotes[idx];
 	bool st = MySQL_Variables::set_transaction[idx];
-	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, Variable::name[idx], session->mysql_variables->server_get_value(idx), q, st);
+	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, Variable::set_name[idx], session->mysql_variables->server_get_value(idx), q, st);
 	return ret;
 }
