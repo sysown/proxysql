@@ -229,17 +229,21 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 
 
 			// transaction_isolation (level)
-			if (!el.value()["transaction_isolation"].dump().compare("\"REPEATABLE READ\"")) {
-				el.value().erase("transaction_isolation");
+			if (!el.value()["isolation_level"].dump().compare("\"REPEATABLE READ\"")) {
+				el.value().erase("isolation_level");
 				j["conn"]["transaction_isolation"] = "REPEATABLE-READ";
 			}
-			else if (!el.value()["transaction_isolation"].dump().compare("\"READ COMMITTED\"")) {
-				el.value().erase("transaction_isolation");
+			else if (!el.value()["isolation_level"].dump().compare("\"READ COMMITTED\"")) {
+				el.value().erase("isolation_level");
 				j["conn"]["transaction_isolation"] = "READ-COMMITTED";
 			}
-			else if (!el.value()["transaction_isolation"].dump().compare("\"READ UNCOMMITTED\"")) {
-				el.value().erase("transaction_isolation");
+			else if (!el.value()["isolation_level"].dump().compare("\"READ UNCOMMITTED\"")) {
+				el.value().erase("isolation_level");
 				j["conn"]["transaction_isolation"] = "READ-UNCOMMITTED";
+			}
+			else if (!el.value()["isolation_level"].dump().compare("\"SERIALIZABLE\"")) {
+				el.value().erase("isolation_level");
+				j["conn"]["transaction_isolation"] = "SERIALIZABLE";
 			}
 
 			// transaction_read (write|only)

@@ -11,7 +11,7 @@ extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level",
 	"session transaction read"};
-const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "transaction_isolation",
+const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "isolation_level",
 	"transaction_read"};
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
