@@ -953,7 +953,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
-	j["conn"]["tx_isolation"] = ( client_myds->myconn->options.tx_isolation ? client_myds->myconn->options.tx_isolation : "") ;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	j["conn"]["sql_auto_is_null"] = ( client_myds->myconn->options.sql_auto_is_null ? client_myds->myconn->options.sql_auto_is_null : "") ;
 	j["conn"]["collation_connection"] = ( client_myds->myconn->options.collation_connection ? client_myds->myconn->options.collation_connection : "") ;
@@ -1003,7 +1002,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
-				j["backends"][i]["conn"]["tx_isolation"] = ( _myconn->options.tx_isolation ? _myconn->options.tx_isolation : "") ;
 				j["backends"][i]["conn"]["session_track_gtids"] = ( _myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "") ;
 				j["backends"][i]["conn"]["sql_auto_is_null"] = ( _myconn->options.sql_auto_is_null ? _myconn->options.sql_auto_is_null : "") ;
 				j["backends"][i]["conn"]["collation_connection"] = ( _myconn->options.collation_connection ? _myconn->options.collation_connection : "") ;
@@ -1675,20 +1673,6 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 		}
 	}
 	return false;
-}
-
-bool MySQL_Session::handler_again___verify_backend_tx_isolation() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.tx_isolation, mybe->server_myds->myconn->options.tx_isolation);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.tx_isolation_int,
-		&mybe->server_myds->myconn->options.tx_isolation,
-		mysql_thread___default_tx_isolation,
-		&client_myds->myconn->options.tx_isolation_int,
-		client_myds->myconn->options.tx_isolation,
-		SETTING_TX_ISOLATION
-	);
-	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
@@ -2479,13 +2463,6 @@ bool MySQL_Session::handler_again___status_SETTING_CHARSET(int *_rc) {
 	mybe->server_myds->myconn->set_charset(client_myds->myconn->options.charset, CHARSET);
 	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(client_myds->myconn->options.charset);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARSET", (char*)c->csname, false, true);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_TX_ISOLATION(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"TX_ISOLATION", mybe->server_myds->myconn->options.tx_isolation, false, false);
 	return ret;
 }
 
@@ -3854,9 +3831,6 @@ handler_again:
 								if (handler_again___verify_backend_sql_log_bin()) {
 									goto handler_again;
 								}
-								if (handler_again___verify_backend_tx_isolation()) {
-									goto handler_again;
-								}
 								if (handler_again___verify_backend_session_track_gtids()) {
 									goto handler_again;
 								}
@@ -4409,19 +4383,6 @@ handler_again:
 				}
 			}
 			break;
-
-		case SETTING_TX_ISOLATION:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_TX_ISOLATION(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 
 		case SETTING_SESSION_TRACK_GTIDS:
 			{
@@ -5736,15 +5697,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					} else if (var == "tx_isolation") {
 						std::string value1 = *values;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET tx_isolation value %s\n", value1.c_str());
-						uint32_t tx_isolation_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (client_myds->myconn->options.tx_isolation_int != tx_isolation_int) {
-							//fprintf(stderr,"sql_mode_int='%u'\n", sql_mode_int);
-							client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
-							if (client_myds->myconn->options.tx_isolation) {
-								free(client_myds->myconn->options.tx_isolation);
-							}
+						auto pos = value1.find('-');
+						if (pos != std::string::npos)
+							value1[pos] = ' ';
+						uint32_t isolation_level_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (mysql_variables->client_get_hash(SQL_ISOLATION_LEVEL) != isolation_level_int) {
+							mysql_variables->client_set_value(SQL_ISOLATION_LEVEL, value1.c_str());
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
-							client_myds->myconn->options.tx_isolation=strdup(value1.c_str());
 						}
 						exit_after_SetParse = true;
 					} else {

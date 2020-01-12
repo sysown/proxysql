@@ -227,7 +227,6 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["sql_select_limit"] = strdup(ss.str().c_str());
 			}
 
-
 			// transaction_isolation (level)
 			if (!el.value()["isolation_level"].dump().compare("\"REPEATABLE READ\"")) {
 				el.value().erase("isolation_level");
