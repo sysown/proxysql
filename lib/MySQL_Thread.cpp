@@ -3559,13 +3559,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-	uint32_t tx_isolation_int=SpookyHash::Hash32(mysql_thread___default_tx_isolation,strlen(mysql_thread___default_tx_isolation),10);
-	sess->client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
-	if (sess->client_myds->myconn->options.tx_isolation) {
-		free(sess->client_myds->myconn->options.tx_isolation);
-	}
-	sess->client_myds->myconn->options.tx_isolation=strdup(mysql_thread___default_tx_isolation);
-
 	uint32_t session_track_gtids_int=SpookyHash::Hash32(mysql_thread___default_session_track_gtids,strlen(mysql_thread___default_session_track_gtids),10);
 	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
 	if (sess->client_myds->myconn->options.session_track_gtids) {
