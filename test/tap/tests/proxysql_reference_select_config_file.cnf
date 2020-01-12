@@ -364,8 +364,9 @@ restapi:
 		id=1
 		active=1
 		interval_ms=1000
+		method=GET
 		uri="test"
-		script="/script.py"
+		script="./scripts/script.py"
 		comment="comment"
 	}
 )

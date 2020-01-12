@@ -5,6 +5,9 @@
 
 #include <sstream>
 
+Restapi_Row::Restapi_Row(unsigned int _id, bool _is_active, unsigned int _in, const std::string& _method, const std::string& _uri, const std::string& _script, const std::string& _comment) :
+	id(_id), is_active(_is_active), interval_ms(_in), method(_method), uri(_uri), script(_script), comment(_comment) {}
+
 ProxySQL_Restapi::ProxySQL_Restapi(SQLite3DB* db) {
 	assert(db);
 
@@ -20,7 +23,7 @@ ProxySQL_Restapi::ProxySQL_Restapi(SQLite3DB* db) {
 
 ProxySQL_Restapi::~ProxySQL_Restapi() {}
 
-void ProxySQL_Restapi::update_table(SQLite3_result *resultset) {
+void ProxySQL_Restapi::update_restapi_table(SQLite3_result *resultset) {
 #ifdef PA_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&rwlock);
 #else
@@ -35,7 +38,7 @@ void ProxySQL_Restapi::update_table(SQLite3_result *resultset) {
 			is_active=true;
 		}
 		unsigned int interval_ms=strtoul(r->fields[2], NULL, 10);
-		Restapi_Rows.push_back({id, is_active, interval_ms, r->fields[3], r->fields[4], r->fields[5]});
+		Restapi_Rows.push_back({id, is_active, interval_ms, r->fields[3], r->fields[4], r->fields[5], r->fields[6]});
 	}
 
 	// increase version
@@ -76,7 +79,7 @@ void ProxySQL_Restapi::save_restapi_runtime_to_database(bool _runtime) {
 	for (auto r : Restapi_Rows) {
 		std::stringstream ss;
 		ss << "INSERT INTO " << table << " VALUES(" << r.id << "," <<  r.is_active << ","
-			<< r.interval_ms << ",'" << r.uri << "','" << r.script << "','" << r.comment << "')";
+			<< r.interval_ms << ",'" << r.method << "','" << r.uri << "','" << r.script << "','" << r.comment << "')";
 
 		admindb->execute(ss.str().c_str());
 	}
@@ -90,18 +93,13 @@ void ProxySQL_Restapi::save_restapi_runtime_to_database(bool _runtime) {
 
 void ProxySQL_Restapi::load_restapi_to_runtime() {
 	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT * FROM restapi_routes";
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	std::unique_ptr<SQLite3_result> resultset = std::unique_ptr<SQLite3_result>(admindb->execute_statement(query, &error));
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		update_table(resultset);
+		update_restapi_table(resultset.get());
 	}
-	if (resultset) delete resultset;
-	resultset=NULL;
 }
 
 

@@ -68,8 +68,8 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysql, "insert into proxysql_servers (hostname, port, weight, comment) values ('hostname', 3333, 12, 'comment');");
 	MYSQL_QUERY(mysql, "insert into scheduler (id, active, interval_ms, filename, arg1, arg2, arg3, arg4, arg5, comment) values "
 					   " (1,1,1000,'filename','a1','a2','a3','a4','a5','comment');");
-	MYSQL_QUERY(mysql, "insert into restapi_routes (id, active, interval_ms, uri, script, comment) values "
-					   " (1,1,1000,'test','/script.py','comment');");
+	MYSQL_QUERY(mysql, "insert into restapi_routes values "
+					   " (1,1,1000,'GET', 'test','./scripts/script.py','comment');");
 	MYSQL_QUERY(mysql, "insert into mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, "
 					   " domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, "
 					   " add_lag_ms, min_lag_ms, lag_num_checks, comment) "

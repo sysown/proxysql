@@ -360,9 +360,10 @@ int ProxySQL_Config::Write_Restapi_to_configfile(std::string& data) {
 				addField(data, "id", r->fields[0], "");
 				addField(data, "active", r->fields[1], "");
 				addField(data, "interval_ms", r->fields[2], "");
-				addField(data, "uri", r->fields[3]);
-				addField(data, "script", r->fields[4]);
-				addField(data, "comment", r->fields[5]);
+				addField(data, "method", r->fields[3], "");
+				addField(data, "uri", r->fields[4]);
+				addField(data, "script", r->fields[5]);
+				addField(data, "comment", r->fields[6]);
 
 				data += "\t}";
 				isNext = true;
@@ -386,7 +387,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO restapi (id, active, interval_ms, uri, script, comment) VALUES (%d, %d, %d, '%s', '%s', '%s')";
+	char *q=(char *)"INSERT OR REPLACE INTO restapi VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
 	for (i=0; i< count; i++) {
 		const Setting &route = routes[i];
 		int id;
@@ -394,7 +395,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		// variable for parsing interval_ms
 		int interval_ms=0;
 
-
+		std::string method;
 		std::string uri;
 		std::string script;
 		std::string comment="";
@@ -406,6 +407,10 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		}
 		route.lookupValue("active", active);
 		route.lookupValue("interval_ms", interval_ms);
+		if (route.lookupValue("method", method)==false) {
+			proxy_error("Admin: detected a restapi route in config file without a mandatory method\n");
+			continue;
+		}
 		if (route.lookupValue("uri", uri)==false) {
 			proxy_error("Admin: detected a restapi route in config file without a mandatory uri\n");
 			continue;
@@ -421,6 +426,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 			strlen(std::to_string(id).c_str()) +
 			strlen(std::to_string(active).c_str()) +
 			strlen(std::to_string(interval_ms).c_str()) +
+			strlen(method.c_str()) +
 			strlen(uri.c_str()) +
 			strlen(script.c_str()) +
 			strlen(comment.c_str()) +
@@ -429,6 +435,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		sprintf(query, q,
 			id, active,
 			interval_ms,
+			method.c_str(),
 			uri.c_str(),
 			script.c_str(),
 			comment.c_str()

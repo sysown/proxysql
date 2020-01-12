@@ -10518,9 +10518,6 @@ void ProxySQL_Admin::disk_upgrade_mysql_users() {
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
 
-Restapi_Row::Restapi_Row(unsigned int _id, bool _is_active, unsigned int _in, const std::string& _uri, const std::string& _script, const std::string& _comment) :
-	id(_id), is_active(_is_active), interval_ms(_in), uri(_uri), script(_script), comment(_comment) {}
-
 Scheduler_Row::Scheduler_Row(unsigned int _id, bool _is_active, unsigned int _in, char *_f, char *a1, char *a2, char *a3, char *a4, char *a5, char *_comment) {
 	int i;
 	id=_id;
