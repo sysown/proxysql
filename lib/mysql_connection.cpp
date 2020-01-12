@@ -229,13 +229,11 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
-	options.tx_isolation = NULL;
 	options.session_track_gtids = NULL;
 	options.sql_auto_is_null = NULL;
 	options.collation_connection = NULL;
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
-	options.tx_isolation_sent = false;
 	options.session_track_gtids_sent = false;
 	options.sql_auto_is_null_sent = false;
 	options.collation_connection_sent = false;
@@ -245,7 +243,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
-	options.tx_isolation_int=0;
 	options.session_track_gtids_int=0;
 	options.sql_auto_is_null_int=0;
 	options.collation_connection_int=0;
@@ -329,10 +326,6 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
-	if (options.tx_isolation) {
-		free(options.tx_isolation);
-		options.tx_isolation=NULL;
-	}
 	if (options.session_track_gtids) {
 		free(options.session_track_gtids);
 		options.session_track_gtids=NULL;
@@ -2168,12 +2161,6 @@ void MySQL_Connection::reset() {
 		}
 	}
 
-	options.tx_isolation_int = 0;
-	if (options.tx_isolation) {
-		free (options.tx_isolation);
-		options.tx_isolation = NULL;
-		options.tx_isolation_sent = false;
-	}
 	options.session_track_gtids_int = 0;
 	if (options.session_track_gtids) {
 		free (options.session_track_gtids);

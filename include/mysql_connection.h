@@ -59,7 +59,6 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-		uint32_t tx_isolation_int;
 		uint32_t session_track_gtids_int;
 		uint32_t sql_auto_is_null_int;
 		uint32_t collation_connection_int;
@@ -71,13 +70,11 @@ class MySQL_Connection {
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
-		char * tx_isolation;
 		char * session_track_gtids;
 		char * sql_auto_is_null;
 		char * collation_connection;
 		char * net_write_timeout;
 		char * max_join_size;
-		bool tx_isolation_sent;
 		bool session_track_gtids_sent;
 		bool sql_auto_is_null_sent;
 		bool collation_connection_sent;
