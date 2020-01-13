@@ -22,4 +22,6 @@
 "SET tx_isolation='READ-UNCOMMITTED'", "{'transaction_isolation':'READ-UNCOMMITTED'}"
 "SET tx_isolation='REPEATABLE-READ'", "{'transaction_isolation':'REPEATABLE-READ'}"
 "SET tx_isolation='SERIALIZABLE'", "{'transaction_isolation':'SERIALIZABLE'}"
+"SET session_track_gtids=OFF", "{'session_track_gtids':'OFF'}"
+"SET session_track_gtids=OWN_GTID", "{'session_track_gtids':'OWN_GTID'}"
 

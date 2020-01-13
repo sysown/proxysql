@@ -3559,13 +3559,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-	uint32_t session_track_gtids_int=SpookyHash::Hash32(mysql_thread___default_session_track_gtids,strlen(mysql_thread___default_session_track_gtids),10);
-	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
-	if (sess->client_myds->myconn->options.session_track_gtids) {
-		free(sess->client_myds->myconn->options.session_track_gtids);
-	}
-	sess->client_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
-
 	uint32_t sql_auto_is_null_int=SpookyHash::Hash32(mysql_thread___default_sql_auto_is_null,strlen(mysql_thread___default_sql_auto_is_null),10);
 	sess->client_myds->myconn->options.sql_auto_is_null_int = sql_auto_is_null_int;
 	if (sess->client_myds->myconn->options.sql_auto_is_null) {
@@ -3580,6 +3573,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, mysql_thread___default_character_set_results);
 	sess->mysql_variables->client_set_value(SQL_ISOLATION_LEVEL, mysql_thread___default_isolation_level);
 	sess->mysql_variables->client_set_value(SQL_TRANSACTION_READ, mysql_thread___default_transaction_read);
+	sess->mysql_variables->client_set_value(SQL_SESSION_TRACK_GTIDS, mysql_thread___default_session_track_gtids);
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;
