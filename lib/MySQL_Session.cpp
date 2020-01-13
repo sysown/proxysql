@@ -953,7 +953,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
-	j["conn"]["sql_auto_is_null"] = ( client_myds->myconn->options.sql_auto_is_null ? client_myds->myconn->options.sql_auto_is_null : "") ;
 	j["conn"]["collation_connection"] = ( client_myds->myconn->options.collation_connection ? client_myds->myconn->options.collation_connection : "") ;
 	j["conn"]["net_write_timeout"] = ( client_myds->myconn->options.net_write_timeout ? client_myds->myconn->options.net_write_timeout : "") ;
 	j["conn"]["max_join_size"] = ( client_myds->myconn->options.max_join_size ? client_myds->myconn->options.max_join_size : "") ;
@@ -1001,7 +1000,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
-				j["backends"][i]["conn"]["sql_auto_is_null"] = ( _myconn->options.sql_auto_is_null ? _myconn->options.sql_auto_is_null : "") ;
 				j["backends"][i]["conn"]["collation_connection"] = ( _myconn->options.collation_connection ? _myconn->options.collation_connection : "") ;
 				j["backends"][i]["conn"]["net_write_timeout"] = ( _myconn->options.net_write_timeout ? _myconn->options.net_write_timeout : "") ;
                 j["backends"][i]["conn"]["max_join_size"] = ( _myconn->options.max_join_size ? _myconn->options.max_join_size : "") ;
@@ -1671,20 +1669,6 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 		}
 	}
 	return false;
-}
-
-bool MySQL_Session::handler_again___verify_backend_sql_auto_is_null() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.sql_auto_is_null, mybe->server_myds->myconn->options.sql_auto_is_null);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.sql_auto_is_null_int,
-		&mybe->server_myds->myconn->options.sql_auto_is_null,
-		mysql_thread___default_sql_auto_is_null,
-		&client_myds->myconn->options.sql_auto_is_null_int,
-		client_myds->myconn->options.sql_auto_is_null,
-		SETTING_SQL_AUTO_IS_NULL
-	);
-	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_backend(int var) {
@@ -2447,13 +2431,6 @@ bool MySQL_Session::handler_again___status_SETTING_CHARSET(int *_rc) {
 	mybe->server_myds->myconn->set_charset(client_myds->myconn->options.charset, CHARSET);
 	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(client_myds->myconn->options.charset);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARSET", (char*)c->csname, false, true);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_AUTO_IS_NULL", mybe->server_myds->myconn->options.sql_auto_is_null, true);
 	return ret;
 }
 
@@ -3808,9 +3785,6 @@ handler_again:
 								if (handler_again___verify_backend_sql_log_bin()) {
 									goto handler_again;
 								}
-								if (handler_again___verify_backend_sql_auto_is_null()) {
-									goto handler_again;
-								}
 								if (handler_again___verify_backend_collation_connection()) {
 									goto handler_again;
 								}
@@ -4358,18 +4332,6 @@ handler_again:
 			}
 			break;
 
-		case SETTING_SQL_AUTO_IS_NULL:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_SQL_AUTO_IS_NULL(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_SQL_MODE:
 		case SETTING_SQL_SELECT_LIMIT:
 		case SETTING_SQL_SAFE_UPDATES:
@@ -4378,6 +4340,7 @@ handler_again:
 		case SETTING_ISOLATION_LEVEL:
 		case SETTING_TRANSACTION_READ:
 		case SETTING_SESSION_TRACK_GTIDS:
+		case SETTING_SQL_AUTO_IS_NULL:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
 				if (mysql_variables->update_variable(rc)) {
@@ -5357,13 +5320,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (__tmp_value >= 0) {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET sql_auto_is_null value %s\n", value1.c_str());
 							uint32_t sql_auto_is_null_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (client_myds->myconn->options.sql_auto_is_null_int != sql_auto_is_null_int) {
-								client_myds->myconn->options.sql_auto_is_null_int = sql_auto_is_null_int;
-								if (client_myds->myconn->options.sql_auto_is_null) {
-									free(client_myds->myconn->options.sql_auto_is_null);
-								}
+							if (mysql_variables->client_get_hash(SQL_SQL_AUTO_IS_NULL) != sql_auto_is_null_int) {
+								mysql_variables->client_set_value(SQL_SQL_AUTO_IS_NULL, value1.c_str());
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection sql_auto_is_null to %s\n", value1.c_str());
-								client_myds->myconn->options.sql_auto_is_null=strdup(value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {
