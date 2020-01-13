@@ -1763,6 +1763,7 @@ __start_label:
 					if (missed_heartbeats >= (unsigned int)GloVars.restart_on_missing_heartbeats) {
 						if (GloVars.restart_on_missing_heartbeats) {
 							proxy_error("Watchdog: reached %u missed heartbeats. Aborting!\n", missed_heartbeats);
+							proxy_error("Watchdog: see details at https://github.com/sysown/proxysql/wiki/Watchdog\n");
 							assert(0);
 						}
 					}
