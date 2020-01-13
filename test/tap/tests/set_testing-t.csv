@@ -24,4 +24,6 @@
 "SET tx_isolation='SERIALIZABLE'", "{'transaction_isolation':'SERIALIZABLE'}"
 "SET session_track_gtids=OFF", "{'session_track_gtids':'OFF'}"
 "SET session_track_gtids=OWN_GTID", "{'session_track_gtids':'OWN_GTID'}"
+"SET sql_auto_is_null=OFF", "{'sql_auto_is_null':'OFF'}"
+"SET sql_auto_is_null=ON", "{'sql_auto_is_null':'ON'}"
 

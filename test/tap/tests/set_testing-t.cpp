@@ -142,7 +142,8 @@ void queryVariables(MYSQL *mysql, json& j) {
 	char *query = (char*)"SELECT * FROM performance_schema.session_variables WHERE variable_name IN "
 		" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
 		" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
-		" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', 'session_track_gtids');";
+		" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', 'session_track_gtids', "
+		" 'sql_auto_is_null');";
 	if (mysql_query(mysql, query)) {
 		if (silent==0) {
 			fprintf(stderr,"%s\n", mysql_error(mysql));
@@ -185,6 +186,22 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 			else if (el.value()["sql_log_bin"] == 0) {
 				el.value().erase("sql_log_bin");
 				j["conn"]["sql_log_bin"] = "OFF";
+			}
+
+			// autocommit {true|false}
+			if (!el.value()["sql_auto_is_null"].dump().compare("ON") ||
+					!el.value()["sql_auto_is_null"].dump().compare("1") ||
+					!el.value()["sql_auto_is_null"].dump().compare("on") ||
+					el.value()["sql_auto_is_null"] == 1) {
+				el.value().erase("sql_auto_is_null");
+				j["conn"]["sql_auto_is_null"] = "ON";
+			}
+			else if (!el.value()["sql_auto_is_null"].dump().compare("OFF") ||
+					!el.value()["sql_auto_is_null"].dump().compare("0") ||
+					!el.value()["sql_auto_is_null"].dump().compare("off") ||
+					el.value()["sql_auto_is_null"] == 0) {
+				el.value().erase("sql_auto_is_null");
+				j["conn"]["sql_auto_is_null"] = "OFF";
 			}
 
 			// autocommit {true|false}
@@ -255,7 +272,7 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["transaction_read_only"] = "OFF";
 			}
 
-			// transaction_read (write|only)
+			// session_track_gtids
 			if (!el.value()["session_track_gtids"].dump().compare("\"OFF\"")) {
 				el.value().erase("session_track_gtids");
 				j["conn"]["session_track_gtids"] = "OFF";
@@ -385,7 +402,7 @@ int main(int argc, char *argv[]) {
 		return exit_status();
 
 	num_threads = 10;
-	queries = 100;
+	queries = 1000;
 	queries_per_connections = 10;
 	count = 10;
 	username = cl.username;
