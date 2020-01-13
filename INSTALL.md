@@ -26,13 +26,13 @@ Make sure you have installed the equivalent for each of these packages for your 
 Shortcut commands for installing pre-requisites:
 ```
 # RHEL / CentOS < 7:
-yum install automake bzip2 cmake make g++ gcc git openssl openssl-devel patch
+yum install -y automake bzip2 cmake make g++ gcc git openssl openssl-devel gnutls libtool patch
 
 # CentOS 7.4+ / Fedora 28+:
-yum install automake bzip2 cmake make gcc-c++ gcc git openssl openssl-devel patch
+yum install -y automake bzip2 cmake make gcc-c++ gcc git openssl openssl-devel gnutls gnutls-devel libtool patch
 
 # Debian / Ubuntu Based:
-apt-get install automake bzip2 cmake make g++ gcc git openssl libssl-dev patch
+apt-get install -y automake bzip2 cmake make g++ gcc git openssl libssl-dev libgnutls28-dev libtool patch
 ```
 
 On Mac OSX, Proxysql's dependencies are not fully satisfied by the tools included with the XCode/clang toolkit. The Proxysql build system needs to be told where to find non-system `curl` (and possibly `openssl`) libraries. Using the [Homebrew](https://brew.sh/) OSX package manager, dependencies can be installed and located on OSX like this:
