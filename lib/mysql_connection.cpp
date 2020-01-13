@@ -10,9 +10,9 @@
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level",
-	"session transaction read"};
+	"session transaction read", "session_track_gtids"};
 const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "isolation_level",
-	"transaction_read"};
+	"transaction_read", "session_track_gtids"};
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 	j["backends"][conn_num]["conn"][Variable::proxysql_internal_session_name[idx]] = std::string(value);
@@ -229,12 +229,10 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
-	options.session_track_gtids = NULL;
 	options.sql_auto_is_null = NULL;
 	options.collation_connection = NULL;
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
-	options.session_track_gtids_sent = false;
 	options.sql_auto_is_null_sent = false;
 	options.collation_connection_sent = false;
 	options.net_write_timeout_sent = false;
@@ -243,7 +241,6 @@ MySQL_Connection::MySQL_Connection() {
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
-	options.session_track_gtids_int=0;
 	options.sql_auto_is_null_int=0;
 	options.collation_connection_int=0;
 	options.net_write_timeout_int=0;
@@ -326,10 +323,6 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
-	if (options.session_track_gtids) {
-		free(options.session_track_gtids);
-		options.session_track_gtids=NULL;
-	}
 	if (options.sql_auto_is_null) {
 		free(options.sql_auto_is_null);
 		options.sql_auto_is_null=NULL;
@@ -2161,12 +2154,6 @@ void MySQL_Connection::reset() {
 		}
 	}
 
-	options.session_track_gtids_int = 0;
-	if (options.session_track_gtids) {
-		free (options.session_track_gtids);
-		options.session_track_gtids = NULL;
-		options.session_track_gtids_sent = false;
-	}
 	options.sql_auto_is_null_int = 0;
 	if (options.sql_auto_is_null) {
 		free (options.sql_auto_is_null);

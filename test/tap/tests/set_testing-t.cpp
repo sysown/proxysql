@@ -142,7 +142,7 @@ void queryVariables(MYSQL *mysql, json& j) {
 	char *query = (char*)"SELECT * FROM performance_schema.session_variables WHERE variable_name IN "
 		" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
 		" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
-		" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only');";
+		" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', 'session_track_gtids');";
 	if (mysql_query(mysql, query)) {
 		if (silent==0) {
 			fprintf(stderr,"%s\n", mysql_error(mysql));
@@ -253,6 +253,20 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 			else if (!el.value()["transaction_read"].dump().compare("\"WRITE\"")) {
 				el.value().erase("transaction_read");
 				j["conn"]["transaction_read_only"] = "OFF";
+			}
+
+			// transaction_read (write|only)
+			if (!el.value()["session_track_gtids"].dump().compare("\"OFF\"")) {
+				el.value().erase("session_track_gtids");
+				j["conn"]["session_track_gtids"] = "OFF";
+			}
+			else if (!el.value()["session_track_gtids"].dump().compare("\"OWN_GTID\"")) {
+				el.value().erase("session_track_gtids");
+				j["conn"]["session_track_gtids"] = "OWN_GTID";
+			}
+			else if (!el.value()["session_track_gtids"].dump().compare("\"ALL_GTIDS\"")) {
+				el.value().erase("session_track_gtids");
+				j["conn"]["session_track_gtids"] = "ALL_GTIDS";
 			}
 		}
 	}
