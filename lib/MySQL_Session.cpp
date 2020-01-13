@@ -6453,11 +6453,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
-	
-		with_gtid = false;
+
 		MySQL_Connection *mc=NULL;
 		MySQL_Backend * _gtid_from_backend = NULL;
 		char uuid[64];
+		char * gtid_uuid=NULL;
 		uint64_t trxid = 0;
 		unsigned long long now_us = 0;
 		if (qpo->max_lag_ms >= 0) {
@@ -6473,22 +6473,33 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			}
 		}
 		if (session_fast_forward == false) {
-			if (qpo->gtid_from_hostgroup >= 0) {
+			if (qpo->min_gtid) {
+				gtid_uuid = qpo->min_gtid;
+			} else if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
 				if (_gtid_from_backend) {
 					if (_gtid_from_backend->gtid_uuid[0]) {
-						with_gtid = true;
+						gtid_uuid = _gtid_from_backend->gtid_uuid;
 					}
 				}
 			}
-			if (with_gtid) {
-				int l = index(_gtid_from_backend->gtid_uuid,':') - _gtid_from_backend->gtid_uuid;
-				trxid = strtoull(index(_gtid_from_backend->gtid_uuid,':')+1, NULL, 10);
+
+			char *sep_pos = NULL;
+			if (gtid_uuid != NULL) {
+				sep_pos = index(gtid_uuid,':');
+				if (sep_pos == NULL) {
+					gtid_uuid = NULL; // gtid is invalid
+				}
+			}
+
+			if (gtid_uuid != NULL) {
+				int l = sep_pos - gtid_uuid;
+				trxid = strtoull(sep_pos+1, NULL, 10);
 				int m;
 				int n=0;
 				for (m=0; m<l; m++) {
-					if (_gtid_from_backend->gtid_uuid[m] != '-') {
-						uuid[n]=_gtid_from_backend->gtid_uuid[m];
+					if (gtid_uuid[m] != '-') {
+						uuid[n]=gtid_uuid[m];
 						n++;
 					}
 				}
