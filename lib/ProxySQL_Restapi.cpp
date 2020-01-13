@@ -99,6 +99,7 @@ void ProxySQL_Restapi::load_restapi_to_runtime() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		update_restapi_table(resultset.get());
+		save_restapi_runtime_to_database(true);
 	}
 }
 

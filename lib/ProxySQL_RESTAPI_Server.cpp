@@ -20,15 +20,17 @@ extern ProxySQL_Admin *GloAdmin;
 
 class sync_resource : public http_resource {
 private:
+	void add_headers(std::shared_ptr<http_response> &response) {
+		response->with_header("Content-Type", "application/json");
+		response->with_header("Access-Control-Allow-Origin", "*");
+	}
+
 	const std::shared_ptr<http_response> find_script(const http_request& req, std::string& script, int &interval_ms) {
-		SQLite3_result *resultset=NULL;
-		int affected_rows;
-		int cols;
 		char *error=NULL;
 		std::stringstream ss;
-		ss << "SELECT * FROM restapi_routes WHERE uri='" << req.get_path_piece(1) << "' and method='" << req.get_method() << "' and active=1";
-		bool rc=GloAdmin->admindb->execute_statement(ss.str().c_str(), &error, &cols, &affected_rows, &resultset);
-		if (!rc) {
+		ss << "SELECT * FROM runtime_restapi_routes WHERE uri='" << req.get_path_piece(1) << "' and method='" << req.get_method() << "' and active=1";
+		std::unique_ptr<SQLite3_result> resultset = std::unique_ptr<SQLite3_result>(GloAdmin->admindb->execute_statement(ss.str().c_str(), &error));
+		if (!resultset) {
 			proxy_error("Cannot query script for given method [%s] and uri [%s]\n", req.get_method().c_str(), req.get_path_piece(1).c_str());
 			std::stringstream ss;
 			if (error) {
@@ -39,17 +41,20 @@ private:
 				ss << "{\"error\":\"The script for method [" << req.get_method() << "] and route [" << req.get_path() << "] was not found.\"}";
 				proxy_error("Path %s\n", req.get_path().c_str());
 			}
-			return std::shared_ptr<http_response>(new string_response(ss.str()));
+			auto response = std::shared_ptr<http_response>(new string_response(ss.str()));
+			add_headers(response);
+			return response;
 		}
 		if (resultset && resultset->rows_count != 1) {
 			std::stringstream ss;
 			ss << "{\"error\":\"The script for method [" << req.get_method() << "] and route [" << req.get_path() << "] was not found. Rows count returned [" << resultset->rows_count << "]\" }";
 			proxy_error("Script for method [%s] and route [%s] was not found\n", req.get_method().c_str(), req.get_path().c_str());
-			return std::shared_ptr<http_response>(new string_response(ss.str()));
+			auto response = std::shared_ptr<http_response>(new string_response(ss.str()));
+			add_headers(response);
+			return response;
 		}
 		script = resultset->rows[0]->fields[5];
 		interval_ms = atoi(resultset->rows[0]->fields[2]);
-		if (resultset) {delete resultset; resultset=NULL;}
 		return std::shared_ptr<http_response>(nullptr);
 	}
 
@@ -59,7 +64,10 @@ private:
 			params = _params;
 		if (params.empty()) {
 			proxy_error("Empty parameters\n");
-			return std::shared_ptr<http_response>(new string_response("{\"error\":\"Empty parameters\"}"));
+
+			auto response = std::shared_ptr<http_response>(new string_response("{\"error\":\"Empty parameters\"}"));
+			add_headers(response);
+			return response;
 		}
 
 		try {
@@ -69,25 +77,36 @@ private:
 			std::stringstream ss;
 			ss << "{\"type\":\"in\", \"error\":\"" << e.what() << "\"}";
 			proxy_error("Error parsing input json parameters. %s\n", ss.str().c_str());
-			return std::shared_ptr<http_response>(new string_response(ss.str()));
+
+			auto response = std::shared_ptr<http_response>(new string_response(ss.str()));
+			add_headers(response);
+			return response;
 		}
 
 		std::string script;
 		int interval_ms;
 		auto result=find_script(req, script, interval_ms);
+
+		// result == nullpts means that script was found and we can execute it. continue.
 		if (nullptr!=result)
 			return result;
 
 		int pipefd[2];
-        if (pipe(pipefd) == -1) {
+		if (pipe(pipefd) == -1) {
 			proxy_error("Cannot create pipe\n");
-            return std::shared_ptr<http_response>(new string_response("{\"error\":\"Cannot create pipe.\"}"));
-        }
+
+			auto response = std::shared_ptr<http_response>(new string_response("{\"error\":\"Cannot create pipe.\"}"));
+			add_headers(response);
+			return response;
+		}
 
 		pid_t pid;
 		if ((pid=fork()) == -1) {
 			proxy_error("Cannot fork\n");
-			return std::shared_ptr<http_response>(new string_response("{\"error\":\"Cannot fork.\"}"));
+
+			auto response = std::shared_ptr<http_response>(new string_response("{\"error\":\"Cannot fork.\"}"));
+			add_headers(response);
+			return response;
 		}
 
 		char buf[65536] = {0};
@@ -103,7 +122,10 @@ private:
 				std::stringstream ss;
 				ss << "{\"error\":\"Error calling execve().\", \"cwd\":\"" << cwd << "\", \"file\":\"" << script << "\"}";
 				proxy_error("%s\n", ss.str().c_str());
-				return std::shared_ptr<http_response>(new string_response(ss.str()));
+
+				auto response = std::shared_ptr<http_response>(new string_response(ss.str()));
+				add_headers(response);
+				return response;
 			}
 			exit(EXIT_SUCCESS);
 		}
@@ -124,19 +146,28 @@ private:
 				proxy_error("Error calling select for path %s\n", req.get_path().c_str());
 				std::stringstream ss;
 				ss << "{\"error\":\"Error calling select().\", \"path\":\"" << req.get_path() << "\"}";
-				return std::shared_ptr<http_response>(new string_response(ss.str()));
+
+				auto response = std::shared_ptr<http_response>(new string_response(ss.str()));
+				add_headers(response);
+				return response;
 			}
 			else if (rv == 0) {
 				proxy_error("Timeout reading script output %s\n", script.c_str());
 				std::stringstream ss;
 				ss << "{\"error\":\"Timeout reading script output. Script file: " << script << "\"}";
-				return std::shared_ptr<http_response>(new string_response(ss.str()));
+
+				auto response = std::shared_ptr<http_response>(new string_response(ss.str()));
+				add_headers(response);
+				return response;
 			}
 			else {
 				int nbytes = read(pipefd[0], buf, sizeof(buf) - 1);
 				if (nbytes == -1) {
 					proxy_error("Error reading pipe\n");
-					return std::shared_ptr<http_response>(new string_response("{\"error\":\"Error reading pipe.\"}"));
+
+					auto response = std::shared_ptr<http_response>(new string_response("{\"error\":\"Error reading pipe.\"}"));
+					add_headers(response);
+					return response;
 				}
 
 				// validate json correctness
@@ -147,7 +178,10 @@ private:
 					std::stringstream ss;
 					ss << "{\"type\":\"out\", \"error\":\"" << e.what() << "\"}";
 					proxy_error("Error parsing script output. %s\n", buf);
-					return std::shared_ptr<http_response>(new string_response(ss.str()));
+
+					auto response = std::shared_ptr<http_response>(new string_response(ss.str()));
+					add_headers(response);
+					return response;
 				}
 			}
 			close(pipefd[0]);
@@ -155,7 +189,9 @@ private:
 			int status;
 			waitpid(pid, &status, 0);
 		}
-        return std::shared_ptr<http_response>(new string_response(buf));
+        auto response = std::shared_ptr<http_response>(new string_response(buf));
+        add_headers(response);
+        return response;
     }
 
 public:
@@ -163,7 +199,11 @@ public:
 		proxy_info("Render generic request with method %s for uri %s\n", req.get_method().c_str(), req.get_path().c_str());
 		std::stringstream ss;
 		ss << "{\"error\":\"HTTP method " << req.get_method().c_str() << " is not implemented\"}";
-        return std::shared_ptr<http_response>(new string_response(ss.str().c_str()));
+
+        auto response = std::shared_ptr<http_response>(new string_response(ss.str().c_str()));
+        response->with_header("Content-Type", "application/json");
+        response->with_header("Access-Control-Allow-Origin", "*");
+        return response;
     }
 
 	const std::shared_ptr<http_response> render_GET(const http_request& req) {
