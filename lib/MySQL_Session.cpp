@@ -3760,6 +3760,7 @@ handler_again:
 											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
+											// issue #841
 											myconn->local_stmts->remove_stmt(myconn->query.stmt);
 											myconn->query_close_stmt();
 										} else {
@@ -3782,6 +3783,7 @@ handler_again:
 										if (myconn && myconn->mysql) {
 											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+											// issue #841
 											myconn->local_stmts->remove_stmt(myconn->query.stmt);
 											myconn->query_close_stmt();
 										} else {
