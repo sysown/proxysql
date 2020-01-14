@@ -70,7 +70,7 @@ class SQLite3_Server {
 #endif // TEST_GALERA
 #ifdef TEST_GROUPREP
 	pthread_mutex_t grouprep_mutex;
-	void populate_grouprep_table(MySQL_Session *sess);
+	void populate_grouprep_table(MySQL_Session *sess, int txs_behind = 0);
 	void init_grouprep_ifaces_string(std::string& s);
 #endif // TEST_GROUPREP
 	SQLite3_Server();
@@ -83,7 +83,7 @@ class SQLite3_Server {
 	bool init();
 	void wrlock();
 	void wrunlock();
-	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
+	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0, uint16_t status=2);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
 };
 #endif // CLASS_PROXYSQL_SQLITE3_SERVER_H

@@ -10,6 +10,14 @@
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
 
+enum MySerStatus {
+	MYSQL_SERVER_STATUS_ONLINE,
+	MYSQL_SERVER_STATUS_SHUNNED,
+	MYSQL_SERVER_STATUS_OFFLINE_SOFT,
+	MYSQL_SERVER_STATUS_OFFLINE_HARD,
+	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG
+};
+
 enum log_event_type {
 	PROXYSQL_COM_QUERY,
 	PROXYSQL_MYSQL_AUTH_OK,
@@ -77,6 +85,11 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_INITDB_END,
 	ASYNC_INITDB_SUCCESSFUL,
 	ASYNC_INITDB_FAILED,
+	ASYNC_SET_OPTION_START,
+	ASYNC_SET_OPTION_CONT,
+	ASYNC_SET_OPTION_END,
+	ASYNC_SET_OPTION_FAILED,
+	ASYNC_SET_OPTION_SUCCESSFUL,
 	ASYNC_STMT_PREPARE_START,
 	ASYNC_STMT_PREPARE_CONT,
 	ASYNC_STMT_PREPARE_END,
@@ -164,6 +177,7 @@ enum session_status {
 	SETTING_COLLATION_CONNECTION,
 	SETTING_NET_WRITE_TIMEOUT,
 	SETTING_MAX_JOIN_SIZE,
+	SETTING_MULTI_STMT,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
@@ -387,6 +401,14 @@ class SQLite3_result;
 class stmt_execute_metadata_t;
 class MySQL_STMTs_meta;
 class MySQL_HostGroups_Manager;
+class ProxySQL_HTTP_Server;
+class MySQL_STMTs_local_v14;
+class MySQL_STMT_Global_info;
+class StmtLongDataHandler;
+class ProxySQL_Cluster;
+class MySQL_ResultSet;
+class Query_Processor_Output;
+class MySrvC;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
@@ -506,6 +528,7 @@ struct _global_variables_t {
 
 	bool has_debug;
 	bool idle_threads;
+	bool version_check;
 
 	volatile int shutdown;
 	bool nostart;
@@ -522,7 +545,6 @@ struct _global_variables_t {
 
 	int merge_configfile_db;
 
-	int core_dump_file_size;
 	int stack_size;
 	char *proxy_admin_socket;
 	char *proxy_mysql_bind;
@@ -642,7 +664,10 @@ __thread char *mysql_thread___default_sql_safe_updates;
 __thread char *mysql_thread___default_collation_connection;
 __thread char *mysql_thread___default_net_write_timeout;
 __thread char *mysql_thread___default_max_join_size;
+__thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___max_allowed_packet;
+__thread bool mysql_thread___automatic_detect_sqli;
+__thread bool mysql_thread___firewall_whitelist_enabled;
 __thread bool mysql_thread___use_tcp_keepalive;
 __thread int mysql_thread___tcp_keepalive_time;
 __thread int mysql_thread___throttle_connections_per_sec_to_hostgroup;
@@ -750,6 +775,7 @@ __thread int mysql_thread___monitor_replication_lag_timeout;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+__thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 __thread int mysql_thread___monitor_galera_healthcheck_interval;
 __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 __thread int mysql_thread___monitor_galera_healthcheck_max_timeout_count;
@@ -793,7 +819,10 @@ extern __thread char *mysql_thread___default_sql_safe_updates;
 extern __thread char *mysql_thread___default_collation_connection;
 extern __thread char *mysql_thread___default_net_write_timeout;
 extern __thread char *mysql_thread___default_max_join_size;
+extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___max_allowed_packet;
+extern __thread bool mysql_thread___automatic_detect_sqli;
+extern __thread bool mysql_thread___firewall_whitelist_enabled;
 extern __thread bool mysql_thread___use_tcp_keepalive;
 extern __thread int mysql_thread___tcp_keepalive_time;
 extern __thread int mysql_thread___throttle_connections_per_sec_to_hostgroup;
@@ -901,6 +930,7 @@ extern __thread int mysql_thread___monitor_replication_lag_timeout;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+extern __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 extern __thread int mysql_thread___monitor_galera_healthcheck_interval;
 extern __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 extern __thread int mysql_thread___monitor_galera_healthcheck_max_timeout_count;

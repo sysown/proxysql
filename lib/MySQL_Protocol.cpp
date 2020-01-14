@@ -2,6 +2,11 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_Data_Stream.h"
+#include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
+
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern MySQL_Threads_Handler *GloMTH;
@@ -1747,10 +1752,10 @@ __do_auth:
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
 		|| 
 			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+//#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		|| 
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
-#endif // TEST_AURORA  || TEST_GALERA
+//#endif // TEST_AURORA  || TEST_GALERA
 		) {
 			if (strcmp((const char *)user,mysql_thread___monitor_username)==0) {
 				proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);

@@ -4,6 +4,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_Protocol.h"
 
 #define QUEUE_T_DEFAULT_SIZE	32768
 #define MY_SSL_BUFFER	8192

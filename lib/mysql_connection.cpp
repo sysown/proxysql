@@ -3,6 +3,10 @@
 #include "SpookyV2.h"
 #include <fcntl.h>
 
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 #define PROXYSQL_USE_RESULT
@@ -668,6 +672,18 @@ void MySQL_Connection::initdb_cont(short event) {
 	async_exit_status = mysql_select_db_cont(&interr,mysql, mysql_status(event, true));
 }
 
+void MySQL_Connection::set_option_start() {
+	PROXY_TRACE();
+
+	enum_mysql_set_option set_option;
+	set_option=((options.client_flag & CLIENT_MULTI_STATEMENTS) ? MYSQL_OPTION_MULTI_STATEMENTS_ON : MYSQL_OPTION_MULTI_STATEMENTS_OFF);
+	async_exit_status = mysql_set_server_option_start(&interr,mysql,set_option);
+}
+
+void MySQL_Connection::set_option_cont(short event) {
+	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
+	async_exit_status = mysql_set_server_option_cont(&interr,mysql, mysql_status(event, true));
+}
 
 void MySQL_Connection::set_autocommit_start() {
 	PROXY_TRACE();
@@ -1322,6 +1338,35 @@ handler_again:
 		case ASYNC_INITDB_FAILED:
 			fprintf(stderr,"%s\n",mysql_error(mysql));
 			break;
+		case ASYNC_SET_OPTION_START:
+			set_option_start();
+			if (async_exit_status) {
+				next_event(ASYNC_SET_OPTION_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_OPTION_END);
+			}
+			break;
+		case ASYNC_SET_OPTION_CONT:
+			set_option_cont(event);
+			if (async_exit_status) {
+				next_event(ASYNC_SET_OPTION_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_OPTION_END);
+			}
+			break;
+		case ASYNC_SET_OPTION_END:
+			if (interr) {
+				NEXT_IMMEDIATE(ASYNC_SET_OPTION_FAILED);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_SET_OPTION_SUCCESSFUL);
+			}
+			break;
+		case ASYNC_SET_OPTION_SUCCESSFUL:
+			break;
+		case ASYNC_SET_OPTION_FAILED:
+			proxy_error("Error setting MYSQL_OPTION_MULTI_STATEMENTS : %s\n", mysql_error(mysql));
+			break;
+
 		default:
 			assert(0); //we should never reach here
 			break;
@@ -1721,6 +1766,47 @@ int MySQL_Connection::async_set_names(short event, unsigned int c) {
 	return 1;
 }
 
+int MySQL_Connection::async_set_option(short event, bool mask) {
+	PROXY_TRACE();
+	assert(mysql);
+	assert(ret_mysql);
+	switch (async_state_machine) {
+		case ASYNC_SET_OPTION_SUCCESSFUL:
+			unknown_transaction_status = false;
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_SET_OPTION_FAILED:
+			return -1;
+			break;
+		case ASYNC_IDLE:
+			if (mask)
+				options.client_flag |= CLIENT_MULTI_STATEMENTS;
+			else
+				options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
+			async_state_machine=ASYNC_SET_OPTION_START;
+		default:
+			handler(event);
+			break;
+	}
+
+	// check again
+	switch (async_state_machine) {
+		case ASYNC_SET_OPTION_SUCCESSFUL:
+			unknown_transaction_status = false;
+			async_state_machine=ASYNC_IDLE;
+			return 0;
+			break;
+		case ASYNC_SET_OPTION_FAILED:
+			return -1;
+			break;
+		default:
+			return 1;
+			break;
+	}
+	return 1;
+}
+
 void MySQL_Connection::async_free_result() {
 	PROXY_TRACE();
 	assert(mysql);
@@ -2086,6 +2172,13 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	return 1;
 }
 
+void MySQL_Connection::query_close_stmt() {
+	if (query.stmt) {
+		mysql_stmt_close(query.stmt);
+		query.stmt = NULL;
+	}
+}
+
 void MySQL_Connection::reset() {
 	status_flags=0;
 	reusable=true;
@@ -2201,6 +2294,9 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 				const char *data;
 				size_t length;
 				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
+					if (length >= (sizeof(gtid_uuid) - 1)) {
+						length = sizeof(gtid_uuid) - 1;
+					}
 					if (memcmp(gtid_uuid,data,length)) {
 						// copy to local buffer in MySQL_Connection
 						memcpy(gtid_uuid,data,length);

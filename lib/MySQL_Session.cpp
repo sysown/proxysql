@@ -5,6 +5,20 @@
 #include "SpookyV2.h"
 #include "set_parser.h"
 
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_Logger.hpp"
+#include "StatCounters.h"
+#include "MySQL_Authentication.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
+#include "MySQL_Protocol.h"
+#include "SQLite3_Server.h"
+
+
+#include "libinjection.h"
+#include "libinjection_sqli.h"
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
@@ -78,33 +92,25 @@ bool Session_Regex::match(char *m) {
 	return rc;
 }
 
-/*
-#define KILL_QUERY       1
-#define KILL_CONNECTION  2
 
-class KillArgs {
-	public:
-	char *username;
-	char *password;
-	char *hostname;
-	unsigned int port;
-	unsigned long id;
-	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt) {
-		username=strdup(u);
-		password=strdup(p);
-		hostname=strdup(h);
-		port=P;
-		id=i;
-		kill_type=kt;
-	};
-	~KillArgs() {
-		free(username);
-		free(password);
-		free(hostname);
-	};
-};
-*/
+KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt) {
+	username=strdup(u);
+	password=strdup(p);
+	hostname=strdup(h);
+	port=P;
+	id=i;
+	kill_type=kt;
+	mt=_mt;
+}
+
+KillArgs::~KillArgs() {
+	free(username);
+	free(password);
+	free(hostname);
+}
+
+
+
 void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
@@ -148,6 +154,7 @@ void * kill_query_thread(void *arg) {
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
+		proxy_error("Failed to connect to server %s:%d to run KILL %s %llu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
 		goto __exit_kill_query_thread;
 	}
 	char buf[100];
@@ -164,8 +171,9 @@ void * kill_query_thread(void *arg) {
 	}
 	// FIXME: these 2 calls are blocking, fortunately on their own thread
 	mysql_query(mysql,buf);
-	mysql_close(mysql);
 __exit_kill_query_thread:
+	if (mysql)
+		mysql_close(mysql);
 	delete ka;
 	return NULL;
 }
@@ -242,6 +250,7 @@ void Query_Info::end() {
 			free(stmt_meta->pkt);
 			stmt_meta->pkt=NULL;
 		}
+		stmt_meta = NULL;
 	}
 }
 
@@ -401,17 +410,28 @@ void MySQL_Session::operator delete(void *ptr) {
 }
 
 
+void MySQL_Session::set_status(enum session_status e) {
+	if (e==NONE) {
+		if (mybe) {
+			if (mybe->server_myds) {
+				assert(mybe->server_myds->myconn==0);
+				if (mybe->server_myds->myconn) {
+					assert(mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE);
+				}
+			}
+		}
+	}
+	status=e;
+}
+
+
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
 	handler_ret = 0;
 	pause_until=0;
 	qpo=new Query_Processor_Output();
 	start_time=0;
-#ifdef PROXYSQL_STATSCOUNTERS_NOLOCK
 	command_counters=new StatCounters(15,10);
-#else
-	command_counters=new StatCounters(15,10,false);
-#endif
 	healthy=1;
 	autocommit=true;
 	autocommit_handled=false;
@@ -441,6 +461,7 @@ MySQL_Session::MySQL_Session() {
 	current_hostgroup=-1;
 	default_hostgroup=-1;
 	locked_on_hostgroup=-1;
+	locked_on_hostgroup_and_all_variables_set=false;
 	next_query_flagIN=-1;
 	mirror_hostgroup=-1;
 	mirror_flagOUT=-1;
@@ -483,6 +504,7 @@ void MySQL_Session::reset() {
 	current_hostgroup=-1;
 	default_hostgroup=-1;
 	locked_on_hostgroup=-1;
+	locked_on_hostgroup_and_all_variables_set=false;
 	if (sess_STMTs_meta) {
 		delete sess_STMTs_meta;
 		sess_STMTs_meta=NULL;
@@ -840,6 +862,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 						autocommit=true;
 						client_myds->myconn->set_autocommit(autocommit);
 						autocommit_on_hostgroup=FindOneActiveTransaction();
+						free(_new_pkt.ptr);
 						return false;
 					} else {
 						// as there is no active transaction, we do no need to forward it
@@ -1840,6 +1863,33 @@ bool MySQL_Session::handler_again___verify_backend_net_write_timeout() {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___verify_backend_multi_statement() {
+	if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS != mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) {
+
+		if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)
+			mybe->server_myds->myconn->options.client_flag |= CLIENT_MULTI_STATEMENTS;
+		else
+			mybe->server_myds->myconn->options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
+
+		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				previous_status.push(PROCESSING_QUERY);
+				break;
+				case PROCESSING_STMT_PREPARE:
+			previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+				case PROCESSING_STMT_EXECUTE:
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		NEXT_IMMEDIATE_NEW(SETTING_MULTI_STMT);
+	}
+	return false;
+}
+
 bool MySQL_Session::handler_again___verify_backend_max_join_size() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.max_join_size, mybe->server_myds->myconn->options.max_join_size);
@@ -2531,6 +2581,28 @@ bool MySQL_Session::handler_again___status_SETTING_ISOLATION_LEVEL(int *_rc) {
 	return ret;
 }
 
+bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	enum session_status st=status;
+	bool ret = false;
+
+	if (myds->mypolls==NULL) {
+		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	int rc=myconn->async_set_option(myds->revents, myconn->options.client_flag & CLIENT_MULTI_STATEMENTS);
+	if (rc==0) {
+		myds->DSS = STATE_MARIADB_GENERIC;
+		st=previous_status.top();
+		previous_status.pop();
+		NEXT_IMMEDIATE_NEW(st);
+	} else {
+		proxy_error("Error setting multistatemnt on server\n");
+	}
+	return ret;
+}
+
 bool MySQL_Session::handler_again___status_SETTING_CHARSET(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
@@ -2906,21 +2978,32 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	char msg[128];
+	const MARIADB_CHARSET_INFO *ci = NULL;
+	const char* replace_collation = "";
+	const char* not_supported_collation = "";
 
 	/* Validate that server can support client's charset */
 	if (client_myds->myconn->options.charset >= 255 && myconn->mysql->server_version[0] != '8') {
 		switch(mysql_thread___handle_unknown_charset) {
 			case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
 				snprintf(msg,sizeof(msg),"Can't initialize character set %d",client_myds->myconn->options.charset);
-				proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing connection.\n",
-						myconn->parent->address, myconn->parent->port, 2019, msg);
+				proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing client connection %s:%d.\n",
+						myconn->parent->address, myconn->parent->port, 2019, msg, client_myds->addr.addr, client_myds->addr.port);
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd=0;
 				*_rc=-1;
 				return false;
 			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
-				proxy_warning("Server doesn't support collation id %d. Replace it with default charset %d.\n",
-						client_myds->myconn->options.charset, mysql_thread___default_charset);
+				ci = proxysql_find_charset_nr(client_myds->myconn->options.charset);
+				if (ci)	not_supported_collation = ci->name;
+
+				ci = proxysql_find_charset_nr(mysql_thread___default_charset);
+				if (ci)	replace_collation = ci->name;
+
+				proxy_warning("Server doesn't support collation (%d) %s. Replacing it with the configured default (%d) %s. Client %s:%d\n",
+						client_myds->myconn->options.charset, not_supported_collation, 
+						mysql_thread___default_charset, replace_collation, client_myds->addr.addr, client_myds->addr.port);
+
 				client_myds->myconn->options.charset=mysql_thread___default_charset;
 				break;
 			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT:
@@ -3288,6 +3371,37 @@ __get_pkts_from_client:
 									}
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
+									if (mirror==false) {
+										if (mysql_thread___automatic_detect_sqli) {
+											if (client_myds->com_field_list == false) {
+												if (qpo->firewall_whitelist_mode != WUS_OFF) {
+													struct libinjection_sqli_state state;
+													int issqli;
+													const char * input = (char *)CurrentQuery.QueryPointer;
+													size_t slen = CurrentQuery.QueryLength;
+													libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
+													issqli = libinjection_is_sqli(&state);
+													if (issqli) {
+														bool allow_sqli = false;
+														allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
+														if (allow_sqli) {
+															thread->status_variables.whitelisted_sqli_fingerprint++;
+														} else {
+															thread->status_variables.automatic_detected_sqli++;
+															char * username = client_myds->myconn->userinfo->username;
+															char * client_address = client_myds->addr.addr;
+															proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
+															fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+															fprintf(stderr,"\n");
+															handler_ret = -1;
+															RequestEnd(NULL);
+															return handler_ret;
+														}
+													}
+												}
+											}
+										}
+									}
 									if (rc_break==true) {
 										if (mirror==false) {
 											break;
@@ -3870,7 +3984,7 @@ handler_again:
 							if (handler_again___verify_backend_autocommit()) {
 								goto handler_again;
 							}
-							if (locked_on_hostgroup == -1) {
+							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 								if (handler_again___verify_backend_charset()) {
 									goto handler_again;
 								}
@@ -3915,6 +4029,12 @@ handler_again:
 								}
 								if (handler_again___verify_backend_max_join_size()) {
 									goto handler_again;
+								}
+								if (handler_again___verify_backend_multi_statement()) {
+									goto handler_again;
+								}
+								if (locked_on_hostgroup != -1) {
+									locked_on_hostgroup_and_all_variables_set=true;
 								}
 							}
 						}
@@ -4216,7 +4336,6 @@ handler_again:
 										break;
 									}
 									break;
-								case 1290: // read-only
 								case 1047: // WSREP has not yet prepared node for application use
 								case 1053: // Server shutdown in progress
 									myconn->parent->connect_error(myerr);
@@ -4287,6 +4406,9 @@ handler_again:
 											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
+											// issue #841
+											myconn->local_stmts->remove_stmt(myconn->query.stmt);
+											myconn->query_close_stmt();
 										} else {
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
 											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
@@ -4307,6 +4429,9 @@ handler_again:
 										if (myconn && myconn->mysql) {
 											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+											// issue #841
+											myconn->local_stmts->remove_stmt(myconn->query.stmt);
+											myconn->query_close_stmt();
 										} else {
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
 										}
@@ -4417,6 +4542,18 @@ handler_again:
 			{
 				int rc=0;
 				if (handler_again___status_SETTING_CHARSET(&rc))
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+		case SETTING_MULTI_STMT:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_MULTI_STMT(&rc))
 					goto handler_again;	// we changed status
 				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
@@ -4880,10 +5017,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=true;
 				switch (session_type) {
 					case PROXYSQL_SESSION_SQLITE:
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+//#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 						free_users=1;
 						break;
-#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
+//#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
 						if (ldap_ctx==NULL) {
@@ -6322,11 +6459,11 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
-	
-		with_gtid = false;
+
 		MySQL_Connection *mc=NULL;
 		MySQL_Backend * _gtid_from_backend = NULL;
 		char uuid[64];
+		char * gtid_uuid=NULL;
 		uint64_t trxid = 0;
 		unsigned long long now_us = 0;
 		if (qpo->max_lag_ms >= 0) {
@@ -6342,22 +6479,33 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			}
 		}
 		if (session_fast_forward == false) {
-			if (qpo->gtid_from_hostgroup >= 0) {
+			if (qpo->min_gtid) {
+				gtid_uuid = qpo->min_gtid;
+			} else if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
 				if (_gtid_from_backend) {
 					if (_gtid_from_backend->gtid_uuid[0]) {
-						with_gtid = true;
+						gtid_uuid = _gtid_from_backend->gtid_uuid;
 					}
 				}
 			}
-			if (with_gtid) {
-				int l = index(_gtid_from_backend->gtid_uuid,':') - _gtid_from_backend->gtid_uuid;
-				trxid = strtoull(index(_gtid_from_backend->gtid_uuid,':')+1, NULL, 10);
+
+			char *sep_pos = NULL;
+			if (gtid_uuid != NULL) {
+				sep_pos = index(gtid_uuid,':');
+				if (sep_pos == NULL) {
+					gtid_uuid = NULL; // gtid is invalid
+				}
+			}
+
+			if (gtid_uuid != NULL) {
+				int l = sep_pos - gtid_uuid;
+				trxid = strtoull(sep_pos+1, NULL, 10);
 				int m;
 				int n=0;
 				for (m=0; m<l; m++) {
-					if (_gtid_from_backend->gtid_uuid[m] != '-') {
-						uuid[n]=_gtid_from_backend->gtid_uuid[m];
+					if (gtid_uuid[m] != '-') {
+						uuid[n]=gtid_uuid[m];
 						n++;
 					}
 				}
@@ -6550,7 +6698,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 	}
 }
 
-void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
+void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot, bool in_transaction) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
@@ -6562,10 +6710,17 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 			sid++;
 		}
 		myds->DSS=STATE_COLUMN_DEFINITION;
-
-		unsigned int nTrx=NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		unsigned int nTrx = 0;
+		uint16_t setStatus = 0;
+		if (in_transaction == false) {
+			nTrx=NumActiveTransactions();
+			setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+		} else {
+			// this is for SQLite3 Server
+			setStatus = SERVER_STATUS_AUTOCOMMIT;
+			setStatus |= SERVER_STATUS_IN_TRANS;
+		}
 		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus ); sid++;
 		char **p=(char **)malloc(sizeof(char*)*result->columns);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*result->columns);
@@ -6585,12 +6740,24 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 	} else { // no result set
 		if (error) {
 			// there was an error
-			myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"28000",error);
+			if (strcmp(error,(char *)"database is locked")==0) {
+				myprot->generate_pkt_ERR(true,NULL,NULL,sid,1205,(char *)"HY000",error);
+			} else {
+				myprot->generate_pkt_ERR(true,NULL,NULL,sid,1045,(char *)"28000",error);
+			}
 		} else {
 			// no error, DML succeeded
-			unsigned int nTrx=NumActiveTransactions();
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			unsigned int nTrx = 0;
+			uint16_t setStatus = 0;
+			if (in_transaction == false) {
+				nTrx=NumActiveTransactions();
+				setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			} else {
+				// this is for SQLite3 Server
+				setStatus = SERVER_STATUS_AUTOCOMMIT;
+				setStatus |= SERVER_STATUS_IN_TRANS;
+			}
 			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,setStatus,0,NULL);
 		}
 		myds->DSS=STATE_SLEEP;
@@ -7001,6 +7168,7 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 		case 15991633859978935883ULL: // "SET @MYSQLDUMP_TEMP_LOG_BIN = @@SESSION.SQL_LOG_BIN"
 		case 10636751085721966716ULL: // "SET @@GLOBAL.GTID_PURGED=?"
 		case 15976043181199829579ULL: // "SET SQL_QUOTE_SHOW_CREATE=?"
+		case 12094956190640701942ULL: // "SET SESSION information_schema_stats_expiry=0"
 /*
 		case ULL: // 
 		case ULL: // 

@@ -6,6 +6,11 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_Logger.hpp"
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+#include "SQLite3_Server.h"
+
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -86,6 +91,7 @@ static char *s_strdup(char *s) {
 static int __SQLite3_Server_refresh_interval=1000;
 static bool testTimeoutSequence[] = {true, false, true, false, true, false, true, false};
 static int testIndex = 7;
+static int testLag = 10;
 
 extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;
@@ -293,6 +299,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 
 	// fix bug #1047
 	if (
+/*
 		(!strncasecmp("BEGIN", query_no_space, strlen("BEGIN")))
 		||
 		(!strncasecmp("START TRANSACTION", query_no_space, strlen("START TRANSACTION")))
@@ -301,6 +308,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		||
 		(!strncasecmp("ROLLBACK", query_no_space, strlen("ROLLBACK")))
 		||
+*/
 		(!strncasecmp("SET character_set_results", query_no_space, strlen("SET character_set_results")))
 		||
 		(!strncasecmp("SET SQL_AUTO_IS_NULL", query_no_space, strlen("SET SQL_AUTO_IS_NULL")))
@@ -308,10 +316,44 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
 		||
 		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
+		||
+		(!strncasecmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */")))
+		||
+		(!strncasecmp("/*!40103 SET TIME_ZONE=", query_no_space, strlen("/*!40103 SET TIME_ZONE=")))
+		||
+		(!strncasecmp("/*!80000 SET SESSION", query_no_space, strlen("/*!80000 SET SESSION")))
+		||
+		(!strncasecmp("SET SESSION", query_no_space, strlen("SET SESSION")))
+		||
+		(!strncasecmp("SET wait_timeout", query_no_space, strlen("SET wait_timeout")))
 	) {
-		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		uint16_t status=2; // autocommit
+		if (sqlite3_get_autocommit(db)==0) {
+			status = 3; // autocommit + transaction
+		}
+		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
 		run_query=false;
 		goto __run_query;
+	}
+
+	if (query_no_space_length==17) {
+		if (!strncasecmp((char *)"START TRANSACTION", query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			query = l_strdup((char *)"BEGIN IMMEDIATE");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
+	}
+
+	if (query_no_space_length==5) {
+		if (!strncasecmp((char *)"BEGIN", query_no_space, query_no_space_length)) {
+			l_free(query_length,query);
+			query = l_strdup((char *)"BEGIN IMMEDIATE");
+			query_length=strlen(query)+1;
+			goto __run_query;
+		}
 	}
 
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
@@ -516,7 +558,8 @@ __run_query:
 #ifdef TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
 				pthread_mutex_lock(&GloSQLite3Server->grouprep_mutex);
-				GloSQLite3Server->populate_grouprep_table(sess);
+				GloSQLite3Server->populate_grouprep_table(sess, testLag);
+				if (testLag > 0) testLag--;
 			}
 #endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
@@ -579,7 +622,12 @@ __run_query:
 			}
 		}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		bool in_trans = false;
+		if (sqlite3_get_autocommit(db)==0) {
+			in_trans = true;
+		}
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans);
 		delete resultset;
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
@@ -588,8 +636,11 @@ __run_query:
 
 
 SQLite3_Session::SQLite3_Session() {
-	sessdb = new SQLite3DB();
-    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
+	sessdb=new SQLite3DB();
+    sessdb->open(GloVars.sqlite3serverdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sessdb->execute((char *)"PRAGMA journal_mode=WAL");
+	sessdb->execute((char *)"PRAGMA journal_size_limit=67108864");
+	sessdb->execute((char *)"PRAGMA synchronous=0");
 }
 
 SQLite3_Session::~SQLite3_Session() {
@@ -870,8 +921,11 @@ SQLite3_Server::SQLite3_Server() {
 	//Initialize locker
 	pthread_rwlock_init(&rwlock,NULL);
 
-	sessdb = new SQLite3DB();
-    sessdb->open((char *)"file:mem_sqlitedb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sessdb=new SQLite3DB();
+	sessdb->open(GloVars.sqlite3serverdb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	sessdb->execute((char *)"PRAGMA journal_mode=WAL");
+	sessdb->execute((char *)"PRAGMA journal_size_limit=67108864");
+	sessdb->execute((char *)"PRAGMA synchronous=0");
 
 	variables.read_only=false;
 
@@ -1026,7 +1080,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 #endif // TEST_AURORA
 
 #ifdef TEST_GROUPREP
-void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess) {
+void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind) {
 	// this function needs to be called with lock on mutex galera_mutex already acquired
 	//
 	sessdb->execute("DELETE FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
@@ -1034,8 +1088,11 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess) {
 	string server_id = myip.substr(8,1);
 	if (server_id == "1")
 		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'NO', 0)");
-	else
-		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'YES', 0)");
+	else {
+		std::stringstream ss;
+		ss << "INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'YES', " << txs_behind << ")";
+		sessdb->execute(ss.str().c_str());
+	}
 }
 #endif // TEST_GALERA
 
@@ -1205,11 +1262,11 @@ bool SQLite3_Server::set_variable(char *name, char *value) {  // this is the pub
 	return false;
 }
 
-void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
+void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows, uint16_t status) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
-	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg);
+	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,status,0,msg);
 	myds->DSS=STATE_SLEEP;
 }
 

@@ -1,0 +1,28 @@
+--- /tmp/CMakeLists.txt	2019-11-12 10:34:39.913735922 +1100
++++ ./plugins/auth/CMakeLists.txt	2019-11-12 10:35:51.642093480 +1100
+@@ -70,7 +70,7 @@
+   REGISTER_PLUGIN(TARGET caching_sha2_password
+                 TYPE MARIADB_CLIENT_PLUGIN_AUTH
+                 CONFIGURATIONS DYNAMIC STATIC OFF
+-                DEFAULT DYNAMIC
++                DEFAULT STATIC
+                 SOURCES ${CC_SOURCE_DIR}/plugins/auth/caching_sha2_pw.c 
+                         ${CRYPT_SOURCE}
+                 LIBRARIES ${CRYPT_LIBS})
+@@ -81,7 +81,7 @@
+     REGISTER_PLUGIN(TARGET sha256_password
+                     TYPE MARIADB_CLIENT_PLUGIN_AUTH
+                     CONFIGURATIONS DYNAMIC STATIC OFF
+-                    DEFAULT DYNAMIC
++                    DEFAULT STATIC
+                     SOURCES ${AUTH_DIR}/sha256_pw.c
+                     LIBRARIES ${CRYT_LIBS})
+   ENDIF()
+@@ -123,6 +123,6 @@
+ REGISTER_PLUGIN(TARGET mysql_clear_password
+                 TYPE MARIADB_CLIENT_PLUGIN_AUTH
+                 CONFIGURATIONS DYNAMIC STATIC OFF
+-                DEFAULT DYNAMIC
++                DEFAULT STATIC
+                 SOURCES ${AUTH_DIR}/mariadb_cleartext.c)
+ 

@@ -13,7 +13,10 @@ class CommandLine {
 	char* host;
 	char* username;
 	char* password;
+	char* admin_username;
+	char* admin_password;
 	int	 port;
+	int admin_port;
 
 	int read(const std::string& file);
 	int getEnv();

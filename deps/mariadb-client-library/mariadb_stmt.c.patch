@@ -1,4 +1,4 @@
-@@ -124,6 +124,7 @@
+@@ -133,6 +133,7 @@
    case MYSQL_TYPE_TIMESTAMP:
    case MYSQL_TYPE_TINY:
    case MYSQL_TYPE_TINY_BLOB:
@@ -6,7 +6,7 @@
    case MYSQL_TYPE_VAR_STRING:
    case MYSQL_TYPE_YEAR:
      return 1;
-@@ -1143,6 +1144,7 @@
+@@ -1231,6 +1232,7 @@
          break;
        case MYSQL_TYPE_STRING:
        case MYSQL_TYPE_JSON:
@@ -14,3 +14,23 @@
        case MYSQL_TYPE_VAR_STRING:
        case MYSQL_TYPE_BLOB:
        case MYSQL_TYPE_TINY_BLOB:
+@@ -1293,6 +1295,19 @@
+   return 0;
+ }
+
++void STDCALL mysql_stmt_free(MYSQL_STMT *stmt)
++{
++  MA_MEM_ROOT *fields_ma_alloc_root= &((MADB_STMT_EXTENSION *)stmt->extension)->fields_ma_alloc_root;
++
++  /* clear memory */
++  ma_free_root(&stmt->result.alloc, MYF(0)); /* allocated in mysql_stmt_store_result */
++  ma_free_root(&stmt->mem_root,MYF(0));
++  ma_free_root(fields_ma_alloc_root, MYF(0));
++
++  free(stmt->extension);
++  free(stmt);
++}
++
+ my_bool STDCALL mysql_stmt_close(MYSQL_STMT *stmt)
+ {
+   my_bool rc;

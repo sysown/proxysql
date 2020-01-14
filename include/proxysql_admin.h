@@ -6,8 +6,10 @@
 #include "cpp.h"
 #include <vector>
 
-typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
+#include "ProxySQL_RESTAPI_Server.hpp"
 
+typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
+class ProxySQL_Config;
 
 class Scheduler_Row {
 	public:
@@ -100,9 +102,14 @@ class ProxySQL_Admin {
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
+		int stats_mysql_query_digest_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
 		int mysql_show_processlist_extended;
+		bool restapi_enabled;
+		bool restapi_enabled_old;
+		int restapi_port;
+		int restapi_port_old;
 		bool web_enabled;
 		bool web_enabled_old;
 		int web_port;
@@ -204,6 +211,7 @@ class ProxySQL_Admin {
 	void init_users();
 	void init_mysql_servers();
 	void init_mysql_query_rules();
+	void init_mysql_firewall();
 	void init_proxysql_servers();
 	void save_mysql_users_runtime_to_database(bool _runtime);
 	void save_mysql_servers_runtime_to_database(bool);
@@ -221,11 +229,18 @@ class ProxySQL_Admin {
 	void flush_mysql_servers__from_disk_to_memory();
 	void flush_mysql_query_rules__from_memory_to_disk();
 	void flush_mysql_query_rules__from_disk_to_memory();
+	void flush_mysql_firewall__from_memory_to_disk();
+	void flush_mysql_firewall__from_disk_to_memory();
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
 	void save_mysql_query_rules_from_runtime(bool);
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
+	char * load_mysql_firewall_to_runtime();
+	void save_mysql_firewall_from_runtime(bool);
+	void save_mysql_firewall_whitelist_users_from_runtime(bool, SQLite3_result *);
+	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
+	void save_mysql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result *);
 
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
@@ -255,12 +270,7 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 
-	int Read_Global_Variables_from_configfile(const char *prefix);
-	int Read_MySQL_Users_from_configfile();
-	int Read_MySQL_Query_Rules_from_configfile();
-	int Read_MySQL_Servers_from_configfile();
-	int Read_Scheduler_from_configfile();
-	int Read_ProxySQL_Servers_from_configfile();
+	ProxySQL_Config& proxysql_config();
 
 	void flush_error_log();
 	bool GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);
@@ -296,6 +306,7 @@ class ProxySQL_Admin {
 	void save_sqliteserver_variables_from_runtime() { flush_sqliteserver_variables___runtime_to_database(admindb, true, true, false); }
 
 	ProxySQL_HTTP_Server *AdminHTTPServer;
+	ProxySQL_RESTAPI_Server *AdminRestApiServer;
 
 #ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
@@ -309,6 +320,9 @@ class ProxySQL_Admin {
 #endif /* PROXYSQLCLICKHOUSE */
 
 	void vacuum_stats(bool);
+	int FlushDigestTableToDisk(SQLite3DB *);
+
+	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
 
 
 #ifdef TEST_AURORA

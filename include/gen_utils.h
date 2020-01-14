@@ -58,6 +58,13 @@ class PtrArray {
 		pdata=NULL;
 	}
 
+	void reset() {
+		len=0;
+		if (pdata) ( free(pdata) );
+		pdata=NULL;
+		size=0;
+	}
+
 	void *index(unsigned int i) { return pdata[i];}
 
 	void add(void *p) {

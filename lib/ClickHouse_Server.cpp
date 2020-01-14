@@ -7,6 +7,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_Logger.hpp"
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -136,6 +140,12 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					break;
 				case clickhouse::Type::Code::Float64:
 					s=std::to_string(block[i]->As<ColumnFloat64>()->At(r));
+					break;
+				case clickhouse::Type::Code::Enum8:
+					s=block[i]->As<ColumnEnum8>()->NameAt(r);;
+					break;
+				case clickhouse::Type::Code::Enum16:
+					s=block[i]->As<ColumnEnum16>()->NameAt(r);;
 					break;
 				case clickhouse::Type::Code::String:
 					s=block[i]->As<ColumnString>()->At(r);

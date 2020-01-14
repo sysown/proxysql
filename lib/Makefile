@@ -26,11 +26,14 @@ SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
 
 CLICKHOUSE_CPP_DIR=$(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
 
+LIBINJECTION_DIR=$(DEPS_PATH)/libinjection/libinjection
+LIBINJECTION_IDIR=-I$(LIBINJECTION_DIR)/src
+
+LIBHTTPSERVER_DIR=$(DEPS_PATH)/libhttpserver/libhttpserver
+LIBHTTPSERVER_IDIR=-I$(LIBHTTPSERVER_DIR)/src
+
 MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd
 MICROHTTPD_IDIR=-I$(MICROHTTPD_DIR) -I$(MICROHTTPD_DIR)/src/include
-
-COREDUMPER_DIR=$(DEPS_PATH)/google-coredumper/google-coredumper
-COREDUMPER_IDIR=$(COREDUMPER_DIR)/src
 
 CURL_DIR=$(DEPS_PATH)/curl/curl
 CURL_IDIR=-I$(CURL_DIR)/include
@@ -45,7 +48,7 @@ EV_IDIR=$(EV_DIR)
 
 IDIR=../include
 
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) $(MICROHTTPD_IDIR) $(CURL_IDIR) -I$(EV_DIR) -I$(COREDUMPER_IDIR) -I$(SSL_IDIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) $(CURL_IDIR) -I$(EV_DIR) -I$(SSL_IDIR)
 
 LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH)
 
@@ -92,7 +95,7 @@ default: libproxysql.a
 
 _OBJ = c_tokenizer.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
-_OBJ_CXX = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo SQLite3_Server.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo set_parser.oo
+_OBJ_CXX = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo ProxySQL_Config.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo SQLite3_Server.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo set_parser.oo
 OBJ_CXX = $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS = ../include/*.h ../include/*.hpp
 

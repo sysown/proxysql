@@ -125,6 +125,7 @@ class MySQL_Session
 	bool handler_again___verify_backend_collation_connection();
 	bool handler_again___verify_backend_net_write_timeout();
 	bool handler_again___verify_backend_max_join_size();
+	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
@@ -136,6 +137,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_TX_ISOLATION(int *);
 	bool handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
+	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___status_SETTING_CHARSET(int *_rc);
 	bool handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *);
 	bool handler_again___status_SETTING_SQL_SELECT_LIMIT(int *);
@@ -204,6 +206,7 @@ class MySQL_Session
 	bool autocommit;
 	bool autocommit_handled;
 	bool killed;
+	bool locked_on_hostgroup_and_all_variables_set;
 	//bool admin;
 	bool max_connections_reached;
 	bool client_authenticated;
@@ -234,18 +237,7 @@ class MySQL_Session
 
 	void set_unhealthy();
 	
-	void set_status(enum session_status e) {
-		if (e==NONE) {
-			if (mybe) {
-				if (mybe->server_myds) {
-					assert(mybe->server_myds->myconn==0);
-					if (mybe->server_myds->myconn)
-						assert(mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE);
-				}
-			}
-		}
-		status=e;
-	}
+	void set_status(enum session_status e);
 	int handler();
 
 	void (*handler_function) (MySQL_Session *arg, void *, PtrSize_t *pkt);
@@ -253,7 +245,7 @@ class MySQL_Session
 	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
-	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *);
+	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions();
@@ -285,81 +277,10 @@ class KillArgs {
 	unsigned int port;
 	unsigned long id;
 	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt) {
-		username=strdup(u);
-		password=strdup(p);
-		hostname=strdup(h);
-		port=P;
-		id=i;
-		kill_type=kt;
-		mt=_mt;
-	};
-	~KillArgs() {
-		free(username);
-		free(password);
-		free(hostname);
-	};
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt);
+	~KillArgs();
 };
 
 void * kill_query_thread(void *arg);
-/*
-	KillArgs *ka=(KillArgs *)arg;
-	MYSQL *mysql;
-	mysql=mysql_init(NULL);
-	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
-	if (!mysql) {
-		goto __exit_kill_query_thread;
-	}
-	MYSQL *ret;
-	if (ka->port) {
-		switch (ka->kill_type) {
-			case KILL_QUERY:
-				proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
-				break;
-			case KILL_CONNECTION:
-				proxy_warning("KILL CONNECTION %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
-				break;
-			default:
-				break;
-		}
-		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
-	} else {
-		switch (ka->kill_type) {
-			case KILL_QUERY:
-				proxy_warning("KILL QUERY %lu on localhost\n", ka->id);
-				break;
-			case KILL_CONNECTION:
-				proxy_warning("KILL CONNECTION %lu on localhost\n", ka->id);
-				break;
-			default:
-				break;
-		}
-		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
-	}
-	if (!ret) {
-		goto __exit_kill_query_thread;
-	}
-	char buf[100];
-	switch (ka->kill_type) {
-		case KILL_QUERY:
-			sprintf(buf,"KILL QUERY %lu", ka->id);
-			break;
-		case KILL_CONNECTION:
-			sprintf(buf,"KILL CONNECTION %lu", ka->id);
-			break;
-		default:
-			sprintf(buf,"KILL %lu", ka->id);
-			break;
-	}
-	// FIXME: these 2 calls are blocking, fortunately on their own thread
-	mysql_query(mysql,buf);
-	mysql_close(mysql);
-__exit_kill_query_thread:
-	delete ka;
-	return NULL;
-}
-*/
 
-extern Query_Processor *GloQPro;
-extern Query_Cache *GloQC;
 #endif /* __CLASS_MYSQL_SESSION_ H */

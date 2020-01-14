@@ -9,6 +9,12 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+#include "StatCounters.h"
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_Logger.hpp"
+
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
 #endif
@@ -86,6 +92,112 @@ extern "C" {
 __thread unsigned int __thread_MySQL_Thread_Variables_version;
 
 volatile static unsigned int __global_MySQL_Thread_Variables_version;
+
+
+
+static unsigned int near_pow_2 (unsigned int n) {
+	unsigned int i = 1;
+	while (i < n) i <<= 1;
+	return i ? i : n;
+}
+
+
+void ProxySQL_Poll::shrink() {
+	unsigned int new_size=near_pow_2(len+1);
+	fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
+	myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
+	last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
+	last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
+	size=new_size;
+}
+
+void ProxySQL_Poll::expand(unsigned int more) {
+	if ( (len+more) > size ) {
+		unsigned int new_size=near_pow_2(len+more);
+		fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
+		myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
+		last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
+		last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
+		size=new_size;
+	}
+}
+
+ProxySQL_Poll::ProxySQL_Poll() {
+	loop_counters=new StatCounters(15,10);
+	poll_timeout=0;
+	loops=0;
+	len=0;
+	pending_listener_add=0;
+	pending_listener_del=0;
+	size=MIN_POLL_LEN;
+	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
+	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
+	last_recv=(unsigned long long *)malloc(size*sizeof(unsigned long long));
+	last_sent=(unsigned long long *)malloc(size*sizeof(unsigned long long));
+}
+
+
+ProxySQL_Poll::~ProxySQL_Poll() {
+	unsigned int i;
+	for (i=0;i<len;i++) {
+		if (
+			myds[i] && // fix bug #278 . This should be caused by not initialized datastreams used to ping the backend
+			myds[i]->myds_type==MYDS_LISTENER) {
+				delete myds[i];
+		}
+	}
+	free(myds);
+	free(fds);
+	free(last_recv);
+	free(last_sent);
+	delete loop_counters;
+}
+
+
+void ProxySQL_Poll::add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
+	if (len==size) {
+		expand(1);
+	}
+	myds[len]=_myds;
+	fds[len].fd=_fd;
+	fds[len].events=_events;
+	fds[len].revents=0;
+	if (_myds) {
+		_myds->mypolls=this;
+		_myds->poll_fds_idx=len;  // fix a serious bug
+	}
+	last_recv[len]=monotonic_time();
+	last_sent[len]=sent_time;
+	len++;
+}
+
+void ProxySQL_Poll::remove_index_fast(unsigned int i) {
+	if ((int)i==-1) return;
+	myds[i]->poll_fds_idx=-1; // this prevents further delete
+	if (i != (len-1)) {
+		myds[i]=myds[len-1];
+		fds[i].fd=fds[len-1].fd;
+		fds[i].events=fds[len-1].events;
+		fds[i].revents=fds[len-1].revents;
+		myds[i]->poll_fds_idx=i;  // fix a serious bug
+		last_recv[i]=last_recv[len-1];
+		last_sent[i]=last_sent[len-1];
+	}
+	len--;
+	if ( ( len>MIN_POLL_LEN ) && ( size > len*MIN_POLL_DELETE_RATIO ) ) {
+		shrink();
+	}
+}
+
+int ProxySQL_Poll::find_index(int fd) {
+	unsigned int i;
+	for (i=0; i<len; i++) {
+		if (fds[i].fd==fd) {
+			return i;
+		}
+	}
+	return -1;
+}
 
 
 MySQL_Listeners_Manager::MySQL_Listeners_Manager() {
@@ -249,6 +361,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_groupreplication_healthcheck_interval",
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_groupreplication_healthcheck_max_timeout_count",
+	(char *)"monitor_groupreplication_max_transactions_behind_count",
 	(char *)"monitor_galera_healthcheck_interval",
 	(char *)"monitor_galera_healthcheck_timeout",
 	(char *)"monitor_galera_healthcheck_max_timeout_count",
@@ -266,6 +379,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"max_allowed_packet",
 	(char *)"tcp_keepalive_time",
 	(char *)"use_tcp_keepalive",
+	(char *)"automatic_detect_sqli",
+	(char *)"firewall_whitelist_enabled",
+	(char *)"firewall_whitelist_errormsg",
 	(char *)"throttle_connections_per_sec_to_hostgroup",
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
@@ -400,8 +516,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_replication_lag_timeout=1000;
 	variables.monitor_groupreplication_healthcheck_interval=5000;
 	variables.monitor_groupreplication_healthcheck_timeout=800;
-	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_groupreplication_healthcheck_max_timeout_count=3;
+	variables.monitor_groupreplication_max_transactions_behind_count=3;
 	variables.monitor_galera_healthcheck_interval=5000;
 	variables.monitor_galera_healthcheck_timeout=800;
 	variables.monitor_galera_healthcheck_max_timeout_count=3;
@@ -417,6 +533,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
 	variables.max_allowed_packet=64*1024*1024;
+	variables.automatic_detect_sqli=false;
+	variables.firewall_whitelist_enabled=false;
+	variables.firewall_whitelist_errormsg = strdup((char *)"Firewall blocked this query");
 	variables.use_tcp_keepalive=false;
 	variables.tcp_keepalive_time=0;
 	variables.throttle_connections_per_sec_to_hostgroup=1000000;
@@ -465,7 +584,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.default_charset=33;
-	variables.handle_unknown_charset=0;
+	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
 	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
@@ -634,6 +753,13 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			}
 		}
 	}
+	if (!strcmp(name,"firewall_whitelist_errormsg")) {
+		if (variables.firewall_whitelist_errormsg==NULL || strlen(variables.firewall_whitelist_errormsg)==0) {
+			return NULL;
+		} else {
+			return strdup(variables.firewall_whitelist_errormsg);
+		}
+	}
 	if (!strcmp(name,"init_connect")) {
 		if (variables.init_connect==NULL || strlen(variables.init_connect)==0) {
 			return NULL;
@@ -775,6 +901,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 				if (!strcmp(name,"monitor_groupreplication_healthcheck_interval")) return (int)variables.monitor_groupreplication_healthcheck_interval;
 				if (!strcmp(name,"monitor_groupreplication_healthcheck_timeout")) return (int)variables.monitor_groupreplication_healthcheck_timeout;
 				if (!strcmp(name,"monitor_groupreplication_healthcheck_max_timeout_count")) return (int)variables.monitor_groupreplication_healthcheck_max_timeout_count;
+				if (!strcmp(name,"monitor_groupreplication_max_transactions_behind_count")) return (int)variables.monitor_groupreplication_max_transactions_behind_count;
 			}
 			if (b == 'a') {
 				if (!strcmp(name,"monitor_galera_healthcheck_interval")) return (int)variables.monitor_galera_healthcheck_interval;
@@ -822,6 +949,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"auto_increment_delay_multiplex")) return (int)variables.auto_increment_delay_multiplex;
 			if (!strcmp(name,"autocommit_false_is_transaction")) return (int)variables.autocommit_false_is_transaction;
 			if (!strcmp(name,"autocommit_false_not_reusable")) return (int)variables.autocommit_false_not_reusable;
+			if (!strcmp(name,"automatic_detect_sqli")) return (int)variables.automatic_detect_sqli;
 			break;
 		case 'b':
 			if (!strcmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
@@ -858,6 +986,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		case 'f':
 			if (!strcmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
 			if (!strcmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
+			if (!strcmp(name,"firewall_whitelist_enabled")) return (int)variables.firewall_whitelist_enabled;
 			break;
 		case 'h':
 			if (!strcmp(name,"have_compress")) return (int)variables.have_compress;
@@ -971,6 +1100,13 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 //VALGRIND_DISABLE_ERROR_REPORTING;
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
+	if (!strcasecmp(name,"firewall_whitelist_errormsg")) {
+		if (variables.firewall_whitelist_errormsg==NULL || strlen(variables.firewall_whitelist_errormsg)==0) {
+			return NULL;
+		} else {
+			return strdup(variables.firewall_whitelist_errormsg);
+		}
+	}
 	if (!strcasecmp(name,"init_connect")) {
 		if (variables.init_connect==NULL || strlen(variables.init_connect)==0) {
 			return NULL;
@@ -1070,6 +1206,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		return strdup(variables.default_max_join_size);
 	}
+	if (!strcasecmp(name,"firewall_whitelist_errormsg")) return strdup(variables.firewall_whitelist_errormsg);
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
 	if (!strcasecmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
@@ -1174,6 +1311,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_groupreplication_healthcheck_max_timeout_count")) {
 			sprintf(intbuf,"%d",variables.monitor_groupreplication_healthcheck_max_timeout_count);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_groupreplication_max_transactions_behind_count")) {
+			sprintf(intbuf,"%d",variables.monitor_groupreplication_max_transactions_behind_count);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_galera_healthcheck_interval")) {
@@ -1310,6 +1451,14 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"use_tcp_keepalive")) {
 		sprintf(intbuf,"%d",variables.use_tcp_keepalive);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"firewall_whitelist_enabled")) {
+		sprintf(intbuf,"%d",variables.firewall_whitelist_enabled);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"automatic_detect_sqli")) {
+		sprintf(intbuf,"%d",variables.automatic_detect_sqli);
 		return strdup(intbuf);
 	}
 
@@ -1733,6 +1882,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 				return false;
 			}
 		}
+		if (!strcasecmp(name,"monitor_groupreplication_max_transactions_behind_count")) {
+			int intv=atoi(value);
+			if (intv >= 1 && intv <= 10) {
+				variables.monitor_groupreplication_max_transactions_behind_count=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
 		if (!strcasecmp(name,"monitor_galera_healthcheck_interval")) {
 			int intv=atoi(value);
 			if (intv >= 50 && intv <= 7*24*3600*1000) {
@@ -1993,6 +2151,28 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.use_tcp_keepalive=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"firewall_whitelist_enabled")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.firewall_whitelist_enabled=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.firewall_whitelist_enabled=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"automatic_detect_sqli")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.automatic_detect_sqli=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.automatic_detect_sqli=false;
 			return true;
 		}
 		return false;
@@ -2318,6 +2498,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		if (vallen) {
 			if (strcmp(value,"(null)"))
 				variables.init_connect=strdup(value);
+		}
+		return true;
+	}
+	if (!strcasecmp(name,"firewall_whitelist_errormsg")) {
+		if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
+		variables.firewall_whitelist_errormsg=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.firewall_whitelist_errormsg=strdup(value);
 		}
 		return true;
 	}
@@ -3154,6 +3343,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
+	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
@@ -3285,6 +3475,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
+	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
@@ -3455,15 +3646,17 @@ bool MySQL_Thread::init() {
 	assert(mysql_sessions);
 
 #ifdef IDLE_THREADS
-	idle_mysql_sessions = new PtrArray();
-	resume_mysql_sessions = new PtrArray();
+	if (GloVars.global.idle_threads) {
+		idle_mysql_sessions = new PtrArray();
+		resume_mysql_sessions = new PtrArray();
 
-	myexchange.idle_mysql_sessions = new PtrArray();
-	myexchange.resume_mysql_sessions = new PtrArray();
-	pthread_mutex_init(&myexchange.mutex_idles,NULL);
-	pthread_mutex_init(&myexchange.mutex_resumes,NULL);
-	assert(idle_mysql_sessions);
-	assert(resume_mysql_sessions);
+		myexchange.idle_mysql_sessions = new PtrArray();
+		myexchange.resume_mysql_sessions = new PtrArray();
+		pthread_mutex_init(&myexchange.mutex_idles,NULL);
+		pthread_mutex_init(&myexchange.mutex_resumes,NULL);
+		assert(idle_mysql_sessions);
+		assert(resume_mysql_sessions);
+	}
 #endif // IDLE_THREADS
 
 	pthread_mutex_init(&kq.m,NULL);
@@ -4432,6 +4625,8 @@ void MySQL_Thread::refresh_variables() {
 	GloMTH->wrlock();
 	__thread_MySQL_Thread_Variables_version=__global_MySQL_Thread_Variables_version;
 	mysql_thread___max_allowed_packet=GloMTH->get_variable_int((char *)"max_allowed_packet");
+	mysql_thread___automatic_detect_sqli=(bool)GloMTH->get_variable_int((char *)"automatic_detect_sqli");
+	mysql_thread___firewall_whitelist_enabled=(bool)GloMTH->get_variable_int((char *)"firewall_whitelist_enabled");
 	mysql_thread___use_tcp_keepalive=(bool)GloMTH->get_variable_int((char *)"use_tcp_keepalive");
 	mysql_thread___tcp_keepalive_time=GloMTH->get_variable_int((char *)"tcp_keepalive_time");
 	mysql_thread___throttle_connections_per_sec_to_hostgroup=GloMTH->get_variable_int((char *)"throttle_connections_per_sec_to_hostgroup");
@@ -4509,6 +4704,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_groupreplication_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_interval");
 	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_max_timeout_count");
+	mysql_thread___monitor_groupreplication_max_transactions_behind_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_max_transactions_behind_count");
 	mysql_thread___monitor_galera_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_interval");
 	mysql_thread___monitor_galera_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_timeout");
 	mysql_thread___monitor_galera_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_max_timeout_count");
@@ -4519,6 +4715,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_threads_max = GloMTH->get_variable_int((char *)"monitor_threads_max");
 	mysql_thread___monitor_threads_queue_maxsize = GloMTH->get_variable_int((char *)"monitor_threads_queue_maxsize");
 
+	if (mysql_thread___firewall_whitelist_errormsg) free(mysql_thread___firewall_whitelist_errormsg);
+	mysql_thread___firewall_whitelist_errormsg=GloMTH->get_variable_string((char *)"firewall_whitelist_errormsg");
 	if (mysql_thread___init_connect) free(mysql_thread___init_connect);
 	mysql_thread___init_connect=GloMTH->get_variable_string((char *)"init_connect");
 	if (mysql_thread___ldap_user_variable) free(mysql_thread___ldap_user_variable);
@@ -4688,6 +4886,8 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.hostgroup_locked_set_cmds = 0;
 	status_variables.hostgroup_locked_queries = 0;
 	status_variables.aws_aurora_replicas_skipped_during_query = 0;
+	status_variables.automatic_detected_sqli = 0;
+	status_variables.whitelisted_sqli_fingerprint = 0;
 
 	match_regexes=NULL;
 
@@ -5261,6 +5461,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// AWS Aurora replicas skipped during query
 		pta[0]=(char *)"aws_aurora_replicas_skipped_during_query";
 		sprintf(buf,"%llu",get_aws_aurora_replicas_skipped_during_query());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// detected and blocked SQL injection
+		pta[0]=(char *)"automatic_detected_sql_injection";
+		sprintf(buf,"%llu",get_automatic_detected_sqli());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// detected but whitelisted SQL injection fingerprint
+		pta[0]=(char *)"whitelisted_sqli_fingerprint";
+		sprintf(buf,"%llu",get_whitelisted_sqli_fingerprint());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -6365,6 +6577,32 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_packet() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.unexpected_packet,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_automatic_detected_sqli() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.automatic_detected_sqli,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_whitelisted_sqli_fingerprint() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.whitelisted_sqli_fingerprint,0);
 		}
 	}
 	return q;

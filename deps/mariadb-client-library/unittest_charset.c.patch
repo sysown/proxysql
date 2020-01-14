@@ -1,5 +1,3 @@
---- /tmp/charset.c	2017-12-28 14:58:14.174281738 +0100
-+++ unittest/libmariadb/charset.c	2017-12-28 14:59:53.510120540 +0100
 @@ -74,12 +74,12 @@
    char *csname= (char*) "utf8";
    char *csdefault= (char*)mysql_character_set_name(mysql);
@@ -15,7 +13,7 @@
  
    return OK;
  }
-@@ -542,7 +542,7 @@
+@@ -543,7 +543,7 @@
    }
    /* Retrieve character set information. */
  
@@ -24,7 +22,7 @@
    bug30472_retrieve_charset_info(mysql,
                                   character_set_name_1,
                                   character_set_client_1,
-@@ -551,7 +551,7 @@
+@@ -552,7 +552,7 @@
  
    /* Switch client character set. */
  
@@ -33,7 +31,7 @@
  
    /* Retrieve character set information. */
  
-@@ -581,7 +581,7 @@
+@@ -582,7 +582,7 @@
    /* Call mysql_change_user() with the same username, password, database. */
  
    rc= mysql_change_user(mysql, username, password, (schema) ? schema : "test");
@@ -42,7 +40,7 @@
    check_mysql_rc(rc, mysql);
  
    /* Retrieve character set information. */
-@@ -647,7 +647,7 @@
+@@ -648,7 +648,7 @@
      /* ignore ucs2 */
      if (strcmp(row[0], "ucs2") && strcmp(row[0], "utf16le") && strcmp(row[0], "utf8mb4") && 
          strcmp(row[0], "utf16") && strcmp(row[0], "utf32")) {
@@ -51,7 +49,7 @@
        check_mysql_rc(rc, mysql);
      }
    }
-@@ -748,7 +748,7 @@
+@@ -749,7 +749,7 @@
  
    if (strcmp(osname, "utf8"))
    {
@@ -60,7 +58,7 @@
      check_mysql_rc(rc, mysql);
  
      csname2= mysql_character_set_name(mysql);
-@@ -756,7 +756,7 @@
+@@ -757,7 +757,7 @@
  
      FAIL_IF(!strcmp(csname2, csname1), "Wrong charset: expected utf8");
  

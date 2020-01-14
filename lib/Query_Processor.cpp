@@ -6,6 +6,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_Data_Stream.h"
+#include "query_processor.h"
+
 #include "SpookyV2.h"
 
 #include "pcrecpp.h"
@@ -20,17 +24,20 @@
 #define QP_RE_MOD_CASELESS 1
 #define QP_RE_MOD_GLOBAL 2
 
-// Optimization introduced in 2.0.6
-// to avoid a lot of unnecessary copy
-#define DIGEST_STATS_FAST_1
-#define DIGEST_STATS_FAST_MINSIZE	100000
-#define DIGEST_STATS_FAST_THREADS	4
 
 #ifdef DIGEST_STATS_FAST_1
 #include <thread>
 #include <future>
 extern MySQL_Threads_Handler *GloMTH;
 #endif
+
+static int int_cmp(const void *a, const void *b) {
+	const unsigned long long *ia = (const unsigned long long *)a;
+	const unsigned long long *ib = (const unsigned long long *)b;
+	if (*ia < *ib) return -1;
+	if (*ia > *ib) return 1;
+	return 0;
+}
 
 class QP_rule_text_hitsonly {
 	public:
@@ -145,279 +152,235 @@ void my_itoa(char s[], unsigned long long n)
      reverse(s);
 }
 
-
-typedef struct _query_digest_stats_pointers_t {
-	char *pta[14];
-	char digest[24];
-	char count_star[24];
-	char first_seen[24];
-	char last_seen[24];
-	char sum_time[24];
-	char min_time[24];
-	char max_time[24];
-	char hid[24];
-	char rows_affected[24];
-	char rows_sent[24];
-} query_digest_stats_pointers_t;
 #endif
 
-class QP_query_digest_stats {
-	public:
-	uint64_t digest;
-	char *digest_text;
-	char *username;
-	char *schemaname;
-	char *client_address;
+QP_query_digest_stats::QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
+	digest=d;
+	digest_text=NULL;
+	if (dt) {
+		digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
+	}
 #ifdef DIGEST_STATS_FAST_1
-	char username_buf[24];
-	char schemaname_buf[24];
-	char client_address_buf[24];
-#endif
-	time_t first_seen;
-	time_t last_seen;
-	unsigned int count_star;
-	unsigned long long sum_time;
-	unsigned long long min_time;
-	unsigned long long max_time;
-	unsigned long long rows_affected;
-	unsigned long long rows_sent;
-	int hid;
-	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca) {
-		digest=d;
-		digest_text=NULL;
-		if (dt) {
-			digest_text=strndup(dt, mysql_thread___query_digests_max_digest_length);
-		}
-#ifdef DIGEST_STATS_FAST_1
-		if (strlen(u) < sizeof(username_buf)) {
-			strcpy(username_buf,u);
-			username = username_buf;
-		} else {
-			username=strdup(u);
-		}
-		if (strlen(s) < sizeof(schemaname_buf)) {
-			strcpy(schemaname_buf,s);
-			schemaname = schemaname_buf;
-		} else {
-			schemaname=strdup(s);
-		}
-		if (strlen(ca) < sizeof(client_address_buf)) {
-			strcpy(client_address_buf,ca);
-			client_address = client_address_buf;
-		} else {
-			client_address=strdup(ca);
-		}
-#else
+	if (strlen(u) < sizeof(username_buf)) {
+		strcpy(username_buf,u);
+		username = username_buf;
+	} else {
 		username=strdup(u);
+	}
+	if (strlen(s) < sizeof(schemaname_buf)) {
+		strcpy(schemaname_buf,s);
+		schemaname = schemaname_buf;
+	} else {
 		schemaname=strdup(s);
+	}
+	if (strlen(ca) < sizeof(client_address_buf)) {
+		strcpy(client_address_buf,ca);
+		client_address = client_address_buf;
+	} else {
 		client_address=strdup(ca);
-#endif
-		count_star=0;
-		first_seen=0;
-		last_seen=0;
-		sum_time=0;
-		min_time=0;
-		max_time=0;
-		rows_affected=0;
-		rows_sent=0;
-		hid=h;
 	}
-	void add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs) {
-		count_star++;
-		sum_time+=t;
-		rows_affected+=ra;
-		rows_sent+=rs;
-		if (t < min_time || min_time==0) {
-			if (t) min_time = t;
-		}
-		if (t > max_time) {
-			max_time = t;
-		}
-		if (first_seen==0) {
-			first_seen=n;
-		}
-		last_seen=n;
-	}
-	~QP_query_digest_stats() {
-		if (digest_text) {
-			free(digest_text);
-			digest_text=NULL;
-		}
-		if (username) {
-#ifdef DIGEST_STATS_FAST_1
-			if (username == username_buf) {
-			} else {
-				free(username);
-			}
 #else
+	username=strdup(u);
+	schemaname=strdup(s);
+	client_address=strdup(ca);
+#endif
+	count_star=0;
+	first_seen=0;
+	last_seen=0;
+	sum_time=0;
+	min_time=0;
+	max_time=0;
+	rows_affected=0;
+	rows_sent=0;
+	hid=h;
+}
+void QP_query_digest_stats::add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs) {
+	count_star++;
+	sum_time+=t;
+	rows_affected+=ra;
+	rows_sent+=rs;
+	if (t < min_time || min_time==0) {
+		if (t) min_time = t;
+	}
+	if (t > max_time) {
+		max_time = t;
+	}
+	if (first_seen==0) {
+		first_seen=n;
+	}
+	last_seen=n;
+}
+QP_query_digest_stats::~QP_query_digest_stats() {
+	if (digest_text) {
+		free(digest_text);
+		digest_text=NULL;
+	}
+	if (username) {
+#ifdef DIGEST_STATS_FAST_1
+		if (username == username_buf) {
+		} else {
 			free(username);
-#endif
-			username=NULL;
 		}
-		if (schemaname) {
-#ifdef DIGEST_STATS_FAST_1
-			if (schemaname == schemaname_buf) {
-			} else {
-				free(schemaname);
-			}
 #else
-			free(schemaname);
+		free(username);
 #endif
-			schemaname=NULL;
-		}
-		if (client_address) {
-#ifdef DIGEST_STATS_FAST_1
-			if (client_address == client_address_buf) {
-			} else {
-				free(client_address);
-			}
-#else
-			free(client_address);
-#endif
-			client_address=NULL;
-		}
+		username=NULL;
 	}
+	if (schemaname) {
 #ifdef DIGEST_STATS_FAST_1
-	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
-		char **pta=qdsp->pta;
+		if (schemaname == schemaname_buf) {
+		} else {
+			free(schemaname);
+		}
 #else
-	char **get_row(umap_query_digest_text *digest_text_umap) {
-		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*14);
+		free(schemaname);
+#endif
+		schemaname=NULL;
+	}
+	if (client_address) {
+#ifdef DIGEST_STATS_FAST_1
+		if (client_address == client_address_buf) {
+		} else {
+			free(client_address);
+		}
+#else
+		free(client_address);
+#endif
+		client_address=NULL;
+	}
+}
+#ifdef DIGEST_STATS_FAST_1
+char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
+	char **pta=qdsp->pta;
+#else
+char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap) {
+	char buf[128];
+	char **pta=(char **)malloc(sizeof(char *)*14);
 #endif
 
 #ifdef DIGEST_STATS_FAST_1
-		assert(schemaname);
-		pta[0]=schemaname;
-		assert(username);
-		pta[1]=username;
-		assert(client_address);
-		pta[2]=client_address;
+	assert(schemaname);
+	pta[0]=schemaname;
+	assert(username);
+	pta[1]=username;
+	assert(client_address);
+	pta[2]=client_address;
 #else
-		assert(schemaname);
-		pta[0]=strdup(schemaname);
-		assert(username);
-		pta[1]=strdup(username);
-		assert(client_address);
-		pta[2]=strdup(client_address);
+	assert(schemaname);
+	pta[0]=strdup(schemaname);
+	assert(username);
+	pta[1]=strdup(username);
+	assert(client_address);
+	pta[2]=strdup(client_address);
 #endif
 
 #ifdef DIGEST_STATS_FAST_1
-		sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
-		pta[3]=qdsp->digest;
+	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
+	pta[3]=qdsp->digest;
 #else
-		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
-		pta[3]=strdup(buf);
+	sprintf(buf,"0x%016llX", (long long unsigned int)digest);
+	pta[3]=strdup(buf);
 #endif
 
-		if (digest_text) {
+	if (digest_text) {
 #ifdef DIGEST_STATS_FAST_1
-			pta[4]=digest_text;
+		pta[4]=digest_text;
 #else
-			pta[4]=strdup(digest_text);
+		pta[4]=strdup(digest_text);
+#endif
+	} else {
+		std::unordered_map<uint64_t, char *>::iterator it;
+		it=digest_text_umap->find(digest);
+		if (it != digest_text_umap->end()) {
+#ifdef DIGEST_STATS_FAST_1
+			pta[4] = it->second;
+#else
+			pta[4] = strdup(it->second);
 #endif
 		} else {
-			std::unordered_map<uint64_t, char *>::iterator it;
-			it=digest_text_umap->find(digest);
-			if (it != digest_text_umap->end()) {
-#ifdef DIGEST_STATS_FAST_1
-				pta[4] = it->second;
-#else
-				pta[4] = strdup(it->second);
-#endif
-			} else {
-				assert(0);
-			}
+			assert(0);
 		}
-
-#ifdef DIGEST_STATS_FAST_1
-		//sprintf(qdsp->count_star,"%u",count_star);
-		my_itoa(qdsp->count_star, count_star);
-		pta[5]=qdsp->count_star;
-#else
-		sprintf(buf,"%u",count_star);
-		pta[5]=strdup(buf);
-#endif
-
-		time_t __now;
-		time(&__now);
-		unsigned long long curtime=monotonic_time();
-		time_t seen_time;
-		seen_time= __now - curtime/1000000 + first_seen/1000000;
-#ifdef DIGEST_STATS_FAST_1
-		//sprintf(qdsp->first_seen,"%ld", seen_time);
-		my_itoa(qdsp->first_seen, seen_time);
-		pta[6]=qdsp->first_seen;
-#else
-		sprintf(buf,"%ld", seen_time);
-		pta[6]=strdup(buf);
-#endif
-
-		seen_time= __now - curtime/1000000 + last_seen/1000000;
-#ifdef DIGEST_STATS_FAST_1
-		//sprintf(qdsp->last_seen,"%ld", seen_time);
-		my_itoa(qdsp->last_seen, seen_time);
-		pta[7]=qdsp->last_seen;
-		//sprintf(qdsp->sum_time,"%llu",sum_time);
-		my_itoa(qdsp->sum_time,sum_time);
-		pta[8]=qdsp->sum_time;
-		//sprintf(qdsp->min_time,"%llu",min_time);
-		my_itoa(qdsp->min_time,min_time);
-		pta[9]=qdsp->min_time;
-		//sprintf(qdsp->max_time,"%llu",max_time);
-		my_itoa(qdsp->max_time,max_time);
-		pta[10]=qdsp->max_time;
-		// we are reverting this back to the use of sprintf instead of my_itoa
-		// because with my_itoa we are losing the sign
-		// see issue #2285
-		sprintf(qdsp->hid,"%d",hid);
-		//my_itoa(qdsp->hid,hid);
-		pta[11]=qdsp->hid;
-		//sprintf(qdsp->rows_affected,"%llu",rows_affected);
-		my_itoa(qdsp->rows_affected,rows_affected);
-		pta[12]=qdsp->rows_affected;
-		//sprintf(qdsp->rows_sent,"%llu",rows_sent);
-		my_itoa(qdsp->rows_sent,rows_sent);
-		pta[13]=qdsp->rows_sent;
-#else
-		sprintf(buf,"%ld", seen_time);
-		pta[7]=strdup(buf);
-		sprintf(buf,"%llu",sum_time);
-		pta[8]=strdup(buf);
-		sprintf(buf,"%llu",min_time);
-		pta[9]=strdup(buf);
-		sprintf(buf,"%llu",max_time);
-		pta[10]=strdup(buf);
-		sprintf(buf,"%d",hid);
-		pta[11]=strdup(buf);
-		sprintf(buf,"%llu",rows_affected);
-		pta[12]=strdup(buf);
-		sprintf(buf,"%llu",rows_sent);
-		pta[13]=strdup(buf);
-#endif
-		return pta;
 	}
-/*
-	void free_row(query_digest_stats_pointers_t *qdsp) {
-		//free(qdsp->pta[0]);
-		//free(qdsp->pta[1]);
-		//free(qdsp->pta[2]);
-		//free(qdsp->pta[4]);
-	}
-*/
+
+#ifdef DIGEST_STATS_FAST_1
+	//sprintf(qdsp->count_star,"%u",count_star);
+	my_itoa(qdsp->count_star, count_star);
+	pta[5]=qdsp->count_star;
+#else
+	sprintf(buf,"%u",count_star);
+	pta[5]=strdup(buf);
+#endif
+
+	time_t __now;
+	time(&__now);
+	unsigned long long curtime=monotonic_time();
+	time_t seen_time;
+	seen_time= __now - curtime/1000000 + first_seen/1000000;
+#ifdef DIGEST_STATS_FAST_1
+	//sprintf(qdsp->first_seen,"%ld", seen_time);
+	my_itoa(qdsp->first_seen, seen_time);
+	pta[6]=qdsp->first_seen;
+#else
+	sprintf(buf,"%ld", seen_time);
+	pta[6]=strdup(buf);
+#endif
+
+	seen_time= __now - curtime/1000000 + last_seen/1000000;
+#ifdef DIGEST_STATS_FAST_1
+	//sprintf(qdsp->last_seen,"%ld", seen_time);
+	my_itoa(qdsp->last_seen, seen_time);
+	pta[7]=qdsp->last_seen;
+	//sprintf(qdsp->sum_time,"%llu",sum_time);
+	my_itoa(qdsp->sum_time,sum_time);
+	pta[8]=qdsp->sum_time;
+	//sprintf(qdsp->min_time,"%llu",min_time);
+	my_itoa(qdsp->min_time,min_time);
+	pta[9]=qdsp->min_time;
+	//sprintf(qdsp->max_time,"%llu",max_time);
+	my_itoa(qdsp->max_time,max_time);
+	pta[10]=qdsp->max_time;
+	// we are reverting this back to the use of sprintf instead of my_itoa
+	// because with my_itoa we are losing the sign
+	// see issue #2285
+	sprintf(qdsp->hid,"%d",hid);
+	//my_itoa(qdsp->hid,hid);
+	pta[11]=qdsp->hid;
+	//sprintf(qdsp->rows_affected,"%llu",rows_affected);
+	my_itoa(qdsp->rows_affected,rows_affected);
+	pta[12]=qdsp->rows_affected;
+	//sprintf(qdsp->rows_sent,"%llu",rows_sent);
+	my_itoa(qdsp->rows_sent,rows_sent);
+	pta[13]=qdsp->rows_sent;
+#else
+	sprintf(buf,"%ld", seen_time);
+	pta[7]=strdup(buf);
+	sprintf(buf,"%llu",sum_time);
+	pta[8]=strdup(buf);
+	sprintf(buf,"%llu",min_time);
+	pta[9]=strdup(buf);
+	sprintf(buf,"%llu",max_time);
+	pta[10]=strdup(buf);
+	sprintf(buf,"%d",hid);
+	pta[11]=strdup(buf);
+	sprintf(buf,"%llu",rows_affected);
+	pta[12]=strdup(buf);
+	sprintf(buf,"%llu",rows_sent);
+	pta[13]=strdup(buf);
+#endif
+	return pta;
+}
+
 #ifdef DIGEST_STATS_FAST_1
 #else
-	void free_row(char **pta) {
-		int i;
-		for (i=0;i<14;i++) {
-			assert(pta[i]);
-			free(pta[i]);
-		}
-		free(pta);
+void QP_query_digest_stats::free_row(char **pta) {
+	int i;
+	for (i=0;i<14;i++) {
+		assert(pta[i]);
+		free(pta[i]);
 	}
+	free(pta);
+}
 #endif
-};
-
 
 struct __RE2_objects_t {
 	pcrecpp::RE_Options *opt1;
@@ -561,6 +524,17 @@ Query_Processor::Query_Processor() {
 		exit(EXIT_FAILURE);
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Query Processor with version=0\n");
+
+	// firewall
+	pthread_mutex_init(&global_mysql_firewall_whitelist_mutex, NULL);
+	global_mysql_firewall_whitelist_users_runtime = NULL;
+	global_mysql_firewall_whitelist_rules_runtime = NULL;
+	global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
+	global_mysql_firewall_whitelist_users_map___size = 0;
+	global_mysql_firewall_whitelist_users_result___size = 0;
+	global_mysql_firewall_whitelist_rules_map___size = 0;
+	global_mysql_firewall_whitelist_rules_result___size = 0;
+
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_init(&rwlock, NULL);
 	pthread_rwlock_init(&digest_rwlock, NULL);
@@ -671,6 +645,18 @@ Query_Processor::~Query_Processor() {
 	if (fast_routing_resultset) {
 		delete fast_routing_resultset;
 		fast_routing_resultset = NULL;
+	}
+	if (global_mysql_firewall_whitelist_users_runtime) {
+		delete global_mysql_firewall_whitelist_users_runtime;
+		global_mysql_firewall_whitelist_users_runtime = NULL;
+	}
+	if (global_mysql_firewall_whitelist_rules_runtime) {
+		delete global_mysql_firewall_whitelist_rules_runtime;
+		global_mysql_firewall_whitelist_rules_runtime = NULL;
+	}
+	if (global_mysql_firewall_whitelist_sqli_fingerprints_runtime) {
+		delete global_mysql_firewall_whitelist_sqli_fingerprints_runtime;
+		global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
 	}
 };
 
@@ -1476,6 +1462,22 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	return result;
 }
 
+
+void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_wrlock(&digest_rwlock);
+#else
+	spin_wrlock(&digest_rwlock);
+#endif
+	digest_umap.swap(*uqd);
+	digest_text_umap.swap(*uqdt);
+#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
+	pthread_rwlock_unlock(&digest_rwlock);
+#else
+	spin_wrunlock(&digest_rwlock);
+#endif
+}
+
 SQLite3_result * Query_Processor::get_query_digests_reset() {
 	SQLite3_result *result = NULL;
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
@@ -2013,8 +2015,109 @@ __exit_process_mysql_query:
 			query_parser_first_comment(ret, qp->first_comment);
 		}
 	}
+	if (mysql_thread___firewall_whitelist_enabled) {
+		char *username = NULL;
+		char *client_address = NULL;
+		bool check_run = true;
+		if (sess->client_myds) {
+			check_run = false;
+			if (sess->client_myds->myconn && sess->client_myds->myconn->userinfo && sess->client_myds->myconn->userinfo->username) {
+				if (sess->client_myds->addr.addr) {
+					check_run = true;
+					username = sess->client_myds->myconn->userinfo->username;
+					client_address = sess->client_myds->addr.addr;
+					pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+					// FIXME
+					// for now this function search for either username@ip or username@''
+					int wus_status = find_firewall_whitelist_user(username, client_address);
+					if (wus_status == WUS_NOT_FOUND) {
+						client_address = (char *)"";
+						wus_status = find_firewall_whitelist_user(username, client_address);
+					}
+					if (wus_status == WUS_NOT_FOUND) {
+						wus_status = WUS_PROTECTING; // by default, everything should be blocked!
+					}
+					ret->firewall_whitelist_mode = wus_status;
+					if (wus_status == WUS_DETECTING || wus_status == WUS_PROTECTING) {
+						bool allowed_query = false;
+						char * schemaname = sess->client_myds->myconn->userinfo->schemaname;
+						if (qp && qp->digest) {
+							allowed_query = find_firewall_whitelist_rule(username, client_address, schemaname, flagIN, qp->digest);
+						}
+						if (allowed_query == false) {
+							if (wus_status == WUS_PROTECTING) {
+								if (ret->error_msg == NULL) {
+									// change error message only if not already set
+									ret->error_msg = strdup(mysql_thread___firewall_whitelist_errormsg);
+								}
+							}
+						}
+						if (allowed_query == true) {
+							ret->firewall_whitelist_mode = WUS_OFF;
+						}
+					}
+					pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+					if (ret->firewall_whitelist_mode == WUS_DETECTING || ret->firewall_whitelist_mode == WUS_PROTECTING) {
+						char buf[32];
+						if (qp && qp->digest) {
+							sprintf(buf,"0x%016llX", (long long unsigned int)qp->digest);
+						} else {
+							sprintf(buf,"unknown");
+						}
+						char *action = (char *)"blocked";
+						if (ret->firewall_whitelist_mode == WUS_DETECTING) {
+							action = (char *)"detected unknown";
+						}
+						proxy_warning("Firewall %s query with digest %s from user %s@%s\n", action, buf, username, sess->client_myds->addr.addr);
+					}
+				}
+			}
+		}
+		if (check_run == false) {
+			proxy_error("Firewall problem: unknown user\n");
+			assert(0);
+		}
+	} else {
+		ret->firewall_whitelist_mode = WUS_NOT_FOUND;
+	}
 	return ret;
 };
+
+int Query_Processor::find_firewall_whitelist_user(char *username, char *client) {
+	int ret = WUS_NOT_FOUND;
+	string s = username;
+	s += rand_del;
+	s += client;
+	std::unordered_map<std::string, int>:: iterator it2;
+	it2 = global_mysql_firewall_whitelist_users.find(s);
+	if (it2 != global_mysql_firewall_whitelist_users.end()) {
+		ret = it2->second;
+		return ret;
+	}
+	s = username;
+	return ret;
+}
+
+bool Query_Processor::find_firewall_whitelist_rule(char *username, char *client_address, char *schemaname, int flagIN, uint64_t digest) {
+	bool ret = false;
+	string s = username;
+	s += rand_del;
+	s += client_address;
+	s += rand_del;
+	s += schemaname;
+	s += rand_del;
+	s += flagIN;
+	std::unordered_map<std::string, void *>:: iterator it;
+	it = global_mysql_firewall_whitelist_rules.find(s);
+	if (it != global_mysql_firewall_whitelist_rules.end()) {
+		PtrArray *myptrarray = (PtrArray *)it->second;
+		void * found = bsearch(&digest, myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+		if (found) {
+			ret = true;
+		}
+	}
+	return ret;
+}
 
 // this function is called by mysql_session to free the result generated by process_mysql_query()
 void Query_Processor::delete_QP_out(Query_Processor_Output *o) {
@@ -2676,6 +2779,17 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					}
 				}
 			}
+			if (!strcasecmp(key,"min_gtid")) {
+				size_t l = strlen(value);
+				if (is_valid_gtid(value, l)) {
+					char *buf=(char*)malloc(l+1);
+					strncpy(buf, value, l);
+					buf[l+1] = '\0';
+					qpo->min_gtid = buf;
+				} else {
+					proxy_warning("Invalid gtid value=%s\n", value);
+				}
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
@@ -2684,6 +2798,24 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 	}
 	free_tokenizer( &tok );
 	return ret;
+}
+
+bool Query_Processor::is_valid_gtid(char *gtid, size_t gtid_len) {
+	if (gtid_len < 3) {
+		return false;
+	}
+	char *sep_pos = index(gtid, ':');
+	if (sep_pos == NULL) {
+		return false;
+	}
+	size_t uuid_len = sep_pos - gtid;
+	if (uuid_len < 1) {
+		return false;
+	}
+	if (gtid_len < uuid_len + 2) {
+		return false;
+	}
+	return true;
 }
 
 void Query_Processor::query_parser_free(SQP_par_t *qp) {
@@ -2698,6 +2830,164 @@ void Query_Processor::query_parser_free(SQP_par_t *qp) {
 		qp->first_comment=NULL;
 	}
 };
+
+bool Query_Processor::whitelisted_sqli_fingerprint(char *_s) {
+	bool ret = false;
+	string s = _s;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	for (std::vector<std::string>::iterator it = global_mysql_firewall_whitelist_sqli_fingerprints.begin() ; ret == false && it != global_mysql_firewall_whitelist_sqli_fingerprints.end(); ++it) {
+		if (s == *it) {
+			ret = true;
+		}
+	}
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+void Query_Processor::load_mysql_firewall_sqli_fingerprints(SQLite3_result *resultset) {
+	global_mysql_firewall_whitelist_sqli_fingerprints.erase(global_mysql_firewall_whitelist_sqli_fingerprints.begin(), global_mysql_firewall_whitelist_sqli_fingerprints.end());
+	// perform the inserts
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int active = atoi(r->fields[0]);
+		if (active == 0) {
+			continue;
+		}
+		char * fingerprint = r->fields[1];
+		string s = fingerprint;
+		global_mysql_firewall_whitelist_sqli_fingerprints.push_back(s);
+	}
+}
+
+void Query_Processor::load_mysql_firewall_users(SQLite3_result *resultset) {
+	unsigned long long tot_size = 0;
+	std::unordered_map<std::string, int>::iterator it;
+	for (it = global_mysql_firewall_whitelist_users.begin() ; it != global_mysql_firewall_whitelist_users.end(); ++it) {
+		it->second = WUS_NOT_FOUND;
+	}
+	// perform the inserts/updates
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int active = atoi(r->fields[0]);
+		if (active == 0) {
+			continue;
+		}
+		char * username = r->fields[1];
+		char * client_address = r->fields[2];
+		char * mode = r->fields[3];
+		string s = username;
+		s += rand_del;
+		s += client_address;
+		std::unordered_map<std::string, int>:: iterator it2;
+		it2 = global_mysql_firewall_whitelist_users.find(s);
+		if (it2 != global_mysql_firewall_whitelist_users.end()) {
+			if (strcmp(mode,(char *)"DETECTING")==0) {
+				it2->second = WUS_DETECTING;
+			} else if (strcmp(mode,(char *)"PROTECTING")==0) {
+				it2->second = WUS_PROTECTING;
+			}
+		} else {
+			//whitelist_user_setting *wus = (whitelist_user_setting *)malloc(sizeof(whitelist_user_setting));
+			int m = WUS_OFF;
+			if (strcmp(mode,(char *)"DETECTING")==0) {
+				m = WUS_DETECTING;
+			} else if (strcmp(mode,(char *)"PROTECTING")==0) {
+				m = WUS_PROTECTING;
+			}
+			//wus->myptrarray = new PtrArray();
+			global_mysql_firewall_whitelist_users[s] = m;
+		}
+	}
+	// cleanup
+	it = global_mysql_firewall_whitelist_users.begin();
+	while (it != global_mysql_firewall_whitelist_users.end()) {
+		int m = it->second;
+		if (m != WUS_NOT_FOUND) {
+			tot_size += it->first.capacity();
+			tot_size += sizeof(m);
+			it++;
+		} else {
+			// remove the entry
+			it = global_mysql_firewall_whitelist_users.erase(it);
+		}
+	}
+	global_mysql_firewall_whitelist_users_map___size = tot_size;
+}
+
+void Query_Processor::load_mysql_firewall_rules(SQLite3_result *resultset) {
+	unsigned long long tot_size = 0;
+	global_mysql_firewall_whitelist_rules_map___size = 0;
+	//size_t rand_del_size = strlen(rand_del);
+	int num_rows = resultset->rows_count;
+	std::unordered_map<std::string, void *>::iterator it;
+	if (num_rows == 0) {
+		// we must clean it completely
+		for (it = global_mysql_firewall_whitelist_rules.begin() ; it != global_mysql_firewall_whitelist_rules.end(); ++it) {
+			PtrArray * myptrarray = (PtrArray *)it->second;
+			delete myptrarray;
+		}
+		global_mysql_firewall_whitelist_rules.clear();
+		return;
+	}
+	// remove all the pointer array
+	for (it = global_mysql_firewall_whitelist_rules.begin() ; it != global_mysql_firewall_whitelist_rules.end(); ++it) {
+		PtrArray * myptrarray = (PtrArray *)it->second;
+		myptrarray->reset();
+	}
+	// perform the inserts
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int active = atoi(r->fields[0]);
+		if (active == 0) {
+			continue;
+		}
+		char * username = r->fields[1];
+		char * client_address = r->fields[2];
+		char * schemaname = r->fields[3];
+		char * flagIN = r->fields[4];
+		char * digest_hex = r->fields[5];
+		unsigned long long digest_num = strtoull(digest_hex,NULL,0);
+		string s = username;
+		s += rand_del;
+		s += client_address;
+		s += rand_del;
+		s += schemaname;
+		s += rand_del;
+		s += flagIN;
+		std::unordered_map<std::string, void *>:: iterator it2;
+		it2 = global_mysql_firewall_whitelist_rules.find(s);
+		if (it2 != global_mysql_firewall_whitelist_rules.end()) {
+			PtrArray * myptrarray = (PtrArray *)it2->second;
+			myptrarray->add((void *)digest_num);
+		} else {
+			PtrArray * myptrarray = new PtrArray();
+			myptrarray->add((void *)digest_num);
+			global_mysql_firewall_whitelist_rules[s] = (void *)myptrarray;
+		}
+	}
+	// perform ordering and cleanup
+	it = global_mysql_firewall_whitelist_rules.begin();
+	while (it != global_mysql_firewall_whitelist_rules.end()) {
+		PtrArray * myptrarray = (PtrArray *)it->second;
+		if (myptrarray->len) {
+			// there are digests, sort them
+			qsort(myptrarray->pdata, myptrarray->len, sizeof(unsigned long long), int_cmp);
+			tot_size += it->first.capacity();
+			unsigned long long a = (myptrarray->size * sizeof(void *));
+			tot_size += a;
+			it++;
+		} else {
+			// remove the entry
+			delete myptrarray;
+			it = global_mysql_firewall_whitelist_rules.erase(it);
+		}
+	}
+	unsigned long long nsize = global_mysql_firewall_whitelist_rules.size();
+	unsigned long long oh = sizeof(std::string) + sizeof(PtrArray) + sizeof(PtrArray *);
+	nsize *= oh;
+	tot_size += nsize;
+	global_mysql_firewall_whitelist_rules_map___size = tot_size;
+}
 
 void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 #ifdef FAST_ROUTING_NEW208
@@ -2812,5 +3102,96 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 #else
 	spin_rdunlock(&rwlock);
 #endif
+	return ret;
+}
+
+void Query_Processor::get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r, SQLite3_result **sf) {
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	if (global_mysql_firewall_whitelist_rules_runtime) {
+		*r = new SQLite3_result(global_mysql_firewall_whitelist_rules_runtime);
+	}
+	if (global_mysql_firewall_whitelist_users_runtime) {
+		*u = new SQLite3_result(global_mysql_firewall_whitelist_users_runtime);
+	}
+	if (global_mysql_firewall_whitelist_sqli_fingerprints_runtime) {
+		*sf = new SQLite3_result(global_mysql_firewall_whitelist_sqli_fingerprints_runtime);
+	}
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+}
+
+void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, SQLite3_result *sf) {
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	if (global_mysql_firewall_whitelist_rules_runtime) {
+		delete global_mysql_firewall_whitelist_rules_runtime;
+		global_mysql_firewall_whitelist_rules_runtime = NULL;
+	}
+	global_mysql_firewall_whitelist_rules_runtime = r;
+	global_mysql_firewall_whitelist_rules_result___size = r->get_size();
+	if (global_mysql_firewall_whitelist_users_runtime) {
+		delete global_mysql_firewall_whitelist_users_runtime;
+		global_mysql_firewall_whitelist_users_runtime = NULL;
+	}
+	global_mysql_firewall_whitelist_users_runtime = u;
+	if (global_mysql_firewall_whitelist_sqli_fingerprints_runtime) {
+		delete global_mysql_firewall_whitelist_sqli_fingerprints_runtime;
+		global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
+	}
+	global_mysql_firewall_whitelist_sqli_fingerprints_runtime = sf;
+	load_mysql_firewall_users(global_mysql_firewall_whitelist_users_runtime);
+	load_mysql_firewall_rules(global_mysql_firewall_whitelist_rules_runtime);
+	load_mysql_firewall_sqli_fingerprints(global_mysql_firewall_whitelist_sqli_fingerprints_runtime);
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return;
+}
+
+unsigned long long Query_Processor::get_mysql_firewall_memory_users_table() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	ret = global_mysql_firewall_whitelist_users_map___size;
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+unsigned long long Query_Processor::get_mysql_firewall_memory_users_config() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	ret = global_mysql_firewall_whitelist_users_result___size;
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+unsigned long long Query_Processor::get_mysql_firewall_memory_rules_table() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	ret = global_mysql_firewall_whitelist_rules_map___size;
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+unsigned long long Query_Processor::get_mysql_firewall_memory_rules_config() {
+	unsigned long long ret = 0;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	ret = global_mysql_firewall_whitelist_rules_result___size;
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+SQLite3_result * Query_Processor::get_mysql_firewall_whitelist_rules() {
+	SQLite3_result *ret = NULL;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	if (global_mysql_firewall_whitelist_rules_runtime) {
+		ret = new SQLite3_result(global_mysql_firewall_whitelist_rules_runtime);
+	}
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+SQLite3_result * Query_Processor::get_mysql_firewall_whitelist_users() {
+	SQLite3_result *ret = NULL;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	if (global_mysql_firewall_whitelist_users_runtime) {
+		ret = new SQLite3_result(global_mysql_firewall_whitelist_users_runtime);
+	}
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
 	return ret;
 }

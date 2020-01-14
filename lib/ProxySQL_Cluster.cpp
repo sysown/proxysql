@@ -2,6 +2,8 @@
 #include "cpp.h"
 #include "SpookyV2.h"
 
+#include "ProxySQL_Cluster.hpp"
+
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else

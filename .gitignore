@@ -88,6 +88,10 @@ deps/mariadb-client-library/mariadb-connector-c-2.1.0-src/
 deps/mariadb-client-library/mariadb-connector-c-2.3.1/
 deps/mariadb-client-library/mariadb-connector-c-3.0.2-src/
 deps/mariadb-client-library/mariadb-connector-c-3.0.9-src/
+deps/mariadb-client-library/mariadb-connector-c-3.1.4-src/
+
+#libinjection
+deps/libinjection/libinjection-3.10.0/
 
 #glib
 deps/glib/glib-2.40.0/
@@ -104,6 +108,10 @@ deps/libconfig/libconfig-1.7.2/
 
 #libmicrohttpd
 deps/libmicrohttpd/libmicrohttpd-0.9.55/
+deps/libmicrohttpd/libmicrohttpd-0.9.68/
+
+#libhttpserver
+deps/libhttpserver/libhttpserver-master_20191121/
 
 #clickhouse
 deps/clickhouse-cpp/clickhouse-cpp/

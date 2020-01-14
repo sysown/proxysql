@@ -9,18 +9,16 @@ using namespace libconfig;
 class ProxySQL_ConfigFile {
   private:
   //struct stat statbuf;
-  char *filename;
+  std::string filename;
   public:
-  Config *cfg;
-  ProxySQL_ConfigFile();
+  Config cfg;
   bool OpenFile(const char *);
-	void CloseFile();
-	bool ReadGlobals();
-	bool configVariable(const char *, const char *, int &, int, int, int, int);
-	bool configVariable(const char *, const char *, int64_t &, int64_t, int64_t, int64_t, int64_t);
-	bool configVariable(const char *, const char *, bool &, bool);
-	bool configVariable(const char *, const char *, char **, const char *);
-  ~ProxySQL_ConfigFile();
+  void CloseFile();
+  bool ReadGlobals();
+  bool configVariable(const char *, const char *, int &, int, int, int, int);
+  bool configVariable(const char *, const char *, int64_t &, int64_t, int64_t, int64_t, int64_t);
+  bool configVariable(const char *, const char *, bool &, bool);
+  bool configVariable(const char *, const char *, char **, const char *);
 };
 
 

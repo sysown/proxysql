@@ -7,7 +7,6 @@
 	0.2.0902
 		* original implementation
 */
-
 #include <map>
 #include <mutex>
 #include <thread>
@@ -161,13 +160,13 @@ private:
 	PtrArray *conns;
 #endif // DEBUG
 //	std::map<std::pair<std::string, int>, std::vector<MYSQL*> > my_connections;
-	PtrArray *servers;
+	std::unique_ptr<PtrArray> servers;
 public:
 	MYSQL * get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd);
 	void put_connection(char *hostname, int port, MYSQL *my);
 	void purge_some_connections();
 	MySQL_Monitor_Connection_Pool() {
-		servers = new PtrArray();
+		servers = std::unique_ptr<PtrArray>(new PtrArray());
 #ifdef DEBUG
 		conns = new PtrArray();
 		pthread_mutex_init(&m2, NULL);
@@ -522,7 +521,7 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	My_Conn_Pool=new MySQL_Monitor_Connection_Pool();
 
-	queue = new wqueue<WorkItem*>();
+	queue = std::unique_ptr<wqueue<WorkItem*>>(new wqueue<WorkItem*>());
 
 	pthread_mutex_init(&group_replication_mutex,NULL);
 	Group_Replication_Hosts_resultset=NULL;
@@ -1349,43 +1348,14 @@ __end_process_group_replication_result:
 		}
 		if (mmsd->mysql_error_msg) {
 			if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
-				int max_num_timeout = 10;
-				if (mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count < max_num_timeout) {
-					max_num_timeout = mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
-				}
-				unsigned long long start_times[max_num_timeout];
-				bool timeouts[max_num_timeout];
-				for (int i=0; i<max_num_timeout; i++) {
-					start_times[i]=0;
-					timeouts[i]=false;
-				}
-				for (int i=0; i<MyGR_Nentries; i++) {
-					if (node->last_entries[i].start_time) {
-						int smallidx = 0;
-						for (int j=0; j<max_num_timeout; j++) {
-							if (j!=smallidx) {
-								if (start_times[j] < start_times[smallidx]) {
-									smallidx = j;
-								}
-							}
-						}
-						if (start_times[smallidx] < node->last_entries[i].start_time) {
-							start_times[smallidx] = node->last_entries[i].start_time;
-							timeouts[smallidx] = false;
-							if (node->last_entries[i].error) {
-								if (strncasecmp(node->last_entries[i].error, (char *)"timeout", 7) == 0) {
-									timeouts[smallidx] = true;
-								}
-							}
-						}
-					}
-				}
-				for (int i=0; i<max_num_timeout; i++) {
-					if (timeouts[i]) {
-						num_timeouts++;
-					}
-				}
+				num_timeouts=node->get_timeout_count();
+				proxy_warning("%s:%d : group replication health check timeout count %d. Max threshold %d.\n", 
+					mmsd->hostname, mmsd->port, num_timeouts, mmsd->max_transactions_behind_count);
 			}
+		}
+		int lag_counts = 0;
+		if (read_only) {
+			lag_counts = node->get_lag_behind_count(mmsd->max_transactions_behind);
 		}
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 
@@ -1397,7 +1367,7 @@ __end_process_group_replication_result:
 			} else {
 				// it was a timeout. Check if we are having consecutive timeout
 				if (num_timeouts == mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count) {
-					proxy_error("Server %s:%d missed %d group replication checks. Number retires %d, Assuming offline\n",
+					proxy_error("Server %s:%d missed %d group replication checks. Number retries %d, Assuming offline\n",
 					mmsd->hostname, mmsd->port, num_timeouts, num_timeouts);
 					MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 				} else {
@@ -1409,7 +1379,7 @@ __end_process_group_replication_result:
 				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"viable_candidate=NO");
 			} else {
 				if (read_only==true) {
-					if (transactions_behind > mmsd->max_transactions_behind) {
+					if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
 						MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
 					} else {
 						MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
@@ -2716,6 +2686,7 @@ void * MySQL_Monitor::monitor_group_replication() {
 //		resultset = MyHGM->execute_query(query, &error);
 //		assert(resultset);
 		if (Group_Replication_Hosts_resultset==NULL) {
+				proxy_error("Group replication hosts result set is absent\n");
 				goto __end_monitor_group_replication_loop;
 //		}
 //		if (error) {
@@ -2738,6 +2709,7 @@ void * MySQL_Monitor::monitor_group_replication() {
 					mmsd->writer_hostgroup=atoi(r->fields[0]);
 					mmsd->writer_is_also_reader=atoi(r->fields[4]);
 					mmsd->max_transactions_behind=atoi(r->fields[5]);
+					mmsd->max_transactions_behind_count=mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 					mmsd->mondb=monitordb;
 					WorkItem* item;
 					item=new WorkItem(mmsd,monitor_group_replication_thread);
@@ -3210,6 +3182,85 @@ MyGR_monitor_node::~MyGR_monitor_node() {
 	}
 }
 
+int MyGR_monitor_node::get_lag_behind_count(int txs_behind) {
+	int max_lag = 10;
+	if (mysql_thread___monitor_groupreplication_max_transactions_behind_count < max_lag)
+		max_lag = mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+	bool lags[max_lag];
+	unsigned long long start_times[max_lag];
+	int lag_counts=0;
+	for (int i=0; i<max_lag; i++) {
+		start_times[i]=0;
+		lags[i]=false;
+	}
+	for (int i=0; i<MyGR_Nentries; i++) {
+		if (last_entries[i].start_time) {
+			int smallidx = 0;
+			for (int j=0; j<max_lag; j++) {
+				if (j!=smallidx) {
+					if (start_times[j] < start_times[smallidx]) {
+						smallidx = j;
+					}
+				}
+			}
+			if (start_times[smallidx] < last_entries[i].start_time) {
+				start_times[smallidx] = last_entries[i].start_time;
+				lags[smallidx] = false;
+				if (last_entries[i].transactions_behind > txs_behind) {
+					lags[smallidx] = true;
+				}
+			}
+		}
+	}
+	for (int i=0; i<max_lag; i++) {
+		if (lags[i]) {
+			lag_counts++;
+		}
+	}
+
+	return lag_counts;
+}
+
+int MyGR_monitor_node::get_timeout_count() {
+	int num_timeouts = 0;
+	int max_num_timeout = 10;
+	if (mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count < max_num_timeout)
+		max_num_timeout = mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+	unsigned long long start_times[max_num_timeout];
+	bool timeouts[max_num_timeout];
+	for (int i=0; i<max_num_timeout; i++) {
+		start_times[i]=0;
+		timeouts[i]=false;
+	}
+	for (int i=0; i<MyGR_Nentries; i++) {
+		if (last_entries[i].start_time) {
+			int smallidx = 0;
+			for (int j=0; j<max_num_timeout; j++) {
+				if (j!=smallidx) {
+					if (start_times[j] < start_times[smallidx]) {
+						smallidx = j;
+					}
+				}
+			}
+			if (start_times[smallidx] < last_entries[i].start_time) {
+				start_times[smallidx] = last_entries[i].start_time;
+				timeouts[smallidx] = false;
+				if (last_entries[i].error) {
+					if (strncasecmp(last_entries[i].error, (char *)"timeout", 7) == 0) {
+						timeouts[smallidx] = true;
+					}
+				}
+			}
+		}
+	}
+	for (int i=0; i<max_num_timeout; i++) {
+		if (timeouts[i]) {
+			num_timeouts++;
+		}
+	}
+	return num_timeouts;
+}
+
 // return true if status changed
 bool MyGR_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, char *_error) {
 	bool ret=false;
@@ -3549,7 +3600,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
-	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 	sqlite3_stmt *statement1=NULL;
 	char *query2=NULL;
 	query2=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log (hostname, port, time_start_us, success_time_us, error) VALUES (?1, ?2, ?3, ?4, ?5)";
@@ -3587,7 +3638,8 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 							rc=sqlite3_bind_text(statement1, 7, hse->session_id , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 							rc=sqlite3_bind_text(statement1, 8, hse->last_update_timestamp , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 							rc=sqlite3_bind_double(statement1, 9, hse->replica_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_double(statement1, 10, hse->cpu ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=sqlite3_bind_int64(statement1, 10, hse->estimated_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=sqlite3_bind_double(statement1, 11, hse->cpu ); ASSERT_SQLITE_OK(rc, monitordb);
 							SAFE_SQLITE3_STEP2(statement1);
 							rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 							rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, monitordb);
@@ -3799,6 +3851,9 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	unsigned int max_lag_ms = 0;
 	unsigned int check_interval_ms = 0;
 	unsigned int check_timeout_ms = 0;
+	unsigned int add_lag_ms = 0;
+	unsigned int min_lag_ms = 0;
+	unsigned int lag_num_checks = 1;
 	//unsigned int i = 0;
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
@@ -3838,6 +3893,9 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			if (rHG == 0) {
 				rHG = atoi(r->fields[1]);
 			}
+			add_lag_ms = atoi(r->fields[8]);
+			min_lag_ms = atoi(r->fields[9]);
+			lag_num_checks = atoi(r->fields[10]);
 		}
 	}
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*num_hosts);
@@ -4073,6 +4131,27 @@ __exit_monitor_aws_aurora_HG_thread:
 				mysql_free_result(mmsd->result);
 				mmsd->result=NULL;
 			}
+
+			if (lasts_ase[ase_idx]) {
+				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
+				delete l_ase;
+			}
+			lasts_ase[ase_idx] = ase_l;
+			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+			for (auto h : *(ase_l->host_statuses)) {
+				for (auto h2 : *(ase->host_statuses)) {
+					if (strcmp(h2->server_id, h->server_id) == 0) {
+						h2->estimated_lag_ms = h->estimated_lag_ms;
+					}
+				}
+			}
+			// remember that we call evaluate_aws_aurora_results()
+			// *before* shifting ase_idx
+			ase_idx++;
+			if (ase_idx == N_L_ASE) {
+				ase_idx = 0;
+			}
+
 //__end_process_aws_aurora_result:
 			if (mmsd->mysql_error_msg) {
 			}
@@ -4096,18 +4175,7 @@ __exit_monitor_aws_aurora_HG_thread:
 				free(s);
 			}
 			pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-			if (lasts_ase[ase_idx]) {
-				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
-				delete l_ase;
-			}
-			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms);
-			// remember that we call evaluate_aws_aurora_results()
-			// *before* shifting ase_idx
-			ase_idx++;
-			if (ase_idx == N_L_ASE) {
-				ase_idx = 0;
-			}
+
 		}
 		if (mmsd->interr || mmsd->async_exit_status) { // check failed
 		} else {
@@ -4149,17 +4217,6 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 			}
 		}
 	}
-__exit_monitor_AWS_Aurora_thread_HG_now:
-	if (mmsd) {
-		delete (mmsd);
-		mmsd = NULL;
-	for (unsigned int i=0; i<N_L_ASE; i++) {
-		if (lasts_ase[i]) {
-			delete lasts_ase[i];
-			lasts_ase[i] = NULL;
-		}
-	}
-	}
 /*
 		mmsd->writer_hostgroup=atoi(r->fields[0]);
 		mmsd->writer_is_also_reader=atoi(r->fields[4]);
@@ -4188,6 +4245,17 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 					mmsd->mondb=monitordb;
 		
 */
+	}
+__exit_monitor_AWS_Aurora_thread_HG_now:
+	if (mmsd) {
+		delete (mmsd);
+		mmsd = NULL;
+	for (unsigned int i=0; i<N_L_ASE; i++) {
+		if (lasts_ase[i]) {
+			delete lasts_ase[i];
+			lasts_ase[i] = NULL;
+		}
+	}
 	}
 
 	free(hpa);
@@ -4576,7 +4644,35 @@ __fast_exit_monitor_aws_aurora_thread:
 	return NULL;
 }
 
-void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms) {
+unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entry** aase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+	assert(aase);
+	assert(server_id);
+	assert(idx >= 0 && idx < N_L_ASE);
+
+	if (lag_num_checks > N_L_ASE) lag_num_checks = N_L_ASE;
+	if (lag_num_checks <= 0) lag_num_checks = 1;
+
+	unsigned int mlag = 0;
+	unsigned int lag = 0;
+
+	for (int i = 1; i <= lag_num_checks; i++) {
+		if (!aase[idx] || !aase[idx]->host_statuses)
+			break;
+		for (auto hse : *(aase[idx]->host_statuses)) {
+			if (strcmp(server_id, hse->server_id)==0 && (unsigned int)hse->replica_lag_ms != 0) {
+				unsigned int ms = std::max(((unsigned int)hse->replica_lag_ms + add_lag_ms), min_lag_ms);
+				if (ms > mlag) mlag = ms;
+				if (!lag) lag = ms;
+			}
+		}
+		if (idx == 0) idx = N_L_ASE;
+		idx--;
+	}
+
+	return mlag;
+}
+
+void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
 	unsigned int i = 0;
 #ifdef TEST_AURORA
 	bool verbose = false;
@@ -4620,7 +4716,9 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 				bool enable = true;
 				bool is_writer = false;
 				bool rla_rc = true;
-				if (hse->replica_lag_ms > max_latency_ms) {
+				unsigned int current_lag_ms = estimate_lag(hse->server_id, lasts_ase, ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+				hse->estimated_lag_ms = current_lag_ms;
+				if (current_lag_ms > max_latency_ms) {
 					enable = false;
 				}
 				if (strcmp(hse->session_id,"MASTER_SESSION_ID")==0) {
@@ -4633,7 +4731,9 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 							AWS_Aurora_replica_host_status_entry *prev_hse = *it4;
 							if (strcmp(prev_hse->server_id,hse->server_id)==0) {
 								bool prev_enabled = true;
-								if (prev_hse->replica_lag_ms > max_latency_ms) {
+
+								unsigned int prev_lag_ms = estimate_lag(hse->server_id, lasts_ase, ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+								if (prev_lag_ms > max_latency_ms) {
 									prev_enabled = false;
 								}
 								if (prev_enabled == enable) {
@@ -4649,15 +4749,18 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					action_yes++;
 					(enable ? enabling++ : disabling++);
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer, verbose);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer, verbose);
 #else
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer);
+					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
 #endif // TEST_AURORA
-#ifdef TEST_AURORA
 				} else {
+#ifdef TEST_AURORA
 					action_no++;
 #endif // TEST_AURORA
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, hse->replica_lag_ms, enable, is_writer);
+					if (is_writer ) {
+						// if the server is a writer we run it anyway. This will perform some sanity check
+						rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+					}
 				}
 				//if (is_writer == true && rla_rc == false) {
 				if (rla_rc == false) {
@@ -4694,3 +4797,5 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 	}
 #endif // TEST_AURORA
 }
+
+

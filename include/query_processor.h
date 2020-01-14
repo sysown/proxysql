@@ -3,6 +3,15 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include <set>
+
+// Optimization introduced in 2.0.6
+// to avoid a lot of unnecessary copy
+#define DIGEST_STATS_FAST_1
+#define DIGEST_STATS_FAST_MINSIZE   100000
+#define DIGEST_STATS_FAST_THREADS   4
+
+
 #define FAST_ROUTING_NEW208
 
 
@@ -10,10 +19,70 @@
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
 #endif
+
 #define PROXYSQL_QPRO_PTHREAD_MUTEX
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
+
+
+#define WUS_NOT_FOUND   0	// couldn't find any filter
+#define WUS_OFF         1	// allow the query
+#define WUS_DETECTING   2	// allow the query but log it
+#define WUS_PROTECTING  3	// block the query
+
+
+#ifdef DIGEST_STATS_FAST_1
+typedef struct _query_digest_stats_pointers_t {
+	char *pta[14];
+	char digest[24];
+	char count_star[24];
+	char first_seen[24];
+	char last_seen[24];
+	char sum_time[24];
+	char min_time[24];
+	char max_time[24];
+	char hid[24];
+	char rows_affected[24];
+	char rows_sent[24];
+} query_digest_stats_pointers_t;
+#endif
+
+
+class QP_query_digest_stats {
+	public:
+	uint64_t digest;
+	char *digest_text;
+	char *username;
+	char *schemaname;
+	char *client_address;
+#ifdef DIGEST_STATS_FAST_1
+	char username_buf[24];
+	char schemaname_buf[24];
+	char client_address_buf[24];
+#endif
+	time_t first_seen;
+	time_t last_seen;
+	unsigned int count_star;
+	unsigned long long sum_time;
+	unsigned long long min_time;
+	unsigned long long max_time;
+	unsigned long long rows_affected;
+	unsigned long long rows_sent;
+	int hid;
+	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca);
+	void add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs);
+	~QP_query_digest_stats();
+#ifdef DIGEST_STATS_FAST_1
+	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
+#else
+	char **get_row(umap_query_digest_text *digest_text_umap);
+#endif
+#ifdef DIGEST_STATS_FAST_1
+#else
+	void free_row(char **pta);
+#endif
+};
 
 struct _Query_Processor_rule_t {
 	int rule_id;
@@ -81,7 +150,9 @@ class Query_Processor_Output {
 	int gtid_from_hostgroup;
 	long long max_lag_ms;
 	int log;
+	int firewall_whitelist_mode;
 	char *comment; // #643
+	char *min_gtid;
 	std::string *new_query;
 	void * operator new(size_t size) {
 		return l_alloc(size);
@@ -118,6 +189,8 @@ class Query_Processor_Output {
 		error_msg=NULL;
 		OK_msg=NULL;
 		comment=NULL; // #643
+		min_gtid=NULL;
+		firewall_whitelist_mode = WUS_NOT_FOUND;
 	}
 	void destroy() {
 		if (error_msg) {
@@ -127,6 +200,10 @@ class Query_Processor_Output {
 		if (OK_msg) {
 			free(OK_msg);
 			OK_msg=NULL;
+		}
+		if (min_gtid) {
+			free(min_gtid);
+			min_gtid = NULL;
 		}
 		if (comment) { // #643
 			free(comment);
@@ -214,6 +291,19 @@ class Query_Processor {
 	std::unordered_map<std::string,int> rules_fast_routing;
 #endif
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
+
+	// firewall
+	pthread_mutex_t global_mysql_firewall_whitelist_mutex;
+	std::unordered_map<std::string, int>global_mysql_firewall_whitelist_users;
+	std::unordered_map<std::string, void *> global_mysql_firewall_whitelist_rules;
+	std::vector<std::string> global_mysql_firewall_whitelist_sqli_fingerprints;
+	SQLite3_result * global_mysql_firewall_whitelist_users_runtime;
+	SQLite3_result * global_mysql_firewall_whitelist_rules_runtime;
+	SQLite3_result * global_mysql_firewall_whitelist_sqli_fingerprints_runtime;
+	unsigned long long global_mysql_firewall_whitelist_users_map___size;
+	unsigned long long global_mysql_firewall_whitelist_users_result___size;
+	unsigned long long global_mysql_firewall_whitelist_rules_map___size;
+	unsigned long long global_mysql_firewall_whitelist_rules_result___size;
 	volatile unsigned int version;
 	unsigned long long rules_mem_used;
 	public:
@@ -221,7 +311,7 @@ class Query_Processor {
 	~Query_Processor();
 	void print_version();
 	void reset_all(bool lock=true);
-	void wrlock();		// explicit write lock, to be used in multi-isert 
+	void wrlock();		// explicit write lock, to be used in multi-insert
 	void wrunlock();	// explicit write unlock
 	bool insert(QP_rule_t *qr, bool lock=true);		// insert a new rule. Uses a generic void pointer to a structure that may vary depending from the Query Processor
 	QP_rule_t * new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout, int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_hostgroup, int mirror_flagOUT, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment);	// to use a generic query rule struct, this is generated by this function and returned as generic void pointer
@@ -235,7 +325,7 @@ class Query_Processor {
 	void end_thread();
 	void commit();	// this applies all the changes in memory
 	SQLite3_result * get_current_query_rules();
-	SQLite3_result * get_stats_query_rules();	
+	SQLite3_result * get_stats_query_rules();
 
 	void update_query_processor_stats();
 
@@ -245,6 +335,7 @@ class Query_Processor {
 	void query_parser_free(SQP_par_t *qp);
 	char * get_digest_text(SQP_par_t *qp);
 	uint64_t get_digest(SQP_par_t *qp);
+	bool is_valid_gtid(char *gtid, size_t gtid_len);
 
 	void update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, MySQL_Session *sess);
 
@@ -253,6 +344,7 @@ class Query_Processor {
 	SQLite3_result * get_stats_commands_counters();
 	SQLite3_result * get_query_digests();
 	SQLite3_result * get_query_digests_reset();
+	void get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt);
 	unsigned long long purge_query_digests(bool async_purge, bool parallel, char **msg);
 	unsigned long long purge_query_digests_async(char **msg);
 	unsigned long long purge_query_digests_sync(bool parallel);
@@ -260,12 +352,28 @@ class Query_Processor {
 	unsigned long long get_query_digests_total_size();
 	unsigned long long get_rules_mem_used();
 
-
 	// fast routing
 	SQLite3_result * fast_routing_resultset;
 	void load_fast_routing(SQLite3_result *resultset);
 	SQLite3_result * get_current_query_rules_fast_routing();
 	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
+
+	// firewall
+	void load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, SQLite3_result *sf);
+	void load_mysql_firewall_users(SQLite3_result *);
+	void load_mysql_firewall_rules(SQLite3_result *);
+	void load_mysql_firewall_sqli_fingerprints(SQLite3_result *);
+	unsigned long long get_mysql_firewall_memory_users_table();
+	unsigned long long get_mysql_firewall_memory_users_config();
+	unsigned long long get_mysql_firewall_memory_rules_table();
+	unsigned long long get_mysql_firewall_memory_rules_config();
+	void get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r, SQLite3_result **sf);
+	int find_firewall_whitelist_user(char *username, char *client);
+	bool find_firewall_whitelist_rule(char *username, char *client_address, char *schemaname, int flagIN, uint64_t digest);
+	SQLite3_result * get_mysql_firewall_whitelist_users();
+	SQLite3_result * get_mysql_firewall_whitelist_rules();
+	SQLite3_result * get_mysql_firewall_whitelist_sqli_fingerprints();
+	bool whitelisted_sqli_fingerprint(char *);
 };
 
 typedef Query_Processor * create_Query_Processor_t();

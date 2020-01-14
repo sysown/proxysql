@@ -52,6 +52,7 @@ class ProxySQL_GlobalVariables {
 	char *datadir;
 	char *admindb;
 	char *statsdb_disk;
+	char *sqlite3serverdb;
 	char *errorlog;
 	char *pid;
 	int restart_on_missing_heartbeats;
@@ -62,6 +63,7 @@ class ProxySQL_GlobalVariables {
 		bool gdbg;
 		bool nostart;
 		bool monitor;
+		bool version_check;
 #ifdef SO_REUSEPORT
 		bool reuseport;
 #endif /* SO_REUSEPORT */

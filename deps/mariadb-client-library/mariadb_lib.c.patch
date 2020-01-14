@@ -1,4 +1,4 @@
-@@ -1494,9 +1494,16 @@
+@@ -1515,9 +1515,16 @@
  
    mysql->client_flag= client_flag;
  
@@ -15,7 +15,7 @@
  
    if (mysql->client_flag & CLIENT_COMPRESS)
      net->compress= 1;
-@@ -1625,7 +1632,7 @@
+@@ -1647,7 +1654,7 @@
    if (!mysql_real_connect(&tmp_mysql,mysql->host,mysql->user,mysql->passwd,
  			  mysql->db, mysql->port, mysql->unix_socket,
  			  mysql->client_flag | CLIENT_REMEMBER_OPTIONS) ||
@@ -24,7 +24,7 @@
    {
      if (ctxt)
        my_context_install_suspend_resume_hook(ctxt, NULL, NULL);
-@@ -1671,6 +1678,7 @@
+@@ -1693,6 +1700,7 @@
  {
    if (mysql->stmts)
    {
@@ -32,7 +32,7 @@
      LIST *li_stmt= mysql->stmts;
  
      for (; li_stmt; li_stmt= li_stmt->next)
-@@ -1679,6 +1687,7 @@
+@@ -1701,6 +1709,7 @@
        stmt->mysql= NULL;
        SET_CLIENT_STMT_ERROR(stmt, CR_STMT_CLOSED, SQLSTATE_UNKNOWN, function_name);
      }
@@ -40,7 +40,7 @@
      mysql->stmts= NULL;
    }
  }
-@@ -1948,6 +1957,33 @@
+@@ -1970,6 +1979,33 @@
    return;
  }
  
@@ -74,16 +74,16 @@
  
  /**************************************************************************
  ** Do a query. If query returned rows, free old rows.
-@@ -2028,6 +2064,8 @@
-               old_pos= pos;
-               si_type= (enum enum_session_state_type)net_field_length(&pos);
-               switch(si_type) {
-+              case SESSION_TRACK_GTIDS:
-+                net_field_length(&pos); /* skip encoding */
-               case SESSION_TRACK_SCHEMA:
-               case SESSION_TRACK_STATE_CHANGE:
-               case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
-@@ -3425,18 +3463,27 @@
+@@ -2036,6 +2072,8 @@
+             old_pos= pos;
+             si_type= (enum enum_session_state_type)net_field_length(&pos);
+             switch(si_type) {
++            case SESSION_TRACK_GTIDS:
++              net_field_length(&pos); /* skip encoding */
+             case SESSION_TRACK_SCHEMA:
+             case SESSION_TRACK_STATE_CHANGE:
+             case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
+@@ -3474,18 +3512,27 @@
    mariadb_get_charset_info(mysql, cs);
  }
  

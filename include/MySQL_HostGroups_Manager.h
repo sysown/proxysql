@@ -36,7 +36,17 @@
 
 #define MYHGM_MYSQL_GALERA_HOSTGROUPS "CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1,2)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
 
-#define MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL DEFAULT '' , max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , comment VARCHAR , UNIQUE (reader_hostgroup))"
+#define MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
+										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL DEFAULT '' , " \
+										  "max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , " \
+										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
+										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , " \
+										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
+										  "new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , " \
+										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , " \
+										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
+										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR ," \
+										  "UNIQUE (reader_hostgroup))"
 
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
@@ -45,14 +55,6 @@ class MySrvConnList;
 class MySrvC;
 class MySrvList;
 class MyHGC;
-
-enum MySerStatus {
-	MYSQL_SERVER_STATUS_ONLINE,
-	MYSQL_SERVER_STATUS_SHUNNED,
-	MYSQL_SERVER_STATUS_OFFLINE_SOFT,
-	MYSQL_SERVER_STATUS_OFFLINE_HARD,
-	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG
-};
 
 
 std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
@@ -78,205 +80,9 @@ class GTID_Server_Data {
 	bool readall();
 	bool writeout();
 	bool read_next_gtid();
-/*
-	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port) {
-		active = true;
-		w = _w;
-		size = 1024; // 1KB buffer
-		data = (char *)malloc(size);
-		uuid_server[0] = 0;
-		pos = 0;
-		len = 0;
-		address = strdup(_address);
-		port = _port;
-		mysql_port = _mysql_port;
-	}
-	void resize(size_t _s) {
-		char *data_ = (char *)malloc(_s);
-		memcpy(data_, data, (_s > size ? size : _s));
-		size = _s;
-		free(data);
-		data = data_;
-	}
-	~GTID_Server_Data() {
-		free(address);
-		free(data);
-	}
-	bool readall() {
-		bool ret = true;
-		if (size == len) {
-			// buffer is full, expand
-			resize(len*2);
-		}
-		int rc = 0;
-		rc = read(w->fd,data+len,size-len);
-		if (rc > 0) {
-			len += rc;
-		} else {
-			int myerr = errno;
-			fprintf(stderr,"read returned %d bytes, error %d\n", rc, myerr);
-			if (
-				//(rc == 0) ||
-				(rc==-1 && myerr != EINTR && myerr != EAGAIN)
-			) {
-				ret = false;
-			}
-		}
-		return ret;
-	}
-	bool writeout() {
-		bool ret = true;
-		if (len==0) {
-			return ret;
-		}
-		int rc = 0;
-		rc = write(w->fd,data+pos,len-pos);
-		if (rc > 0) {
-			pos += rc;
-			if (pos >= len/2) {
-				memmove(data,data+pos,len-pos);
-				len = len-pos;
-				pos = 0;
-			}
-		}
-		return ret;
-	}
-	bool read_next_gtid() {
-		if (len==0) {
-			return false;
-		}
-		void *nlp = NULL;
-		nlp = memchr(data+pos,'\n',len-pos);
-		if (nlp == NULL) {
-			return false;
-		}
-		int l = (char *)nlp - (data+pos);
-		char rec_msg[80];
-		if (strncmp(data+pos,(char *)"ST=",3)==0) {
-			// we are reading the bootstrap
-			char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
-			memcpy(bs,data+pos+3,l+1-3);
-			char *saveptr1=NULL;
-			char *saveptr2=NULL;
-			//char *saveptr3=NULL;
-			char *token = NULL;
-			char *subtoken = NULL;
-			//char *subtoken2 = NULL;
-			char *str1 = NULL;
-			char *str2 = NULL;
-			//char *str3 = NULL;
-			for (str1 = bs; ; str1 = NULL) {
-				token = strtok_r(str1, ",", &saveptr1);
-				if (token == NULL) {
-					break;
-				}
-				int j = 0;
-				for (str2 = token; ; str2 = NULL) {
-					subtoken = strtok_r(str2, ":", &saveptr2);
-					if (subtoken == NULL) {
-						break;
-					}
-					j++;
-					if (j%2 == 1) { // we are reading the uuid
-						char *p = uuid_server;
-						for (unsigned int k=0; k<strlen(subtoken); k++) {
-							if (subtoken[k]!='-') {
-								*p = subtoken[k];
-								p++;
-							}
-						}
-						//fprintf(stdout,"BS from %s\n", uuid_server);
-					} else { // we are reading the trxids
-						uint64_t trx_from;
-						uint64_t trx_to;
-						sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
-						//fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server, trx_from, trx_to);
-						std::string s = uuid_server;
-						gtid_executed[s].emplace_back(trx_from, trx_to);
-					}
-				}
-			}
-			pos += l+1;
-			free(bs);
-			//return true;
-		} else {
-			strncpy(rec_msg,data+pos,l);
-			pos += l+1;
-			rec_msg[l]=0;
-			//int rc = write(1,data+pos,l+1);
-			//fprintf(stdout,"%s\n", rec_msg);
-			if (rec_msg[0]=='I') {
-				//char rec_uuid[80];
-				uint64_t rec_trxid;
-				char *a = NULL;
-				int ul = 0;
-				switch (rec_msg[1]) {
-					case '1':
-						//sscanf(rec_msg+3,"%s\:%lu",uuid_server,&rec_trxid);
-						a = strchr(rec_msg+3,':');
-						ul = a-rec_msg-3;
-						strncpy(uuid_server,rec_msg+3,ul);
-						uuid_server[ul] = 0;
-						rec_trxid=atoll(a+1);
-						break;
-					case '2':
-						//sscanf(rec_msg+3,"%lu",&rec_trxid);
-						rec_trxid=atoll(rec_msg+3);
-						break;
-					default:
-						break;
-				}
-				fprintf(stdout,"%s:%lu\n", uuid_server, rec_trxid);
-				std::string s = uuid_server;
-				gtid_t new_gtid = std::make_pair(s,rec_trxid);
-				addGtid(new_gtid,gtid_executed);
-				//return true;
-			}
-		}
-		std::cout << "current pos " << gtid_executed_to_string(gtid_executed) << std::endl << std::endl;
-		return true;
-	}
-*/
 	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
 	void read_all_gtids();
 	void dump();
-/*
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-		std::string s = gtid_uuid;
-		auto it = gtid_executed.find(s);
-		fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
-		if (it == gtid_executed.end()) {
-			fprintf(stderr,"NO\n");
-			return false;
-		}
-		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-			if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
-				fprintf(stderr,"YES\n");
-				return true;
-			}
-		}
-		fprintf(stderr,"NO\n");
-		return false;
-	}
-	void read_all_gtids() {
-		while (read_next_gtid()) {
-		}
-	}
-	void dump() {
-		if (len==0) {
-			return;
-		}
-		read_all_gtids();
-		//int rc = write(1,data+pos,len-pos);
-		fflush(stdout);
-		///pos += rc;
-		if (pos >= len/2) {
-			memmove(data,data+pos,len-pos);
-			len = len-pos;
-			pos = 0;
-		}
-	}
-*/
 };
 
 
@@ -437,6 +243,9 @@ class AWS_Aurora_Info {
 	int reader_hostgroup;
 	int aurora_port;
 	int max_lag_ms;
+	int add_lag_ms;
+	int min_lag_ms;
+	int lag_num_checks;
 	int check_interval_ms;
 	int check_timeout_ms;
 	int writer_is_also_reader;
@@ -447,8 +256,8 @@ class AWS_Aurora_Info {
 	char * comment;
 	bool active;
 	bool __active;
-	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int ml, int ci, int ct, bool _a, int wiar, int nrw, char *c);
-	bool update(int r, int _port, char *_end_addr, int ml, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	~AWS_Aurora_Info();
 };
 

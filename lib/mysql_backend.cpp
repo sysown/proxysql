@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Data_Stream.h"
 
 void * MySQL_Backend::operator new(size_t size) {
 	return l_alloc(size);
