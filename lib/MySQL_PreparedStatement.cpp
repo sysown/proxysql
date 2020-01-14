@@ -573,6 +573,11 @@ MySQL_STMT_Manager_v14::MySQL_STMT_Manager_v14() {
 }
 
 MySQL_STMT_Manager_v14::~MySQL_STMT_Manager_v14() {
+	for (auto s3 : map_stmt_id_to_info) {
+		auto a = s3.second;
+		delete a;
+	}
+	map_stmt_id_to_info.erase(map_stmt_id_to_info.begin(), map_stmt_id_to_info.end());
 }
 
 void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lock) {
