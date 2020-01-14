@@ -7,16 +7,16 @@
  
  my_bool mariadb_get_infov(MYSQL *mysql, enum mariadb_value value, void *arg, ...);
  my_bool STDCALL mariadb_get_info(MYSQL *mysql, enum mariadb_value value, void *arg);
-@@ -511,6 +511,7 @@
+@@ -511,6 +511,8 @@
  					   const char *unix_socket,
  					   unsigned long clientflag);
  void		STDCALL mysql_close(MYSQL *sock);
-+void		STDCALL mysql_close_no_command(MYSQL *sock);
-+void		STDCALL mysql_stmt_free(MYSQL_STMT *stmt);
++void           STDCALL mysql_close_no_command(MYSQL *sock);
++void           STDCALL mysql_stmt_free(MYSQL_STMT *stmt);
  int		STDCALL mysql_select_db(MYSQL *mysql, const char *db);
  int		STDCALL mysql_query(MYSQL *mysql, const char *q);
  int		STDCALL mysql_send_query(MYSQL *mysql, const char *q,
-@@ -610,7 +611,7 @@
+@@ -610,7 +612,7 @@
  int STDCALL mysql_stmt_next_result_cont(int *ret, MYSQL_STMT *stmt, int status);
  
  int STDCALL mysql_set_character_set_start(int *ret, MYSQL *mysql,
