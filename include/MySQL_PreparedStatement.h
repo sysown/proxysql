@@ -221,7 +221,7 @@ class MySQL_STMTs_local_v14 {
 	unsigned int get_num_backend_stmts() { return backend_stmt_to_global_ids.size(); }
 	uint32_t generate_new_client_stmt_id(uint64_t global_statement_id);
 	uint64_t find_global_stmt_id_from_client(uint32_t client_stmt_id);
-	void remove_stmt(MYSQL_STMT* stmt);
+	void remove_stmt(MYSQL_STMT* stmt, bool fromExecutedState);
 	bool client_close(uint32_t client_statement_id);
 	MYSQL_STMT * find_backend_stmt_by_global_id(uint32_t global_statement_id) {
 		auto s=global_stmt_to_backend_stmt.find(global_statement_id);

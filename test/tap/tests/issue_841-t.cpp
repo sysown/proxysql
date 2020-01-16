@@ -186,7 +186,7 @@ int simulate_deadlock(const char* host, const char* username, const char* passwo
 
 	sem_t* sp = sem_open("mysync", O_CREAT, S_IRUSR | S_IWUSR, 0);
 	if (sp == SEM_FAILED)
-		fprintf(stderr, "TRACE : cannot create semaphor\n");
+		fprintf(stderr, "cannot create semaphor\n");
 
 	auto pid = fork();
 	if (pid == 0) {
@@ -209,7 +209,7 @@ int simulate_deadlock(const char* host, const char* username, const char* passwo
 			fprintf(stderr, "Error opening sem\n");
 		MYSQL_QUERY(mysqla, "START TRANSACTION");
 		if (sem_post(sp1))
-			fprintf(stderr, "TRACE error semaphor post\n");
+			fprintf(stderr, "error semaphor post\n");
 		if (mysql_query(mysqla, "DELETE FROM t WHERE i = 1")) {
 			exit(0);
 		}
@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
 
 	srand(time(NULL));
 
-	plan(1001);
+	plan(101);
 	diag("Testing prepared statements");
 
 	/* configuring proxysql for testing (setup) */
@@ -280,8 +280,8 @@ int main(int argc, char** argv) {
 
 	auto mem_before = query_memory(mysqladmin);
 
-	/* simlating deadloc */
-	for (int i = 0 ; i < 1000; i++) {
+	/* simulating deadloc */
+	for (int i = 0 ; i < 100; i++) {
 		simulate_deadlock(cl.host, cl.username, cl.password, cl.port);
 		ok(true, "Iteration");
 	}
@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
 	auto mem_after = query_memory(mysqladmin);
 	mysql_close(mysqladmin);
 
-	fprintf(stderr, "TRACE: mem before %d, me after %d, diff %d\n", mem_before, mem_after, mem_after - mem_before);
+	fprintf(stderr, "mem before %d, me after %d, diff %d\n", mem_before, mem_after, mem_after - mem_before);
 
 	ok(mem_after - mem_before < 500000, "Everything is ok");
 	return exit_status();

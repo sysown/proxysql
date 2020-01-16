@@ -122,4 +122,5 @@ set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ set_testing-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -O0 -ggdb -ldl -lssl -lcrypto -o set_testing-t
 
 issue_841-t: issue_841-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ issue_841-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -ggdb -std=c++11 $(MYLIBS) -ltap -pthread -ldl -lssl -lcrypto -o issue_841-t
+	g++ issue_841-t.cpp $(INCLUDEDIRS) $(LDIRS) -ggdb $(OPT) -std=c++11 $(MYLIBS) -ldl -ltap -o issue_841-t
+

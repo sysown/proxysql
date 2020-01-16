@@ -197,6 +197,8 @@ Query_Info::Query_Info() {
 	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
+	end_time=0;
+	start_time=0;
 }
 
 Query_Info::~Query_Info() {
@@ -3406,6 +3408,40 @@ handler_again:
 									PROXY_TRACE();
 								}
 							}
+							else {
+								if (CurrentQuery.mysql_stmt->mysql==NULL) {
+									proxy_warning("mysql_stmt (session %p) for global id %d was removed. Session status %d. Cannot continue. mysql_stmt %p\n", this, CurrentQuery.stmt_global_id, status, CurrentQuery.mysql_stmt);
+
+									myconn->local_stmts->remove_stmt(myconn->query.stmt, false);
+									myconn->query_close_stmt();
+
+									client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),(char*)"HY000",(char *)"Error");
+									client_myds->pkt_sid++;
+									RequestEnd(myds);
+									if (myds->myconn) {
+										myds->myconn->reduce_auto_increment_delay_token();
+										if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+											myds->DSS=STATE_NOT_INITIALIZED;
+											if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+												if (mysql_thread___reset_connection_algorithm == 2) {
+													create_new_session_and_reset_connection(myds);
+												} else {
+													myds->destroy_MySQL_Connection_From_Pool(true);
+												}
+											} else {
+												myds->return_MySQL_Connection_To_Pool();
+											}
+										} else {
+											myconn->async_state_machine=ASYNC_IDLE;
+											myds->DSS=STATE_MARIADB_GENERIC;
+										}
+									}
+									writeout();
+
+									handler_ret = 0;
+									return handler_ret;
+								}
+							}
 						}
 					}
 				}
@@ -3761,7 +3797,7 @@ handler_again:
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
 											// issue #841
-											myconn->local_stmts->remove_stmt(myconn->query.stmt);
+											myconn->local_stmts->remove_stmt(myconn->query.stmt, false);
 											myconn->query_close_stmt();
 										} else {
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
@@ -3784,7 +3820,7 @@ handler_again:
 											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 											// issue #841
-											myconn->local_stmts->remove_stmt(myconn->query.stmt);
+											myconn->local_stmts->remove_stmt(myconn->query.stmt, true);
 											myconn->query_close_stmt();
 										} else {
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");

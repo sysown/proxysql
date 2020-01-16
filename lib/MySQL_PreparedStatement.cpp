@@ -677,21 +677,32 @@ void MySQL_STMT_Manager_v14::ref_count_server(uint64_t _stmt_id ,int _v, bool lo
 		pthread_rwlock_unlock(&rwlock_);
 }
 
-void MySQL_STMTs_local_v14::remove_stmt(MYSQL_STMT* stmt) {
+void MySQL_STMTs_local_v14::remove_stmt(MYSQL_STMT* stmt, bool fromExecutedState) {
+	if (fromExecutedState)
+		GloMyStmt->ref_count_server(stmt->stmt_id, -1);
+
 	auto a = backend_stmt_to_global_ids.find(stmt->stmt_id);
 	if (a == backend_stmt_to_global_ids.end()) return;
 
 	auto global_stmt_id = a->second;
+	auto ret = global_stmt_to_client_ids.equal_range(global_stmt_id);
+
+	for (std::multimap<uint64_t,uint32_t>::iterator it=ret.first; it!=ret.second; ++it) {
+		client_close(it->second);
+		proxy_warning("Error in prepared statement. Closing clients global_stmt_id %d-%d, client_stmt_id %d\n", it->first, global_stmt_id, it->second);
+	}
+
 	global_stmt_to_backend_ids.erase(global_stmt_id);
+	global_stmt_to_backend_stmt.erase(global_stmt_id);
+	client_stmt_to_global_ids.erase(stmt->stmt_id);
+	global_stmt_to_client_ids.erase(global_stmt_id);
+	backend_stmt_to_global_ids.erase(stmt->stmt_id);
 
 	if (stmt->mysql) {
 		stmt->mysql->stmts =
 			list_delete(stmt->mysql->stmts, &stmt->list);
 	}
-
-	global_stmt_to_backend_stmt.erase(global_stmt_id);
-	backend_stmt_to_global_ids.erase(global_stmt_id);
-	GloMyStmt->ref_count_server(global_stmt_id, -1);
+	proxy_warning("Error in prepared statement %d  %p. Called from %d, Removed.\n", stmt->stmt_id, stmt, fromExecutedState);
 }
 
 MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
