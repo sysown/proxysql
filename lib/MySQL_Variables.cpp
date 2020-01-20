@@ -5,51 +5,6 @@
 #include "MySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
-int MySQL_Variables::session_by_var[SQL_NAME_LAST] = {
-	SETTING_SQL_SAFE_UPDATES,
-	SETTING_SQL_SELECT_LIMIT,
-	SETTING_SQL_MODE,
-	SETTING_TIME_ZONE,
-	SETTING_CHARACTER_SET_RESULTS,
-	SETTING_ISOLATION_LEVEL,
-	SETTING_TRANSACTION_READ,
-	SETTING_SESSION_TRACK_GTIDS,
-	SETTING_SQL_AUTO_IS_NULL
-/*	SETTING_COLLATION_CONNECTION,
-	SETTING_NET_WRITE_TIMEOUT,
-	SETTING_MAX_JOIN_SIZE*/
-};
-
-bool MySQL_Variables::quotes[SQL_NAME_LAST] = {
-	true,  // SQL_SAFE_UPDATES
-	true,  // SQL_SELECT_LIMIT
-	false, // SQL_MODE
-	false, // SQL_TIME_ZONE
-	true,  // CHARACTER_SET_RESULTS
-	false, // ISOLATION_LEVEL
-	false, // TRANSACTION_READ
-	true,  // SESSION_TRACK_GTIDS
-	true   // SQL_AUTO_IS_NULL
-/*	false, // COLLATION_CONNECTION
-	true,  // NET_WRITE_TIMEOUT
-	true   // MAX_JOIN_SIZE*/
-};
-
-bool MySQL_Variables::set_transaction[SQL_NAME_LAST] = {
-	false, // SQL_SAFE_UPDATES
-	false, // SQL_SELECT_LIMIT
-	false, // SQL_MODE
-	false, // SQL_TIME_ZONE
-	false, // CHARACTER_SET_RESULTS
-	true,  // ISOLATION_LEVEL
-	true,  // TRANSACTION_READ
-	false, // SESSION_TRACK_GTIDS
-	false  // SQL_AUTO_IS_NULL
-/*	false, // COLLATION_CONNECTION
-	false, // NET_WRITE_TIMEOUT
-	false  // MAX_JOIN_SIZE */
-};
-
 int MySQL_Variables::var_by_session[NONE] = {
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
@@ -215,16 +170,16 @@ bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
 	auto ret = session->mysql_variables->verify_generic_variable(
 		&session->mybe->server_myds->myconn->variables[idx].hash,
 		&session->mybe->server_myds->myconn->variables[idx].value,
-		mysql_thread___default_sql_safe_updates,
+		mysql_thread___default_variables[idx],
 		&session->client_myds->myconn->variables[idx].hash,
 		session->client_myds->myconn->variables[idx].value,
-		static_cast<session_status>(MySQL_Variables::session_by_var[idx])
+		mysql_tracked_variables[idx].status
 	);
 }
 
 bool Generic_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
-	bool q = MySQL_Variables::quotes[idx];
-	bool st = MySQL_Variables::set_transaction[idx];
+	bool q = mysql_tracked_variables[idx].quote;
+	bool st = mysql_tracked_variables[idx].set_transaction;
 	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, Variable::set_name[idx], session->mysql_variables->server_get_value(idx), q, st);
 	return ret;
 }

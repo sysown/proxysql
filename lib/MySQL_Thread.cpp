@@ -35,6 +35,8 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
+extern mysql_variable_st mysql_tracked_variables[];
+
 const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	const MARIADB_CHARSET_INFO * c = mariadb_compiled_charsets;
 	do {
@@ -458,16 +460,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"init_connect",
 	(char *)"ldap_user_variable",
 	(char *)"add_ldap_user_comment",
-	(char *)"default_sql_mode",
-	(char *)"default_time_zone",
-	(char *)"default_isolation_level",
-	(char *)"default_transaction_read",
 	(char *)"default_tx_isolation",
-	(char *)"default_character_set_results",
-	(char *)"default_session_track_gtids",
-	(char *)"default_sql_auto_is_null",
-	(char *)"default_sql_select_limit",
-	(char *)"default_sql_safe_updates",
 	(char *)"default_collation_connection",
 	(char *)"default_net_write_timeout",
 	(char *)"default_max_join_size",
@@ -574,16 +567,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.init_connect=NULL;
 	variables.ldap_user_variable=NULL;
 	variables.add_ldap_user_comment=NULL;
-	variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
-	variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
-	variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
-	variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
+	}
 	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
-	variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
-	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
-	variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
-	variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT);
-	variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES);
 	variables.default_collation_connection=strdup((char *)MYSQL_DEFAULT_COLLATION_CONNECTION);
 	variables.default_net_write_timeout=strdup((char *)MYSQL_DEFAULT_NET_WRITE_TIMEOUT);
 	variables.default_max_join_size=strdup((char *)MYSQL_DEFAULT_MAX_JOIN_SIZE);
@@ -789,65 +776,21 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 		}
 	}
 	if (!strncmp(name,"default_",8)) {
-		if (!strcmp(name,"default_sql_mode")) {
-			if (variables.default_sql_mode==NULL) {
-				variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
+		for (int i=0; i<SQL_NAME_LAST; i++) {
+			char buf[128];
+			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
+			if (!strcmp(name,buf)) {
+				if (variables.default_variables[i]==NULL) {
+					variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
+				}
+				return strdup(variables.default_variables[i]);
 			}
-			return strdup(variables.default_sql_mode);
-		}
-		if (!strcmp(name,"default_time_zone")) {
-			if (variables.default_time_zone==NULL) {
-				variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
-			}
-			return strdup(variables.default_time_zone);
-		}
-		if (!strcmp(name,"default_isolation_level")) {
-			if (variables.default_isolation_level==NULL) {
-				variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
-			}
-			return strdup(variables.default_isolation_level);
 		}
 		if (!strcmp(name,"default_tx_isolation")) {
 			if (variables.default_tx_isolation==NULL) {
 				variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 			}
 			return strdup(variables.default_tx_isolation);
-		}
-		if (!strcmp(name,"default_transaction_read")) {
-			if (variables.default_transaction_read==NULL) {
-				variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
-			}
-			return strdup(variables.default_transaction_read);
-		}
-		if (!strcmp(name,"default_character_set_results")) {
-			if (variables.default_character_set_results==NULL) {
-				variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
-			}
-			return strdup(variables.default_character_set_results);
-		}
-		if (!strcmp(name,"default_session_track_gtids")) {
-			if (variables.default_session_track_gtids==NULL) {
-				variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
-			}
-			return strdup(variables.default_session_track_gtids);
-		}
-		if (!strcmp(name,"default_sql_auto_is_null")) {
-			if (variables.default_sql_auto_is_null==NULL) {
-				variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
-			}
-			return strdup(variables.default_sql_auto_is_null);
-		}
-		if (!strcmp(name,"default_sql_select_limit")) {
-			if (variables.default_sql_select_limit==NULL) {
-				variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT);
-			}
-			return strdup(variables.default_sql_select_limit);
-		}
-		if (!strcmp(name,"default_sql_safe_updates")) {
-			if (variables.default_sql_safe_updates==NULL) {
-				variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES);
-			}
-			return strdup(variables.default_sql_safe_updates);
 		}
 		if (!strcmp(name,"default_collation_connection")) {
 			if (variables.default_collation_connection==NULL) {
@@ -1135,65 +1078,16 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			return strdup(variables.add_ldap_user_comment);
 		}
 	}
-	if (!strcasecmp(name,"default_sql_mode")) {
-		if (variables.default_sql_mode==NULL) {
-			variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE);
-		}
-		return strdup(variables.default_sql_mode);
-	}
-	if (!strcasecmp(name,"default_time_zone")) {
-		if (variables.default_time_zone==NULL) {
-			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE);
-		}
-		return strdup(variables.default_time_zone);
-	}
-	if (!strcasecmp(name,"default_isolation_level")) {
-		if (variables.default_isolation_level==NULL) {
-			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL);
-		}
-		return strdup(variables.default_isolation_level);
-	}
 	if (!strcasecmp(name,"default_tx_isolation")) {
 		if (variables.default_tx_isolation==NULL) {
 			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 		}
 		return strdup(variables.default_tx_isolation);
 	}
-	if (!strcasecmp(name,"default_transaction_read")) {
-		if (variables.default_transaction_read==NULL) {
-			variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ);
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		if (variables.default_variables[i]==NULL) {
+			variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
 		}
-		return strdup(variables.default_transaction_read);
-	}
-	if (!strcasecmp(name,"default_character_set_results")) {
-		if (variables.default_character_set_results==NULL) {
-			variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS);
-		}
-		return strdup(variables.default_character_set_results);
-	}
-	if (!strcasecmp(name,"default_session_track_gtids")) {
-		if (variables.default_session_track_gtids==NULL) {
-			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
-		}
-		return strdup(variables.default_session_track_gtids);
-	}
-	if (!strcasecmp(name,"default_sql_auto_is_null")) {
-		if (variables.default_sql_auto_is_null==NULL) {
-			variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL);
-		}
-		return strdup(variables.default_sql_auto_is_null);
-	}
-	if (!strcasecmp(name,"default_sql_select_limit")) {
-		if (variables.default_sql_select_limit==NULL) {
-			variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT);
-		}
-		return strdup(variables.default_sql_select_limit);
-	}
-	if (!strcasecmp(name,"default_sql_safe_updates")) {
-		if (variables.default_sql_safe_updates==NULL) {
-			variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES);
-		}
-		return strdup(variables.default_sql_safe_updates);
 	}
 	if (!strcasecmp(name,"default_collation_connection")) {
 		if (variables.default_collation_connection==NULL) {
@@ -2536,45 +2430,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
-	if (!strcasecmp(name,"default_sql_mode")) {
-		if (variables.default_sql_mode) free(variables.default_sql_mode);
-		variables.default_sql_mode=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_sql_mode=strdup(value);
-		}
-		if (variables.default_sql_mode==NULL) {
-			variables.default_sql_mode=strdup((char *)MYSQL_DEFAULT_SQL_MODE); // default
-		}
-		return true;
-	}
-
-	if (!strcasecmp(name,"default_time_zone")) {
-		if (variables.default_time_zone) free(variables.default_time_zone);
-		variables.default_time_zone=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_time_zone=strdup(value);
-		}
-		if (variables.default_time_zone==NULL) {
-			variables.default_time_zone=strdup((char *)MYSQL_DEFAULT_TIME_ZONE); // default
-		}
-		return true;
-	}
-
-	if (!strcasecmp(name,"default_isolation_level")) {
-		if (variables.default_isolation_level) free(variables.default_isolation_level);
-		variables.default_isolation_level=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_isolation_level=strdup(value);
-		}
-		if (variables.default_isolation_level==NULL) {
-			variables.default_isolation_level=strdup((char *)MYSQL_DEFAULT_ISOLATION_LEVEL); // default
-		}
-		return true;
-	}
-
 	if (!strcasecmp(name,"default_tx_isolation")) {
 		if (variables.default_tx_isolation) free(variables.default_tx_isolation);
 		variables.default_tx_isolation=NULL;
@@ -2588,83 +2443,23 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		return true;
 	}
 
-	if (!strcasecmp(name,"default_transaction_read")) {
-		if (variables.default_transaction_read) free(variables.default_transaction_read);
-		variables.default_transaction_read=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_transaction_read=strdup(value);
+
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		char buf[128];
+		sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
+		if (!strcasecmp(name,buf)) {
+			if (variables.default_variables[i]) free(variables.default_variables[i]);
+			variables.default_variables[i] = NULL;
+			if (vallen) {
+				if (strcmp(value,"(null)"))
+					variables.default_variables[i] = strdup(value);
+			}
+			if (variables.default_variables[i] == NULL)
+				variables.default_variables[i] = strdup(mysql_tracked_variables[i].default_value);
+			return true;
 		}
-		if (variables.default_transaction_read==NULL) {
-			variables.default_transaction_read=strdup((char *)MYSQL_DEFAULT_TRANSACTION_READ); // default
-		}
-		return true;
 	}
 
-	if (!strcasecmp(name,"default_character_set_results")) {
-		if (variables.default_character_set_results) free(variables.default_character_set_results);
-		variables.default_character_set_results=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_character_set_results=strdup(value);
-		}
-		if (variables.default_character_set_results==NULL) {
-			variables.default_character_set_results=strdup((char *)MYSQL_DEFAULT_CHARACTER_SET_RESULTS); // default
-		}
-		return true;
-	}
-
-	if (!strcasecmp(name,"default_session_track_gtids")) {
-		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
-		variables.default_session_track_gtids=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_session_track_gtids=strdup(value);
-		}
-		if (variables.default_session_track_gtids==NULL) {
-			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS); // default
-		}
-		return true;
-	}
-
-	if (!strcasecmp(name,"default_sql_auto_is_null")) {
-		if (variables.default_sql_auto_is_null) free(variables.default_sql_auto_is_null);
-		variables.default_sql_auto_is_null=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_sql_auto_is_null=strdup(value);
-		}
-		if (variables.default_sql_auto_is_null==NULL) {
-			variables.default_sql_auto_is_null=strdup((char *)MYSQL_DEFAULT_SQL_AUTO_IS_NULL); // default
-		}
-		return true;
-	}
-
-	if (!strcasecmp(name,"default_sql_select_limit")) {
-		if (variables.default_sql_select_limit) free(variables.default_sql_select_limit);
-		variables.default_sql_select_limit=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_sql_select_limit=strdup(value);
-		}
-		if (variables.default_sql_select_limit==NULL) {
-			variables.default_sql_select_limit=strdup((char *)MYSQL_DEFAULT_SQL_SELECT_LIMIT); // default
-		}
-		return true;
-	}
-
-	if (!strcasecmp(name,"default_sql_safe_updates")) {
-		if (variables.default_sql_safe_updates) free(variables.default_sql_safe_updates);
-		variables.default_sql_safe_updates=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_sql_safe_updates=strdup(value);
-		}
-		if (variables.default_sql_safe_updates==NULL) {
-			variables.default_sql_safe_updates=strdup((char *)MYSQL_DEFAULT_SQL_SAFE_UPDATES); // default
-		}
-		return true;
-	}
 
 	if (!strcasecmp(name,"default_collation_connection")) {
 		if (variables.default_collation_connection) free(variables.default_collation_connection);
@@ -3218,18 +3013,38 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 	return false;
 }
 
+
+// return variables from both mysql_thread_variables_names AND mysql_tracked_variables
 char ** MySQL_Threads_Handler::get_variables_list() {
 	size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
-	char **ret=(char **)malloc(sizeof(char *)*l);
-	for (i=0;i<l;i++) {
-		ret[i]=(i==l-1 ? NULL : strdup(mysql_thread_variables_names[i]));
+	char **ret=(char **)malloc(sizeof(char *)*l+SQL_NAME_LAST);
+	for (i=0; i < SQL_NAME_LAST ; i++) {
+		char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
+		sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
+		ret[i] == m;
+	}
+	for (i=SQL_NAME_LAST;i<l+SQL_NAME_LAST;i++) {
+		ret[i]=(i == l+SQL_NAME_LAST-1 ? NULL : strdup(mysql_thread_variables_names[i]));
 	}
 	return ret;
 }
 
 // Returns true if the given name is the name of an existing mysql variable
+// scan both mysql_thread_variables_names AND mysql_tracked_variables
 bool MySQL_Threads_Handler::has_variable(const char *name) {
+	if (strlen(name) > 8) {
+		if (strncmp(name, "default_", 8)) {
+			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
+				size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
+				if (strlen(name) == (var_len+8)) {
+					if (!strncmp(name+8, (mysql_tracked_variables[i].internal_variable_name), var_len)) {
+						return true;
+					}
+				}
+			}
+		}
+	}
 	size_t no_vars = sizeof(mysql_thread_variables_names) / sizeof(char *);
 	for (unsigned int i = 0; i < no_vars-1 ; ++i) {
 		size_t var_len = strlen(mysql_thread_variables_names[i]);
@@ -3357,16 +3172,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
-	if (variables.default_sql_mode) free(variables.default_sql_mode);
-	if (variables.default_time_zone) free(variables.default_time_zone);
-	if (variables.default_isolation_level) free(variables.default_isolation_level);
 	if (variables.default_tx_isolation) free(variables.default_tx_isolation);
-	if (variables.default_transaction_read) free(variables.default_transaction_read);
-	if (variables.default_character_set_results) free(variables.default_character_set_results);
-	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
-	if (variables.default_sql_auto_is_null) free(variables.default_sql_auto_is_null);
-	if (variables.default_sql_select_limit) free(variables.default_sql_select_limit);
-	if (variables.default_sql_safe_updates) free(variables.default_sql_safe_updates);
 	if (variables.default_collation_connection) free(variables.default_collation_connection);
 	if (variables.default_net_write_timeout) free(variables.default_net_write_timeout);
 	if (variables.default_max_join_size) free(variables.default_max_join_size);
@@ -3376,6 +3182,12 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
 	if (variables.ssl_p2s_key) free(variables.ssl_p2s_key);
 	if (variables.ssl_p2s_cipher) free(variables.ssl_p2s_cipher);
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		if (variables.default_variables[i]) {
+			free(variables.default_variables[i]);
+			variables.default_variables[i]=NULL;
+		}
+	}
 	free(mysql_threads);
 	mysql_threads=NULL;
 #ifdef IDLE_THREADS
@@ -3489,16 +3301,15 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
-	if (mysql_thread___default_sql_mode) { free(mysql_thread___default_sql_mode); mysql_thread___default_sql_mode=NULL; }
-	if (mysql_thread___default_time_zone) { free(mysql_thread___default_time_zone); mysql_thread___default_time_zone=NULL; }
-	if (mysql_thread___default_isolation_level) { free(mysql_thread___default_isolation_level); mysql_thread___default_isolation_level=NULL; }
 	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation=NULL; }
-	if (mysql_thread___default_transaction_read) { free(mysql_thread___default_transaction_read); mysql_thread___default_transaction_read=NULL; }
-	if (mysql_thread___default_character_set_results) { free(mysql_thread___default_character_set_results); mysql_thread___default_character_set_results=NULL; }
-	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
-	if (mysql_thread___default_sql_auto_is_null) { free(mysql_thread___default_sql_auto_is_null); mysql_thread___default_sql_auto_is_null=NULL; }
-	if (mysql_thread___default_sql_select_limit) { free(mysql_thread___default_sql_select_limit); mysql_thread___default_sql_select_limit=NULL; }
-	if (mysql_thread___default_sql_safe_updates) { free(mysql_thread___default_sql_safe_updates); mysql_thread___default_sql_safe_updates=NULL; }
+
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		if (mysql_thread___default_variables[i]) {
+			free(mysql_thread___default_variables[i]);
+			mysql_thread___default_variables[i] = NULL;
+		}
+	}
+
 	if (mysql_thread___default_collation_connection) { free(mysql_thread___default_collation_connection); mysql_thread___default_collation_connection=NULL; }
 	if (mysql_thread___default_net_write_timeout) { free(mysql_thread___default_net_write_timeout); mysql_thread___default_net_write_timeout=NULL; }
 	if (mysql_thread___default_max_join_size) { free(mysql_thread___default_max_join_size); mysql_thread___default_max_join_size=NULL; }
@@ -3559,16 +3370,9 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-
-	sess->mysql_variables->client_set_value(SQL_SELECT_LIMIT, mysql_thread___default_sql_select_limit);
-	sess->mysql_variables->client_set_value(SQL_SAFE_UPDATES, mysql_thread___default_sql_safe_updates);
-	sess->mysql_variables->client_set_value(SQL_SQL_MODE, mysql_thread___default_sql_mode);
-	sess->mysql_variables->client_set_value(SQL_TIME_ZONE, mysql_thread___default_time_zone);
-	sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, mysql_thread___default_character_set_results);
-	sess->mysql_variables->client_set_value(SQL_ISOLATION_LEVEL, mysql_thread___default_isolation_level);
-	sess->mysql_variables->client_set_value(SQL_TRANSACTION_READ, mysql_thread___default_transaction_read);
-	sess->mysql_variables->client_set_value(SQL_SESSION_TRACK_GTIDS, mysql_thread___default_session_track_gtids);
-	sess->mysql_variables->client_set_value(SQL_SQL_AUTO_IS_NULL, mysql_thread___default_sql_auto_is_null);
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		sess->mysql_variables->client_set_value(i, mysql_thread___default_variables[i]);
+	}
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;
@@ -4680,26 +4484,18 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ldap_user_variable=GloMTH->get_variable_string((char *)"ldap_user_variable");
 	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
 	mysql_thread___add_ldap_user_comment=GloMTH->get_variable_string((char *)"add_ldap_user_comment");
-	if (mysql_thread___default_sql_mode) free(mysql_thread___default_sql_mode);
-	mysql_thread___default_sql_mode=GloMTH->get_variable_string((char *)"default_sql_mode");
-	if (mysql_thread___default_time_zone) free(mysql_thread___default_time_zone);
-	mysql_thread___default_time_zone=GloMTH->get_variable_string((char *)"default_time_zone");
-	if (mysql_thread___default_isolation_level) free(mysql_thread___default_isolation_level);
-	mysql_thread___default_isolation_level=GloMTH->get_variable_string((char *)"default_isolation_level");
 	if (mysql_thread___default_tx_isolation) free(mysql_thread___default_tx_isolation);
 	mysql_thread___default_tx_isolation=GloMTH->get_variable_string((char *)"default_tx_isolation");
-	if (mysql_thread___default_transaction_read) free(mysql_thread___default_transaction_read);
-	mysql_thread___default_transaction_read=GloMTH->get_variable_string((char *)"default_transaction_read");
-	if (mysql_thread___default_character_set_results) free(mysql_thread___default_character_set_results);
-	mysql_thread___default_character_set_results=GloMTH->get_variable_string((char *)"default_character_set_results");
-	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
-	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
-	if (mysql_thread___default_sql_auto_is_null) free(mysql_thread___default_sql_auto_is_null);
-	mysql_thread___default_sql_auto_is_null=GloMTH->get_variable_string((char *)"default_sql_auto_is_null");
-	if (mysql_thread___default_sql_select_limit) free(mysql_thread___default_sql_select_limit);
-	mysql_thread___default_sql_select_limit=GloMTH->get_variable_string((char *)"default_sql_select_limit");
-	if (mysql_thread___default_sql_safe_updates) free(mysql_thread___default_sql_safe_updates);
-	mysql_thread___default_sql_safe_updates=GloMTH->get_variable_string((char *)"default_sql_safe_updates");
+
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		if (mysql_thread___default_variables[i]) {
+			free(mysql_thread___default_variables[i]);
+		}
+		char buf[128];
+		sprintf(buf,"default_%s",mysql_tracked_variables[i].internal_variable_name);
+		mysql_thread___default_variables[i] = GloMTH->get_variable_string(buf);
+	}
+
 	if (mysql_thread___default_collation_connection) free(mysql_thread___default_collation_connection);
 	mysql_thread___default_collation_connection=GloMTH->get_variable_string((char *)"default_collation_connection");
 	if (mysql_thread___default_net_write_timeout) free(mysql_thread___default_net_write_timeout);
