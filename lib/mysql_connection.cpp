@@ -9,17 +9,12 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
-const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level",
-	"session transaction read", "session_track_gtids", "sql_auto_is_null"};
-const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "isolation_level",
-	"transaction_read", "session_track_gtids", "sql_auto_is_null"};
-
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
-	j["backends"][conn_num]["conn"][Variable::proxysql_internal_session_name[idx]] = std::string(value);
+	j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value);
 }
 
 void Variable::fill_client_internal_session(json &j, int idx) {
-	j["conn"][Variable::proxysql_internal_session_name[idx]] = value;
+	j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
 }
 
 #define PROXYSQL_USE_RESULT

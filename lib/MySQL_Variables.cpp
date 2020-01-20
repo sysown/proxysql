@@ -180,6 +180,7 @@ bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
 bool Generic_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 	bool q = mysql_tracked_variables[idx].quote;
 	bool st = mysql_tracked_variables[idx].set_transaction;
-	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, Variable::set_name[idx], session->mysql_variables->server_get_value(idx), q, st);
+	const char * set_var_name = mysql_tracked_variables[idx].set_variable_name;
+	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, session->mysql_variables->server_get_value(idx), q, st);
 	return ret;
 }

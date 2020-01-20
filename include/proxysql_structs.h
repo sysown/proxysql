@@ -986,11 +986,6 @@ extern __thread unsigned int g_seed;
 #ifndef MYSQL_TRACKED_VARIABLES
 #define MYSQL_TRACKED_VARIABLES
 #ifdef PROXYSQL_EXTERN
-//	SQL_CHARACTER_SET_RESULTS,
-//	SQL_ISOLATION_LEVEL,
-//	SQL_TRANSACTION_READ,
-//	SQL_SESSION_TRACK_GTIDS,
-//	SQL_SQL_AUTO_IS_NULL,
 mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_SAFE_UPDATES, SETTING_SQL_SAFE_UPDATES ,              true,  false, false, (char *)"sql_safe_update",  (char *)"sql_safe_update", (char *)"OFF" } ,
     { SQL_SELECT_LIMIT, SETTING_SQL_SELECT_LIMIT ,              true,  false, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
