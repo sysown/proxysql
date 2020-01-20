@@ -20,6 +20,9 @@ MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 		case SQL_TRANSACTION_READ:
 		case SQL_SESSION_TRACK_GTIDS:
 		case SQL_SQL_AUTO_IS_NULL:
+		case SQL_COLLATION_CONNECTION:
+		case SQL_NET_WRITE_TIMEOUT:
+		case SQL_MAX_JOIN_SIZE:
 			updaters[i] = new Generic_Updater();
 			break;
 		default:
