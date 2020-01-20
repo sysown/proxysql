@@ -357,9 +357,6 @@ class MySQL_Threads_Handler
 		char *ldap_user_variable;
 		char *add_ldap_user_comment;
 		char *default_tx_isolation;
-		char *default_collation_connection;
-		char *default_net_write_timeout;
-		char *default_max_join_size;
 		char *default_variables[SQL_NAME_LAST];
 		char *firewall_whitelist_errormsg;
 #ifdef DEBUG
