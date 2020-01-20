@@ -128,17 +128,13 @@ class MySQL_Session
 	bool handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
-	bool handler_again___status_SETTING_CHARSET(int *_rc);
 	bool handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *);
-	bool handler_again___status_SETTING_SQL_SELECT_LIMIT(int *);
-	bool handler_again___status_SETTING_SQL_SAFE_UPDATES(int *);
 	bool handler_again___status_SETTING_COLLATION_CONNECTION(int *);
 	bool handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *);
 	bool handler_again___status_SETTING_MAX_JOIN_SIZE(int *);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
-	bool handler_again___status_CHANGING_CHARSET(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	void init();
 	void reset();
@@ -147,6 +143,7 @@ class MySQL_Session
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
+	bool handler_again___status_CHANGING_CHARSET(int *);
 	std::stack<enum session_status> previous_status;
 	void * operator new(size_t);
 	void operator delete(void *);

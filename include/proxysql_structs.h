@@ -193,6 +193,9 @@ enum session_status {
 	SETTING_ISOLATION_LEVEL,
 	SETTING_TRANSACTION_READ,
 	SETTING_CHARACTER_SET_RESULTS,
+	SETTING_CHARACTER_SET_CONNECTION,
+	SETTING_CHARACTER_SET_CLIENT,
+	SETTING_CHARACTER_SET_DATABASE,
 	SETTING_SESSION_TRACK_GTIDS,
 	SETTING_SQL_AUTO_IS_NULL,
 	SETTING_SQL_SELECT_LIMIT,
@@ -207,6 +210,7 @@ enum session_status {
 	PROCESSING_STMT_EXECUTE,
 	SETTING_VARIABLE,
 	SETTING_MULTIPLE_VARIABLES,
+	SETTING_SET_NAMES,
 	NONE
 };
 
@@ -733,7 +737,6 @@ __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
-__thread unsigned int mysql_thread___default_charset;
 __thread unsigned int mysql_thread___handle_unknown_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
@@ -877,7 +880,6 @@ extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
-extern __thread unsigned int  mysql_thread___default_charset;
 extern __thread unsigned int mysql_thread___handle_unknown_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;

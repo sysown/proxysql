@@ -399,7 +399,7 @@ class MySQL_Threads_Handler
  	void wrunlock();
 	void commit();
 	char *get_variable(char *name);
-	bool set_variable(char *name, char *value);
+	bool set_variable(char *name, const char *value);
 	char **get_variables_list();
 	bool has_variable(const char * name);
 
