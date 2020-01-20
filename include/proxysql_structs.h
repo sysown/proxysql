@@ -205,8 +205,23 @@ enum session_status {
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
+	SETTING_VARIABLE,
+	SETTING_MULTIPLE_VARIABLES,
 	NONE
 };
+
+#ifdef __cplusplus
+typedef struct {
+	enum variable_name idx;     // index number
+	enum session_status status; // what status should be changed after setting this variables
+	bool quote;                 // if the variable needs to be quoted
+	bool set_transaction;       // if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
+	bool special_handling;      // if true, some special handling is required
+	char * set_variable_name;   // what variable name (or string) will be used when setting it to backend
+	char * internal_variable_name; // variable name as displayed in admin , WITHOUT "default_"
+	char * default_value;       // default value
+} mysql_variable_st;
+#endif
 
 enum mysql_data_stream_status {
 	STATE_NOT_INITIALIZED,
@@ -676,19 +691,7 @@ __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___keep_multiplexing_variables;
 __thread char *mysql_thread___init_connect;
 __thread char *mysql_thread___ldap_user_variable;
-__thread char *mysql_thread___default_sql_mode;
-__thread char *mysql_thread___default_time_zone;
-__thread char *mysql_thread___default_isolation_level;
-__thread char *mysql_thread___default_transaction_read;
 __thread char *mysql_thread___default_tx_isolation;
-__thread char *mysql_thread___default_character_set_results;
-__thread char *mysql_thread___default_session_track_gtids;
-__thread char *mysql_thread___default_sql_auto_is_null;
-__thread char *mysql_thread___default_sql_select_limit;
-__thread char *mysql_thread___default_sql_safe_updates;
-__thread char *mysql_thread___default_collation_connection;
-__thread char *mysql_thread___default_net_write_timeout;
-__thread char *mysql_thread___default_max_join_size;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___automatic_detect_sqli;
@@ -762,6 +765,7 @@ __thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
+__thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -831,19 +835,7 @@ extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___keep_multiplexing_variables;
 extern __thread char *mysql_thread___init_connect;
 extern __thread char *mysql_thread___ldap_user_variable;
-extern __thread char *mysql_thread___default_sql_mode;
-extern __thread char *mysql_thread___default_time_zone;
-extern __thread char *mysql_thread___default_isolation_level;
-extern __thread char *mysql_thread___default_transaction_read;
 extern __thread char *mysql_thread___default_tx_isolation;
-extern __thread char *mysql_thread___default_character_set_results;
-extern __thread char *mysql_thread___default_session_track_gtids;
-extern __thread char *mysql_thread___default_sql_auto_is_null;
-extern __thread char *mysql_thread___default_sql_select_limit;
-extern __thread char *mysql_thread___default_sql_safe_updates;
-extern __thread char *mysql_thread___default_collation_connection;
-extern __thread char *mysql_thread___default_net_write_timeout;
-extern __thread char *mysql_thread___default_max_join_size;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___automatic_detect_sqli;
@@ -917,6 +909,7 @@ extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
+extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
