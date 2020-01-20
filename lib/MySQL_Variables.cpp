@@ -38,6 +38,8 @@ int MySQL_Variables::var_by_session[NONE] = {
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
+	SQL_NAME_LAST,
+	SQL_NAME_LAST,
 	SQL_NAME_LAST
 };
 

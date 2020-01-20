@@ -1678,34 +1678,6 @@ bool MySQL_Session::handler_again___verify_backend(int var) {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___verify_backend_collation_connection() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.collation_connection, mybe->server_myds->myconn->options.collation_connection);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.collation_connection_int,
-		&mybe->server_myds->myconn->options.collation_connection,
-		mysql_thread___default_collation_connection,
-		&client_myds->myconn->options.collation_connection_int,
-		client_myds->myconn->options.collation_connection,
-		SETTING_COLLATION_CONNECTION
-	);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___verify_backend_net_write_timeout() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.net_write_timeout, mybe->server_myds->myconn->options.net_write_timeout);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.net_write_timeout_int,
-		&mybe->server_myds->myconn->options.net_write_timeout,
-		mysql_thread___default_net_write_timeout,
-		&client_myds->myconn->options.net_write_timeout_int,
-		client_myds->myconn->options.net_write_timeout,
-		SETTING_NET_WRITE_TIMEOUT
-	);
-	return ret;
-}
-
 bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 	if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS != mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) {
 
@@ -1731,20 +1703,6 @@ bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 		NEXT_IMMEDIATE_NEW(SETTING_MULTI_STMT);
 	}
 	return false;
-}
-
-bool MySQL_Session::handler_again___verify_backend_max_join_size() {
-	bool ret = false;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.max_join_size, mybe->server_myds->myconn->options.max_join_size);
-	ret = handler_again___verify_backend__generic_variable(
-		&mybe->server_myds->myconn->options.max_join_size_int,
-		&mybe->server_myds->myconn->options.max_join_size,
-		mysql_thread___default_max_join_size,
-		&client_myds->myconn->options.max_join_size_int,
-		client_myds->myconn->options.max_join_size,
-		SETTING_MAX_JOIN_SIZE
-	);
-	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_init_connect() {
@@ -3783,15 +3741,6 @@ handler_again:
 								}
 
 								if (handler_again___verify_backend_sql_log_bin()) {
-									goto handler_again;
-								}
-								if (handler_again___verify_backend_collation_connection()) {
-									goto handler_again;
-								}
-								if (handler_again___verify_backend_net_write_timeout()) {
-									goto handler_again;
-								}
-								if (handler_again___verify_backend_max_join_size()) {
 									goto handler_again;
 								}
 								if (handler_again___verify_backend_multi_statement()) {

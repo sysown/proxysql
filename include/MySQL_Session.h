@@ -114,16 +114,7 @@ class MySQL_Session
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_backend_sql_log_bin();
-	bool handler_again___verify_backend_time_zone();
-	bool handler_again___verify_backend_isolation_level();
-	bool handler_again___verify_backend_transaction_read();
 	bool handler_again___verify_backend_tx_isolation();
-	bool handler_again___verify_backend_character_set_results();
-	bool handler_again___verify_backend_session_track_gtids();
-	bool handler_again___verify_backend_sql_auto_is_null();
-	bool handler_again___verify_backend_collation_connection();
-	bool handler_again___verify_backend_net_write_timeout();
-	bool handler_again___verify_backend_max_join_size();
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);

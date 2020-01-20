@@ -156,9 +156,9 @@ enum variable_name {
 	SQL_TRANSACTION_READ,
 	SQL_SESSION_TRACK_GTIDS,
 	SQL_SQL_AUTO_IS_NULL,
-/*	SQL_COLLATION_CONNECTION,
+	SQL_COLLATION_CONNECTION,
 	SQL_NET_WRITE_TIMEOUT,
-	SQL_MAX_JOIN_SIZE,*/
+	SQL_MAX_JOIN_SIZE,
 	SQL_NAME_LAST
 };
 
@@ -196,6 +196,8 @@ enum session_status {
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
+	SETTING_VARIABLE,
+	SETTING_MULTIPLE_VARIABLES,
 	NONE
 };
 
@@ -680,9 +682,6 @@ __thread char *mysql_thread___keep_multiplexing_variables;
 __thread char *mysql_thread___init_connect;
 __thread char *mysql_thread___ldap_user_variable;
 __thread char *mysql_thread___default_tx_isolation;
-__thread char *mysql_thread___default_collation_connection;
-__thread char *mysql_thread___default_net_write_timeout;
-__thread char *mysql_thread___default_max_join_size;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___automatic_detect_sqli;
@@ -827,9 +826,6 @@ extern __thread char *mysql_thread___keep_multiplexing_variables;
 extern __thread char *mysql_thread___init_connect;
 extern __thread char *mysql_thread___ldap_user_variable;
 extern __thread char *mysql_thread___default_tx_isolation;
-extern __thread char *mysql_thread___default_collation_connection;
-extern __thread char *mysql_thread___default_net_write_timeout;
-extern __thread char *mysql_thread___default_max_join_size;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___automatic_detect_sqli;
@@ -978,6 +974,9 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ,           false, true,  true,  (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" } ,
 	{ SQL_SESSION_TRACK_GTIDS, SETTING_SESSION_TRACK_GTIDS,     true, false, false, (char *)"session_track_gtids" , (char *)"session_track_gtids" , (char *)"OFF" } ,
     { SQL_SQL_AUTO_IS_NULL, SETTING_SQL_AUTO_IS_NULL,           true, false, false, (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" } ,
+    { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"" } ,
+    { SQL_NET_WRITE_TIMEOUT, SETTING_NET_WRITE_TIMEOUT,         false, false, false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" } ,
+    { SQL_MAX_JOIN_SIZE, SETTING_MAX_JOIN_SIZE,                 false, false, false, (char *)"max_join_size", (char *)"max_join_size", (char *)"18446744073709551615" } ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];
