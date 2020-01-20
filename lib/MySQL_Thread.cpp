@@ -2941,10 +2941,10 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	for (i=0; i < SQL_NAME_LAST ; i++) {
 		char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
 		sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
-		ret[i] == m;
+		ret[i] = m;
 	}
 	for (i=SQL_NAME_LAST;i<l+SQL_NAME_LAST;i++) {
-		ret[i]=(i == l+SQL_NAME_LAST-1 ? NULL : strdup(mysql_thread_variables_names[i]));
+		ret[i]=(i == l+SQL_NAME_LAST-1 ? NULL : strdup(mysql_thread_variables_names[i-SQL_NAME_LAST]));
 	}
 	return ret;
 }
