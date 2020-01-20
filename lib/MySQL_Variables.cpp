@@ -5,6 +5,7 @@
 #include "MySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
+/*
 int MySQL_Variables::var_by_session[NONE] = {
 	SQL_NAME_LAST,
 	SQL_NAME_LAST,
@@ -42,6 +43,7 @@ int MySQL_Variables::var_by_session[NONE] = {
 	SQL_NAME_LAST,
 	SQL_NAME_LAST
 };
+*/
 
 MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 	assert(_session);
@@ -155,16 +157,25 @@ bool MySQL_Variables::verify_generic_variable(uint32_t *be_int, char **be_var, c
 	return false;
 }
 
-bool MySQL_Variables::update_variable(int &_rc) {
-	auto idx = MySQL_Variables::var_by_session[session->status];
+bool MySQL_Variables::update_variable(session_status status, int &_rc) {
+	int idx = SQL_NAME_LAST;
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		if (mysql_tracked_variables[i].status == status) {
+			idx = i;
+			break;
+		}
+	}
+	assert(idx != SQL_NAME_LAST);
 	updaters[idx]->update_server_variable(session, idx, _rc);
 }
 
 bool MySQL_Variables::verify_variable(int idx) {
 	int rc = 0;
 	auto ret = updaters[idx]->verify_variables(session, idx);
-	if (ret)
-		update_variable(rc);
+	if (ret) {
+		// FIXME
+		//update_variable(rc);
+	}
 	return ret;
 }
 
@@ -177,12 +188,14 @@ bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
 		session->client_myds->myconn->variables[idx].value,
 		mysql_tracked_variables[idx].status
 	);
+	return ret;
 }
 
 bool Generic_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
-	bool q = mysql_tracked_variables[idx].quote;
+	bool no_quote = true;
+	if (mysql_tracked_variables[idx].quote) no_quote = false;
 	bool st = mysql_tracked_variables[idx].set_transaction;
 	const char * set_var_name = mysql_tracked_variables[idx].set_variable_name;
-	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, session->mysql_variables->server_get_value(idx), q, st);
+	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, session->mysql_variables->server_get_value(idx), no_quote, st);
 	return ret;
 }

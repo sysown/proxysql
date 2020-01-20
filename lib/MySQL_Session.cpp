@@ -953,9 +953,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
-	j["conn"]["collation_connection"] = ( client_myds->myconn->options.collation_connection ? client_myds->myconn->options.collation_connection : "") ;
-	j["conn"]["net_write_timeout"] = ( client_myds->myconn->options.net_write_timeout ? client_myds->myconn->options.net_write_timeout : "") ;
-	j["conn"]["max_join_size"] = ( client_myds->myconn->options.max_join_size ? client_myds->myconn->options.max_join_size : "") ;
 	j["conn"]["charset"] = client_myds->myconn->options.charset;
 	j["conn"]["sql_log_bin"] = client_myds->myconn->options.sql_log_bin;
 	j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
@@ -1000,9 +997,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["questions"] = _myconn->statuses.questions;
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
-				j["backends"][i]["conn"]["collation_connection"] = ( _myconn->options.collation_connection ? _myconn->options.collation_connection : "") ;
-				j["backends"][i]["conn"]["net_write_timeout"] = ( _myconn->options.net_write_timeout ? _myconn->options.net_write_timeout : "") ;
-                j["backends"][i]["conn"]["max_join_size"] = ( _myconn->options.max_join_size ? _myconn->options.max_join_size : "") ;
 				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
 				j["backends"][i]["conn"]["sql_log_bin"] = ( _myconn->options.sql_log_bin ? "ON" : "OFF" );
 				j["backends"][i]["conn"]["init_connect"] = ( _myconn->options.init_connect ? _myconn->options.init_connect : "");
@@ -1671,12 +1665,14 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 	return false;
 }
 
+/*
 bool MySQL_Session::handler_again___verify_backend(int var) {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, mysql_variables->client_get_value(var), mysql_variables->server_get_value(var));
 	ret = mysql_variables->verify_variable(var);
 	return ret;
 }
+*/
 
 bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 	if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS != mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) {
@@ -2405,28 +2401,6 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_SAFE_UPDATES(int *_rc) {
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SAFE_UPDATES", mysql_variables->server_get_value(SQL_SAFE_UPDATES), true);
 	return ret;
 }
-
-bool MySQL_Session::handler_again___status_SETTING_COLLATION_CONNECTION(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"COLLATION_CONNECTION", mybe->server_myds->myconn->options.collation_connection);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"NET_WRITE_TIMEOUT", mybe->server_myds->myconn->options.net_write_timeout, true);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_MAX_JOIN_SIZE(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"MAX_JOIN_SIZE", mybe->server_myds->myconn->options.max_join_size, true);
-	return ret;
-}
-
 
 bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	bool ret=false;
@@ -3736,6 +3710,7 @@ handler_again:
 								}
 
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
+									// FIXME: for now it seems broken
 									if(mysql_variables->verify_variable(i))
 										goto handler_again;
 								}
@@ -4290,48 +4265,15 @@ handler_again:
 		case SETTING_TRANSACTION_READ:
 		case SETTING_SESSION_TRACK_GTIDS:
 		case SETTING_SQL_AUTO_IS_NULL:
+		case SETTING_COLLATION_CONNECTION:
+		case SETTING_NET_WRITE_TIMEOUT:
+		case SETTING_MAX_JOIN_SIZE:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
-				if (mysql_variables->update_variable(rc)) {
+				if (mysql_variables->update_variable(status, rc)) {
 					goto handler_again;
 				}
 				if (rc == -1) {
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_COLLATION_CONNECTION:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_COLLATION_CONNECTION(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_NET_WRITE_TIMEOUT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_NET_WRITE_TIMEOUT(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_MAX_JOIN_SIZE:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_MAX_JOIN_SIZE(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
 					return handler_ret;
 				}
@@ -5375,59 +5317,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
 						}
-					} else if (var == "max_join_size") {
-						std::string value1 = *values;
-						int vl = strlen(value1.c_str());
-						const char *v = value1.c_str();
-						bool only_digit_chars = true;
-						for (int i=0; i<vl && only_digit_chars==true; i++) {
-							if (is_digit(v[i])==0) {
-								only_digit_chars=false;
-							}
-						}
-						if (only_digit_chars) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET max_join_size value %s\n", value1.c_str());
-							uint32_t max_join_size_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (client_myds->myconn->options.max_join_size_int != max_join_size_int) {
-								client_myds->myconn->options.max_join_size_int = max_join_size_int;
-								if (client_myds->myconn->options.max_join_size) {
-									free(client_myds->myconn->options.max_join_size);
-								}
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection max_join_size to %s\n", value1.c_str());
-								client_myds->myconn->options.max_join_size=strdup(value1.c_str());
-							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
-					} else if (var == "net_write_timeout") {
-						std::string value1 = *values;
-						int vl = strlen(value1.c_str());
-						const char *v = value1.c_str();
-						bool only_digit_chars = true;
-						for (int i=0; i<vl && only_digit_chars==true; i++) {
-							if (is_digit(v[i])==0) {
-								only_digit_chars=false;
-							}
-						}
-						if (only_digit_chars) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET net_write_timeout value %s\n", value1.c_str());
-							uint32_t net_write_timeout_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (client_myds->myconn->options.net_write_timeout_int != net_write_timeout_int) {
-								client_myds->myconn->options.net_write_timeout_int = net_write_timeout_int;
-								if (client_myds->myconn->options.net_write_timeout) {
-									free(client_myds->myconn->options.net_write_timeout);
-								}
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection net_write_timeout to %s\n", value1.c_str());
-								client_myds->myconn->options.net_write_timeout=strdup(value1.c_str());
-							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
-					} else if (var == "sql_select_limit") {
+					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") ) {
 						std::string value1 = *values;
 						int vl = strlen(value1.c_str());
 						const char *v = value1.c_str();
@@ -5438,49 +5328,37 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (!only_digit_chars) {
-							if (strcasecmp(v,"default")==0) {
-								only_digit_chars = true;
+							if (var == "sql_select_limit") { // only sql_select_limit allows value "default"
+								if (strcasecmp(v,"default")==0) {
+									only_digit_chars = true;
+								}
 							}
 						}
 						if (only_digit_chars) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET sql_select_limit value %s\n", value1.c_str());
-							uint32_t sql_select_limit_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (mysql_variables->client_get_hash(SQL_SELECT_LIMIT) != sql_select_limit_int) {
-								mysql_variables->client_set_value(SQL_SELECT_LIMIT, value1.c_str());
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection sql_select_limit to %s\n", value1.c_str());
-							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
-					} else if (var == "collation_connection") {
-						std::string value1 = *values;
-						int vl = strlen(value1.c_str());
-						const char *v = value1.c_str();
-						bool only_normal_chars = true;
-						for (int i=0; i<vl && only_normal_chars==true; i++) {
-							if (is_normal_char(v[i])==0) {
-								only_normal_chars=false;
-							}
-						}
-						if (only_normal_chars) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET collation_connection value %s\n", value1.c_str());
-							uint32_t collation_connection_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (client_myds->myconn->options.collation_connection_int != collation_connection_int) {
-								client_myds->myconn->options.collation_connection_int = collation_connection_int;
-								if (client_myds->myconn->options.collation_connection) {
-									free(client_myds->myconn->options.collation_connection);
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
+							uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+							int idx = SQL_NAME_LAST;
+							for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+								if (!strcmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+									idx = mysql_tracked_variables[i].idx;
+									break;
 								}
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection collation_connection to %s\n", value1.c_str());
-								client_myds->myconn->options.collation_connection=strdup(value1.c_str());
+							}
+							if (idx == SQL_NAME_LAST) {
+								proxy_error("Variable %s not found in mysql_tracked_variables[]\n", var.c_str());
+								unable_to_parse_set_statement(lock_hostgroup);
+								return false;
+							}
+							if (mysql_variables->client_get_hash(idx) != var_value_int) {
+								mysql_variables->client_set_value(idx, value1.c_str());
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
 						}
-					} else if (var == "character_set_results") {
+					} else if ( (var == "character_set_results") || ( var == "collation_connection" ) ) {
 						std::string value1 = *values;
 						int vl = strlen(value1.c_str());
 						const char *v = value1.c_str();
@@ -5491,11 +5369,23 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (only_normal_chars) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET character_set_results value %s\n", value1.c_str());
-							uint32_t character_set_results_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (mysql_variables->client_get_hash(SQL_CHARACTER_SET_RESULTS) != character_set_results_int) {
-								mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, value1.c_str());
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection character_set_results to %s\n", value1.c_str());
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
+							uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+							int idx = SQL_NAME_LAST;
+							for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+								if (!strcmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+									idx = mysql_tracked_variables[i].idx;
+									break;
+								}
+							}
+							if (idx == SQL_NAME_LAST) {
+								proxy_error("Variable %s not found in mysql_tracked_variables[]\n", var.c_str());
+								unable_to_parse_set_statement(lock_hostgroup);
+								return false;
+							}
+							if (mysql_variables->client_get_hash(idx) != var_value_int) {
+								mysql_variables->client_set_value(idx, value1.c_str());
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {

@@ -974,9 +974,9 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ,           false, true,  true,  (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" } ,
 	{ SQL_SESSION_TRACK_GTIDS, SETTING_SESSION_TRACK_GTIDS,     true, false, false, (char *)"session_track_gtids" , (char *)"session_track_gtids" , (char *)"OFF" } ,
     { SQL_SQL_AUTO_IS_NULL, SETTING_SQL_AUTO_IS_NULL,           true, false, false, (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" } ,
-    { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"" } ,
-    { SQL_NET_WRITE_TIMEOUT, SETTING_NET_WRITE_TIMEOUT,         false, false, false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" } ,
-    { SQL_MAX_JOIN_SIZE, SETTING_MAX_JOIN_SIZE,                 false, false, false, (char *)"max_join_size", (char *)"max_join_size", (char *)"18446744073709551615" } ,
+    { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, false, (char *)"COLLATION_CONNECTION", (char *)"collation_connection", (char *)"" } ,
+    { SQL_NET_WRITE_TIMEOUT, SETTING_NET_WRITE_TIMEOUT,         false, false, false, (char *)"NET_WRITE_TIMEOUT", (char *)"net_write_timeout", (char *)"60" } ,
+    { SQL_MAX_JOIN_SIZE, SETTING_MAX_JOIN_SIZE,                 false, false, false, (char *)"MAX_JOIN_SIZE", (char *)"max_join_size", (char *)"18446744073709551615" } ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];
