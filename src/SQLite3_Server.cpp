@@ -956,7 +956,6 @@ SQLite3_Server::SQLite3_Server() {
 #ifdef TEST_GALERA
 void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex galera_mutex already acquired
-	proxy_warning("TRACE : populate galera table\n");
 	sessdb->execute("BEGIN TRANSACTION");
 	char *error=NULL;
 	int cols=0;
@@ -970,9 +969,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	int hg_id = 2270+(cluster_id*10)+1;
 	char buf[1024];
 	sprintf(buf, (char *)"SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
-	proxy_warning("TRACE : buf %s\n", buf);
 	sessdb->execute_statement(buf, &error , &cols , &affected_rows , &resultset);
-	proxy_warning("TRACE : count %d\n", resultset->rows_count);
 	if (resultset->rows_count==0) {
 		//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
 		sqlite3_stmt *statement=NULL;
@@ -981,7 +978,6 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
 		rc = sessdb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, sessdb);
-		proxy_warning("TRACE : num servers%d\n", num_galera_servers[cluster_id]);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
 			string serverid = "";
 			serverid = "127.1." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
@@ -1001,7 +997,6 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 			char *pxt_maint_mode = rand()%2==0?(char*)"ENABLED":(char*)"DISABLED";
 			rc=sqlite3_bind_text(statement, 11, pxt_maint_mode, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 
-			proxy_warning("TRACE : maint mode %s\n", pxt_maint_mode);
 			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);

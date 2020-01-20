@@ -1716,16 +1716,13 @@ __exit_monitor_galera_thread:
 			if (row[7]) {
 				std::string s(row[7]);
 				std::transform(s.begin(), s.end(), s.begin(), ::toupper);
-				if (!strncmp("DISABLED",s.c_str(),8))
-					pxc_maint_mode=false;
-				else if (!strncmp("ENABLED",s.c_str(),7))
-					pxc_maint_mode=true;
-				else {
-					proxy_error("Wrong value for pxc_maint_mode %s\n", row[7]);
+				if (!strncmp("DISABLED",s.c_str(),8)) {
 					pxc_maint_mode=false;
 				}
+				else {
+					pxc_maint_mode=true;
+				}
 			}
-			proxy_warning("TRACE : wsrep_local_state [%d], pxc_maint_mode %d\n", wsrep_local_state, pxc_maint_mode);
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
@@ -1810,37 +1807,42 @@ __end_process_galera_result:
 			}
 		} else {
 			if (fields) { // if we didn't get any error, but fileds is NULL, we are likely hitting bug #1994
-				if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
-					if (primary_partition == false) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
-					} else {
-						if (wsrep_desync == true) {
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+				if (pxc_maint_mode) {
+					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"pxc_maint_mode=YES");
+				}
+				else {
+					if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+						if (primary_partition == false) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
 						} else {
-							char msg[80];
-							sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+							if (wsrep_desync == true) {
+								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+							} else {
+								char msg[80];
+								sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+							}
 						}
-					}
-				} else {
-					//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
+					} else {
+						//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
 						if (wsrep_reject_queries) {
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
-					//	} else {
-					//		// wsrep_sst_donor_rejects_queries
-					//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
-					//	}
-					} else {
-						if (read_only==true) {
-							if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
-								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+							//	} else {
+							//		// wsrep_sst_donor_rejects_queries
+							//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
+							//	}
+					    } else {
+						    if (read_only==true) {
+								if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
+									MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+								} else {
+									MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+								}
 							} else {
-								MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+								// the node is a writer
+								// TODO: for now we don't care about the number of writers
+								MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 							}
-						} else {
-							// the node is a writer
-							// TODO: for now we don't care about the number of writers
-							MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 						}
 					}
 				}
