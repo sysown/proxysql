@@ -44,7 +44,7 @@ public:
 	uint32_t server_get_hash(int idx);
 
 	bool verify_variable(int idx);
-	bool update_variable(int &_rc);
+	bool update_variable(session_status status, int &_rc);
 
 };
 

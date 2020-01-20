@@ -5,87 +5,6 @@
 #include "MySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
-int MySQL_Variables::session_by_var[SQL_NAME_LAST] = {
-	SETTING_SQL_SAFE_UPDATES,
-	SETTING_SQL_SELECT_LIMIT,
-	SETTING_SQL_MODE,
-	SETTING_TIME_ZONE,
-	SETTING_CHARACTER_SET_RESULTS,
-	SETTING_ISOLATION_LEVEL,
-	SETTING_TRANSACTION_READ,
-	SETTING_SESSION_TRACK_GTIDS,
-	SETTING_SQL_AUTO_IS_NULL
-/*	SETTING_COLLATION_CONNECTION,
-	SETTING_NET_WRITE_TIMEOUT,
-	SETTING_MAX_JOIN_SIZE*/
-};
-
-bool MySQL_Variables::quotes[SQL_NAME_LAST] = {
-	true,  // SQL_SAFE_UPDATES
-	true,  // SQL_SELECT_LIMIT
-	false, // SQL_MODE
-	false, // SQL_TIME_ZONE
-	true,  // CHARACTER_SET_RESULTS
-	false, // ISOLATION_LEVEL
-	false, // TRANSACTION_READ
-	true,  // SESSION_TRACK_GTIDS
-	true   // SQL_AUTO_IS_NULL
-/*	false, // COLLATION_CONNECTION
-	true,  // NET_WRITE_TIMEOUT
-	true   // MAX_JOIN_SIZE*/
-};
-
-bool MySQL_Variables::set_transaction[SQL_NAME_LAST] = {
-	false, // SQL_SAFE_UPDATES
-	false, // SQL_SELECT_LIMIT
-	false, // SQL_MODE
-	false, // SQL_TIME_ZONE
-	false, // CHARACTER_SET_RESULTS
-	true,  // ISOLATION_LEVEL
-	true,  // TRANSACTION_READ
-	false, // SESSION_TRACK_GTIDS
-	false  // SQL_AUTO_IS_NULL
-/*	false, // COLLATION_CONNECTION
-	false, // NET_WRITE_TIMEOUT
-	false  // MAX_JOIN_SIZE */
-};
-
-int MySQL_Variables::var_by_session[NONE] = {
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_SQL_MODE,
-	SQL_TIME_ZONE,
-	SQL_ISOLATION_LEVEL,
-	SQL_TRANSACTION_READ,
-	SQL_CHARACTER_SET_RESULTS,
-	SQL_SESSION_TRACK_GTIDS,
-	SQL_SQL_AUTO_IS_NULL,
-	SQL_SELECT_LIMIT,
-	SQL_SAFE_UPDATES,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST,
-	SQL_NAME_LAST
-};
-
 MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 	assert(_session);
 	session = _session;
@@ -198,16 +117,25 @@ bool MySQL_Variables::verify_generic_variable(uint32_t *be_int, char **be_var, c
 	return false;
 }
 
-bool MySQL_Variables::update_variable(int &_rc) {
-	auto idx = MySQL_Variables::var_by_session[session->status];
+bool MySQL_Variables::update_variable(session_status status, int &_rc) {
+	int idx = SQL_NAME_LAST;
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		if (mysql_tracked_variables[i].status == status) {
+			idx = i;
+			break;
+		}
+	}
+	assert(idx != SQL_NAME_LAST);
 	updaters[idx]->update_server_variable(session, idx, _rc);
 }
 
 bool MySQL_Variables::verify_variable(int idx) {
 	int rc = 0;
 	auto ret = updaters[idx]->verify_variables(session, idx);
-	if (ret)
-		update_variable(rc);
+	if (ret) {
+		// FIXME
+		//update_variable(rc);
+	}
 	return ret;
 }
 
@@ -215,16 +143,19 @@ bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
 	auto ret = session->mysql_variables->verify_generic_variable(
 		&session->mybe->server_myds->myconn->variables[idx].hash,
 		&session->mybe->server_myds->myconn->variables[idx].value,
-		mysql_thread___default_sql_safe_updates,
+		mysql_thread___default_variables[idx],
 		&session->client_myds->myconn->variables[idx].hash,
 		session->client_myds->myconn->variables[idx].value,
-		static_cast<session_status>(MySQL_Variables::session_by_var[idx])
+		mysql_tracked_variables[idx].status
 	);
+	return ret;
 }
 
 bool Generic_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
-	bool q = MySQL_Variables::quotes[idx];
-	bool st = MySQL_Variables::set_transaction[idx];
-	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, Variable::set_name[idx], session->mysql_variables->server_get_value(idx), q, st);
+	bool no_quote = true;
+	if (mysql_tracked_variables[idx].quote) no_quote = false;
+	bool st = mysql_tracked_variables[idx].set_transaction;
+	const char * set_var_name = mysql_tracked_variables[idx].set_variable_name;
+	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, session->mysql_variables->server_get_value(idx), no_quote, st);
 	return ret;
 }

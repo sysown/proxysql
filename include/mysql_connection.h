@@ -59,21 +59,21 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-		uint32_t collation_connection_int;
-		uint32_t net_write_timeout_int;
-		uint32_t max_join_size_int;
+//		uint32_t collation_connection_int;
+//		uint32_t net_write_timeout_int;
+//		uint32_t max_join_size_int;
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
 		uint32_t client_flag;
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
-		char * collation_connection;
-		char * net_write_timeout;
-		char * max_join_size;
-		bool collation_connection_sent;
-		bool net_write_timeout_sent;
-		bool max_join_size_sent;
+//		char * collation_connection;
+//		char * net_write_timeout;
+//		char * max_join_size;
+//		bool collation_connection_sent;
+//		bool net_write_timeout_sent;
+//		bool max_join_size_sent;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
 		bool ldap_user_variable_sent;
