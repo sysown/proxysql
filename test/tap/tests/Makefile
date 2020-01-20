@@ -11,6 +11,7 @@ PROXYSQL_PATH=../../..
 PROXYSQL_IDIR=$(PROXYSQL_PATH)/include
 
 SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
+JSON_IDIR=$(DEPS_PATH)/json
 
 STATIC_LIBS=$(MARIADB_LDIR)/libmariadbclient.a
 
@@ -19,18 +20,18 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t || true
+	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t set_testing-t || true
 
 OPT=-O2
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp
+SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp set_testing-t.cpp
 
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t
+tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t set_testing-t
 
 sqlite3-t: $(LIBDIR)/libtap.a sqlite3-t.cpp
 	g++ sqlite3-t.cpp -I$(INCLUDEDIR) -I$(PROXYSQL_IDIR) -I$(MARIADB_IDIR) -I$(SQLITE3_DIR) -L$(LIBDIR) $(OPT) ../../../lib/libproxysql.a -lpthread -ldl -std=c++11 -ltap -o sqlite3-t
 
-basic-t: $(LIBDIR)/libtap.a
+basic-t: basic-t.cpp $(LIBDIR)/libtap.a
 	g++ basic-t.cpp -I$(INCLUDEDIR) -L$(LIBDIR) $(OPT) -std=c++11 -ltap -o basic-t
 
 set_character_set-t: set_character_set-t.cpp $(LIBDIR)/libtap.a
@@ -42,3 +43,5 @@ charset_unsigned_int-t: charset_unsigned_int-t.cpp $(LIBDIR)/libtap.a
 select_config_file-t: select_config_file-t.cpp $(LIBDIR)/libtap.a
 	g++ select_config_file-t.cpp -I$(INCLUDEDIR) -L$(LIBDIR) -std=c++11 `mysql_config --include --libs` -lmysqlclient -ltap -o select_config_file-t
 
+set_testing-t: set_testing-t.cpp $(LIBDIR)/libtap.a
+	g++ set_testing-t.cpp -Wall -I$(INCLUDEDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -L$(LIBDIR) $(OPT) -std=c++11 $(STATIC_LIBS) -ltap -pthread -O0 -ggdb -ldl -lssl -lcrypto -o set_testing-t
