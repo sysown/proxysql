@@ -5298,9 +5298,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
 						exit_after_SetParse = true;
-					} else if (var == "sql_auto_is_null") {
+					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
 						std::string value1 = *values;
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET sql_auto_is_null value %s\n", value1.c_str());
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
 						int __tmp_value = -1;
 						if (
 							(strcasecmp(value1.c_str(),(char *)"0")==0) ||
@@ -5318,42 +5318,23 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (__tmp_value >= 0) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET sql_auto_is_null value %s\n", value1.c_str());
-							uint32_t sql_auto_is_null_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (mysql_variables->client_get_hash(SQL_SQL_AUTO_IS_NULL) != sql_auto_is_null_int) {
-								mysql_variables->client_set_value(SQL_SQL_AUTO_IS_NULL, value1.c_str());
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection sql_auto_is_null to %s\n", value1.c_str());
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
+							uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+							int idx = SQL_NAME_LAST;
+							for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+								if (!strcmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+									idx = mysql_tracked_variables[i].idx;
+									break;
+								}
 							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
-					} else if (var == "sql_safe_updates") {
-						std::string value1 = *values;
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET sql_safe_updates value %s\n", value1.c_str());
-						int __tmp_value = -1;
-						if (
-							(strcasecmp(value1.c_str(),(char *)"0")==0) ||
-							(strcasecmp(value1.c_str(),(char *)"false")==0) ||
-							(strcasecmp(value1.c_str(),(char *)"off")==0)
-						) {
-							__tmp_value = 0;
-						} else {
-							if (
-								(strcasecmp(value1.c_str(),(char *)"1")==0) ||
-								(strcasecmp(value1.c_str(),(char *)"true")==0) ||
-								(strcasecmp(value1.c_str(),(char *)"on")==0)
-							) {
-								__tmp_value = 1;
+							if (idx == SQL_NAME_LAST) {
+								proxy_error("Variable %s not found in mysql_tracked_variables[]\n", var.c_str());
+								unable_to_parse_set_statement(lock_hostgroup);
+								return false;
 							}
-						}
-						if (__tmp_value >= 0) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET sql_safe_updates value %s\n", value1.c_str());
-							uint32_t sql_safe_updates_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (mysql_variables->client_get_hash(SQL_SAFE_UPDATES) != sql_safe_updates_int) {
-								mysql_variables->client_set_value(SQL_SAFE_UPDATES, value1.c_str());
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection sql_safe_updates to %s\n", value1.c_str());
+							if (mysql_variables->client_get_hash(idx) != var_value_int) {
+								mysql_variables->client_set_value(idx, value1.c_str());
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {
