@@ -107,7 +107,7 @@ class MySQL_Session
 	int handler_again___status_RESETTING_CONNECTION();
 	void handler_again___new_thread_to_kill_connection();
 
-	bool handler_again___verify_backend(int var);
+//	bool handler_again___verify_backend(int var);
 	bool handler_again___verify_backend_charset();
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_ldap_user_variable();

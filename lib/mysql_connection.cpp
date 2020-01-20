@@ -224,19 +224,19 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
-	options.collation_connection = NULL;
-	options.net_write_timeout = NULL;
-	options.max_join_size = NULL;
-	options.collation_connection_sent = false;
-	options.net_write_timeout_sent = false;
-	options.max_join_size_sent = false;
+//	options.collation_connection = NULL;
+//	options.net_write_timeout = NULL;
+//	options.max_join_size = NULL;
+//	options.collation_connection_sent = false;
+//	options.net_write_timeout_sent = false;
+//	options.max_join_size_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
-	options.collation_connection_int=0;
-	options.net_write_timeout_int=0;
-	options.max_join_size_int=0;
+//	options.collation_connection_int=0;
+//	options.net_write_timeout_int=0;
+//	options.max_join_size_int=0;
 	options.charset=0;
 	options.charset_action=UNKNOWN;
 	compression_pkt_id=0;
@@ -315,6 +315,7 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
+/*
 	if (options.collation_connection) {
 		free(options.collation_connection);
 		options.collation_connection=NULL;
@@ -327,6 +328,7 @@ MySQL_Connection::~MySQL_Connection() {
 		free(options.max_join_size);
 		options.max_join_size=NULL;
 	}
+*/
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -2142,24 +2144,6 @@ void MySQL_Connection::reset() {
 		}
 	}
 
-	options.collation_connection_int = 0;
-	if (options.collation_connection) {
-		free (options.collation_connection);
-		options.collation_connection = NULL;
-		options.collation_connection_sent = false;
-	}
-	options.net_write_timeout_int = 0;
-	if (options.net_write_timeout) {
-		free (options.net_write_timeout);
-		options.net_write_timeout = NULL;
-		options.net_write_timeout_sent = false;
-	}
-	options.max_join_size_int = 0;
-	if (options.max_join_size) {
-		free (options.max_join_size);
-		options.max_join_size = NULL;
-		options.max_join_size_sent = false;
-	}
 	if (options.init_connect) {
 		free(options.init_connect);
 		options.init_connect = NULL;
