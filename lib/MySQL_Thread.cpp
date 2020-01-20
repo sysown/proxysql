@@ -14,6 +14,7 @@
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+#include "MySQL_Variables.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -3549,69 +3550,16 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-	// fix bug 1253 : initialize time_zone
-	uint32_t time_zone_int=SpookyHash::Hash32(mysql_thread___default_time_zone,strlen(mysql_thread___default_time_zone),10);
-	sess->client_myds->myconn->options.time_zone_int = time_zone_int;
-	if (sess->client_myds->myconn->options.time_zone) {
-		free(sess->client_myds->myconn->options.time_zone);
-	}
-	sess->client_myds->myconn->options.time_zone=strdup(mysql_thread___default_time_zone);
 
-	uint32_t isolation_level_int=SpookyHash::Hash32(mysql_thread___default_isolation_level,strlen(mysql_thread___default_isolation_level),10);
-	sess->client_myds->myconn->options.isolation_level_int = isolation_level_int;
-	if (sess->client_myds->myconn->options.isolation_level) {
-		free(sess->client_myds->myconn->options.isolation_level);
-	}
-	sess->client_myds->myconn->options.isolation_level=strdup(mysql_thread___default_isolation_level);
-
-	uint32_t tx_isolation_int=SpookyHash::Hash32(mysql_thread___default_tx_isolation,strlen(mysql_thread___default_tx_isolation),10);
-	sess->client_myds->myconn->options.tx_isolation_int = tx_isolation_int;
-	if (sess->client_myds->myconn->options.tx_isolation) {
-		free(sess->client_myds->myconn->options.tx_isolation);
-	}
-	sess->client_myds->myconn->options.tx_isolation=strdup(mysql_thread___default_tx_isolation);
-
-	uint32_t transaction_read_int=SpookyHash::Hash32(mysql_thread___default_transaction_read,strlen(mysql_thread___default_transaction_read),10);
-	sess->client_myds->myconn->options.transaction_read_int = transaction_read_int;
-	if (sess->client_myds->myconn->options.transaction_read) {
-		free(sess->client_myds->myconn->options.transaction_read);
-	}
-	sess->client_myds->myconn->options.transaction_read=strdup(mysql_thread___default_transaction_read);
-
-	uint32_t character_set_results_int=SpookyHash::Hash32(mysql_thread___default_character_set_results,strlen(mysql_thread___default_character_set_results),10);
-	sess->client_myds->myconn->options.character_set_results_int = character_set_results_int;
-	if (sess->client_myds->myconn->options.character_set_results) {
-		free(sess->client_myds->myconn->options.character_set_results);
-	}
-	sess->client_myds->myconn->options.character_set_results=strdup(mysql_thread___default_character_set_results);
-
-	uint32_t session_track_gtids_int=SpookyHash::Hash32(mysql_thread___default_session_track_gtids,strlen(mysql_thread___default_session_track_gtids),10);
-	sess->client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
-	if (sess->client_myds->myconn->options.session_track_gtids) {
-		free(sess->client_myds->myconn->options.session_track_gtids);
-	}
-	sess->client_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
-
-	uint32_t sql_auto_is_null_int=SpookyHash::Hash32(mysql_thread___default_sql_auto_is_null,strlen(mysql_thread___default_sql_auto_is_null),10);
-	sess->client_myds->myconn->options.sql_auto_is_null_int = sql_auto_is_null_int;
-	if (sess->client_myds->myconn->options.sql_auto_is_null) {
-		free(sess->client_myds->myconn->options.sql_auto_is_null);
-	}
-	sess->client_myds->myconn->options.sql_auto_is_null=strdup(mysql_thread___default_sql_auto_is_null);
-
-	uint32_t sql_select_limit_int=SpookyHash::Hash32(mysql_thread___default_sql_select_limit,strlen(mysql_thread___default_sql_select_limit),10);
-	sess->client_myds->myconn->options.sql_select_limit_int = sql_select_limit_int;
-	if (sess->client_myds->myconn->options.sql_select_limit) {
-		free(sess->client_myds->myconn->options.sql_select_limit);
-	}
-	sess->client_myds->myconn->options.sql_select_limit=strdup(mysql_thread___default_sql_select_limit);
-
-	uint32_t sql_safe_updates_int=SpookyHash::Hash32(mysql_thread___default_sql_safe_updates,strlen(mysql_thread___default_sql_safe_updates),10);
-	sess->client_myds->myconn->options.sql_safe_updates_int = sql_safe_updates_int;
-	if (sess->client_myds->myconn->options.sql_safe_updates) {
-		free(sess->client_myds->myconn->options.sql_safe_updates);
-	}
-	sess->client_myds->myconn->options.sql_safe_updates=strdup(mysql_thread___default_sql_safe_updates);
+	sess->mysql_variables->client_set_value(SQL_SELECT_LIMIT, mysql_thread___default_sql_select_limit);
+	sess->mysql_variables->client_set_value(SQL_SAFE_UPDATES, mysql_thread___default_sql_safe_updates);
+	sess->mysql_variables->client_set_value(SQL_SQL_MODE, mysql_thread___default_sql_mode);
+	sess->mysql_variables->client_set_value(SQL_TIME_ZONE, mysql_thread___default_time_zone);
+	sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, mysql_thread___default_character_set_results);
+	sess->mysql_variables->client_set_value(SQL_ISOLATION_LEVEL, mysql_thread___default_isolation_level);
+	sess->mysql_variables->client_set_value(SQL_TRANSACTION_READ, mysql_thread___default_transaction_read);
+	sess->mysql_variables->client_set_value(SQL_SESSION_TRACK_GTIDS, mysql_thread___default_session_track_gtids);
+	sess->mysql_variables->client_set_value(SQL_SQL_AUTO_IS_NULL, mysql_thread___default_sql_auto_is_null);
 
 	uint32_t collation_connection_int=SpookyHash::Hash32(mysql_thread___default_collation_connection,strlen(mysql_thread___default_collation_connection),10);
 	sess->client_myds->myconn->options.collation_connection_int = collation_connection_int;

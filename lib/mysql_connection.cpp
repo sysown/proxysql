@@ -9,6 +9,19 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
+const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level",
+	"session transaction read", "session_track_gtids", "sql_auto_is_null"};
+const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "isolation_level",
+	"transaction_read", "session_track_gtids", "sql_auto_is_null"};
+
+void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
+	j["backends"][conn_num]["conn"][Variable::proxysql_internal_session_name[idx]] = std::string(value);
+}
+
+void Variable::fill_client_internal_session(json &j, int idx) {
+	j["conn"][Variable::proxysql_internal_session_name[idx]] = value;
+}
+
 #define PROXYSQL_USE_RESULT
 
 static int
@@ -202,6 +215,12 @@ MySQL_Connection::MySQL_Connection() {
 	fd=-1;
 	status_flags=0;
 	last_time_used=0;
+
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		variables[i].value = NULL;
+		variables[i].hash = 0;
+	}
+
 	options.client_flag = 0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
@@ -210,45 +229,16 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
-	options.character_set_results = NULL;
-	options.isolation_level = NULL;
-	options.tx_isolation = NULL;
-	options.transaction_read = NULL;
-	options.session_track_gtids = NULL;
-	options.sql_auto_is_null = NULL;
-	options.sql_select_limit = NULL;
-	options.sql_safe_updates = NULL;
 	options.collation_connection = NULL;
 	options.net_write_timeout = NULL;
 	options.max_join_size = NULL;
-	options.isolation_level_sent = false;
-	options.tx_isolation_sent = false;
-	options.transaction_read_sent = false;
-	options.character_set_results_sent = false;
-	options.session_track_gtids_sent = false;
-	options.sql_auto_is_null_sent = false;
-	options.sql_select_limit_sent = false;
-	options.sql_safe_updates_sent = false;
 	options.collation_connection_sent = false;
 	options.net_write_timeout_sent = false;
 	options.max_join_size_sent = false;
-	options.sql_mode_sent=false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
-	options.sql_mode=NULL;	// #509
-	options.sql_mode_int=0;	// #509
-	options.time_zone=NULL;	// #819
-	options.time_zone_int=0;	// #819
-	options.isolation_level_int=0;
-	options.tx_isolation_int=0;
-	options.transaction_read_int=0;
-	options.character_set_results_int=0;
-	options.session_track_gtids_int=0;
-	options.sql_auto_is_null_int=0;
-	options.sql_select_limit_int=0;
-	options.sql_safe_updates_int=0;
 	options.collation_connection_int=0;
 	options.net_write_timeout_int=0;
 	options.max_join_size_int=0;
@@ -322,46 +312,14 @@ MySQL_Connection::~MySQL_Connection() {
 	if (query.stmt) {
 		query.stmt=NULL;
 	}
-	if (options.sql_mode) {
-		free(options.sql_mode);
-		options.sql_mode=NULL;
+
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		if (variables[i].value) {
+			free(variables[i].value);
+			variables[i].value = NULL;
+		}
 	}
-	if (options.time_zone) {
-		free(options.time_zone);
-		options.time_zone=NULL;
-	}
-	if (options.isolation_level) {
-		free(options.isolation_level);
-		options.isolation_level=NULL;
-	}
-	if (options.tx_isolation) {
-		free(options.tx_isolation);
-		options.tx_isolation=NULL;
-	}
-	if (options.transaction_read) {
-		free(options.transaction_read);
-		options.transaction_read=NULL;
-	}
-	if (options.character_set_results) {
-		free(options.character_set_results);
-		options.character_set_results=NULL;
-	}
-	if (options.session_track_gtids) {
-		free(options.session_track_gtids);
-		options.session_track_gtids=NULL;
-	}
-	if (options.sql_auto_is_null) {
-		free(options.sql_auto_is_null);
-		options.sql_auto_is_null=NULL;
-	}
-	if (options.sql_select_limit) {
-		free(options.sql_select_limit);
-		options.sql_select_limit=NULL;
-	}
-	if (options.sql_safe_updates) {
-		free(options.sql_safe_updates);
-		options.sql_safe_updates=NULL;
-	}
+
 	if (options.collation_connection) {
 		free(options.collation_connection);
 		options.collation_connection=NULL;
@@ -2176,71 +2134,19 @@ void MySQL_Connection::reset() {
 	status_flags=0;
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
-	{ // bug #1160
-		options.sql_mode_int = 0;
-		if (options.sql_mode) {
-			free(options.sql_mode);
-			options.sql_mode = NULL;
-			options.sql_mode_sent = false;
-			
-		}
-		options.time_zone_int = 0;
-		if (options.time_zone) {
-			free(options.time_zone);
-			options.time_zone = NULL;
-		}
-	}
+
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
-	options.isolation_level_int = 0;
-	if (options.isolation_level) {
-		free (options.isolation_level);
-		options.isolation_level = NULL;
-		options.isolation_level_sent = false;
+
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		variables[i].hash = 0;
+		if (variables[i].value) {
+			free(variables[i].value);
+			variables[i].value = NULL;
+		}
 	}
-	options.tx_isolation_int = 0;
-	if (options.tx_isolation) {
-		free (options.tx_isolation);
-		options.tx_isolation = NULL;
-		options.tx_isolation_sent = false;
-	}
-	options.transaction_read_int = 0;
-	if (options.transaction_read) {
-		free (options.transaction_read);
-		options.transaction_read = NULL;
-		options.transaction_read_sent = false;
-	}
-	options.character_set_results_int = 0;
-	if (options.character_set_results) {
-		free (options.character_set_results);
-		options.character_set_results = NULL;
-		options.character_set_results_sent = false;
-	}
-	options.session_track_gtids_int = 0;
-	if (options.session_track_gtids) {
-		free (options.session_track_gtids);
-		options.session_track_gtids = NULL;
-		options.session_track_gtids_sent = false;
-	}
-	options.sql_auto_is_null_int = 0;
-	if (options.sql_auto_is_null) {
-		free (options.sql_auto_is_null);
-		options.sql_auto_is_null = NULL;
-		options.sql_auto_is_null_sent = false;
-	}
-	options.sql_select_limit_int = 0;
-	if (options.sql_select_limit) {
-		free (options.sql_select_limit);
-		options.sql_select_limit = NULL;
-		options.sql_select_limit_sent = false;
-	}
-	options.sql_safe_updates_int = 0;
-	if (options.sql_safe_updates) {
-		free (options.sql_safe_updates);
-		options.sql_safe_updates = NULL;
-		options.sql_safe_updates_sent = false;
-	}
+
 	options.collation_connection_int = 0;
 	if (options.collation_connection) {
 		free (options.collation_connection);
