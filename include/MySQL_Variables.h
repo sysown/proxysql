@@ -14,6 +14,7 @@ class Updater {
 public:
 	virtual bool verify_variables(MySQL_Session* session, int idx) = 0;
 	virtual bool update_server_variable(MySQL_Session* session, int idx, int &_rc) = 0;
+	virtual ~Updater();
 };
 
 class Generic_Updater : public Updater {
@@ -35,7 +36,7 @@ public:
 	MySQL_Variables(MySQL_Session* session);
 	virtual ~MySQL_Variables();
 
-	void client_set_value(int idx, const char* value);
+	void client_set_value(int idx, const std::string& value);
 	const char* client_get_value(int idx);
 	uint32_t client_get_hash(int idx);
 
