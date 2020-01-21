@@ -84,7 +84,7 @@ tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t s
 tests-monitor: galera_1_timeout_count galera_2_timeout_no_count aurora
 
 sqlite3-t: $(TAP_LIBDIR)/libtap.a sqlite3-t.cpp
-	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) ../../../lib/libproxysql.a -lpthread -ldl -std=c++11 -ltap -o sqlite3-t
+	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) ../../../lib/libproxysql.a $(MYLIBS) -lpthread -ldl -std=c++11 -ltap -o sqlite3-t
 
 basic-t: $(TAP_LIBDIR)/libtap.a
 	g++ basic-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -o basic-t
