@@ -137,7 +137,7 @@ bool MySQL_Variables::verify_variable(int idx) {
 	auto ret = updaters[idx]->verify_variables(session, idx);
 	if (ret) {
 		// FIXME
-		//update_variable(rc);
+		// update_variable(mysql_tracked_variables[idx].status, rc);
 	}
 	return ret;
 }

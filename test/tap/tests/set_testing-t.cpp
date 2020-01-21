@@ -17,6 +17,15 @@
 #include "tap.h"
 #include "command_line.h"
 
+#define MYSQL_QUERY(mysql, query) \
+	do { \
+		if (mysql_query(mysql, query)) { \
+			fprintf(stderr, "File %s, line %d, Error: %s\n", \
+					__FILE__, __LINE__, mysql_error(mysql)); \
+			return exit_status(); \
+		} \
+	} while(0)
+
 
 using nlohmann::json;
 
@@ -400,6 +409,20 @@ int main(int argc, char *argv[]) {
 
 	if(cl.getEnv())
 		return exit_status();
+
+	MYSQL* mysqladmin = mysql_init(NULL);
+	if (!mysqladmin)
+		return exit_status();
+
+	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	    fprintf(stderr, "File %s, line %d, Error: %s\n",
+	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		return exit_status();
+	}
+
+	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' where variable_name='mysql-default_sql_mode'");
+	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
+
 
 	num_threads = 10;
 	queries = 1000;
