@@ -11,6 +11,8 @@
 "SET sql_safe_updates=0", "{'sql_safe_updates':'OFF'}"
 "SET sql_safe_updates=1", "{'sql_safe_updates':'ON'}"
 "SET sql_select_limit=1010", "{'sql_select_limit':'1010'}"
+"SET sql_select_limit=2020", "{'sql_select_limit':'2020'}"
+"SET sql_select_limit=3030", "{'sql_select_limit':'3030'}"
 "SET character_set_results='latin1'", "{'character_set_results':'latin1'}"
 "SET character_set_results='utf8'", "{'character_set_results':'utf8'}"
 "SET character_set_results='utf8mb4'", "{'character_set_results':'utf8mb4'}"

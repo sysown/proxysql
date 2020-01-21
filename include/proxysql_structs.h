@@ -966,7 +966,7 @@ extern __thread unsigned int g_seed;
 #ifdef PROXYSQL_EXTERN
 mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_SAFE_UPDATES, SETTING_SQL_SAFE_UPDATES ,              true,  false, false, (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" } ,
-    { SQL_SELECT_LIMIT, SETTING_SQL_SELECT_LIMIT ,              true,  false, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
+    { SQL_SELECT_LIMIT, SETTING_SQL_SELECT_LIMIT ,              false,  false, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
 	{ SQL_SQL_MODE, SETTING_SQL_MODE ,                          true, false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" } ,
     { SQL_TIME_ZONE, SETTING_TIME_ZONE ,                        true, false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" } ,
 	{ SQL_CHARACTER_SET_RESULTS, SETTING_CHARACTER_SET_RESULTS, true,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"NULL" } ,
