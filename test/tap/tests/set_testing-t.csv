@@ -6,6 +6,8 @@
 "SET time_zone='-03:00', sql_mode='ALLOW_INVALID_DATES'","{'time_zone':'-03:00', 'sql_mode':'ALLOW_INVALID_DATES'}"
 "SET autocommit=0","{'autocommit':'OFF'}"
 "SET time_zone='+04:00', sql_mode='NO_ENGINE_SUBSTITUTION'", "{'time_zone':'+04:00','sql_mode':'NO_ENGINE_SUBSTITUTION'}"
+"SET sql_safe_updates='OFF'", "{'sql_safe_updates':'OFF'}"
+"SET sql_safe_updates='ON'", "{'sql_safe_updates':'ON'}"
 "SET sql_safe_updates=0", "{'sql_safe_updates':'OFF'}"
 "SET sql_safe_updates=1", "{'sql_safe_updates':'ON'}"
 "SET sql_select_limit=1010", "{'sql_select_limit':'1010'}"

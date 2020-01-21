@@ -5118,7 +5118,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							}
 							if (mysql_variables->client_get_hash(idx) != var_value_int) {
-								mysql_variables->client_set_value(idx, value1.c_str());
+								if (__tmp_value == 0)
+									mysql_variables->client_set_value(idx, "OFF");
+								else
+									mysql_variables->client_set_value(idx, "ON");
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 							}
 							exit_after_SetParse = true;

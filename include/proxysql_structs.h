@@ -965,10 +965,10 @@ extern __thread unsigned int g_seed;
 #define MYSQL_TRACKED_VARIABLES
 #ifdef PROXYSQL_EXTERN
 mysql_variable_st mysql_tracked_variables[] {
-	{ SQL_SAFE_UPDATES, SETTING_SQL_SAFE_UPDATES ,              true,  false, false, (char *)"sql_safe_update",  (char *)"sql_safe_update", (char *)"OFF" } ,
+	{ SQL_SAFE_UPDATES, SETTING_SQL_SAFE_UPDATES ,              true,  false, false, (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" } ,
     { SQL_SELECT_LIMIT, SETTING_SQL_SELECT_LIMIT ,              true,  false, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
 	{ SQL_SQL_MODE, SETTING_SQL_MODE ,                          true, false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" } ,
-    { SQL_TIME_ZONE, SETTING_TIME_ZONE ,                        false, false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" } ,
+    { SQL_TIME_ZONE, SETTING_TIME_ZONE ,                        true, false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" } ,
 	{ SQL_CHARACTER_SET_RESULTS, SETTING_CHARACTER_SET_RESULTS, true,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"NULL" } ,
 	{ SQL_ISOLATION_LEVEL, SETTING_ISOLATION_LEVEL,             false, true,  true,  (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" } ,
 	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ,           false, true,  true,  (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" } ,
