@@ -22,19 +22,17 @@ int main(int argc, char** argv) {
 	MYSQL* mysqladmin = mysql_init(NULL);
 	if (!mysqladmin)
 		return exit_status();
-	
+
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	}
-	
-	MYSQL_QUERY(mysqladmin, "delete from global_variables");
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return exit_status();
-	
+
 	if (mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "utf8")) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysql));
