@@ -61,26 +61,6 @@ extern SQLite3_Server *GloSQLite3Server;
         } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
-void SQLite3_Server::init_galera_ifaces_string(std::string& s) {
-	if(!s.empty())
-		s += ";";
-	pthread_mutex_init(&galera_mutex,NULL);
-	unsigned int ngs = time(NULL);
-	ngs = ngs % 3; // range
-	ngs += 5; // min
-	max_num_galera_servers = 1; // hypothetical maximum number of nodes
-	for (unsigned int j=1; j<4; j++) {
-		//cur_aurora_writer[j-1] = 0;
-		num_galera_servers[j-1] = ngs;
-		for (unsigned int i=11; i<max_num_galera_servers+11 ; i++) {
-			s += "127.1." + std::to_string(j) + "." + std::to_string(i) + ":3306";
-			if ( j!=3 || (j==3 && i<max_num_galera_servers+11-1) ) {
-				s += ";";
-			}
-		}
-	}
-}
-
 void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
 	if(!s.empty())
 		s += ";";
