@@ -44,9 +44,13 @@ debug: build_deps_debug build_lib_debug build_src_debug
 
 .PHONY: testaurora
 testaurora: build_deps_debug build_lib_testaurora build_src_testaurora
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
 testgalera: build_deps_debug build_lib_testgalera build_src_testgalera
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
+	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgrouprep
 testgrouprep: build_deps_debug build_lib_testgrouprep build_src_testgrouprep

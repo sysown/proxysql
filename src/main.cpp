@@ -1296,6 +1296,14 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : MySQL Threads Handler listeners started in ";
 #endif
 	}
+	if ( GloVars.global.sqlite3_server == true ) {
+		cpu_timer t;
+		ProxySQL_Main_init_SQLite3Server();
+		sleep(1);
+#ifdef DEBUG
+		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
+#endif
+	}
 	if (GloVars.global.monitor==true)
 		{
 			cpu_timer t;
@@ -1304,13 +1312,6 @@ void ProxySQL_Main_init_phase3___start_all() {
 			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
 #endif
 		}
-	if ( GloVars.global.sqlite3_server == true ) {
-		cpu_timer t;
-		ProxySQL_Main_init_SQLite3Server();
-#ifdef DEBUG
-		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
-#endif
-	}
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
 		cpu_timer t;

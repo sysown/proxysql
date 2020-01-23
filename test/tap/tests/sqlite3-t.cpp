@@ -1,9 +1,12 @@
+#define PROXYSQL_EXTERN
+
 #include <stdlib.h>
 #include "tap.h"
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include "sqlite3db.h"
+#include "proxysql.h"
 
 int main() {
 	plan(8);
