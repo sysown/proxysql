@@ -75,7 +75,7 @@ sub main {
 	print STDERR "Adding new $maxwriters write(s)\n";	
 
 	# in this example, the algorithm is that are promoted as master(s) the first N hosts order by ORDER BY weight DESC, hostname, port
-	$dbh->do("REPLACE INTO mysql_servers (hostgroup_id, hostname, port, status, weight, max_connections, use_ssl) SELECT $writerHG , hostname, port, status, weight, max_connections, use_ssl FROM mysql_servers WHERE hostgroup_id=$readerHG AND status='ONLINE' ORDER BY weight DESC, hostname, port LIMIT $maxwriters") or die "Unable to set new writer: $DBI::errstr\n";
+	$dbh->do("REPLACE INTO mysql_servers (hostgroup_id, hostname, port, status, weight, max_connections, connection_warming, use_ssl) SELECT $writerHG , hostname, port, status, weight, max_connections, connection_warming, use_ssl FROM mysql_servers WHERE hostgroup_id=$readerHG AND status='ONLINE' ORDER BY weight DESC, hostname, port LIMIT $maxwriters") or die "Unable to set new writer: $DBI::errstr\n";
 
 	# now we load at RUNTIME
 	print STDERR "Loading to runtime...";
