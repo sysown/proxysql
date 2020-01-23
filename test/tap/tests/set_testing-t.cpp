@@ -423,6 +423,8 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' where variable_name='mysql-default_sql_mode'");
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='OFF' where variable_name='mysql-default_sql_safe_update'");
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='utf8' where variable_name='mysql-default_character_set_results'");
+	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='REPEATABLE READ' where variable_name='mysql-default_isolation_level'");
+	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='REPEATABLE READ' where variable_name='mysql-default_tx_isolation'");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
 
