@@ -5236,7 +5236,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 							int idx = SQL_NAME_LAST;
 							for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
-								if (!strcmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
 									idx = mysql_tracked_variables[i].idx;
 									break;
 								}
