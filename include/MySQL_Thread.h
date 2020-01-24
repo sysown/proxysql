@@ -354,6 +354,7 @@ class MySQL_Threads_Handler
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
+		bool connection_warming;
 #ifdef IDLE_THREADS
 		int session_idle_ms;
 		bool session_idle_show_processlist;

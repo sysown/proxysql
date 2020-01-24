@@ -222,6 +222,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_filesize",
 	(char *)"default_charset",
 	(char *)"free_connections_pct",
+	(char *)"connection_warming",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_ms",
 #endif // IDLE_THREADS
@@ -377,6 +378,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.wait_timeout=8*3600*1000;
 	variables.throttle_max_bytes_per_second_to_client=2147483647;
 	variables.throttle_ratio_server_to_client=0;
+	variables.connection_warming=false;
 	variables.max_connections=10*1000;
 	variables.max_stmts_per_connection=20;
 	variables.max_stmts_cache=10000;
@@ -633,6 +635,7 @@ int MySQL_Threads_Handler::get_variable_int(char *name) {
 	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) return (int)variables.throttle_max_bytes_per_second_to_client;
 	if (!strcasecmp(name,"throttle_ratio_server_to_client")) return (int)variables.throttle_ratio_server_to_client;
 	if (!strcasecmp(name,"max_connections")) return (int)variables.max_connections;
+	if (!strcasecmp(name,"connection_warming")) return (int)variables.connection_warming;
 	if (!strcasecmp(name,"max_stmts_per_connection")) return (int)variables.max_stmts_per_connection;
 	if (!strcasecmp(name,"max_stmts_cache")) return (int)variables.max_stmts_cache;
 	if (!strcasecmp(name,"mirror_max_concurrency")) return (int)variables.mirror_max_concurrency;
@@ -1023,6 +1026,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"forward_autocommit")) {
 		return strdup((variables.forward_autocommit ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"connection_warming")) {
+		return strdup((variables.connection_warming ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"enforce_autocommit_on_reads")) {
 		return strdup((variables.enforce_autocommit_on_reads ? "true" : "false"));
@@ -2016,6 +2022,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.stats_time_query_processor=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"connection_warming")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.connection_warming=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.connection_warming=false;
 			return true;
 		}
 		return false;
@@ -3396,6 +3413,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
+	mysql_thread___connection_warming=(bool)GloMTH->get_variable_int((char *)"connection_warming");
 	mysql_thread___forward_autocommit=(bool)GloMTH->get_variable_int((char *)"forward_autocommit");
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___autocommit_false_not_reusable=(bool)GloMTH->get_variable_int((char *)"autocommit_false_not_reusable");
