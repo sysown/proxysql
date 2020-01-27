@@ -21,7 +21,7 @@ using json = nlohmann::json;
 
 class Variable {
 public:
-	char *value;
+	char *value = (char*)"";
 	uint32_t hash;
 	void fill_server_internal_session(json &j, int conn_num, int idx);
 	void fill_client_internal_session(json &j, int idx);
@@ -78,8 +78,6 @@ class MySQL_Connection {
 		char *ldap_user_variable_value;
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
-		unsigned int charset;
-		enum charset_action charset_action;
 		uint8_t sql_log_bin;
 		int8_t last_set_autocommit;
 		bool autocommit;

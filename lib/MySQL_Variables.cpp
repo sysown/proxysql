@@ -5,6 +5,8 @@
 #include "MySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
+extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
+
 MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 	assert(_session);
 	session = _session;
@@ -25,9 +27,15 @@ MySQL_Variables::MySQL_Variables(MySQL_Session* _session) {
 		case SQL_MAX_JOIN_SIZE:
 			updaters[i] = new Generic_Updater();
 			break;
+		case SQL_CHARACTER_SET:
+			updaters[i] = new Charset_Updater();
+			break;
+		case SQL_SET_NAMES:
+			updaters[i] = new Names_Updater();
+			break;
 		default:
-			proxy_error("Wrong variable index\n");
-			assert(0);
+			proxy_info("Skip variable without an action\n");
+			updaters[i] = NULL;
 		}
 	}
 }
@@ -37,6 +45,8 @@ MySQL_Variables::~MySQL_Variables() {
 		delete u;
 }
 
+void print_backtrace(void);
+
 void MySQL_Variables::client_set_value(int idx, const char* value) {
 	session->client_myds->myconn->variables[idx].hash = SpookyHash::Hash32(value,strlen(value),10);
 
@@ -44,6 +54,15 @@ void MySQL_Variables::client_set_value(int idx, const char* value) {
 		free(session->client_myds->myconn->variables[idx].value);
 	}
 	session->client_myds->myconn->variables[idx].value = strdup(value);
+}
+
+void MySQL_Variables::client_set_value(int idx, const std::string& value) {
+	session->client_myds->myconn->variables[idx].hash = SpookyHash::Hash32(value.c_str(),strlen(value.c_str()),10);
+
+	if (session->client_myds->myconn->variables[idx].value) {
+		free(session->client_myds->myconn->variables[idx].value);
+	}
+	session->client_myds->myconn->variables[idx].value = strdup(value.c_str());
 }
 
 const char* MySQL_Variables::client_get_value(int idx) {
@@ -134,13 +153,24 @@ bool MySQL_Variables::update_variable(session_status status, int &_rc) {
 
 bool MySQL_Variables::verify_variable(int idx) {
 	int rc = 0;
-	auto ret = updaters[idx]->verify_variables(session, idx);
+	auto ret = false;
+	if (updaters[idx] && updaters[idx])
+		ret = updaters[idx]->verify_variables(session, idx);
 	if (ret) {
 		// FIXME
 		// update_variable(mysql_tracked_variables[idx].status, rc);
 	}
 	return ret;
 }
+
+
+
+/* 
+ * Updaters for different variables
+ */
+
+Updater::~Updater() {}
+
 
 bool Generic_Updater::verify_variables(MySQL_Session* session, int idx) {
 	auto ret = session->mysql_variables->verify_generic_variable(
@@ -160,5 +190,84 @@ bool Generic_Updater::update_server_variable(MySQL_Session* session, int idx, in
 	bool st = mysql_tracked_variables[idx].set_transaction;
 	const char * set_var_name = mysql_tracked_variables[idx].set_variable_name;
 	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, session->mysql_variables->server_get_value(idx), no_quote, st);
+	return ret;
+}
+
+bool Names_Updater::verify_variables(MySQL_Session* session, int idx) {
+	if (strcmp(session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].value, "1"))
+		return false;
+
+	auto ret = session->mysql_variables->verify_generic_variable(
+			&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_SET].hash,
+			&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_SET].value,
+			mysql_thread___default_variables[SQL_CHARACTER_SET],
+			&session->client_myds->myconn->variables[SQL_CHARACTER_SET].hash,
+			session->client_myds->myconn->variables[SQL_CHARACTER_SET].value,
+			mysql_tracked_variables[idx].status
+			);
+
+	if (ret) {
+		const MARIADB_CHARSET_INFO *ci = NULL;
+		ci = proxysql_find_charset_nr(atoi(session->mysql_variables->server_get_value(SQL_CHARACTER_SET)));
+		session->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, ci->csname);
+		return ret;
+	}
+
+	ret = session->mysql_variables->verify_generic_variable(
+			&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_ACTION].hash,
+			&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_ACTION].value,
+			mysql_thread___default_variables[SQL_CHARACTER_ACTION],
+			&session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].hash,
+			session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].value,
+			mysql_tracked_variables[idx].status
+			);
+	return ret;
+}
+
+bool Names_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
+	auto ret = session->handler_again___status_CHANGING_CHARSET(&_rc);
+	return ret;
+}
+
+bool Charset_Updater::verify_variables(MySQL_Session* session, int idx) {
+	if (strcmp(session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].value, "2"))
+		return false;
+
+	auto ret = session->mysql_variables->verify_generic_variable(
+		&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_SET].hash,
+		&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_SET].value,
+		mysql_thread___default_variables[SQL_CHARACTER_SET],
+		&session->client_myds->myconn->variables[SQL_CHARACTER_SET].hash,
+		session->client_myds->myconn->variables[SQL_CHARACTER_SET].value,
+		mysql_tracked_variables[idx].status
+	);
+
+	if (ret) {
+		const MARIADB_CHARSET_INFO *ci = NULL;
+		ci = proxysql_find_charset_nr(atoi(session->mysql_variables->server_get_value(SQL_CHARACTER_SET)));
+		session->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, ci->csname);
+		return ret;
+	}
+
+	ret = session->mysql_variables->verify_generic_variable(
+		&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_ACTION].hash,
+		&session->mybe->server_myds->myconn->variables[SQL_CHARACTER_ACTION].value,
+		mysql_thread___default_variables[SQL_CHARACTER_ACTION],
+		&session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].hash,
+		session->client_myds->myconn->variables[SQL_CHARACTER_ACTION].value,
+		mysql_tracked_variables[idx].status
+	);
+	return ret;
+}
+
+bool Charset_Updater::update_server_variable(MySQL_Session* session, int idx, int &_rc) {
+	bool no_quote = true;
+	if (mysql_tracked_variables[idx].quote) no_quote = false;
+	bool st = mysql_tracked_variables[idx].set_transaction;
+	const char * set_var_name = mysql_tracked_variables[idx].set_variable_name;
+	const MARIADB_CHARSET_INFO *ci = NULL;
+	ci = proxysql_find_charset_nr(atoi(session->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
+
+	auto ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, ci->csname, no_quote, st);
 	return ret;
 }

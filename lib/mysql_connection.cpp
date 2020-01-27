@@ -2,19 +2,22 @@
 #include "cpp.h"
 #include "SpookyV2.h"
 #include <fcntl.h>
+#include <sstream>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
+#include "MySQL_Variables.h"
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
-	j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value);
+	j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value?value:"");
 }
 
 void Variable::fill_client_internal_session(json &j, int idx) {
-	j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
+
+	j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value?value:"";
 }
 
 #define PROXYSQL_USE_RESULT
@@ -237,8 +240,6 @@ MySQL_Connection::MySQL_Connection() {
 //	options.collation_connection_int=0;
 //	options.net_write_timeout_int=0;
 //	options.max_join_size_int=0;
-	options.charset=0;
-	options.charset_action=UNKNOWN;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -345,8 +346,16 @@ bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
 
 unsigned int MySQL_Connection::set_charset(unsigned int _c, enum charset_action action) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
-	options.charset=_c;
-	options.charset_action = action;
+
+	std::stringstream ss;
+	ss << _c;
+	myds->sess->mysql_variables->client_set_value(SQL_CHARACTER_SET, ss.str());
+
+	ss.str(std::string());
+	ss.clear();
+	ss << action;
+	myds->sess->mysql_variables->client_set_value(SQL_CHARACTER_ACTION, ss.str());
+
 	return _c;
 }
 
@@ -652,12 +661,12 @@ void MySQL_Connection::set_autocommit_cont(short event) {
 
 void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
-	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(options.charset);
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
 	if (!c) {
-		proxy_error("Not existing charset number %u\n", options.charset);
+		proxy_error("Not existing charset number %u\n", atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
 		assert(0);
 	}
-	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, options.charset);
+	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
 }
 
 void MySQL_Connection::set_names_cont(short event) {

@@ -369,7 +369,6 @@ void * my_conn_thread(void *arg) {
 			__sync_fetch_and_add(&g_select_OK,1);
 		}
 
-
 		json mysql_vars;
 		queryVariables(mysql, mysql_vars);
 

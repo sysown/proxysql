@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
 	ok(var_value.compare("latin1") == 0, "Results character set is changed");
 
 	if (mysql_query(mysql, "set names latin1")) {
-		fprintf(stderr, "SET CHARACTER SET : Error: %s\n",
+		fprintf(stderr, "SET NAMES : Error: %s\n",
 				mysql_error(mysql));
 		return exit_status();
 	}

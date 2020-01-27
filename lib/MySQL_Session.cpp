@@ -953,7 +953,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
-	j["conn"]["charset"] = client_myds->myconn->options.charset;
 	j["conn"]["sql_log_bin"] = client_myds->myconn->options.sql_log_bin;
 	j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
 	j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
@@ -1565,35 +1564,6 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 // handler() should check the return code of the function it calls, and if
 // true should jump to handler_again
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
-
-bool MySQL_Session::handler_again___verify_backend_charset() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client charset: %u , backend charset: %u\n", this, client_myds->myconn->options.charset, mybe->server_myds->myconn->mysql->charset->nr);
-	if (client_myds->myconn->options.charset != mybe->server_myds->myconn->mysql->charset->nr || client_myds->myconn->options.charset_action != mybe->server_myds->myconn->options.charset_action) {
-		//previous_status.push(PROCESSING_QUERY);
-		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				assert(0);
-				break;
-		}
-		if (client_myds->myconn->options.charset_action == NAMES) {
-			NEXT_IMMEDIATE_NEW(CHANGING_CHARSET);
-		} else if (client_myds->myconn->options.charset_action == CHARSET) {
-			NEXT_IMMEDIATE_NEW(SETTING_CHARSET);
-		} else {
-			assert(0);
-		}
-	}
-	return false;
-}
 
 bool MySQL_Session::handler_again___verify_backend_sql_log_bin() {
 	if (client_myds->myconn->options.sql_log_bin != mybe->server_myds->myconn->options.sql_log_bin) {
@@ -2273,29 +2243,6 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_CHARSET(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	mybe->server_myds->myconn->set_charset(client_myds->myconn->options.charset, CHARSET);
-	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(client_myds->myconn->options.charset);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"CHARSET", (char*)c->csname, false, true);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_SQL_SELECT_LIMIT(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SELECT_LIMIT", mysql_variables->server_get_value(SQL_SELECT_LIMIT), true);
-	return ret;
-}
-
-bool MySQL_Session::handler_again___status_SETTING_SQL_SAFE_UPDATES(int *_rc) {
-	bool ret=false;
-	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SQL_SAFE_UPDATES", mysql_variables->server_get_value(SQL_SAFE_UPDATES), true);
-	return ret;
-}
-
 bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	bool ret=false;
 	//fprintf(stderr,"CHANGING_SCHEMA\n");
@@ -2594,12 +2541,14 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	const MARIADB_CHARSET_INFO *ci = NULL;
 	const char* replace_collation = "";
 	const char* not_supported_collation = "";
+	std::stringstream ss;
 
 	/* Validate that server can support client's charset */
-	if (client_myds->myconn->options.charset >= 255 && myconn->mysql->server_version[0] != '8') {
+	int charset = atoi(mysql_variables->client_get_value(SQL_CHARACTER_SET));
+	if ( charset >= 255 && myconn->mysql->server_version[0] != '8') {
 		switch(mysql_thread___handle_unknown_charset) {
 			case HANDLE_UNKNOWN_CHARSET__DISCONNECT_CLIENT:
-				snprintf(msg,sizeof(msg),"Can't initialize character set %d",client_myds->myconn->options.charset);
+				snprintf(msg,sizeof(msg),"Can't initialize character set %s",mysql_variables->client_get_value(SQL_CHARACTER_SET));
 				proxy_error("Can't initialize character set on %s, %d: Error %d (%s). Closing client connection %s:%d.\n",
 						myconn->parent->address, myconn->parent->port, 2019, msg, client_myds->addr.addr, client_myds->addr.port);
 				myds->destroy_MySQL_Connection_From_Pool(false);
@@ -2607,20 +2556,24 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				*_rc=-1;
 				return false;
 			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
-				ci = proxysql_find_charset_nr(client_myds->myconn->options.charset);
+				ci = proxysql_find_charset_nr(atoi(mysql_variables->client_get_value(SQL_CHARACTER_SET)));
 				if (ci)	not_supported_collation = ci->name;
 
 				ci = proxysql_find_charset_nr(mysql_thread___default_charset);
 				if (ci)	replace_collation = ci->name;
 
-				proxy_warning("Server doesn't support collation (%d) %s. Replacing it with the configured default (%d) %s. Client %s:%d\n",
-						client_myds->myconn->options.charset, not_supported_collation, 
+				proxy_warning("Server doesn't support collation (%s) %s. Replacing it with the configured default (%d) %s. Client %s:%d\n",
+						mysql_variables->client_get_value(SQL_CHARACTER_SET), not_supported_collation, 
 						mysql_thread___default_charset, replace_collation, client_myds->addr.addr, client_myds->addr.port);
 
-				client_myds->myconn->options.charset=mysql_thread___default_charset;
+				ss.clear();
+				ss << mysql_thread___default_charset;
+				mysql_variables->client_set_value(SQL_CHARACTER_SET, ss.str());
 				break;
 			case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT:
-				client_myds->myconn->options.charset=mysql_thread___default_charset;
+				ss.clear();
+				ss << mysql_thread___default_charset;
+				mysql_variables->client_set_value(SQL_CHARACTER_SET, ss.str());
 				break;
 			default:
 				proxy_error("Wrong configuration of the handle_unknown_charset\n");
@@ -2630,11 +2583,12 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
-	if (client_myds->myconn->options.charset_action == NAMES) {
+	auto  action = atoi(mysql_variables->client_get_value(SQL_CHARACTER_ACTION));
+	if (action == NAMES) {
 		if (myds->mypolls==NULL) {
 			thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 		}
-		int rc=myconn->async_set_names(myds->revents, client_myds->myconn->options.charset);
+		int rc=myconn->async_set_names(myds->revents, atoi(mysql_variables->client_get_value(SQL_CHARACTER_SET)));
 		if (rc==0) {
 			__sync_fetch_and_add(&MyHGM->status.backend_set_names, 1);
 			myds->DSS = STATE_MARIADB_GENERIC;
@@ -2647,8 +2601,10 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				int myerr=mysql_errno(myconn->mysql);
 				if (myerr >= 2000) {
 					if (myerr == 2019) {
-            			proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", client_myds->myconn->options.charset, myconn->parent->address, myconn->parent->port, mysql_thread___default_charset);
-						client_myds->myconn->options.charset = mysql_thread___default_charset;
+						proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", mysql_variables->client_get_value(SQL_CHARACTER_SET), myconn->parent->address, myconn->parent->port, mysql_thread___default_charset);
+						ss.clear();
+						ss << mysql_thread___default_charset;
+						mysql_variables->client_set_value(SQL_CHARACTER_SET, ss.str());
 					}
 					bool retry_conn=false;
 					// client error, serious
@@ -2683,11 +2639,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				// rc==1 , nothing to do for now
 			}
 		}
-	} else if (client_myds->myconn->options.charset_action == CHARSET) {
-		myds->DSS = STATE_MARIADB_GENERIC;
-		st=previous_status.top();
-		previous_status.pop();
-		NEXT_IMMEDIATE_NEW(st);
 	}
 	return false;
 }
@@ -3599,10 +3550,6 @@ handler_again:
 							}
 							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 
-								if (handler_again___verify_backend_charset()) {
-									goto handler_again;
-								}
-
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
 									// FIXME: for now it seems broken
 									if(mysql_variables->verify_variable(i))
@@ -4114,17 +4061,6 @@ handler_again:
 				}
 			}
 			break;
-		case SETTING_CHARSET:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_CHARSET(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
 
 		case SETTING_MULTI_STMT:
 			{
@@ -4162,6 +4098,8 @@ handler_again:
 		case SETTING_COLLATION_CONNECTION:
 		case SETTING_NET_WRITE_TIMEOUT:
 		case SETTING_MAX_JOIN_SIZE:
+		case SETTING_CHARSET:
+		case SETTING_SET_NAMES:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
 				if (mysql_variables->update_variable(status, rc)) {
