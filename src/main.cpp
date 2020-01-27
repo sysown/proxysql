@@ -1498,6 +1498,14 @@ bool ProxySQL_daemonize_phase3() {
 	return true;
 }
 
+void my_terminate(void) {
+	proxy_error("ProxySQL crashed due to exception\n");
+	print_backtrace();
+}
+
+namespace {
+	static const bool SET_TERMINATE = std::set_terminate(my_terminate);
+}
 
 int main(int argc, const char * argv[]) {
 
