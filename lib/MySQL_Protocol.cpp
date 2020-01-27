@@ -1719,15 +1719,20 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						memcpy(binds[i].buffer,&ts,sizeof(MYSQL_TIME));
 					}
 					break;
+				case MYSQL_TYPE_DECIMAL:
+				case MYSQL_TYPE_VARCHAR:
+				case MYSQL_TYPE_BIT:
+				case MYSQL_TYPE_JSON:
+				case MYSQL_TYPE_NEWDECIMAL:
+				case MYSQL_TYPE_ENUM:
+				case MYSQL_TYPE_SET:
 				case MYSQL_TYPE_TINY_BLOB:
 				case MYSQL_TYPE_MEDIUM_BLOB:
 				case MYSQL_TYPE_LONG_BLOB:
 				case MYSQL_TYPE_BLOB:
-				case MYSQL_TYPE_VARCHAR:
 				case MYSQL_TYPE_VAR_STRING:
 				case MYSQL_TYPE_STRING:
-				case MYSQL_TYPE_DECIMAL:
-				case MYSQL_TYPE_NEWDECIMAL:
+				case MYSQL_TYPE_GEOMETRY:
 					{
 						uint8_t l=0;
 						uint64_t len;
@@ -1742,6 +1747,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					}
 					break;
 				default:
+					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
+							"of query %s from user %s with default schema %s\n",
+							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
 					assert(0);
 					break;
 			}
