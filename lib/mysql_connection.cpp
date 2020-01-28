@@ -10,14 +10,38 @@
 #include "MySQL_Variables.h"
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
+MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
-	j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value?value:"");
+	if (idx == SQL_CHARACTER_SET_RESULTS) {
+		const MARIADB_CHARSET_INFO *ci = NULL;
+		ci = proxysql_find_charset_nr(atoi(value));
+
+		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
+	} else if (idx == SQL_COLLATION_CONNECTION) {
+		const MARIADB_CHARSET_INFO *ci = NULL;
+		ci = proxysql_find_charset_nr(atoi(value));
+
+		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->name)?ci->name:"");
+	} else {
+		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value?value:"");
+	}
 }
 
 void Variable::fill_client_internal_session(json &j, int idx) {
+	if (idx == SQL_CHARACTER_SET_RESULTS) {
+		const MARIADB_CHARSET_INFO *ci = NULL;
+		ci = proxysql_find_charset_nr(atoi(value));
+		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
 
-	j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value?value:"";
+	} else if (idx == SQL_COLLATION_CONNECTION) {
+		const MARIADB_CHARSET_INFO *ci = NULL;
+		ci = proxysql_find_charset_nr(atoi(value));
+
+		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
+	} else {
+		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value?value:"";
+	}
 }
 
 #define PROXYSQL_USE_RESULT
@@ -344,6 +368,8 @@ bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
 	return _ac;
 }
 
+void print_backtrace(void);
+
 unsigned int MySQL_Connection::set_charset(unsigned int _c, enum charset_action action) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
 
@@ -516,7 +542,7 @@ bool MySQL_Connection::match_tracked_options(MySQL_Connection *c) {
 }
 
 // non blocking API
-void MySQL_Connection::connect_start() {
+void MySQL_Connection::connect_start(const char* csname) {
 	PROXY_TRACE();
 	mysql=mysql_init(NULL);
 	assert(mysql);
@@ -528,12 +554,17 @@ void MySQL_Connection::connect_start() {
 	}
 	unsigned int timeout= 1;
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
-	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
+	const MARIADB_CHARSET_INFO * c = NULL;
+	if (csname)
+		c = proxysql_find_charset_nr(atoi(csname));
+	else
+		c = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+
 	if (!c) {
-		proxy_error("Not existing charset number %u\n", mysql_thread___default_charset);
+		proxy_error("Not existing charset number %s\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		assert(0);
 	}
-	set_charset(c->nr, NAMES);
+	set_charset(c->nr, CONNECT_START);
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	unsigned long client_flags = 0;
 	//if (mysql_thread___client_found_rows)
@@ -756,7 +787,7 @@ void MySQL_Connection::set_is_client() {
 
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
-MDB_ASYNC_ST MySQL_Connection::handler(short event) {
+MDB_ASYNC_ST MySQL_Connection::handler(short event, const char* csname) {
 	unsigned long long processed_bytes=0;	// issue #527 : this variable will store the amount of bytes processed during this event
 	if (mysql==NULL) {
 		// it is the first time handler() is being called
@@ -772,7 +803,7 @@ handler_again:
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"async_state_machine=%d\n", async_state_machine);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_START:
-			connect_start();
+			connect_start(csname);
 			if (async_exit_status) {
 				next_event(ASYNC_CONNECT_CONT);
 			} else {
@@ -1706,7 +1737,7 @@ int MySQL_Connection::async_set_names(short event, unsigned int c) {
 			return -1;
 			break;
 		case ASYNC_IDLE:
-			set_charset(c, NAMES);
+			//set_charset(c, CONNECT_START);
 			async_state_machine=ASYNC_SET_NAMES_START;
 		default:
 			handler(event);

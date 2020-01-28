@@ -32,7 +32,8 @@ public:
 enum charset_action {
 	UNKNOWN,
 	NAMES,
-	CHARSET
+	CHARSET,
+	CONNECT_START
 };
 
 class MySQL_Connection_userinfo {
@@ -163,7 +164,7 @@ class MySQL_Connection {
 	bool get_status_no_multiplex();
 	bool get_status_sql_log_bin0();
 	bool get_status_found_rows();
-	void connect_start();
+	void connect_start(const char* csname);
 	void connect_cont(short event);
 	void change_user_start();
 	void change_user_cont(short event);
@@ -182,7 +183,7 @@ class MySQL_Connection {
 	void set_option_start();
 	void set_option_cont(short event);
 	void set_query(char *stmt, unsigned long length);
-	MDB_ASYNC_ST handler(short event);
+	MDB_ASYNC_ST handler(short event, const char* csnmae=NULL);
 	void next_event(MDB_ASYNC_ST new_st);
 
 	int async_connect(short event);

@@ -70,6 +70,17 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, c
 	return NULL;
 }
 
+MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
+	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
+	do {
+		if (!strcasecmp(c->name, collatename)) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
@@ -571,7 +582,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
 	variables.default_schema=strdup((char *)"information_schema");
-	variables.default_charset=33;
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
 	variables.server_version=strdup((char *)"5.5.30");
@@ -804,7 +814,6 @@ uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 }
 
 unsigned int MySQL_Threads_Handler::get_variable_uint(char *name) {
-	if (!strcasecmp(name,"default_charset")) return variables.default_charset;
 	if (!strcasecmp(name,"handle_unknown_charset")) return variables.handle_unknown_charset;
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
@@ -1218,14 +1227,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		if (!strcasecmp(name,"monitor_wait_timeout")) {
 			return strdup((variables.monitor_wait_timeout ? "true" : "false"));
 		}
-	}
-	if (!strcasecmp(name,"default_charset")) {
-		const MARIADB_CHARSET_INFO *c = proxysql_find_charset_nr(variables.default_charset);
-		if (!c) {
-			proxy_error("Not existing charset number %u\n", variables.default_charset);
-			assert(c);
-		}
-		return strdup(c->csname);
 	}
 	if (!strcasecmp(name, "handle_unknown_charset")) {
 		sprintf(intbuf, "%d",variables.handle_unknown_charset);
@@ -2574,19 +2575,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, char *value) {	// this is t
 			return false;
 		}
 	}
-	if (!strcasecmp(name,"default_charset")) {
-		if (vallen) {
-			MARIADB_CHARSET_INFO * c=proxysql_find_charset_name(value);
-			if (c) {
-				variables.default_charset=c->nr;
-				return true;
-			} else {
-				return false;
-			}
-		} else {
-			return false;
-		}
-	}
 	if (!strcasecmp(name,"handle_unknown_charset")) {
 		uint8_t intv=atoi(value);
 		if (intv >= 0 && intv < HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE) {
@@ -3284,7 +3272,48 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
 	for (int i=0; i<SQL_NAME_LAST; i++) {
-		sess->mysql_variables->client_set_value(i, mysql_thread___default_variables[i]);
+		if (i == SQL_CHARACTER_SET) {
+			const MARIADB_CHARSET_INFO *ci = NULL;
+			int nr = 33; // if configuration has an error then use utf8_general_ci
+			ci = proxysql_find_charset_name(mysql_thread___default_variables[i]);
+			if (ci) {
+				nr = ci->nr;
+			} else {
+				proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable. Using character set 33.\n", 
+						mysql_thread___default_variables[SQL_CHARACTER_SET], mysql_tracked_variables[SQL_CHARACTER_SET].internal_variable_name);
+			}
+			std::stringstream ss;
+			ss << nr;
+			sess->mysql_variables->client_set_value(i, ss.str());
+		} else if (i == SQL_CHARACTER_SET_RESULTS) {
+			const MARIADB_CHARSET_INFO *ci = NULL;
+			int nr = 33; // if configuration has an error then use utf8_general_ci
+			ci = proxysql_find_charset_name(mysql_thread___default_variables[i]);
+			if (ci) {
+				nr = ci->nr;
+			} else {
+				proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable. Using character set 33.\n", 
+						mysql_thread___default_variables[SQL_CHARACTER_SET_RESULTS], mysql_tracked_variables[SQL_CHARACTER_SET_RESULTS].internal_variable_name);
+			}
+			std::stringstream ss;
+			ss << nr;
+			sess->mysql_variables->client_set_value(i, ss.str());
+		} else if (i == SQL_COLLATION_CONNECTION) {
+			const MARIADB_CHARSET_INFO *ci = NULL;
+			int nr = 33; // if configuration has an error then use utf8_general_ci
+			ci = proxysql_find_charset_collate(mysql_thread___default_variables[i]);
+			if (ci) {
+				nr = ci->nr;
+			} else {
+				proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable. Using character set 33.\n", 
+						mysql_thread___default_variables[SQL_COLLATION_CONNECTION], mysql_tracked_variables[SQL_COLLATION_CONNECTION].internal_variable_name);
+			}
+			std::stringstream ss;
+			ss << nr;
+			sess->mysql_variables->client_set_value(i, ss.str());
+		} else {
+			sess->mysql_variables->client_set_value(i, mysql_thread___default_variables[i]);
+		}
 	}
 
 	return sess;
@@ -4405,7 +4434,6 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
 	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
-	mysql_thread___default_charset=GloMTH->get_variable_uint((char *)"default_charset");
 	mysql_thread___handle_unknown_charset=GloMTH->get_variable_uint((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");

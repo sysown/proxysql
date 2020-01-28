@@ -31,7 +31,7 @@
 "SET sql_auto_is_null=OFF", "{'sql_auto_is_null':'OFF'}"
 "SET sql_auto_is_null=ON", "{'sql_auto_is_null':'ON'}"
 "set collation_connection='utf8mb4_general_ci'", "{'collation_connection':'utf8mb4_general_ci'}"
-"set collation_connection='utf8mb4_0900_ai_ci'", "{'collation_connection':'utf8mb4_0900_ai_ci'}"
+"set collation_connection='latin1_danish_ci'", "{'collation_connection':'latin1_danish_ci'}"
 "set collation_connection='latin1_swedish_ci'", "{'collation_connection':'latin1_swedish_ci'}"
 "set collation_connection='utf8_general_ci'", "{'collation_connection':'utf8_general_ci'}"
 "set net_write_timeout=30", "{'net_write_timeout':'30'}"

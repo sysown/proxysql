@@ -147,6 +147,9 @@ enum MySQL_DS_type {
 
 
 enum variable_name {
+	SQL_CHARACTER_SET,
+	SQL_CHARACTER_ACTION,
+	SQL_SET_NAMES,
 	SQL_SAFE_UPDATES,
 	SQL_SELECT_LIMIT,
 	SQL_SQL_MODE,
@@ -159,9 +162,6 @@ enum variable_name {
 	SQL_COLLATION_CONNECTION,
 	SQL_NET_WRITE_TIMEOUT,
 	SQL_MAX_JOIN_SIZE,
-	SQL_CHARACTER_SET,
-	SQL_CHARACTER_ACTION,
-	SQL_SET_NAMES,
 	SQL_NAME_LAST
 };
 
@@ -727,7 +727,6 @@ __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
-__thread unsigned int mysql_thread___default_charset;
 __thread unsigned int mysql_thread___handle_unknown_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
@@ -871,7 +870,6 @@ extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
-extern __thread unsigned int  mysql_thread___default_charset;
 extern __thread unsigned int mysql_thread___handle_unknown_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
@@ -977,21 +975,21 @@ extern __thread unsigned int g_seed;
 // field_7: variable name as displayed in admin , WITHOUT "default_"
 // field_8: default value
 mysql_variable_st mysql_tracked_variables[] {
+    { SQL_CHARACTER_SET, SETTING_CHARSET,                       false, true, false, (char *)"CHARSET", (char *)"CHARSET", (char *)"UTF8" } ,
+    { SQL_CHARACTER_ACTION, NONE,		                        false, false, false, (char *)"action", (char *)"action", (char *)"1" } ,
+    { SQL_SET_NAMES, SETTING_SET_NAMES,	                        false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" } ,
 	{ SQL_SAFE_UPDATES, SETTING_SQL_SAFE_UPDATES ,              true,  false, false, (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" } ,
     { SQL_SELECT_LIMIT, SETTING_SQL_SELECT_LIMIT ,              false,  false, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
 	{ SQL_SQL_MODE, SETTING_SQL_MODE ,                          true, false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" } ,
     { SQL_TIME_ZONE, SETTING_TIME_ZONE ,                        true, false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" } ,
-	{ SQL_CHARACTER_SET_RESULTS, SETTING_CHARACTER_SET_RESULTS, true,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"NULL" } ,
+	{ SQL_CHARACTER_SET_RESULTS, SETTING_CHARACTER_SET_RESULTS, true,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"UTF8" } ,
 	{ SQL_ISOLATION_LEVEL, SETTING_ISOLATION_LEVEL,             false, true,  true,  (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" } ,
 	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ,           false, true,  true,  (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" } ,
 	{ SQL_SESSION_TRACK_GTIDS, SETTING_SESSION_TRACK_GTIDS,     true, false, false, (char *)"session_track_gtids" , (char *)"session_track_gtids" , (char *)"OFF" } ,
     { SQL_SQL_AUTO_IS_NULL, SETTING_SQL_AUTO_IS_NULL,           true, false, false, (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" } ,
-    { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, false, (char *)"COLLATION_CONNECTION", (char *)"collation_connection", (char *)"" } ,
+    { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, false, (char *)"COLLATION_CONNECTION", (char *)"collation_connection", (char *)"utf8_general_ci" } ,
     { SQL_NET_WRITE_TIMEOUT, SETTING_NET_WRITE_TIMEOUT,         false, false, false, (char *)"NET_WRITE_TIMEOUT", (char *)"net_write_timeout", (char *)"60" } ,
     { SQL_MAX_JOIN_SIZE, SETTING_MAX_JOIN_SIZE,                 false, false, false, (char *)"MAX_JOIN_SIZE", (char *)"max_join_size", (char *)"18446744073709551615" } ,
-    { SQL_CHARACTER_SET, SETTING_CHARSET,                       false, true, false, (char *)"CHARSET", (char *)"CHARSET", (char *)"DEFAULT" } ,
-    { SQL_CHARACTER_ACTION, NONE,		                        false, false, false, (char *)"action", (char *)"action", (char *)"1" } ,
-    { SQL_SET_NAMES, SETTING_SET_NAMES,	                        false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" } ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];

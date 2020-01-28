@@ -309,8 +309,14 @@ void * my_conn_thread(void *arg) {
 	if (mysqlconns==NULL) {
 		exit(EXIT_FAILURE);
 	}
+
+	std::vector<std::string> cs = {"latin1", "utf8", "utf8mb4", "latin2", "latin7"};
+
 	for (i=0; i<count; i++) {
 		MYSQL *mysql=mysql_init(NULL);
+		std::string nextcs = cs[i%cs.size()];
+
+		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
 		if (mysql==NULL) {
 			exit(EXIT_FAILURE);
 		}
@@ -393,9 +399,11 @@ void * my_conn_thread(void *arg) {
 				testPassed = false;
 				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
+				ok(testPassed, "Command : %s", testCases[r2].command.c_str());
+				exit(0);
 			}
 		}
-		ok(testPassed, "Test passed");
+		ok(testPassed, "Command : %s", testCases[r2].command.c_str());
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
 
@@ -421,7 +429,7 @@ int main(int argc, char *argv[]) {
 
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' where variable_name='mysql-default_sql_mode'");
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='OFF' where variable_name='mysql-default_sql_safe_update'");
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='utf8' where variable_name='mysql-default_character_set_results'");
+	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='NULL' where variable_name='mysql-default_character_set_results'");
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='REPEATABLE READ' where variable_name='mysql-default_isolation_level'");
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='REPEATABLE READ' where variable_name='mysql-default_tx_isolation'");
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='utf8mb4_general_ci' where variable_name='mysql-default_collation_connection'");
