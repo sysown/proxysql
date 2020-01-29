@@ -1842,6 +1842,8 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	const char *Q3B=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q4=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q5=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id)";
+	const char *Q6=(char *)"select hostname from (select writer_hostgroup from mysql_replication_hostgroups join mysql_servers on reader_hostgroup=hostgroup_id and hostname='%s' and  port=%d) join mysql_servers on hostgroup_id=writer_hostgroup and status=0";
+
 	if (GloAdmin==NULL) {
 		return;
 	}
@@ -1879,6 +1881,30 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 		case 0:
 			if (num_rows==0) {
 				// the server has read_only=0 , but we can't find any writer, so we perform a swap
+				
+				 // before we perform a swap, check if there's already a server in writer group,if so, we stop swapping 
+                                 // and print a warning message in the log
+                                cols=0;
+                                error=NULL;
+                                affected_rows=0;
+                                sprintf(query,Q6,hostname,port);
+ 
+                                wrlock();
+                                mydb->execute_statement(query,&error,&cols,&affected_rows,&resultset);
+                                wrunlock();
+                                if(resultset==NULL){
+                                    goto __exit_read_only_action;
+                                }
+ 
+                                int cc = 0;
+                                cc=resultset->rows_count;
+                                delete resultset;
+                                resultset=NULL;
+                                if(cc > 0){
+                                   // there's already one server with ONLINE status in the writer's group
+                                    proxy_warning("host:%s:%d with read_only=%d doesn't seem to be right. Please pay attention!!!\n",hostname,port,read_only);
+                                    break;
+                                }
 				GloAdmin->mysql_servers_wrlock();
 				if (GloMTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
