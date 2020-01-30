@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
 
 	fprintf(stderr, "mem before %d, me after %d, diff %d\n", mem_before, mem_after, mem_after - mem_before);
 
-	ok(mem_after - mem_before < 500000, "Everything is ok");
+	ok(mem_after - mem_before < 2000000, "Everything is ok");
 	return exit_status();
 }
 
