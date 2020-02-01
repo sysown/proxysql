@@ -11,35 +11,7 @@
 
 #include "tap.h"
 #include "command_line.h"
-
-#define MYSQL_QUERY(mysql, query) \
-	do { \
-		if (mysql_query(mysql, query)) { \
-			fprintf(stderr, "File %s, line %d, Error: %s\n", \
-					__FILE__, __LINE__, mysql_error(mysql)); \
-			return exit_status(); \
-		} \
-	} while(0)
-
-
-int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value) {
-	char query[128];
-
-	snprintf(query, sizeof(query),"show variables like '%s'", var_name.c_str());
-	if (mysql_query(mysql, query)) {
-		fprintf(stderr, "Failed to execute SHOW VARIABLES LIKE : no %d, %s\n",
-				mysql_errno(mysql), mysql_error(mysql));
-		return -1;
-	}
-
-	MYSQL_RES *result;
-	MYSQL_ROW row;
-	result = mysql_store_result(mysql);
-
-	row = mysql_fetch_row(result);
-	var_value = row[1];
-	mysql_free_result(result);
-}
+#include "utils.h"
 
 int select_config_file(MYSQL* mysql, std::string& resultset) {
 	if (mysql_query(mysql, "select config file")) {
