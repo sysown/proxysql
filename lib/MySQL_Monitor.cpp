@@ -140,15 +140,23 @@ class MonMySrvC {
 	public:
 	char *address;
 	uint16_t port;
-	PtrArray *conns;
+	std::unique_ptr<PtrArray> conns;
 	MonMySrvC(char *a, uint16_t p) {
 		address = strdup(a);
 		port = p;
-		conns = new PtrArray();
+		conns = std::unique_ptr<PtrArray>(new PtrArray());
 	};
 	~MonMySrvC() {
 		free(address);
-		delete conns;
+		if (conns) {
+			while (conns->len) {
+				MYSQL* mysql = static_cast<MYSQL*>(conns->index(0));
+				if (mysql) {
+					mysql_close(mysql); mysql=NULL;
+				}
+				conns->remove_index_fast(0);
+			}
+		}
 	}
 };
 
@@ -172,6 +180,17 @@ public:
 		pthread_mutex_init(&m2, NULL);
 #endif // DEBUG
 	};
+	~MySQL_Monitor_Connection_Pool() {
+		if (servers) {
+			while(servers->len) {
+				MonMySrvC *srv = static_cast<MonMySrvC *>(servers->index(0));
+				if (srv) {
+					delete srv;
+				}
+				servers->remove_index_fast(0);
+			}
+		}
+	}
 	void conn_register(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
