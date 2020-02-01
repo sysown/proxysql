@@ -74,13 +74,13 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t || true
+	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t test_ps_large_result-t || true
 
 OPT=-O2
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp
+SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp
 
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t
+tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -101,6 +101,9 @@ select_config_file-t: select_config_file-t.cpp $(TAP_LIBDIR)/libtap.a
 
 test_set_character_results-t: test_set_character_results-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_set_character_results-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -lssl -lcrypto -ldl -lpthread -o test_set_character_results-t
+
+test_ps_large_result-t: test_ps_large_result-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_ps_large_result-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -lssl -lcrypto -ldl -lpthread -o test_ps_large_result-t
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_GALERA -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
