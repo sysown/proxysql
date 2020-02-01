@@ -3947,6 +3947,10 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
 
+		if (mmsd) {
+			delete mmsd;
+			mmsd = NULL;
+		}
 		unsigned int glover;
 		t1=monotonic_time();
 		
