@@ -2387,41 +2387,108 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
 		if (r) {
-		total_size+=r->length;
-		if (r->length > 0xFFFFFF) {
-			total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-		}
-		total_size+=sizeof(mysql_hdr);
-		while(r->next) {
-			r=r->next;
 			total_size+=r->length;
 			if (r->length > 0xFFFFFF) {
 				total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
 			}
 			total_size+=sizeof(mysql_hdr);
-		}
-		PtrSize_t pkt;
-		pkt.size=total_size;
-		pkt.ptr=malloc(pkt.size);
-		total_size=0;
-		r=_stmt->result.data;
-		add_row2(r,(unsigned char *)pkt.ptr);
-		total_size+=r->length;
-		if (r->length > 0xFFFFFF) {
-			total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-		}
-		total_size+=sizeof(mysql_hdr);
-		while(r->next) {
-			r=r->next;
-			add_row2(r,(unsigned char *)pkt.ptr+total_size);
-			total_size+=r->length;
-			if (r->length > 0xFFFFFF) {
-				total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+			while(r->next) {
+				r=r->next;
+				total_size+=r->length;
+				if (r->length > 0xFFFFFF) {
+					total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+				}
+				total_size+=sizeof(mysql_hdr);
 			}
-			total_size+=sizeof(mysql_hdr);
-		}
-		PSarrayOUT.add(pkt.ptr,pkt.size);
-		resultset_size+=pkt.size;
+#define MAXBUFFSTMT 12*1024*1024  // hardcoded to LESS *very important* than 16MB
+			if (total_size < MAXBUFFSTMT) {
+				PtrSize_t pkt;
+				pkt.size=total_size;
+				pkt.ptr=malloc(pkt.size);
+				total_size=0;
+				r=_stmt->result.data;
+				add_row2(r,(unsigned char *)pkt.ptr);
+				total_size+=r->length;
+				if (r->length > 0xFFFFFF) {
+					total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+				}
+				total_size+=sizeof(mysql_hdr);
+				while(r->next) {
+					r=r->next;
+					add_row2(r,(unsigned char *)pkt.ptr+total_size);
+					total_size+=r->length;
+					if (r->length > 0xFFFFFF) {
+						total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+					}
+					total_size+=sizeof(mysql_hdr);
+				}
+				PSarrayOUT.add(pkt.ptr,pkt.size);
+				if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
+					// generate a heartbeat every 256MB
+					unsigned long long curtime=monotonic_time();
+					c_myds->sess->thread->atomic_curtime=curtime;
+				}
+				resultset_size+=pkt.size;
+			} else { // this code fixes a bug: resultset larger than 4GB would cause a crash
+				unsigned long long tmp_pkt_size = 0;
+				r=_stmt->result.data;
+				MYSQL_ROWS * r2 = NULL;
+				while (r) {
+					if (r->length >= MAXBUFFSTMT) {
+						// we have a large row
+						// we will send just that
+						tmp_pkt_size = r->length;
+						if (r->length > 0xFFFFFF) {
+							tmp_pkt_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
+						}
+						tmp_pkt_size += sizeof(mysql_hdr);
+						PtrSize_t pkt;
+						pkt.size=tmp_pkt_size;
+						pkt.ptr=malloc(pkt.size);
+						add_row2(r,(unsigned char *)pkt.ptr);
+						PSarrayOUT.add(pkt.ptr,pkt.size);
+						if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
+							// generate a heartbeat every 256MB
+							unsigned long long curtime=monotonic_time();
+							c_myds->sess->thread->atomic_curtime=curtime;
+						}
+						resultset_size+=pkt.size;
+						r=r->next; // next row
+					} else { // we have small row
+						r2 = r;
+						tmp_pkt_size = 0;
+						unsigned int a = 0;
+						while (r && (tmp_pkt_size + r->length) < MAXBUFFSTMT) {
+							a++;
+							tmp_pkt_size += r->length;
+							tmp_pkt_size += sizeof(mysql_hdr);
+							//if (r->next) {
+								r = r->next;
+							//}
+						}
+						r = r2; // we reset it back to the beginning
+						if (tmp_pkt_size) { // this should always be true
+							unsigned long long tmp2 = 0;
+							PtrSize_t pkt;
+							pkt.size=tmp_pkt_size;
+							pkt.ptr=malloc(pkt.size);
+							while (tmp2 < tmp_pkt_size) {
+								add_row2(r,(unsigned char *)pkt.ptr+tmp2);
+								tmp2 += r->length;
+								tmp2 += sizeof(mysql_hdr);
+								r = r->next;
+							}
+							PSarrayOUT.add(pkt.ptr,pkt.size);
+							if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
+								// generate a heartbeat every 256MB
+								unsigned long long curtime=monotonic_time();
+								c_myds->sess->thread->atomic_curtime=curtime;
+							}
+							resultset_size+=pkt.size;
+						}
+					}
+				}
+			}
 		}
 		add_eof();
 	}
@@ -2485,7 +2552,9 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 			pkt_sid++;
 			memcpy(offset, &myhdr, sizeof(mysql_hdr));
 			offset+=sizeof(mysql_hdr);
-			memcpy(offset, row->data+copied, myhdr.pkt_length);
+			char *o = (char *) row->data;
+			o += copied;
+			memcpy(offset, o, myhdr.pkt_length);
 			offset+=0xFFFFFF;
 			// we are writing a large packet (over 16MB), we assume we are always outside the buffer
 			copied+=0xFFFFFF;
@@ -2497,7 +2566,9 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 		pkt_sid++;
 		memcpy(offset, &myhdr, sizeof(mysql_hdr));
 		offset+=sizeof(mysql_hdr);
-		memcpy(offset, row->data+copied, myhdr.pkt_length);
+		char *o = (char *) row->data;
+		o += copied;
+		memcpy(offset, o, myhdr.pkt_length);
 		// we are writing a large packet (over 16MB), we assume we are always outside the buffer
 	}
 	sid=pkt_sid;
