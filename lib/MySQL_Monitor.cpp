@@ -717,6 +717,10 @@ void * monitor_connect_thread(void *arg) {
 		) {
 			proxy_error("Server %s:%d is returning \"Access denied\" for monitoring user\n", mmsd->hostname, mmsd->port);
 		}
+		else if (strncmp(mmsd->mysql_error_msg,"Your password has expired.",strlen("Your password has expired."))==0)
+		{
+			proxy_error("Server %s:%d is returning \"Your password has expired.\" for monitoring user\n", mmsd->hostname, mmsd->port);
+		}
 	} else {
 		connect_success = true;
 	}
