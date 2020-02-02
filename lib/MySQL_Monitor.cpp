@@ -2382,7 +2382,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				resultset=NULL;
 			}
 			char *new_query=NULL;
-			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' AND ping_error NOT LIKE 'Your password has expired.%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
