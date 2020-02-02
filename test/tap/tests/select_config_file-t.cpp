@@ -15,7 +15,7 @@
 
 int select_config_file(MYSQL* mysql, std::string& resultset) {
 	if (mysql_query(mysql, "select config file")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
+	    fprintf(stderr, "File %s, line %d, Error: 2 %s\n",
 	              __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 
 	plan(1);
-	diag("Testing SELECT CONFIG FILE");
+	diag("Testing SELECT CONFIG INTO OUTFILE");
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
@@ -108,6 +108,12 @@ int main(int argc, char** argv) {
 
 		ok(!str.compare(resultset), "Files are equal");
 	}
+
+#if 0
+	std::ofstream out("output.cnf");
+	out << resultset;
+	out.close();
+#endif
 
 	MYSQL_QUERY(mysql, "load mysql variables from disk");
 	MYSQL_QUERY(mysql, "load admin variables from disk");
