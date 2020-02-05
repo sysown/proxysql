@@ -2885,6 +2885,8 @@ void Query_Processor::load_mysql_firewall_users(SQLite3_result *resultset) {
 				it2->second = WUS_DETECTING;
 			} else if (strcmp(mode,(char *)"PROTECTING")==0) {
 				it2->second = WUS_PROTECTING;
+			} else if (strcmp(mode,(char *)"OFF")==0) {
+				it2->second = WUS_OFF;
 			}
 		} else {
 			//whitelist_user_setting *wus = (whitelist_user_setting *)malloc(sizeof(whitelist_user_setting));
