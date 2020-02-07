@@ -338,6 +338,116 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 	return rows;
 }
 
+int ProxySQL_Config::Write_Restapi_to_configfile(std::string& data) {
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* sqlite_resultset = NULL;
+
+	char *query=(char *)"SELECT * FROM restapi_routes";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		proxy_error("Error on read from restapi_router: %s\n", error);
+		return -1;
+	} else {
+		if (sqlite_resultset) {
+			data += "restapi:\n(\n";
+			bool isNext = false;
+			for (auto r : sqlite_resultset->rows) {
+				if (isNext)
+					data += ",\n";
+				data += "\t{\n";
+				addField(data, "id", r->fields[0], "");
+				addField(data, "active", r->fields[1], "");
+				addField(data, "interval_ms", r->fields[2], "");
+				addField(data, "method", r->fields[3], "");
+				addField(data, "uri", r->fields[4]);
+				addField(data, "script", r->fields[5]);
+				addField(data, "comment", r->fields[6]);
+
+				data += "\t}";
+				isNext = true;
+			}
+			data += "\n)\n";
+		}
+	}
+
+	if (sqlite_resultset)
+		delete sqlite_resultset;
+
+	return 0;
+}
+
+int ProxySQL_Config::Read_Restapi_from_configfile() {
+	const Setting& root = GloVars.confFile->cfg.getRoot();
+	if (root.exists("restapi")==false) return 0;
+	const Setting &routes = root["restapi"];
+	int count = routes.getLength();
+	//fprintf(stderr, "Found %d users\n",count);
+	int i;
+	int rows=0;
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	char *q=(char *)"INSERT OR REPLACE INTO restapi VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
+	for (i=0; i< count; i++) {
+		const Setting &route = routes[i];
+		int id;
+		int active=1;
+		// variable for parsing interval_ms
+		int interval_ms=0;
+
+		std::string method;
+		std::string uri;
+		std::string script;
+		std::string comment="";
+
+		// validate arguments
+		if (route.lookupValue("id", id)==false) {
+			proxy_error("Admin: detected a restapi route in config file without a mandatory id\n");
+			continue;
+		}
+		route.lookupValue("active", active);
+		route.lookupValue("interval_ms", interval_ms);
+		if (route.lookupValue("method", method)==false) {
+			proxy_error("Admin: detected a restapi route in config file without a mandatory method\n");
+			continue;
+		}
+		if (route.lookupValue("uri", uri)==false) {
+			proxy_error("Admin: detected a restapi route in config file without a mandatory uri\n");
+			continue;
+		}
+		if (route.lookupValue("script", script)==false) {
+			proxy_error("Admin: detected a restapi route in config file without a mandatory script\n");
+			continue;
+		}
+		route.lookupValue("comment", comment);
+
+		int query_len=0;
+		query_len+=strlen(q) +
+			strlen(std::to_string(id).c_str()) +
+			strlen(std::to_string(active).c_str()) +
+			strlen(std::to_string(interval_ms).c_str()) +
+			strlen(method.c_str()) +
+			strlen(uri.c_str()) +
+			strlen(script.c_str()) +
+			strlen(comment.c_str()) +
+			40;
+		char *query=(char *)malloc(query_len);
+		sprintf(query, q,
+			id, active,
+			interval_ms,
+			method.c_str(),
+			uri.c_str(),
+			script.c_str(),
+			comment.c_str()
+		);
+		admindb->execute(query);
+		free(query);
+		rows++;
+	}
+	admindb->execute("PRAGMA foreign_keys = ON");
+	return rows;
+}
+
 int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 	char* error = NULL;
 	int cols = 0;

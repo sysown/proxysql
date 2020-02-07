@@ -17,6 +17,7 @@
 #include "query_processor.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
+#include "proxysql_restapi.h"
 
 
 #include <libdaemon/dfork.h>
@@ -1261,6 +1262,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 		GloAdmin->init_mysql_servers();
 		GloAdmin->init_proxysql_servers();
 		GloAdmin->load_scheduler_to_runtime();
+		GloAdmin->proxysql_restapi().load_restapi_to_runtime();
 #ifdef DEBUG
 		std::cerr << "Main phase3 : GloAdmin initialized in ";
 #endif
