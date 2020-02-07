@@ -18,6 +18,7 @@
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "proxysql_restapi.h"
+#include "Web_Interface.hpp"
 
 
 #include <libdaemon/dfork.h>
@@ -39,6 +40,9 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
 void * __mysql_ldap_auth;
+
+volatile create_Web_Interface_t * create_Web_Interface = NULL;
+void * __web_interface;
 
 // absolute path of ssl files
 char *ssl_key_fp = NULL;
@@ -695,7 +699,7 @@ ClickHouse_Authentication *GloClickHouseAuth;
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
-
+Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
 
 MySQL_Monitor *GloMyMon;
@@ -817,6 +821,14 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			rc=root.lookupValue("errorlog", errorlog_path);
 			if (rc==true) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
+			}
+		}
+		if (root.exists("web_interface_plugin")==true) {
+			string web_interface_plugin;
+			bool rc;
+			rc=root.lookupValue("web_interface_plugin", web_interface_plugin);
+			if (rc==true) {
+				GloVars.web_interface_plugin=strdup(web_interface_plugin.c_str());
 			}
 		}
 		if (root.exists("ldap_auth_plugin")==true) {
@@ -966,6 +978,9 @@ void ProxySQL_Main_init_Query_module() {
 	GloQPro->print_version();
 	GloAdmin->init_mysql_query_rules();
 	GloAdmin->init_mysql_firewall();
+	if (GloWebInterface) {
+		GloWebInterface->print_version();
+	}
 }
 
 void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
@@ -1184,6 +1199,35 @@ void ProxySQL_Main_init() {
 
 
 static void LoadPlugins() {
+	if (GloVars.web_interface_plugin) {
+		dlerror();
+		char * dlsym_error = NULL;
+		dlerror();
+		dlsym_error=NULL;
+		__web_interface = dlopen(GloVars.web_interface_plugin, RTLD_NOW);
+		if (!__web_interface) {
+			cerr << "Cannot load library: " << dlerror() << '\n';
+			exit(EXIT_FAILURE);
+		} else {
+			dlerror();
+			create_Web_Interface = (create_Web_Interface_t *) dlsym(__web_interface, "create_Web_Interface_func");
+			dlsym_error = dlerror();
+			if (dlsym_error!=NULL) {
+				cerr << "Cannot load symbol create_Web_Interface: " << dlsym_error << '\n';
+				exit(EXIT_FAILURE);
+			}
+		}
+		if (__web_interface==NULL || dlsym_error) {
+			proxy_error("Unable to load Web_Interface from %s\n", GloVars.web_interface_plugin);
+			exit(EXIT_FAILURE);
+		} else {
+			GloWebInterface = create_Web_Interface();
+			if (GloWebInterface) {
+				//GloAdmin->init_WebInterfacePlugin();
+				//GloAdmin->load_ldap_variables_to_runtime();
+			}
+		}
+	}
 	if (GloVars.ldap_auth_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;
@@ -1814,6 +1858,9 @@ finish:
 
 #ifdef RUNNING_ON_VALGRIND
 	if (RUNNING_ON_VALGRIND==0) {
+		if (__web_interface) {
+			dlclose(__web_interface);
+		}
 		if (__mysql_ldap_auth) {
 			dlclose(__mysql_ldap_auth);
 		}
