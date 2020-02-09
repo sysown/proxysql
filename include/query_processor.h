@@ -374,6 +374,7 @@ class Query_Processor {
 	SQLite3_result * get_mysql_firewall_whitelist_rules();
 	SQLite3_result * get_mysql_firewall_whitelist_sqli_fingerprints();
 	bool whitelisted_sqli_fingerprint(char *);
+	friend Web_Interface_plugin;
 };
 
 typedef Query_Processor * create_Query_Processor_t();

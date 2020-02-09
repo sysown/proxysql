@@ -409,6 +409,7 @@ class ProxySQL_Cluster;
 class MySQL_ResultSet;
 class Query_Processor_Output;
 class MySrvC;
+class Web_Interface_plugin;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 
