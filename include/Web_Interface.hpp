@@ -5,6 +5,8 @@ class Web_Interface {
     public:
     Web_Interface() {};
     virtual ~Web_Interface() {};
+    virtual void start(int p) {};
+    virtual void stop() {};
     virtual void print_version() {};
 };
 

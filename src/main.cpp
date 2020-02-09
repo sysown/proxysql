@@ -530,9 +530,10 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
 			proxy_error("Unable to run EVP_PKEY_assign_RSA()\n");
 			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 		}
-		x1 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_CA_Certificate", 2, 3650, NULL, NULL);
+		time_t t = time(NULL);
+		x1 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_CA_Certificate", t, 3650, NULL, NULL);
 		write_x509(ssl_ca_fp, x1);
-		x2 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_Server_Certificate", 3, 3650, x1, pk);
+		x2 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_Server_Certificate", t, 3650, x1, pk);
 		write_x509(ssl_cert_fp, x2);
 
 		rsa = NULL;
@@ -978,9 +979,9 @@ void ProxySQL_Main_init_Query_module() {
 	GloQPro->print_version();
 	GloAdmin->init_mysql_query_rules();
 	GloAdmin->init_mysql_firewall();
-	if (GloWebInterface) {
-		GloWebInterface->print_version();
-	}
+//	if (GloWebInterface) {
+//		GloWebInterface->print_version();
+//	}
 }
 
 void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
@@ -1262,6 +1263,8 @@ static void LoadPlugins() {
 
 
 void ProxySQL_Main_init_phase2___not_started() {
+	LoadPlugins();
+
 	ProxySQL_Main_init_main_modules();
 	ProxySQL_Main_init_Admin_module();
 	GloMTH->print_version();
@@ -1278,7 +1281,6 @@ void ProxySQL_Main_init_phase2___not_started() {
 		GloVars.confFile->CloseFile();
 	}
 
-	LoadPlugins();
 
 	ProxySQL_Main_init_Auth_module();
 
