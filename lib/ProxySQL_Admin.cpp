@@ -2585,6 +2585,58 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	}
 
+	if (!strncasecmp("SAVE CONFIG TO FILE", query_no_space, strlen("SAVE CONFIG TO FILE"))) {
+		std::string fileName = query_no_space + strlen("SAVE CONFIG TO FILE");
+
+		fileName.erase(0, fileName.find_first_not_of("\t\n\v\f\r "));
+		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
+		if (fileName.size() == 0) {
+			proxy_error("ProxySQL Admin Error: empty file name\n");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, "ProxySQL Admin Error: empty file name");
+			return false;
+		}
+		std::string data;
+		data.reserve(100000);
+		data += config_header;
+		int rc = pa->proxysql_config().Write_Global_Variables_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Users_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Query_Rules_to_configfile(data);
+		rc = pa->proxysql_config().Write_MySQL_Servers_to_configfile(data);
+		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
+		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc) {
+			std::stringstream ss;
+			proxy_error("ProxySQL Admin Error: Cannot extract configuration\n");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, "ProxySQL Admin Error: Cannot extract configuration");
+			return false;
+		} else {
+			std::ofstream out;
+			out.open(fileName);
+			if (out.is_open()) {
+				out << data;
+				out.close();
+				if (!out) {
+					std::stringstream ss;
+					ss << "ProxySQL Admin Error: Error writing file " << fileName;
+					proxy_error("%s\n", ss.str().c_str());
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char*)ss.str().c_str());
+					return false;
+				} else {
+					std::stringstream ss;
+					ss << "File " << fileName << " is saved.";
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, (char*)ss.str().c_str());
+					return false;
+				}
+			} else {
+				std::stringstream ss;
+				ss << "ProxySQL Admin Error: Cannot open file " << fileName;
+				proxy_error("%s\n", ss.str().c_str());
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char*)ss.str().c_str());
+				return false;
+			}
+		}
+	}
+
 	return true;
 }
 
@@ -3903,8 +3955,8 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SELECT CONFIG TO", query_no_space, strlen("SELECT CONFIG TO"))) {
-		std::string fileName = query_no_space + strlen("SELECT CONFIG TO");
+	if (!strncasecmp("SELECT CONFIG INTO OUTFILE", query_no_space, strlen("SELECT CONFIG INTO OUTFILE"))) {
+		std::string fileName = query_no_space + strlen("SELECT CONFIG INTO OUTFILE");
 		fileName.erase(0, fileName.find_first_not_of("\t\n\v\f\r "));
 		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
 		if (fileName.size() == 0) {
