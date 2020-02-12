@@ -2106,7 +2106,7 @@ bool Query_Processor::find_firewall_whitelist_rule(char *username, char *client_
 	s += rand_del;
 	s += schemaname;
 	s += rand_del;
-	s += flagIN;
+	s += to_string(flagIN);
 	std::unordered_map<std::string, void *>:: iterator it;
 	it = global_mysql_firewall_whitelist_rules.find(s);
 	if (it != global_mysql_firewall_whitelist_rules.end()) {

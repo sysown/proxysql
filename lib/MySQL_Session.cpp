@@ -3371,7 +3371,7 @@ __get_pkts_from_client:
 									}
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
-									if (mirror==false) {
+									if (mirror==false && rc_break==false) {
 										if (mysql_thread___automatic_detect_sqli) {
 											if (client_myds->com_field_list == false) {
 												if (qpo->firewall_whitelist_mode != WUS_OFF) {
