@@ -120,6 +120,11 @@ start() {
   getpid
   if [ "X$pid" = "X" ]
    then
+                if [ -d /var/run/proxysql ]; then
+                        chmod 1777 /var/run/proxysql
+                else
+                        mkdir /var/run/proxysql && chmod 1777 /var/run/proxysql
+                fi
 		if [ -f $OLDDATADIR/proxysql.db ]
 		then
 			if [ ! -f $DATADIR/proxysql.db ]
