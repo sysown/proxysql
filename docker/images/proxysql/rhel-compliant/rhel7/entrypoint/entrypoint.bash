@@ -1,11 +1,15 @@
 #!/bin/bash
 set -eu
 
+# For troubleshooting...
+# while true; do echo hello; sleep 2; done
+
 echo "==> Build environment:"
 env
 
 echo "==> Dirty patching to ensure OS deps are installed"
-yum -y install gnutls-devel libtool || true
+yum -y install python2 gnutls-devel libtool || true
+ln -s /usr/bin/python2.7 /usr/bin/python
 
 echo "==> Cleaning"
 # Delete package if exists
