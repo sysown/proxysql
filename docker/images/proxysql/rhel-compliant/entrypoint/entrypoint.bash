@@ -4,6 +4,9 @@ set -eu
 echo "==> Build environment:"
 env
 
+echo "==> Dirty patching to ensure OS deps are installed"
+yum -y install gnutls-devel libtool || true
+
 echo "==> Cleaning"
 # Delete package if exists
 rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.x86_64.rpm || true
