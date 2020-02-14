@@ -8,8 +8,16 @@ echo "==> Build environment:"
 env
 
 echo "==> Dirty patching to ensure OS deps are installed"
-yum -y install python2 gnutls-devel libtool || true
-ln -s /usr/bin/python2.7 /usr/bin/python
+
+if [[ $(rpm -E %{rhel} | cut -d"." -f1) -eq "7" ]]; 
+then 
+    echo "==> Installing dependancies for RHEL compliant version 7"
+    yum -y install gnutls-devel libtool || true
+else
+    echo "==> Installing dependancies for RHEL compliant version 8"
+    yum -y install python2 gnutls-devel libtool || true
+    ln -s /usr/bin/python2.7 /usr/bin/python
+fi
 
 echo "==> Cleaning"
 # Delete package if exists
