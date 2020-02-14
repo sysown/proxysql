@@ -377,7 +377,7 @@ binaries/proxysql_${CURVER}-ubuntu18_amd64.deb:
 
 binaries/proxysql_${CURVER}-debian7_amd64.deb:
 	docker-compose up debian7_build
-	docker-compose rm -f
+	#docker-compose rm -f
 
 binaries/proxysql_${CURVER}-debian8_amd64.deb:
 	docker-compose up debian8_build
