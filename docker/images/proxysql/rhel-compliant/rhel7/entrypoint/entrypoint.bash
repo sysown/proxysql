@@ -9,7 +9,7 @@ env
 
 echo "==> Dirty patching to ensure OS deps are installed"
 
-if [[ -f "/usr/bin/python" ]];
+if [[ -f "/usr/bin/python" ]]  || [[ -h "/usr/bin/python" ]];
 then 
     echo "==> Installing dependancies for RHEL compliant version 7"
     yum -y install gnutls-devel libtool || true
