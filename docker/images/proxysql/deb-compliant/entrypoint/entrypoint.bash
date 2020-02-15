@@ -4,7 +4,9 @@ set -eu
 
 # Dirty patch to ensure OS deps are installed:
 apt-get update
-apt-get -y install gnutls-dev libgnutls28-dev libtool || true
+apt-get -y install gnutls-dev || true
+apt-get -y install libgnutls28-dev || true
+apt-get -y install libtool || true
 
 # Delete package if exists
 rm -f "/opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_amd64.deb" || true
