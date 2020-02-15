@@ -16,7 +16,7 @@ then
 else
     echo "==> Installing dependancies for RHEL compliant version 8"
     yum -y install python2 gnutls-devel libtool || true
-    ln -s /usr/bin/python2.7 /usr/bin/python
+    ln -s /usr/bin/python2.7 /usr/bin/python || true
 fi
 
 echo "==> Cleaning"
