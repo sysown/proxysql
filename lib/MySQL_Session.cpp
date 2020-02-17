@@ -2526,6 +2526,33 @@ handler_again:
 				}
 			}
 			break;
+		case SHOW_WARNINGS:
+			{
+				MySQL_Data_Stream *myds=mybe->server_myds;
+				MySQL_Connection *myconn=myds->myconn;
+				int pre_rc = myconn->async_query(mybe->server_myds->revents,(char *)"show warnings", strlen((char *)"show warnings"));
+				if (pre_rc==0) {
+					int myerr=mysql_errno(myconn->mysql);
+
+					RequestEnd(myds);
+					writeout();
+
+					handler_ret = 0;
+					return handler_ret;
+					if ( myerr > 0 ) {
+						char sqlstate[10];
+						sprintf(sqlstate,"%s",mysql_sqlstate(mybe->server_myds->myconn->mysql));
+						RequestEnd(mybe->server_myds);
+						break;
+					}
+					mybe->server_myds->myconn->async_free_result();
+					NEXT_IMMEDIATE(PROCESSING_QUERY);
+				} else {
+					goto handler_again;
+				}
+				break;
+			}
+			break;
 		case FAST_FORWARD:
 			if (mybe->server_myds->mypolls==NULL) {
 				// register the mysql_data_stream
@@ -2776,6 +2803,13 @@ handler_again:
 						default:
 							assert(0);
 							break;
+					}
+
+					auto warn_no = mysql_warning_count(myconn->mysql);
+					if (warn_no > 0) {
+						myconn->async_state_machine=ASYNC_IDLE;
+						myds->DSS=STATE_MARIADB_GENERIC;
+						NEXT_IMMEDIATE(SHOW_WARNINGS);
 					}
 
 					RequestEnd(myds);

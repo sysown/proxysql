@@ -971,6 +971,8 @@ handler_again:
 			} else {
 				async_fetch_row_start=false;
 				if (mysql_row) {
+					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS)
+						proxy_warning("MySQL Warning. Level: [%s], Code: [%s], Message: [%s]\n", mysql_row[0], mysql_row[1], mysql_row[2]);
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
