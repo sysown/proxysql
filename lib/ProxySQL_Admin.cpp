@@ -20,6 +20,8 @@
 #include "MySQL_Logger.hpp"
 #include "SQLite3_Server.h"
 
+#include "Web_Interface.hpp"
+
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -235,6 +237,8 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
+
+extern Web_Interface *GloWebInterface;
 
 extern ProxySQL_Cluster *GloProxyCluster;
 #ifdef PROXYSQLCLICKHOUSE
@@ -5342,29 +5346,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 			}
 			if (variables.web_enabled != variables.web_enabled_old) {
 				if (variables.web_enabled) {
-					char *key_pem;
-					char *cert_pem;
-					key_pem = load_file(ssl_key_fp);
-					cert_pem = load_file(ssl_cert_fp);
-					Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
-						variables.web_port,
-						NULL, NULL, http_handler, NULL,
-						MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
-						MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
-						MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
-						MHD_OPTION_HTTPS_MEM_KEY, key_pem,
-						MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
-						MHD_OPTION_END);
-				} else {
-					MHD_stop_daemon(Admin_HTTP_Server);
-					Admin_HTTP_Server = NULL;
-				}
-				variables.web_enabled_old = variables.web_enabled;
-			} else {
-				if (variables.web_port != variables.web_port_old) {
-					if (variables.web_enabled) {
-						MHD_stop_daemon(Admin_HTTP_Server);
-						Admin_HTTP_Server = NULL;
+					if (GloVars.web_interface_plugin == NULL) {
 						char *key_pem;
 						char *cert_pem;
 						key_pem = load_file(ssl_key_fp);
@@ -5378,6 +5360,40 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							MHD_OPTION_HTTPS_MEM_KEY, key_pem,
 							MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
 							MHD_OPTION_END);
+					} else {
+						GloWebInterface->start(variables.web_port);
+					}
+				} else {
+					if (GloVars.web_interface_plugin == NULL) {
+						MHD_stop_daemon(Admin_HTTP_Server);
+						Admin_HTTP_Server = NULL;
+					} else {
+						GloWebInterface->stop();
+					}
+				}
+				variables.web_enabled_old = variables.web_enabled;
+			} else {
+				if (variables.web_port != variables.web_port_old) {
+					if (variables.web_enabled) {
+						if (GloVars.web_interface_plugin == NULL) {
+							MHD_stop_daemon(Admin_HTTP_Server);
+							Admin_HTTP_Server = NULL;
+							char *key_pem;
+							char *cert_pem;
+							key_pem = load_file(ssl_key_fp);
+							cert_pem = load_file(ssl_cert_fp);
+							Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
+								variables.web_port,
+								NULL, NULL, http_handler, NULL,
+								MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int) 120, MHD_OPTION_STRICT_FOR_CLIENT, (int) 1,
+								MHD_OPTION_THREAD_POOL_SIZE, (unsigned int) 4,
+								MHD_OPTION_NONCE_NC_SIZE, (unsigned int) 300,
+								MHD_OPTION_HTTPS_MEM_KEY, key_pem,
+								MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
+								MHD_OPTION_END);
+						} else {
+							GloWebInterface->start(variables.web_port);
+						}
 					}
 					variables.web_port_old = variables.web_port;
 				}
