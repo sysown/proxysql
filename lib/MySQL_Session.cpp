@@ -2755,7 +2755,11 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				PROXY_TRACE();
 			}
 			char buf[256];
-			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
+			if (qpo->min_gtid) {
+				sprintf(buf,"Gave up waiting for GTID on hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
+			} else {
+				sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
+			}
 			if (thread) {
 				thread->status_variables.max_connect_timeout_err++;
 			}
