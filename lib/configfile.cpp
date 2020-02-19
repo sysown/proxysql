@@ -38,8 +38,7 @@ struct _global_configfile_entry_t {
 };
 
 bool ProxySQL_ConfigFile::OpenFile(const char *__filename) {
-	assert(__filename);
-	filename = __filename;
+	if (__filename) filename = __filename;
 	if (FileUtils::isReadable(filename.c_str())==false) return false;
 	try
 	{
