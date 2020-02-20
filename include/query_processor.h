@@ -7,7 +7,6 @@
 
 // Optimization introduced in 2.0.6
 // to avoid a lot of unnecessary copy
-#define DIGEST_STATS_FAST_1
 #define DIGEST_STATS_FAST_MINSIZE   100000
 #define DIGEST_STATS_FAST_THREADS   4
 
@@ -32,7 +31,6 @@ typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
 #define WUS_PROTECTING  3	// block the query
 
 
-#ifdef DIGEST_STATS_FAST_1
 typedef struct _query_digest_stats_pointers_t {
 	char *pta[14];
 	char digest[24];
@@ -46,7 +44,6 @@ typedef struct _query_digest_stats_pointers_t {
 	char rows_affected[24];
 	char rows_sent[24];
 } query_digest_stats_pointers_t;
-#endif
 
 
 class QP_query_digest_stats {
@@ -56,11 +53,9 @@ class QP_query_digest_stats {
 	char *username;
 	char *schemaname;
 	char *client_address;
-#ifdef DIGEST_STATS_FAST_1
 	char username_buf[24];
 	char schemaname_buf[24];
 	char client_address_buf[24];
-#endif
 	time_t first_seen;
 	time_t last_seen;
 	unsigned int count_star;
@@ -73,15 +68,7 @@ class QP_query_digest_stats {
 	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca);
 	void add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs);
 	~QP_query_digest_stats();
-#ifdef DIGEST_STATS_FAST_1
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
-#else
-	char **get_row(umap_query_digest_text *digest_text_umap);
-#endif
-#ifdef DIGEST_STATS_FAST_1
-#else
-	void free_row(char **pta);
-#endif
 };
 
 struct _Query_Processor_rule_t {
