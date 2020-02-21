@@ -4325,7 +4325,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	sprintf(query,q,_hostname,_port);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
-		free(error);
+//		free(error);
 		error=NULL;
 	}
 	//free(query);
