@@ -4616,47 +4616,6 @@ __exit_monitor_aws_aurora_thread:
 			GloMyMon->AWS_Aurora_Hosts_Map.insert(std::make_pair(s,node));
 		}
 		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-/*
-		// NOTE: we update MyHGM outside the mutex aws_aurora_mutex
-		if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
-			MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
-		} else {
-			if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
-				if (primary_partition == false) {
-					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
-				} else {
-					if (wsrep_desync == true) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
-					} else {
-						char msg[80];
-						sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
-					}
-				}
-			} else {
-				//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
-					if (wsrep_reject_queries) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
-				//	} else {
-				//		// wsrep_sst_donor_rejects_queries
-				//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
-				//	}
-				} else {
-					if (read_only==true) {
-						if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
-						} else {
-							MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
-						}
-					} else {
-						// the node is a writer
-						// TODO: for now we don't care about the number of writers
-						MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
-					}
-				}
-			}
-		}
-*/
 		// clean up
 		if (l<110) {
 		} else {
