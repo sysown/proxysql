@@ -1811,30 +1811,29 @@ __end_process_galera_result:
 			}
 		} else {
 			if (fields) { // if we didn't get any error, but fileds is NULL, we are likely hitting bug #1994
-				if (pxc_maint_mode) {
-					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"pxc_maint_mode=YES");
-				}
-				else {
-					if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
-						if (primary_partition == false) {
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
-						} else {
-							if (wsrep_desync == true) {
-								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
-							} else {
-								char msg[80];
-								sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
-								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
-							}
-						}
+				if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+					if (primary_partition == false) {
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
 					} else {
-						//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
-						if (wsrep_reject_queries) {
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
-							//	} else {
-							//		// wsrep_sst_donor_rejects_queries
-							//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
-							//	}
+						if (wsrep_desync == true) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+						} else {
+							char msg[80];
+							sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+						}
+					}
+				} else {
+					//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
+					if (wsrep_reject_queries) {
+						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
+						//	} else {
+						//		// wsrep_sst_donor_rejects_queries
+						//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
+						//	}
+					} else {
+						if (pxc_maint_mode) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"pxc_maint_mode=YES", true);
 					    } else {
 						    if (read_only==true) {
 								if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
