@@ -4332,9 +4332,11 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	GloAdmin->mysql_servers_wrlock();
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
+			// the server was found. It needs to be set offline
 			set_offline = true;
-		} else { // the server is already offline, but we check if needs to be taken back online
+		} else { // the server is already offline, but we check if needs to be taken back online because there are no other writers
 			SQLite3_result *numw_result = NULL;
+			// we search for writers
 			q=(char *)"SELECT 1 FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
 			query=(char *)malloc(strlen(q) + (sizeof(_writer_hostgroup) * 8 + 1));
 			sprintf(query,q,_writer_hostgroup);
@@ -4827,32 +4829,6 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 						if (num_writers == 0 && num_backup_writers == 0) {
 							proxy_warning("Galera: we couldn't find any healthy node for writer HG %d\n", info->writer_hostgroup);
 							// ask Monitor to get the status of the whole cluster
-							/*
-							char * s0 = GloMyMon->galera_find_last_node(info->writer_hostgroup);
-							if (s0) {
-								std::string s = string(s0);
-								std::size_t found=s.find_last_of(":");
-								std::string host=s.substr(0,found);
-								std::string port=s.substr(found+1);
-								int port_n = atoi(port.c_str());
-								proxy_info("Galera: trying to use server %s:%s as a writer for HG %d\n", host.c_str(), port.c_str(), info->writer_hostgroup);
-								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id IN (%d, %d, %d, %d)  AND hostname='%s' AND port=%d";
-								query=(char *)malloc(strlen(q) + s.length() + 512);
-								sprintf(query,q,info->writer_hostgroup, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup, host.c_str(), port_n);
-								mydb->execute(query);
-								free(query);
-								bool writer_is_also_reader = info->writer_is_also_reader;
-								if (writer_is_also_reader) {
-									int read_HG = info->reader_hostgroup;
-									q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
-									query=(char *)malloc(strlen(q) + s.length() + 128);
-									sprintf(query,q,read_HG, info->writer_hostgroup, host.c_str(), port_n);
-									mydb->execute(query);
-									free(query);
-								}
-								free(s0);
-							}
-							*/
 							std::vector<string> * pn = GloMyMon->galera_find_possible_last_nodes(info->writer_hostgroup);
 							if (pn->size()) {
 								std::vector<string>::iterator it2;
