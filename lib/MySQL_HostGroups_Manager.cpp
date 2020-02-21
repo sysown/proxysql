@@ -4328,7 +4328,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 		free(error);
 		error=NULL;
 	}
-	free(query);
+	//free(query);
 	GloAdmin->mysql_servers_wrlock();
 	if (resultset) { // we lock only if needed
 		if (resultset->rows_count) {
@@ -4341,7 +4341,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			//query=(char *)malloc(strlen(q) + (sizeof(_writer_hostgroup) * 8 + 1));
 			sprintf(query,q,_writer_hostgroup);
 			mydb->execute_statement(query, &error , &cols , &affected_rows , &numw_result);
-			free(query);
+			//free(query);
 			if (numw_result) {
 				if (numw_result->rows_count == 0) { // we have no writers
 					set_offline = true;
@@ -4382,15 +4382,15 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				int cols=0;
 				int affected_rows=0;
 				SQLite3_result *resultset_servers=NULL;
-				char *query=NULL;
+				char *query_local=NULL;
 				char *q1 = NULL;
 				char *q2 = NULL;
 				char *error=NULL;
 				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
 				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers_incoming.comment FROM mysql_servers_incoming JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
-				//query = (char *)malloc(strlen(q2)+128);
-				sprintf(query,q1,_writer_hostgroup);
-				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+				query_local = (char *)malloc(strlen(q2)+128);
+				sprintf(query_local,q1,_writer_hostgroup);
+				mydb->execute_statement(query_local, &error , &cols , &affected_rows , &resultset_servers);
 				if (error == NULL) {
 					if (resultset_servers) {
 						checksum_current = resultset_servers->raw_checksum();
@@ -4400,8 +4400,8 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 					delete resultset_servers;
 					resultset_servers = NULL;
 				}
-				sprintf(query,q2,_writer_hostgroup);
-				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+				sprintf(query_local,q2,_writer_hostgroup);
+				mydb->execute_statement(query_local, &error , &cols , &affected_rows , &resultset_servers);
 				if (error == NULL) {
 					if (resultset_servers) {
 						checksum_incoming = resultset_servers->raw_checksum();
@@ -4411,7 +4411,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 					delete resultset_servers;
 					resultset_servers = NULL;
 				}
-				free(query);
+				free(query_local);
 			}
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
@@ -4446,9 +4446,9 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			} else {
 				proxy_warning("Galera: skipping setting offline node %s:%d from hostgroup %d because won't change the list of ONLINE nodes\n", _hostname, _port, _writer_hostgroup);
 			}
-			free(query);
 		}
 	}
+	free(query);
 	GloAdmin->mysql_servers_wrunlock();
 	if (resultset) {
 		delete resultset;
