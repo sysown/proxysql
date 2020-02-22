@@ -2310,7 +2310,6 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
-	MySQL_Data_Stream * c_myds = *(myprot->myds);
 	if (buffer==NULL) {
 	//if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
 	// removing the previous assumption. We allocate this buffer also for prepared statements
@@ -2341,6 +2340,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	if (myprot==NULL) {
 		return; // this is a mirror
 	}
+	MySQL_Data_Stream * c_myds = *(myprot->myds);
 	if (c_myds->com_field_list==false) {
 		myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields,this);
 		sid++;
