@@ -31,9 +31,10 @@ services:
     image: proxysql/packaging:build-centos6.7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
+      - APPLY_PATCH=rhel6
       - MAKE
       - MAKEOPT
       - CURVER
@@ -44,9 +45,10 @@ services:
     image: proxysql/packaging:build-centos6.7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
+      - APPLY_PATCH=rhel6
       - MAKE
       - MAKEOPT
       - CURVER
