@@ -65,7 +65,7 @@ curl: curl/curl/lib/.libs/libcurl.a
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
-	cd libmicrohttpd && rm libmicrohttpd || true
+	cd libmicrohttpd && rm -f libmicrohttpd || true
 ifeq ($(CENTOSVER),6.7)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
