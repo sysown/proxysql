@@ -157,6 +157,7 @@ deps/google-coredumper/google-coredumper/
 test/.vagrant
 .DS_Store
 proxysql-tests.ini
+test/sqlite_history_convert
 
 #heaptrack
 heaptrack.*
