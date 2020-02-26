@@ -200,6 +200,8 @@ cleanall:
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
+	cd libmicrohttpd && rm -f libmicrohttpd || true
+	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
 	cd curl && rm -rf curl-7.57.0 || true
 	cd libev && rm -rf libev-4.24 || true

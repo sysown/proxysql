@@ -67,6 +67,8 @@ notes.txt
 architecture.txt
 
 
+#builddir
+proxysql-2.*
 
 ### DEPS
 
