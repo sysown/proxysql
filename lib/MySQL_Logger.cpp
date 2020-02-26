@@ -41,8 +41,9 @@ static inline int write_encoded_length(unsigned char *p, uint64_t val, uint8_t l
 	return len;
 }
 
-MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len) {
+MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len, unsigned long tid) {
 	thread_id=_thread_id;
+	mysql_thread_id = tid;
 	username=_username;
 	schemaname=_schemaname;
 	start_time=_start_time;
@@ -132,6 +133,7 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 		j["time"] = buffer2;
 	}
 	j["thread_id"] = thread_id;
+	j["mysql_thread_id"] = mysql_thread_id;
 	if (username) {
 		j["username"] = username;
 	} else {
@@ -243,6 +245,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	uint64_t total_bytes=0;
 	total_bytes+=1; // et
 	total_bytes+=mysql_encode_length(thread_id, NULL);
+	total_bytes+=mysql_encode_length(mysql_thread_id, NULL);
 	username_len=strlen(username);
 	total_bytes+=mysql_encode_length(username_len,NULL)+username_len;
 	schemaname_len=strlen(schemaname);
@@ -278,6 +281,10 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 
 	len=mysql_encode_length(thread_id,buf);
 	write_encoded_length(buf,thread_id,len,buf[0]);
+	f->write((char *)buf,len);
+
+	len=mysql_encode_length(mysql_thread_id,buf);
+	write_encoded_length(buf,mysql_thread_id,len,buf[0]);
 	f->write((char *)buf,len);
 
 	len=mysql_encode_length(username_len,buf);
@@ -345,6 +352,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 		j["hostgroup_id"] = -1;
 	}
 	j["thread_id"] = thread_id;
+	j["mysql_thread_id"] = mysql_thread_id;
 	switch (et) {
 		case PROXYSQL_COM_STMT_EXECUTE:
 			j["event"]="COM_STMT_EXECUTE";
@@ -672,7 +680,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
 		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs),
-		ca, cl
+		ca, cl, sess->mysql_tid
 	);
 	char *c = NULL;
 	int ql = 0;
@@ -813,7 +821,6 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 
 	uint64_t curtime_real=realtime_time();
-	uint64_t curtime_mono=sess->thread->curtime;
 	int cl=0;
 	char *ca=(char *)""; // default
 	if (sess->client_myds->addr.addr) {
@@ -839,7 +846,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	MySQL_Event me(_et, sess->thread_session_id,
 		un, sn, 
 		curtime_real, 0, 0,
-		ca, cl
+		ca, cl, sess->mysql_tid
 	);
 /*
 	char *c=(char *)sess->CurrentQuery.QueryPointer;
@@ -863,8 +870,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	sl=strlen(sa);
 	if (sl) {
-		int hid=-1;
-		hid=myds->myconn->parent->myhgc->hid;
+//		int hid=myds->myconn->parent->myhgc->hid;
 //		me.set_server(hid,sa,sl);
 	}
 

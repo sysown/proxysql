@@ -8,6 +8,7 @@
 class MySQL_Event {
 	private:
 	uint32_t thread_id;
+	unsigned long mysql_thread_id;
 	char *username;
 	char *schemaname;
 	size_t username_len;
@@ -31,7 +32,7 @@ class MySQL_Event {
 	uint64_t affected_rows;
 	uint64_t rows_sent;
 	public:
-	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
+	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len, unsigned long tid);
 	uint64_t write(std::fstream *f, MySQL_Session *sess);
 	uint64_t write_query_format_1(std::fstream *f);
 	uint64_t write_query_format_2_json(std::fstream *f);

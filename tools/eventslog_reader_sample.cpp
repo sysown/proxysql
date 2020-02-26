@@ -91,6 +91,7 @@ char * read_string(std::fstream *f, size_t len) {
 
 class MySQL_Event {
 	private:
+	unsigned long mysql_thread_id;
 	uint32_t thread_id;
 	char *username;
 	char *schemaname;
@@ -129,6 +130,7 @@ class MySQL_Event {
 	void read_query(std::fstream *f) {
 
 		read_encoded_length((uint64_t *)&thread_id,f);
+		read_encoded_length((uint64_t *)&mysql_thread_id,f);
 		read_encoded_length((uint64_t *)&username_len,f);
 		username=read_string(f,username_len);
 		read_encoded_length((uint64_t *)&schemaname_len,f);
@@ -150,7 +152,7 @@ class MySQL_Event {
 				assert(0); // not supported
 				break;
 		}
-		cout << ": thread_id=\"" << thread_id << "\" username=\"" << username << "\" schemaname=\"" << schemaname << "\" client=\"" << client << "\"";
+		cout << ": thread_id=\"" << thread_id << "\" mysql_thread_id=\"" << mysql_thread_id << "\" username=\"" << username << "\" schemaname=\"" << schemaname << "\" client=\"" << client << "\"";
 		read_encoded_length((uint64_t *)&hid,f);
 		if (hid==UINT64_MAX) {
 			cout << " HID=NULL ";
