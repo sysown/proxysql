@@ -1012,7 +1012,14 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultse
 	}
 }
 
-void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
+void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset, time_t ts) {
+	MySQL_Query_Cache_sets_v1(resultset, ts);
+	if (GloVars.web_interface_plugin) {
+		MySQL_Threads_Handler_sets_v2(resultset, ts);
+	}
+}
+
+void ProxySQL_Statistics::MySQL_Query_Cache_sets_v1(SQLite3_result *resultset, time_t ts) {
 	int rc;
 	if (resultset == NULL)
 		return;
@@ -1081,7 +1088,7 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	int cols;
 	int affected_rows;
 	char *error = NULL;
-	time_t ts = time(NULL);
+	//time_t ts = time(NULL);
 	char *query = (char *)"SELECT MAX(timestamp) FROM mysql_query_cache_hour";
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset2);
 	if (error) {

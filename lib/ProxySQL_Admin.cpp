@@ -4585,8 +4585,8 @@ static void * admin_main_loop(void *arg)
 		}
 __end_while_pool:
 		{
+			time_t ts = time(NULL);
 			if (GloProxyStats->MySQL_Threads_Handler_timetoget(curtime)) {
-				time_t ts = time(NULL);
 				if (GloMTH) {
 					SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus(false);
 					if (resultset) {
@@ -4613,7 +4613,7 @@ __end_while_pool:
 				if (GloQC) {
 					SQLite3_result * resultset=GloQC->SQL3_getStats();
 					if (resultset) {
-						GloProxyStats->MySQL_Query_Cache_sets(resultset);
+						GloProxyStats->MySQL_Query_Cache_sets(resultset, ts);
 						delete resultset;
 					}
 				}
