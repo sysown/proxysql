@@ -247,5 +247,6 @@ class MySQL_Connection {
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_tracked_options(MySQL_Connection *c);
+	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */
