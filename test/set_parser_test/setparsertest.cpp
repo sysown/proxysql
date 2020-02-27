@@ -103,7 +103,7 @@ void TestParse(const Test* tests, int ntests, const string& title) {
     }
     
     SetParser parser(tests[i].query);
-    std::map<std::string, std::vector<std::string>> result = parser.parse();
+    std::map<std::string, std::vector<std::string>> result = parser.parse1();
     
     // printMap("result", result);
     // printMap("expected", data);
@@ -202,6 +202,8 @@ static Test multiple[] = {
   { "SET NAMES utf8, @@SESSION.sql_mode = CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 3600",
   { Expected("names", {"utf8"}), Expected("sql_mode",  {"CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
   Expected("wait_timeout", {"3600"}) } },
+  { "set autocommit=1, session_track_schema=1, sql_mode = concat(@@sql_mode,',STRICT_TRANS_TABLES'), @@SESSION.net_write_timeout=7200", { Expected("autocommit", {"1"}), Expected("session_track_schema", {"1"}), Expected("sql_mode", {"concat(@@sql_mode,',STRICT_TRANS_TABLES')"}),
+  Expected("net_write_timeout", {"7200"}) } },
 };
 
 TEST(TestParse, MULTIPLE) {
