@@ -27,10 +27,7 @@ ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
 
-# Force to 8 for automatic build
-export MAKEOPT=-j 8
-
-#export MAKEOPT=-j ${NPROCS}
+export MAKEOPT=-j ${NPROCS}
 
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
