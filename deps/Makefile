@@ -10,7 +10,7 @@ MYJEOPT=--enable-xmalloc --enable-prof
 endif
 
 ifneq (,$(wildcard /etc/system-release))
-	CENTOSVER := $(shell cat /etc/system-release | awk '{print $$3}')
+	CENTOSVER := $(shell rpm --eval %rhel)
 else
 	CENTOSVER := Unknown
 endif
@@ -66,7 +66,7 @@ libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
-ifeq ($(CENTOSVER),6.7)
+ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
