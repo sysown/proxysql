@@ -33,8 +33,9 @@ libinjection: libinjection/libinjection/src/libinjection.a
 libssl/openssl/libssl.a:
 #	cd libssl && rm -rf openssl-1.1.0h || true
 #	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
+	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.0h || true
-	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
+	cd libssl && tar -zxf openssl-1.1.1d.tar.gz
 	cd libssl/openssl  && ./config no-ssl3
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
@@ -207,6 +208,7 @@ cleanall:
 	cd libev && rm -rf libev-4.24 || true
 	cd libssl && rm -rf openssl-1.1.0h || true
 	cd libssl && rm -rf openssl-1.1.1b || true
+	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 .PHONY: cleanall
 
