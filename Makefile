@@ -11,7 +11,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.0.9
+export CURVER?=2.0.10
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
@@ -27,10 +27,7 @@ ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
 
-# Force to 8 for automatic build
-export MAKEOPT=-j 8
-
-#export MAKEOPT=-j ${NPROCS}
+export MAKEOPT=-j ${NPROCS}
 
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1

@@ -12,6 +12,15 @@
 
 #define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V2_0
 
+#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_V2_0_10 "CREATE TABLE history_mysql_status_variables (timestamp INT NOT NULL , variable_name VARCHAR NOT NULL , variable_value VARCHAR NOT NULL , PRIMARY KEY (timestamp, variable_name))"
+
+#define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_V2_0_10
+
+#define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10 "CREATE TABLE history_stats_mysql_connection_pool (timestamp INT NOT NULL , hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT, PRIMARY KEY (timestamp, hostgroup , srv_host , srv_port))"
+
+#define STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL_V2_0_10
+
+
 #define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_V2_0  "CREATE TABLE myhgm_connections (timestamp INT NOT NULL, MyHGM_myconnpoll_destroy INT NOT NULL, MyHGM_myconnpoll_get INT NOT NULL, MyHGM_myconnpoll_get_ok INT NOT NULL, MyHGM_myconnpoll_push INT NOT NULL, MyHGM_myconnpoll_reset INT NOT NULL, PRIMARY KEY (timestamp))"
 
 #define STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS STATSDB_SQLITE_TABLE_MYHGM_CONNECTIONS_V2_0
@@ -80,6 +89,10 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_system_memory;
 #endif
 	unsigned long long next_timer_MySQL_Query_Cache;
+	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);
+	void MySQL_Threads_Handler_sets_v2(SQLite3_result *);
+	void MyHGM_Handler_sets_v1(SQLite3_result *);
+	void MyHGM_Handler_sets_connection_pool(SQLite3_result *);
 	public:
 	struct {
 		int stats_mysql_connection_pool;
@@ -104,7 +117,7 @@ class ProxySQL_Statistics {
 #endif
 	bool MySQL_Query_Cache_timetoget(unsigned long long);
 	void MySQL_Threads_Handler_sets(SQLite3_result *);
-	void MyHGM_Handler_sets(SQLite3_result *);
+	void MyHGM_Handler_sets(SQLite3_result *, SQLite3_result *);
 	void system_cpu_sets();
 #ifndef NOJEM
 	void system_memory_sets();

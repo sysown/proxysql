@@ -4,6 +4,12 @@ GIT_VERSION := $(shell git describe --long)
 
 DEPS_PATH=../deps
 
+ifneq (,$(wildcard /etc/system-release))
+	CENTOSVER := $(shell cat /etc/system-release | awk '{print $$3}')
+else
+	CENTOSVER := Unknown
+endif
+
 MARIADB_PATH=$(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR=$(MARIADB_PATH)/include
 MARIADB_LDIR=$(MARIADB_PATH)/libmariadb
@@ -102,6 +108,9 @@ ifeq ($(UNAME_S),Linux)
 endif
 ifeq ($(UNAME_S),FreeBSD)
 	MYLIBS+= -lexecinfo
+endif
+ifeq ($(CENTOSVER),6.7)
+	MYLIBS+= -lgcrypt
 endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a

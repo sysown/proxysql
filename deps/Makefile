@@ -9,6 +9,12 @@ MYCFLAGS=-O2
 MYJEOPT=--enable-xmalloc --enable-prof
 endif
 
+ifneq (,$(wildcard /etc/system-release))
+	CENTOSVER := $(shell cat /etc/system-release | awk '{print $$3}')
+else
+	CENTOSVER := Unknown
+endif
+
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection
@@ -57,8 +63,16 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
+	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
+	cd libmicrohttpd && rm -f libmicrohttpd || true
+ifeq ($(CENTOSVER),6.7)
+	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
+	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
+else
+	cd libmicrohttpd && ln -s libmicrohttpd-0.9.68 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
+endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
@@ -186,6 +200,8 @@ cleanall:
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
+	cd libmicrohttpd && rm -f libmicrohttpd || true
+	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
 	cd curl && rm -rf curl-7.57.0 || true
 	cd libev && rm -rf libev-4.24 || true

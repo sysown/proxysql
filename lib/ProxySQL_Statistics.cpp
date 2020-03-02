@@ -19,6 +19,7 @@
 #endif /* DEBUG */
 #define PROXYSQL_STATISTICS_VERSION "1.4.1027" DEB
 
+using namespace std;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
 
@@ -80,6 +81,8 @@ void ProxySQL_Statistics::init() {
 	tables_defs_statsdb_disk = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_statsdb_mem,"mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_status_variables", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_stats_mysql_connection_pool", STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_cpu", STATSDB_SQLITE_TABLE_SYSTEM_CPU);
 #ifndef NOJEM
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_memory", STATSDB_SQLITE_TABLE_SYSTEM_MEMORY);
@@ -629,7 +632,49 @@ void ProxySQL_Statistics::system_memory_sets() {
 }
 #endif
 
-void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset) {
+void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset1, SQLite3_result *resultset2) {
+	MyHGM_Handler_sets_v1(resultset1);
+	if (GloVars.web_interface_plugin && resultset2) {
+		MySQL_Threads_Handler_sets_v2(resultset1);
+		MyHGM_Handler_sets_connection_pool(resultset2);
+	}
+}
+
+void ProxySQL_Statistics::MyHGM_Handler_sets_connection_pool(SQLite3_result *resultset) {
+	int rc;
+	if (resultset == NULL)
+		return;
+	sqlite3 *mydb3=statsdb_disk->get_db();
+	sqlite3_stmt *statement=NULL;
+	string query;
+	if (resultset->rows_count == 0) {
+		return;
+	}
+	time_t ts = time(NULL);
+	query = "INSERT INTO history_stats_mysql_connection_pool VALUES (?1";
+	for (int i=0; i < resultset->columns; i++) {
+		query += ",?" + to_string(i+2);
+	}
+	query += ")";
+	rc=sqlite3_prepare_v2(mydb3, query.c_str(), -1, &statement, 0);
+	if (rc!=SQLITE_OK) {
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		exit(EXIT_SUCCESS);
+	}
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		rc=sqlite3_bind_int64(statement, 1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		for (int i=0 ; i < resultset->columns ; i++) {
+			rc=sqlite3_bind_text(statement, i+2, r->fields[i] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		}
+		SAFE_SQLITE3_STEP2(statement);
+		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=sqlite3_reset(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+	}
+	sqlite3_finalize(statement);
+}
+
+void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 	int rc;
 	if (resultset == NULL)
 		return;
@@ -733,6 +778,50 @@ void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset) {
 }
 
 void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) {
+	MySQL_Threads_Handler_sets_v1(resultset);
+	if (GloVars.web_interface_plugin) {
+		MySQL_Threads_Handler_sets_v2(resultset);
+	}
+}
+
+void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultset) {
+	int rc;
+	if (resultset == NULL)
+		return;
+	sqlite3 *mydb3=statsdb_disk->get_db();
+	sqlite3_stmt *statement=NULL;
+	string query;
+	if (resultset->rows_count == 0) {
+		return;
+	}
+	time_t ts = time(NULL);
+	query = "INSERT INTO history_mysql_status_variables VALUES ";
+	int idx = 0;
+	for (int i=0; i < resultset->rows_count; i++) {
+		query += "(?" + to_string(idx+1) + ",?" + to_string(idx+2) + ",?" + to_string(idx+3) + "),";
+		idx+=3;
+	}
+	query.pop_back();
+	rc=sqlite3_prepare_v2(mydb3, query.c_str(), -1, &statement, 0);
+	if (rc!=SQLITE_OK) {
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		exit(EXIT_SUCCESS);
+	}
+	idx=0;
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		rc=sqlite3_bind_int64(statement, idx+1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=sqlite3_bind_text(statement, idx+2, r->fields[0] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // name
+		rc=sqlite3_bind_text(statement, idx+3, r->fields[1] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // value
+		idx+=3;
+	}
+	SAFE_SQLITE3_STEP2(statement);
+	rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+	rc=sqlite3_reset(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+	sqlite3_finalize(statement);
+}
+
+void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultset) {
 	int rc;
 	if (resultset == NULL)
 		return;

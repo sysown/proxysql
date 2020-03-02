@@ -66,16 +66,16 @@ int main(int argc, char** argv) {
 	std::string var_value;
 
 	show_variable(mysql, var_charset_client, var_value);
-	ok(var_value.compare("utf8") == 0, "Initial client character set");
+	ok(var_value.compare("utf8") == 0, "Initial client character set. Actual %s", var_value.c_str()); // ok_1
 
 	show_variable(mysql, var_charset_connection, var_value);
-	ok(var_value.compare("utf8") == 0, "Initial connection character set");
+	ok(var_value.compare("utf8") == 0, "Initial connection character set. Actual %s", var_value.c_str()); // ok_2
 
 	show_variable(mysql, var_charset_results, var_value);
-	ok(var_value.compare("utf8") == 0, "Initial results character set");
+	ok(var_value.compare("utf8") == 0, "Initial results character set. Actual %s", var_value.c_str()); // ok_3
 
 	show_variable(mysql, var_charset_database, var_value);
-	ok(var_value.compare("utf8") == 0, "Initial results character set");
+	ok(var_value.compare("utf8") == 0, "Initial database character set. Actual %s", var_value.c_str()); // ok_4
 
 	if (mysql_query(mysql, "set character set latin1")) {
 	    fprintf(stderr, "SET CHARACTER SET : Error: %s\n",
@@ -84,37 +84,37 @@ int main(int argc, char** argv) {
 	}
 
 	show_variable(mysql, var_charset_client, var_value);
-	ok(var_value.compare("latin1") == 0, "Client character set is changed");
+	ok(var_value.compare("latin1") == 0, "Client character set is changed. Actual %s", var_value.c_str()); // ok_5
 
 	std::string db_charset_value;
 	show_variable(mysql, var_charset_database, db_charset_value);
 
 	show_variable(mysql, var_charset_database, var_value);
-	ok(var_value.compare("utf8") == 0, "Database character set is not changed");
+	ok(var_value.compare("utf8") == 0, "Database character set is not changed. Actual %s", var_value.c_str()); // ok_6
 
 	show_variable(mysql, var_charset_connection, var_value);
-	ok(var_value.compare(db_charset_value) == 0, "Connection character set same as database charset");
+	ok(var_value.compare(db_charset_value) == 0, "Connection character set same as database charset. Actual %s", var_value.c_str()); // ok_7
 
 	show_variable(mysql, var_charset_results, var_value);
-	ok(var_value.compare("latin1") == 0, "Results character set is changed");
+	ok(var_value.compare("latin1") == 0, "Results character set is changed. Actual %s", var_value.c_str()); // ok_8
 
 	if (mysql_query(mysql, "set names latin1")) {
-		fprintf(stderr, "SET CHARACTER SET : Error: %s\n",
+		fprintf(stderr, "SET NAMES : Error: %s\n",
 				mysql_error(mysql));
 		return exit_status();
 	}
 
 	show_variable(mysql, var_charset_client, var_value);
-	ok(var_value.compare("latin1") == 0, "Client character set is correct");
+	ok(var_value.compare("latin1") == 0, "Client character set is correct. Actual %s", var_value.c_str()); // ok_9
 
 	show_variable(mysql, var_charset_connection, var_value);
-	ok(var_value.compare("latin1") == 0, "Set names changed connection character set");
+	ok(var_value.compare("latin1") == 0, "Set names changed connection character set. Actual %s", var_value.c_str()); // ok_10
 
 	show_variable(mysql, var_charset_results, var_value);
-	ok(var_value.compare("latin1") == 0, "Results character set is correct");
+	ok(var_value.compare("latin1") == 0, "Results character set is correct. Actual %s", var_value.c_str()); // ok_11
 
 	show_variable(mysql, var_charset_database, var_value);
-	ok(var_value.compare("utf8") == 0, "Database character set is not changed by set names");
+	ok(var_value.compare("utf8") == 0, "Database character set is not changed by set names. Actual %s", var_value.c_str()); // ok_12
 
 	mysql_close(mysql);
 

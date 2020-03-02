@@ -644,6 +644,10 @@ SQLite3_Session::SQLite3_Session() {
 }
 
 SQLite3_Session::~SQLite3_Session() {
+	sqlite3 *db = sessdb->get_db();
+	if (sqlite3_get_autocommit(db)==0) {
+		sessdb->execute((char *)"COMMIT");
+	}
 	delete sessdb;
 	sessdb = NULL;
 }
