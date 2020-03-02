@@ -8,6 +8,9 @@
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 
+/*
+
+in libssl 1.1.0 
 struct bio_st {
 	const BIO_METHOD *method;
 	long (*callback) (struct bio_st *, int, const char *, int, long, long);
@@ -26,6 +29,32 @@ struct bio_st {
 	CRYPTO_EX_DATA ex_data;
 	CRYPTO_RWLOCK *lock;
 };
+*/
+
+typedef int CRYPTO_REF_COUNT;
+
+// in libssl 1.1.1
+struct bio_st {
+    const BIO_METHOD *method;
+    /* bio, mode, argp, argi, argl, ret */
+    BIO_callback_fn callback;
+    BIO_callback_fn_ex callback_ex;
+    char *cb_arg;               /* first argument for the callback */
+    int init;
+    int shutdown;
+    int flags;                  /* extra storage */
+    int retry_reason;
+    int num;
+    void *ptr;
+    struct bio_st *next_bio;    /* used by filter BIOs */
+    struct bio_st *prev_bio;    /* used by filter BIOs */
+    CRYPTO_REF_COUNT references;
+    uint64_t num_read;
+    uint64_t num_write;
+    CRYPTO_EX_DATA ex_data;
+    CRYPTO_RWLOCK *lock;
+};
+
 
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
