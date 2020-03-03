@@ -89,7 +89,7 @@ bool MySQL_Variables::client_set_value(int idx, const std::string& value) {
 				session->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, session->mysql_variables->client_get_value(SQL_CHARACTER_SET));
 				session->mysql_variables->client_set_value(SQL_CHARACTER_SET_CLIENT, session->mysql_variables->client_get_value(SQL_CHARACTER_SET));
 			}
-			if (session->mysql_variables->client_get_value(SQL_CHARACTER_SET_DATABASE)) {
+			if (!session->mysql_variables->client_get_value(SQL_CHARACTER_SET_DATABASE)) {
 				const MARIADB_CHARSET_INFO *ci = NULL;
 				ci = proxysql_find_charset_name(mysql_tracked_variables[SQL_CHARACTER_SET_CONNECTION].default_value);
 
@@ -106,7 +106,11 @@ bool MySQL_Variables::client_set_value(int idx, const std::string& value) {
 				ss << nr;
 
 				session->mysql_variables->client_set_value(SQL_COLLATION_CONNECTION, ss.str());
+			} else {
+				session->mysql_variables->client_set_value(SQL_CHARACTER_SET_CONNECTION, session->mysql_variables->client_get_value(SQL_CHARACTER_SET_DATABASE));
+				session->mysql_variables->client_set_value(SQL_COLLATION_CONNECTION, session->mysql_variables->client_get_value(SQL_CHARACTER_SET_DATABASE));
 			}
+
 		}
 		// SET NAMES during handshake etc.
 		else if (value == "3") {

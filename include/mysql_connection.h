@@ -24,8 +24,6 @@ public:
 	char *value = (char*)"";
 	void fill_server_internal_session(json &j, int conn_num, int idx);
 	void fill_client_internal_session(json &j, int idx);
-	static const char set_name[SQL_NAME_LAST][64];
-	static const char proxysql_internal_session_name[SQL_NAME_LAST][64];
 };
 
 enum charset_action {
