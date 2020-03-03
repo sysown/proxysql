@@ -22,7 +22,6 @@ using json = nlohmann::json;
 class Variable {
 public:
 	char *value = (char*)"";
-	uint32_t hash;
 	void fill_server_internal_session(json &j, int conn_num, int idx);
 	void fill_client_internal_session(json &j, int idx);
 	static const char set_name[SQL_NAME_LAST][64];
@@ -60,31 +59,22 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-//		uint32_t collation_connection_int;
-//		uint32_t net_write_timeout_int;
-//		uint32_t max_join_size_int;
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
 		uint32_t client_flag;
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
-//		char * collation_connection;
-//		char * net_write_timeout;
-//		char * max_join_size;
-//		bool collation_connection_sent;
-//		bool net_write_timeout_sent;
-//		bool max_join_size_sent;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
-		uint8_t sql_log_bin;
 		int8_t last_set_autocommit;
 		bool autocommit;
 		bool no_backslash_escapes;
 	} options;
 	Variable variables[SQL_NAME_LAST];
+	uint32_t var_hash[SQL_NAME_LAST];
 	struct {
 		unsigned long length;
 		char *ptr;

@@ -165,6 +165,7 @@ enum variable_name {
 	SQL_COLLATION_CONNECTION,
 	SQL_NET_WRITE_TIMEOUT,
 	SQL_MAX_JOIN_SIZE,
+	SQL_LOG_BIN,
 	SQL_NAME_LAST
 };
 
@@ -985,21 +986,22 @@ mysql_variable_st mysql_tracked_variables[] {
     { SQL_CHARACTER_SET, SETTING_CHARSET,                       false, true, false, (char *)"CHARSET", (char *)"CHARSET", (char *)"UTF8" } , // should be before SQL_CHARACTER_SET_RESULTS
     { SQL_CHARACTER_ACTION, NONE,		                        false, false, false, (char *)"action", (char *)"action", (char *)"1" } ,
     { SQL_SET_NAMES, SETTING_SET_NAMES,	                        false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" } ,
-	{ SQL_SAFE_UPDATES, SETTING_SQL_SAFE_UPDATES ,              true,  false, false, (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" } ,
-    { SQL_SELECT_LIMIT, SETTING_SQL_SELECT_LIMIT ,              false,  false, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
-	{ SQL_SQL_MODE, SETTING_SQL_MODE ,                          true, false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" } ,
-    { SQL_TIME_ZONE, SETTING_TIME_ZONE ,                        true, false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" } ,
-	{ SQL_CHARACTER_SET_RESULTS, SETTING_CHARACTER_SET_RESULTS, false,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"UTF8" } ,
-	{ SQL_CHARACTER_SET_CONNECTION, SETTING_CHARACTER_SET_CONNECTION, false,  false, false, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"UTF8" } ,
-	{ SQL_CHARACTER_SET_CLIENT, SETTING_CHARACTER_SET_CLIENT,   false,  false, false, (char *)"character_set_client", (char *)"character_set_client", (char *)"UTF8" } ,
-	{ SQL_CHARACTER_SET_DATABASE, SETTING_CHARACTER_SET_DATABASE,   false,  false, false, (char *)"character_set_database", (char *)"character_set_database", (char *)"UTF8" } ,
+	{ SQL_SAFE_UPDATES, SETTING_SQL_SAFE_UPDATES ,              true,  false, true, (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" } ,
+    { SQL_SELECT_LIMIT, SETTING_SQL_SELECT_LIMIT ,              false,  false, true, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
+	{ SQL_SQL_MODE, SETTING_SQL_MODE ,                          true, false, true, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" } ,
+    { SQL_TIME_ZONE, SETTING_TIME_ZONE ,                        true, false, true, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" } ,
+	{ SQL_CHARACTER_SET_RESULTS, SETTING_CHARACTER_SET_RESULTS, false,  false, true, (char *)"character_set_results", (char *)"character_set_results", (char *)"UTF8" } ,
+	{ SQL_CHARACTER_SET_CONNECTION, SETTING_CHARACTER_SET_CONNECTION, false,  false, true, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"UTF8" } ,
+	{ SQL_CHARACTER_SET_CLIENT, SETTING_CHARACTER_SET_CLIENT,   false,  false, true, (char *)"character_set_client", (char *)"character_set_client", (char *)"UTF8" } ,
+	{ SQL_CHARACTER_SET_DATABASE, SETTING_CHARACTER_SET_DATABASE,   false,  false, true, (char *)"character_set_database", (char *)"character_set_database", (char *)"UTF8" } ,
 	{ SQL_ISOLATION_LEVEL, SETTING_ISOLATION_LEVEL,             false, true,  true,  (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" } ,
 	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ,           false, true,  true,  (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" } ,
-	{ SQL_SESSION_TRACK_GTIDS, SETTING_SESSION_TRACK_GTIDS,     true, false, false, (char *)"session_track_gtids" , (char *)"session_track_gtids" , (char *)"OFF" } ,
-    { SQL_SQL_AUTO_IS_NULL, SETTING_SQL_AUTO_IS_NULL,           true, false, false, (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" } ,
-    { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, false, (char *)"COLLATION_CONNECTION", (char *)"collation_connection", (char *)"utf8_general_ci" } ,
-    { SQL_NET_WRITE_TIMEOUT, SETTING_NET_WRITE_TIMEOUT,         false, false, false, (char *)"NET_WRITE_TIMEOUT", (char *)"net_write_timeout", (char *)"60" } ,
-    { SQL_MAX_JOIN_SIZE, SETTING_MAX_JOIN_SIZE,                 false, false, false, (char *)"MAX_JOIN_SIZE", (char *)"max_join_size", (char *)"18446744073709551615" } ,
+	{ SQL_SESSION_TRACK_GTIDS, SETTING_SESSION_TRACK_GTIDS,     true, false, true, (char *)"session_track_gtids" , (char *)"session_track_gtids" , (char *)"OFF" } ,
+    { SQL_SQL_AUTO_IS_NULL, SETTING_SQL_AUTO_IS_NULL,           true, false, true, (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" } ,
+    { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, true, (char *)"COLLATION_CONNECTION", (char *)"collation_connection", (char *)"utf8_general_ci" } ,
+    { SQL_NET_WRITE_TIMEOUT, SETTING_NET_WRITE_TIMEOUT,         false, false, true, (char *)"NET_WRITE_TIMEOUT", (char *)"net_write_timeout", (char *)"60" } ,
+    { SQL_MAX_JOIN_SIZE, SETTING_MAX_JOIN_SIZE,                 false, false, true, (char *)"MAX_JOIN_SIZE", (char *)"max_join_size", (char *)"18446744073709551615" } ,
+    { SQL_LOG_BIN, SETTING_SQL_LOG_BIN,                         false, false, true, (char *)"SQL_LOG_BIN", (char *)"sql_log_bin", (char *)"1" } ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];

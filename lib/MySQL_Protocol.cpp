@@ -1982,8 +1982,6 @@ __exit_do_auth:
 		sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
 		sess->mysql_variables->client_set_value(SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
-	if (sess->mysql_variables)
-		proxy_warning("TRACE : LOGIN charset server %s, client %s, handshake %d\n", sess->mysql_variables->server_get_value(SQL_CHARACTER_SET), sess->mysql_variables->client_get_value(SQL_CHARACTER_SET), charset);
 	// enable compression
 	if (capabilities & CLIENT_COMPRESS) {
 		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
