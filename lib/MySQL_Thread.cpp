@@ -3279,7 +3279,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-	proxy_warning("TRACE : new_client\n");
 	for (int i=0; i<SQL_NAME_LAST; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_SET_RESULTS ||
 			i == SQL_CHARACTER_SET_CONNECTION || i == SQL_CHARACTER_SET_CLIENT ||

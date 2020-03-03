@@ -1,5 +1,6 @@
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
+#include "MySQL_Variables.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -107,35 +108,19 @@ class MySQL_Session
 	int handler_again___status_RESETTING_CONNECTION();
 	void handler_again___new_thread_to_kill_connection();
 
-//	bool handler_again___verify_backend(int var);
-	bool handler_again___verify_backend_charset();
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_ldap_user_variable();
 	bool handler_again___verify_backend_autocommit();
-	bool handler_again___verify_backend_user_schema();
-	bool handler_again___verify_backend_sql_log_bin();
-	bool handler_again___verify_backend_tx_isolation();
 	bool handler_again___verify_backend_multi_statement();
-	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
+	bool handler_again___verify_backend_user_schema();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
-	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
-	bool handler_again___status_SETTING_TIME_ZONE(int *);
-	bool handler_again___status_SETTING_ISOLATION_LEVEL(int *);
-	bool handler_again___status_SETTING_TRANSACTION_READ(int *);
-	bool handler_again___status_SETTING_TX_ISOLATION(int *);
-	bool handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *);
-	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
-	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
-	bool handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *);
-	bool handler_again___status_SETTING_COLLATION_CONNECTION(int *);
-	bool handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *);
-	bool handler_again___status_SETTING_MAX_JOIN_SIZE(int *);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
+	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
@@ -143,7 +128,7 @@ class MySQL_Session
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
-	bool handler_again___status_CHANGING_CHARSET(int *);
+	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	std::stack<enum session_status> previous_status;
 	void * operator new(size_t);
 	void operator delete(void *);
@@ -166,7 +151,7 @@ class MySQL_Session
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
 	char * default_schema;
-	std::unique_ptr<MySQL_Variables> mysql_variables;
+	std::unique_ptr<MySQL_Variables> mysql_variables {nullptr};
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
