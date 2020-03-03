@@ -24,38 +24,38 @@ int main(int argc, char** argv) {
 		return exit_status();
 	
 	if (mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "utf8")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
-	              mysql_error(mysql));
+		fprintf(stderr, "Failed to connect to database: Error: %s\n",
+				mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (mysql_query(mysql, "drop database if exists t1")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (mysql_query(mysql, "create database t1 charset utf8")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (mysql_query(mysql, "use t1")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
 	if (mysql_query(mysql, "set names 'utf8'")) {
-	    fprintf(stderr, "SET CHARACTER SET 'utf8': Error: %s\n",
-	              mysql_error(mysql));
+		fprintf(stderr, "SET NAMES 'utf8': Error: %s\n",
+				mysql_error(mysql));
 		return exit_status();
 	}
 

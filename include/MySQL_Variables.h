@@ -10,43 +10,41 @@
 
 class MySQL_Session;
 
-class Updater {
-public:
-	virtual bool verify_variables(MySQL_Session* session, int idx) = 0;
-	virtual bool update_server_variable(MySQL_Session* session, int idx, int &_rc) = 0;
-	virtual ~Updater();
-};
+extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
+extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
+extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+extern void print_backtrace(void);
 
-class Generic_Updater : public Updater {
-public:
-	bool verify_variables(MySQL_Session* session, int idx);
-	bool update_server_variable(MySQL_Session* session, int idx, int &_rc);
-};
+typedef bool (*verify_var)(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
+typedef bool (*update_var)(MySQL_Session* session, int idx, int &_rc);
+
+bool validate_charset(MySQL_Session* session, int idx, int &_rc);
+bool update_server_variable(MySQL_Session* session, int idx, int &_rc);
+bool verify_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
+bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
 
 class MySQL_Variables {
 	MySQL_Session* session;
-public:
-	bool verify_generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
-	static int session_by_var[SQL_NAME_LAST];
-	static int var_by_session[NONE];
-	static bool quotes[SQL_NAME_LAST];
-	static bool set_transaction[SQL_NAME_LAST];
-	Updater* updaters[SQL_NAME_LAST];
 
+	verify_var verifiers[SQL_NAME_LAST];
+	update_var updaters[SQL_NAME_LAST];
+
+public:
+	bool is_connected_to_backend;
 	MySQL_Variables(MySQL_Session* session);
 	virtual ~MySQL_Variables();
 
-	void client_set_value(int idx, const std::string& value);
-	const char* client_get_value(int idx);
-	uint32_t client_get_hash(int idx);
+	bool client_set_value(int idx, const std::string& value);
+	const char* client_get_value(int idx) const;
+	uint32_t client_get_hash(int idx) const;
 
 	void server_set_value(int idx, const char* value);
-	const char* server_get_value(int idx);
-	uint32_t server_get_hash(int idx);
+	const char* server_get_value(int idx) const;
+	inline uint32_t server_get_hash(int idx) const;
 
-	bool verify_variable(int idx);
+	bool verify_variable(int idx) const;
 	bool update_variable(session_status status, int &_rc);
-
+	bool on_connect_to_backend(mysql_variable_st* tracked_variables);
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H

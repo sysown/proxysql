@@ -15,17 +15,8 @@
 #include "json.hpp"
 
 #include "tap.h"
+#include "utils.h"
 #include "command_line.h"
-
-#define MYSQL_QUERY(mysql, query) \
-	do { \
-		if (mysql_query(mysql, query)) { \
-			fprintf(stderr, "File %s, line %d, Error: %s\n", \
-					__FILE__, __LINE__, mysql_error(mysql)); \
-			return exit_status(); \
-		} \
-	} while(0)
-
 
 std::vector<std::string> split(const std::string& s, char delimiter)
 {
@@ -108,6 +99,9 @@ int local=0;
 int queries=0;
 int uniquequeries=0;
 int histograms=-1;
+
+bool is_mariadb = false;
+bool is_cluster = false;
 unsigned int g_connect_OK=0;
 unsigned int g_connect_ERR=0;
 unsigned int g_select_OK=0;
@@ -140,8 +134,9 @@ void parseResult(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
 
-	while ((row = mysql_fetch_row(result)))
+	while ((row = mysql_fetch_row(result))) {
 		j[row[0]] = row[1];
+	}
 }
 
 void dumpResult(MYSQL_RES *result) {
@@ -162,11 +157,27 @@ void dumpResult(MYSQL_RES *result) {
 
 void queryVariables(MYSQL *mysql, json& j) {
 	std::stringstream query;
-	query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
-		" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
-		" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
-		" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', 'session_track_gtids', "
-		" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database');";
+	if (is_mariadb) {
+		query << "SELECT /* mysql " << mysql << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
+			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only', "
+			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database');";
+	}
+	if (is_cluster) {
+		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
+			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
+			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'wsrep_sync_wait');";
+	}
+	if (!is_mariadb && !is_cluster) {
+		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
+			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
+			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database');";
+	}
 	//fprintf(stderr, "TRACE : QUERY 3 : variables %s\n", query.str().c_str());
 	if (mysql_query(mysql, query.str().c_str())) {
 		if (silent==0) {
@@ -269,47 +280,83 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["sql_select_limit"] = strdup(ss.str().c_str());
 			}
 
-			// transaction_isolation (level)
-			if (!el.value()["isolation_level"].dump().compare("\"REPEATABLE READ\"")) {
-				el.value().erase("isolation_level");
-				j["conn"]["transaction_isolation"] = "REPEATABLE-READ";
+			if (!is_mariadb) {
+				// transaction_isolation (level)
+				if (!el.value()["isolation_level"].dump().compare("\"REPEATABLE READ\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["transaction_isolation"] = "REPEATABLE-READ";
+				}
+				else if (!el.value()["isolation_level"].dump().compare("\"READ COMMITTED\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["transaction_isolation"] = "READ-COMMITTED";
+				}
+				else if (!el.value()["isolation_level"].dump().compare("\"READ UNCOMMITTED\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["transaction_isolation"] = "READ-UNCOMMITTED";
+				}
+				else if (!el.value()["isolation_level"].dump().compare("\"SERIALIZABLE\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["transaction_isolation"] = "SERIALIZABLE";
+				}
 			}
-			else if (!el.value()["isolation_level"].dump().compare("\"READ COMMITTED\"")) {
-				el.value().erase("isolation_level");
-				j["conn"]["transaction_isolation"] = "READ-COMMITTED";
-			}
-			else if (!el.value()["isolation_level"].dump().compare("\"READ UNCOMMITTED\"")) {
-				el.value().erase("isolation_level");
-				j["conn"]["transaction_isolation"] = "READ-UNCOMMITTED";
-			}
-			else if (!el.value()["isolation_level"].dump().compare("\"SERIALIZABLE\"")) {
-				el.value().erase("isolation_level");
-				j["conn"]["transaction_isolation"] = "SERIALIZABLE";
+			else {
+				// transaction_isolation (level)
+				if (!el.value()["isolation_level"].dump().compare("\"REPEATABLE READ\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["tx_isolation"] = "REPEATABLE-READ";
+				}
+				else if (!el.value()["isolation_level"].dump().compare("\"READ COMMITTED\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["tx_isolation"] = "READ-COMMITTED";
+				}
+				else if (!el.value()["isolation_level"].dump().compare("\"READ UNCOMMITTED\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["tx_isolation"] = "READ-UNCOMMITTED";
+				}
+				else if (!el.value()["isolation_level"].dump().compare("\"SERIALIZABLE\"")) {
+					el.value().erase("isolation_level");
+					j["conn"]["tx_isolation"] = "SERIALIZABLE";
+				}
 			}
 
-			// transaction_read (write|only)
-			if (!el.value()["transaction_read"].dump().compare("\"ONLY\"")) {
-				el.value().erase("transaction_read");
-				j["conn"]["transaction_read_only"] = "ON";
-			}
-			else if (!el.value()["transaction_read"].dump().compare("\"WRITE\"")) {
-				el.value().erase("transaction_read");
-				j["conn"]["transaction_read_only"] = "OFF";
+			if (!is_mariadb) {
+				// transaction_read (write|only)
+				if (!el.value()["transaction_read"].dump().compare("\"ONLY\"")) {
+					el.value().erase("transaction_read");
+					j["conn"]["transaction_read_only"] = "ON";
+				}
+				else if (!el.value()["transaction_read"].dump().compare("\"WRITE\"")) {
+					el.value().erase("transaction_read");
+					j["conn"]["transaction_read_only"] = "OFF";
+				}
+			} else {
+				// transaction_read (write|only)
+				if (!el.value()["transaction_read"].dump().compare("\"ONLY\"")) {
+					el.value().erase("transaction_read");
+					j["conn"]["tx_read_only"] = "ON";
+				}
+				else if (!el.value()["transaction_read"].dump().compare("\"WRITE\"")) {
+					el.value().erase("transaction_read");
+					j["conn"]["tx_read_only"] = "OFF";
+				}
 			}
 
-			// session_track_gtids
-			if (!el.value()["session_track_gtids"].dump().compare("\"OFF\"")) {
-				el.value().erase("session_track_gtids");
-				j["conn"]["session_track_gtids"] = "OFF";
+			if (!is_mariadb) {
+				// session_track_gtids
+				if (!el.value()["session_track_gtids"].dump().compare("\"OFF\"")) {
+					el.value().erase("session_track_gtids");
+					j["conn"]["session_track_gtids"] = "OFF";
+				}
+				else if (!el.value()["session_track_gtids"].dump().compare("\"OWN_GTID\"")) {
+					el.value().erase("session_track_gtids");
+					j["conn"]["session_track_gtids"] = "OWN_GTID";
+				}
+				else if (!el.value()["session_track_gtids"].dump().compare("\"ALL_GTIDS\"")) {
+					el.value().erase("session_track_gtids");
+					j["conn"]["session_track_gtids"] = "ALL_GTIDS";
+				}
 			}
-			else if (!el.value()["session_track_gtids"].dump().compare("\"OWN_GTID\"")) {
-				el.value().erase("session_track_gtids");
-				j["conn"]["session_track_gtids"] = "OWN_GTID";
-			}
-			else if (!el.value()["session_track_gtids"].dump().compare("\"ALL_GTIDS\"")) {
-				el.value().erase("session_track_gtids");
-				j["conn"]["session_track_gtids"] = "ALL_GTIDS";
-			}
+
 		}
 	}
 }
@@ -377,7 +424,34 @@ void * my_conn_thread(void *arg) {
 		}
 
 		for (auto& el : testCases[r2].expected_vars.items()) {
-			vars[el.key()] = el.value();
+			if (el.key() == "transaction_isolation") {
+				if (is_mariadb) {
+					vars["tx_isolation"] = el.value();
+				}
+				else {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "session_track_gtids") {
+				if (!is_mariadb) {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "wsrep_sync_wait") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "transaction_read_only") {
+				if (is_mariadb) {
+					vars["tx_read_only"] = el.value();
+				} else {
+					vars[el.key()] = el.value();
+				}
+			}
+			else {
+				vars[el.key()] = el.value();
+			}
 		}
 
 		int sleepDelay = fastrand()%100;
@@ -460,6 +534,39 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='true' where variable_name='mysql-enforce_autocommit_on_reads'");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
+	mysql_close(mysqladmin);
+
+	MYSQL* mysql = mysql_init(NULL);
+	if (!mysql)
+		return exit_status();
+	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
+		return exit_status();
+	}
+	MYSQL_QUERY(mysql, "select @@version");
+	MYSQL_RES *result = mysql_store_result(mysql);
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result)))
+	{
+		if (strstr(row[0], "Maria")) {
+			is_mariadb = true;
+		}
+		else {
+			is_mariadb = false;
+		}
+
+		char* first_dash = strstr(row[0], "-");
+		if (!first_dash || !strstr(first_dash+1, "-")) {
+			is_cluster = false;
+		} else {
+			is_cluster = true;
+		}
+	}
+
+	mysql_free_result(result);
+	mysql_close(mysql);
+
 	num_threads = 10;
 	queries = 1000;
 	queries_per_connections = 10;
@@ -484,7 +591,6 @@ int main(int argc, char *argv[]) {
 	if (uniquequeries) {
 		uniquequeries=(int)sqrt(uniquequeries);
 	}
-	mysql_library_init(0, NULL, NULL);
 
 	pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
 	if (thi==NULL)
