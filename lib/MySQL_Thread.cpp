@@ -3470,6 +3470,7 @@ void MySQL_Thread::run() {
 			myds->attach_connection(mc);
 			myds->assign_fd_from_mysql_conn();
 			myds->myds_type=MYDS_BACKEND;
+			sess->mysql_variables->on_connect_to_backend(mysql_tracked_variables);
 
 			sess->to_process=1;
 			myds->wait_until=curtime+mysql_thread___ping_timeout_server*1000;	// max_timeout
