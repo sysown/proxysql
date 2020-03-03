@@ -5928,6 +5928,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		status=CONNECTING_SERVER;
 		mybe->server_myds->myconn->reusable=true;
 	} else {
+		mysql_variables->on_connect_to_backend(mysql_tracked_variables);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection found = %p\n", this, mybe->server_myds->myconn);
 		mybe->server_myds->assign_fd_from_mysql_conn();
 		mybe->server_myds->myds_type=MYDS_BACKEND;

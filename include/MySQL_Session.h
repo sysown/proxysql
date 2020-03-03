@@ -1,5 +1,6 @@
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
+#include "MySQL_Variables.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
