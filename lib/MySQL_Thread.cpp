@@ -3279,7 +3279,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	sess->client_myds->myprot.init(&sess->client_myds, sess->client_myds->myconn->userinfo, sess);
 
-	proxy_warning("TRACE : new_client\n");
 	for (int i=0; i<SQL_NAME_LAST; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_SET_RESULTS ||
 			i == SQL_CHARACTER_SET_CONNECTION || i == SQL_CHARACTER_SET_CLIENT ||
@@ -3350,7 +3349,7 @@ bool MySQL_Thread::init() {
 
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)(SQL_MODE|TIME_ZONE|CHARACTER_SET_RESULTS|CHARACTER_SET_CLIENT|CHARACTER_SET_DATABASE|SESSION_TRACK_GTIDS|SQL_AUTO_IS_NULL|SQL_SELECT_LIMIT|SQL_SAFE_UPDATES|COLLATION_CONNECTION|CHARACTER_SET_CONNECTION|NET_WRITE_TIMEOUT|TX_ISOLATION|MAX_JOIN_SIZE( *)(:|)=( *))");
+	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)(SQL_MODE|TIME_ZONE|CHARACTER_SET_RESULTS|CHARACTER_SET_CLIENT|CHARACTER_SET_DATABASE|SESSION_TRACK_GTIDS|SQL_AUTO_IS_NULL|SQL_SELECT_LIMIT|SQL_SAFE_UPDATES|COLLATION_CONNECTION|CHARACTER_SET_CONNECTION|NET_WRITE_TIMEOUT|WSREP_SYNC_WAIT|TX_ISOLATION|MAX_JOIN_SIZE( *)(:|)=( *))");
 	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
 
