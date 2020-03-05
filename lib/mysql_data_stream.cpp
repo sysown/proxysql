@@ -137,6 +137,7 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 static enum sslstatus get_sslstatus(SSL* ssl, int n)
 {
 	int err = SSL_get_error(ssl, n);
+	ERR_clear_error();
 	switch (err) {
 	case SSL_ERROR_NONE:
 		return SSLSTATUS_OK;
