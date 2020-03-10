@@ -2753,6 +2753,8 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 
 bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) { 
 	//fprintf(stderr,"CONNECTING_SERVER\n");
+	unsigned long long curtime=monotonic_time();
+	thread->atomic_curtime=curtime;
 	if (mirror) {
 		mybe->server_myds->connect_retries_on_failure=0; // no try for mirror
 		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;

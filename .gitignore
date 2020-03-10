@@ -150,6 +150,7 @@ deps/libev/libev-4.24/
 #libssl
 deps/libssl/openssl-1.1.0h/
 deps/libssl/openssl-1.1.1b/
+deps/libssl/openssl-1.1.1d/
 
 #google coredumper
 deps/google-coredumper/google-coredumper/

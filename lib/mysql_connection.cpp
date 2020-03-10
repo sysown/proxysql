@@ -830,6 +830,14 @@ handler_again:
     break;
 			break;
 		case ASYNC_CONNECT_END:
+			if (myds) {
+				if (myds->sess) {
+					if (myds->sess->thread) {
+						unsigned long long curtime = monotonic_time();
+						myds->sess->thread->atomic_curtime=curtime;
+					}
+				}
+			}
 			if (!ret_mysql) {
 				// always increase the counter
 				proxy_error("Failed to mysql_real_connect() on %s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
@@ -1280,7 +1288,8 @@ handler_again:
 			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_FAILED:
-			fprintf(stderr,"%s\n",mysql_error(mysql));
+			//fprintf(stderr,"%s\n",mysql_error(mysql));
+			proxy_error("Failed SET AUTOCOMMIT: %s\n",mysql_error(mysql));
 			break;
 		case ASYNC_SET_NAMES_START:
 			set_names_start();
@@ -1308,7 +1317,8 @@ handler_again:
 		case ASYNC_SET_NAMES_SUCCESSFUL:
 			break;
 		case ASYNC_SET_NAMES_FAILED:
-			fprintf(stderr,"%s\n",mysql_error(mysql));
+			//fprintf(stderr,"%s\n",mysql_error(mysql));
+			proxy_error("Failed SET NAMES: %s\n",mysql_error(mysql));
 			break;
 		case ASYNC_INITDB_START:
 			initdb_start();
@@ -1336,7 +1346,8 @@ handler_again:
 		case ASYNC_INITDB_SUCCESSFUL:
 			break;
 		case ASYNC_INITDB_FAILED:
-			fprintf(stderr,"%s\n",mysql_error(mysql));
+			proxy_error("Failed INITDB: %s\n",mysql_error(mysql));
+			//fprintf(stderr,"%s\n",mysql_error(mysql));
 			break;
 		case ASYNC_SET_OPTION_START:
 			set_option_start();

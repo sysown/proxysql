@@ -117,3 +117,11 @@
      if (!mysql_real_query(mysql, buff, (unsigned long)strlen(buff)))
      {
        mysql->charset= cs;
+@@ -3494,6 +3541,7 @@
+   }
+ 
+ error:
++  if (!cs)
+   my_set_error(mysql, CR_CANT_READ_CHARSET, SQLSTATE_UNKNOWN,
+                0, csname, "compiled_in");
+   return(mysql->net.last_errno);
