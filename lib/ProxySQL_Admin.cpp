@@ -4653,21 +4653,21 @@ __end_while_pool:
 			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
 				bool is_ipv6 = false;
-                                char *h = NULL;
-                                if (*sn == '[') {
-										is_ipv6 = true;
-                                        char *p = strchr(sn, ']');
-                                        if (p == NULL)
-                                                proxy_error("Invalid IPv6 address: %s\n", sn);
+				char *h = NULL;
+				if (*sn == '[') {
+					is_ipv6 = true;
+					char *p = strchr(sn, ']');
+					if (p == NULL)
+						proxy_error("Invalid IPv6 address: %s\n", sn);
 
-                                        h = ++sn; // remove first '['
-                                        *p = '\0';
-                                        sn = p++; // remove last ']'
-                                        add = h;
-                                        port = ++p; // remove ':'
-                                } else {
-                                        c_split_2(sn, ":" , &add, &port);
-                                }
+					h = ++sn; // remove first '['
+					*p = '\0';
+					sn = p++; // remove last ']'
+					add = h;
+					port = ++p; // remove ':'
+				} else {
+					c_split_2(sn, ":" , &add, &port);
+				}
 
 #ifdef SO_REUSEPORT
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128, true) : listen_on_unix(add, 128));
