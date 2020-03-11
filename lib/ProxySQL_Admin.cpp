@@ -4652,9 +4652,10 @@ __end_while_pool:
 			i=0; j=0;
 			for (j=0; j<S_amll.ifaces_mysql->ifaces->len; j++) {
 				char *add=NULL; char *port=NULL; char *sn=(char *)S_amll.ifaces_mysql->ifaces->index(j);
-
+				bool is_ipv6 = false;
                                 char *h = NULL;
                                 if (*sn == '[') {
+										is_ipv6 = true;
                                         char *p = strchr(sn, ']');
                                         if (p == NULL)
                                                 proxy_error("Invalid IPv6 address: %s\n", sn);
@@ -4674,8 +4675,10 @@ __end_while_pool:
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
 #endif
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
-				if (add) free(add);
-				if (port) free(port);
+				if (is_ipv6 == false) {
+					if (add) free(add);
+					if (port) free(port);
+				}
 			}
 			S_amll.wrunlock();
 		}
