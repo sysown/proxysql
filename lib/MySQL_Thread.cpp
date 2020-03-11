@@ -224,26 +224,27 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 			return -1;
 		}
 	}
+
 	char *address=NULL; char *port=NULL;
 	int s = -1;
-        char *h = NULL;
+	char *h = NULL;
 	bool is_ipv6 = false;
 
-        if (*(char *)iface == '[') {
-			is_ipv6 = true;
-                char *p = strchr((char *)iface, ']');
-                if (p == NULL) {
-                        proxy_error("Invalid IPv6 address: %s\n", iface);
-                        return -1;
-                }
-                h = (char *)++iface; // remove first '['
-                *p = '\0';
-                iface = p++; // remove last ']'
-                address = h;
-                port = ++p; // remove ':'
-        } else {
-                c_split_2(iface, ":" , &address, &port);
-        }
+	if (*(char *)iface == '[') {
+		is_ipv6 = true;
+		char *p = strchr((char *)iface, ']');
+		if (p == NULL) {
+			proxy_error("Invalid IPv6 address: %s\n", iface);
+			return -1;
+		}
+		h = (char *)++iface; // remove first '['
+		*p = '\0';
+		iface = p++; // remove last ']'
+		address = h;
+		port = ++p; // remove ':'
+	} else {
+		c_split_2(iface, ":" , &address, &port);
+	}
 
 #ifdef SO_REUSEPORT
 	if (GloVars.global.reuseport==false) {
