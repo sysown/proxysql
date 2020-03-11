@@ -227,8 +227,10 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 	char *address=NULL; char *port=NULL;
 	int s = -1;
         char *h = NULL;
+	bool is_ipv6 = false;
 
         if (*(char *)iface == '[') {
+			is_ipv6 = true;
                 char *p = strchr((char *)iface, ']');
                 if (p == NULL) {
                         proxy_error("Invalid IPv6 address: %s\n", iface);
@@ -268,8 +270,11 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
 #endif /* SO_REUSEPORT */
 	if (s==-1) {
-		free(address);
-		free(port);
+		if (is_ipv6 == false) {
+			free(address);
+			free(port);
+		}
+
 		return s;
 	}
 	if (s>0) {
@@ -277,8 +282,11 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 		iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
 		ifaces->add(ifi);
 	}
-	free(address);
-	free(port);
+	if (is_ipv6 == false) {
+		free(address);
+		free(port);
+	}
+
 	return s;
 }
 
