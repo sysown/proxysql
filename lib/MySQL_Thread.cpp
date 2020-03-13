@@ -4561,15 +4561,19 @@ void MySQL_Thread::process_all_sessions() {
 					}
 				}
 				if (servers_table_version_current != servers_table_version_previous) { // bug fix for #1085
-					// Immediatelly kill all client connections using an OFFLINE node
-					//if (sess->HasOfflineBackends()) {
-					//	sess->killed=true;
-					//}
-					// Search for connections that should be terminated, and simulate data in them
-					// the following 2 lines of code replace the previous 2 lines
-					// instead of killing the sessions, fails the backend connections
-					if (sess->SetEventInOfflineBackends()) {
-						sess->to_process=1;
+					// Immediatelly kill all client connections using an OFFLINE node when session_fast_forward == true
+					if (sess->session_fast_forward) {
+						if (sess->HasOfflineBackends()) {
+							sess->killed=true;
+						}
+					}
+					else {
+						// Search for connections that should be terminated, and simulate data in them
+						// the following 2 lines of code replace the previous 2 lines
+						// instead of killing the sessions, fails the backend connections
+						if (sess->SetEventInOfflineBackends()) {
+							sess->to_process=1;
+						}
 					}
 				}
 			}
