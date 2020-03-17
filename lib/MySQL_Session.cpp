@@ -3630,6 +3630,7 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
+					track_session_variables(myconn->mysql);
 
 					if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 						if (mysql_thread___client_session_track_gtid) {
@@ -6573,3 +6574,77 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	}
 }
 
+void MySQL_Session::track_session_variables(MYSQL* mysql) {
+	const char *data;
+	size_t length;
+
+	if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0)
+	{
+		int idx = SQL_NAME_LAST;
+		for (int i=0; i<SQL_NAME_LAST; i++) {
+			if (!strncasecmp(data, mysql_tracked_variables[i].set_variable_name, length)) {
+				idx = i;
+				break;
+			}
+		}
+
+		bool is_value = true;
+		while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0)
+		{
+			if (is_value) {
+				char val[1024];
+				memcpy(val, data, length);
+				val[length]=0;
+				if (length>0) {
+					if (idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE ||
+							idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CONNECTION) {
+						char id[16];
+						char name[32];
+						memcpy(name, data, length);
+						name[length] = '\0';
+						collation_id_from_charset_name_r(name, id, sizeof(id));
+						mysql_variables->client_set_value(idx, id);
+						mysql_variables->server_set_value(idx, id);
+					}
+					else if (idx == SQL_COLLATION_CONNECTION) {
+						char id[16];
+						char collation[32];
+						memcpy(collation, data, length);
+						collation[length] = '\0';
+						collation_id_from_collate_r(collation, id, sizeof(id));
+						mysql_variables->client_set_value(idx, id);
+						mysql_variables->server_set_value(idx, id);
+					}
+					else if (idx == SQL_LOG_BIN) {
+						char value[1024];
+						memcpy(value, data, length);
+						value[length] = '\0';
+						if (value[1] == 'N') {
+							mysql_variables->client_set_value(idx, "1");
+							mysql_variables->server_set_value(idx, "1");
+						} else {
+							mysql_variables->client_set_value(idx, "0");
+							mysql_variables->server_set_value(idx, "0");
+						}
+					} else {
+						if (idx >= SQL_NAME_LAST)
+							continue;
+						char value[1024];
+						memcpy(value, data, length);
+						value[length] = '\0';
+						mysql_variables->client_set_value(idx, value);
+						mysql_variables->server_set_value(idx, value);
+					}
+				}
+			} else {
+				for (int i=0; i<SQL_NAME_LAST; i++) {
+					if (!strncasecmp(data, mysql_tracked_variables[i].set_variable_name, length)) {
+						idx = i;
+						break;
+					}
+				}
+			}
+			is_value = !is_value;
+		}
+	}
+}
