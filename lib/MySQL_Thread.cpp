@@ -48,6 +48,9 @@ const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 }
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name) {
+	if (!name)
+		return NULL;
+
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
 		if (!strcasecmp(c->csname, name)) {
@@ -59,6 +62,9 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name) {
 }
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename) {
+	if (!csname || !collatename)
+		return NULL;
+
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
 		if (!strcasecmp(c->csname, csname) && !strcasecmp(c->name, collatename)) {
@@ -70,6 +76,9 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, c
 }
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
+	if (!collatename)
+		return NULL;
+
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
 		if (!strcasecmp(c->name, collatename)) {
