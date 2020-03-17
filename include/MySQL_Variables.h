@@ -22,6 +22,8 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc);
 bool update_server_variable(MySQL_Session* session, int idx, int &_rc);
 bool verify_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
 bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
+char* collation_id_from_charset_name_r(const char *name, char* collation_id, int length);
+char* collation_id_from_collate_r(const char *collation, char* collation_id, int length);
 
 class MySQL_Variables {
 	MySQL_Session* session;

@@ -237,6 +237,7 @@ class MySQL_Session
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
+	void track_session_variables(MYSQL* mysql);
 };
 
 #define KILL_QUERY       1

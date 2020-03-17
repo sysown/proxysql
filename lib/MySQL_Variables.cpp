@@ -358,3 +358,21 @@ bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 	return session->handler_again___status_SETTING_SQL_LOG_BIN(&_rc);
 }
 
+char* collation_id_from_charset_name_r(const char *name, char* collation_id, int length) {
+	const MARIADB_CHARSET_INFO *ci = NULL;
+	ci = proxysql_find_charset_name(name);
+
+	if (ci)
+		snprintf(collation_id, length, "%d", ci->nr);
+	return collation_id;
+}
+
+char* collation_id_from_collate_r(const char *collation, char* collation_id, int length) {
+	const MARIADB_CHARSET_INFO *ci = NULL;
+	ci = proxysql_find_charset_collate(collation);
+
+	if (ci)
+		snprintf(collation_id, length, "%d", ci->nr);
+	return collation_id;
+}
+
