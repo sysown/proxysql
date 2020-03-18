@@ -32,8 +32,8 @@
 
 int select_config_file(MYSQL* mysql, std::string& resultset) {
 	if (mysql_query(mysql, "select config file")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
@@ -48,12 +48,13 @@ int select_config_file(MYSQL* mysql, std::string& resultset) {
 		fprintf(stderr, "error\n");
 	}
 
+	return 0;
 }
 
 int query_memory(MYSQL* mysql) {
 	if (mysql_query(mysql, "select * from stats_memory_metrics")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
@@ -81,12 +82,12 @@ bool prepared_statement(MYSQL *mysqla, const std::string& query) {
 	int           int_data;
 	int           int_data1;
 	int           int_data2;
-	char 		  str_data1[120];
-	char 		  str_data2[120];
+	char          str_data1[120];
+	char          str_data2[120];
 	my_bool       is_null[4];
 	my_bool       error[4];
 	unsigned long length[4];
-	int			  row_count;
+	int           row_count;
 	memset(bind1, 0, sizeof(bind1));
 
 	int_data = 1;
@@ -157,8 +158,8 @@ int simulate_deadlock(const char* host, const char* username, const char* passwo
 		return exit_status();
 	
 	if (!mysql_real_connect(mysql, host, username, password, "test", port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
@@ -217,8 +218,7 @@ int simulate_deadlock(const char* host, const char* username, const char* passwo
 		sem_close(sp1);
 		mysql_close(mysqla);
 		exit(0);
-	}
-	else {
+	} else {
 
 		sem_wait(sp);
 		std::stringstream ss;
@@ -253,8 +253,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	}
 	
@@ -268,8 +268,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
 
 	auto mem_before = query_memory(mysqladmin);
 
-	/* simulating deadloc */
+	/* simulating deadlock */
 	for (int i = 0 ; i < 100; i++) {
 		simulate_deadlock(cl.host, cl.username, cl.password, cl.port);
 		ok(true, "Iteration");

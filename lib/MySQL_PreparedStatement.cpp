@@ -577,7 +577,6 @@ MySQL_STMT_Manager_v14::~MySQL_STMT_Manager_v14() {
 		auto a = s3.second;
 		delete a;
 	}
-	map_stmt_id_to_info.erase(map_stmt_id_to_info.begin(), map_stmt_id_to_info.end());
 }
 
 void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lock) {
@@ -677,10 +676,7 @@ void MySQL_STMT_Manager_v14::ref_count_server(uint64_t _stmt_id ,int _v, bool lo
 		pthread_rwlock_unlock(&rwlock_);
 }
 
-void MySQL_STMTs_local_v14::remove_stmt(MYSQL_STMT* stmt, bool fromExecutedState) {
-	if (fromExecutedState)
-		GloMyStmt->ref_count_server(stmt->stmt_id, -1);
-
+void MySQL_STMTs_local_v14::remove_stmt(MYSQL_STMT* stmt) {
 	auto a = backend_stmt_to_global_ids.find(stmt->stmt_id);
 	if (a == backend_stmt_to_global_ids.end()) return;
 
@@ -702,7 +698,7 @@ void MySQL_STMTs_local_v14::remove_stmt(MYSQL_STMT* stmt, bool fromExecutedState
 		stmt->mysql->stmts =
 			list_delete(stmt->mysql->stmts, &stmt->list);
 	}
-	proxy_warning("Error in prepared statement %d  %p. Called from %d, Removed.\n", stmt->stmt_id, stmt, fromExecutedState);
+	proxy_warning("Error in prepared statement %d  %p. Removed.\n", stmt->stmt_id, stmt);
 }
 
 MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
