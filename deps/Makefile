@@ -17,9 +17,9 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver libinjection
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 endif
 .PHONY: default
 
@@ -161,6 +161,14 @@ libconfig/libconfig/lib/.libs/libconfig++.a:
 
 libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
+prometheus-cpp/lib/libprometheus-cpp-core.a:
+	cd prometheus-cpp && tar --strip-components=1 -zxf v0.9.0.tar.gz -C .
+	cd prometheus-cpp && git submodule init
+	cd prometheus-cpp && git submodule update
+	cd prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF
+	cd prometheus-cpp && make -j 4
+
+prometheus-cpp: prometheus-cpp/lib/libprometheus-cpp-core.a
 
 re2/re2/obj/libre2.a:
 	cd re2 && rm -rf re2-2018-07-01
@@ -212,5 +220,6 @@ cleanall:
 	cd libssl && rm -rf openssl-1.1.1b || true
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
+	cd prometheus-cpp && make clean
 .PHONY: cleanall
 
