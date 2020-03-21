@@ -852,6 +852,14 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
+		if (root.exists("prometheus_plugin")==true) {
+			string prometheus_plugin { "" };
+			bool rc { root.lookupValue("prometheus_plugin", prometheus_plugin) };
+
+			if (rc == true) {
+				GloVars.prometheus_plugin = prometheus_plugin;
+			}
+		}
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
 		if (GloVars.__cmd_proxysql_config_file) {
