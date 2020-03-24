@@ -554,13 +554,15 @@ void SQLite3_result::add_column_definition(int a, const char *b) {
 	column_definition.push_back(cf);
 }
 
-int SQLite3_result::add_row(sqlite3_stmt *stmt) {
+int SQLite3_result::add_row(sqlite3_stmt *stmt, bool skip) {
 	int rc=sqlite3_step(stmt);
 	if (rc!=SQLITE_ROW) return rc;
-	SQLite3_row *row=new SQLite3_row(columns);
-	row->add_fields(stmt);
-	rows.push_back(row);
-	rows_count++;
+	if (skip==false) {
+		SQLite3_row *row=new SQLite3_row(columns);
+		row->add_fields(stmt);
+		rows.push_back(row);
+		rows_count++;
+	}
 	return SQLITE_ROW;
 }
 
@@ -593,6 +595,31 @@ SQLite3_result::SQLite3_result(sqlite3_stmt *stmt) {
 		add_column_definition(sqlite3_column_type(stmt,i), sqlite3_column_name(stmt,i));
 	}
 	while (add_row(stmt)==SQLITE_ROW) {};
+}
+
+SQLite3_result::SQLite3_result(sqlite3_stmt *stmt, int * found_rows, unsigned int offset, unsigned int limit) {
+	rows_count=0;
+	int fr = 0;
+	columns=sqlite3_column_count(stmt);
+	for (int i=0; i<columns; i++) {
+		add_column_definition(sqlite3_column_type(stmt,i), sqlite3_column_name(stmt,i));
+	}
+	int rc = SQLITE_ROW;
+	while (offset > 0 && rc==SQLITE_ROW) {
+		rc = add_row(stmt, true);
+		if (rc == SQLITE_ROW) fr++;
+		offset--;
+	}
+	while (limit > 0 && rc==SQLITE_ROW) {
+		rc = add_row(stmt, false);
+		if (rc == SQLITE_ROW) fr++;
+		limit--;
+	}
+	while (rc == SQLITE_ROW) {
+		rc=add_row(stmt, true);
+		if (rc == SQLITE_ROW) fr++;
+	}
+	*found_rows = fr;
 }
 
 SQLite3_result::SQLite3_result(int num_columns, bool en_mutex) {
