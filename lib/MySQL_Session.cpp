@@ -6392,6 +6392,7 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						name[length] = '\0';
 						collation_id_from_charset_name_r(name, id, sizeof(id));
 						mysql_variables->client_set_value(idx, id);
+						mysql_variables->server_set_value(idx, id);
 					}
 					else if (idx == SQL_CHARACTER_SET_CONNECTION) {
 						// The SQL_CHARACTER_SET_CONNECTION should be tracked for SET CHARSET command
@@ -6407,6 +6408,7 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						if (ci) {
 							if (strcasecmp(ci->csname, name)!=0 || mysql_variables->client_get_value(idx) == NULL) {
 								mysql_variables->client_set_value(idx, id);
+								mysql_variables->server_set_value(idx, id);
 							}
 						}
 					}
@@ -6417,7 +6419,9 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						collation[length] = '\0';
 						collation_id_from_collate_r(collation, id, sizeof(id));
 						mysql_variables->client_set_value(idx, id);
+						mysql_variables->server_set_value(idx, id);
 						mysql_variables->client_set_value(SQL_CHARACTER_SET_CONNECTION, id);
+						mysql_variables->server_set_value(SQL_CHARACTER_SET_CONNECTION, id);
 					}
 					else if (idx == SQL_LOG_BIN) {
 						char value[1024];
@@ -6425,8 +6429,10 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						value[length] = '\0';
 						if (value[1] == 'N') {
 							mysql_variables->client_set_value(idx, "1");
+							mysql_variables->server_set_value(idx, "1");
 						} else {
 							mysql_variables->client_set_value(idx, "0");
+							mysql_variables->server_set_value(idx, "0");
 						}
 					} else {
 						if (idx >= SQL_NAME_LAST) {
@@ -6440,6 +6446,7 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						memcpy(value, data, length);
 						value[length] = '\0';
 						mysql_variables->client_set_value(idx, value);
+						mysql_variables->server_set_value(idx, value);
 					}
 				}
 			} else {
