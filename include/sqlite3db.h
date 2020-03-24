@@ -44,10 +44,11 @@ class SQLite3_result {
 	SQLite3_result(SQLite3_result *);
 	unsigned long long get_size();
 	void add_column_definition(int a, const char *b);
-	int add_row(sqlite3_stmt *stmt);
+	int add_row(sqlite3_stmt *stmt, bool skip=false);
 	int add_row(char **_fields);
 	int add_row(SQLite3_row *old_row);
 	SQLite3_result(sqlite3_stmt *stmt);
+	SQLite3_result(sqlite3_stmt *stmt, int *found_rows, unsigned int offset, unsigned int limit);
 	SQLite3_result(int num_columns, bool en_mutex=false);
 	~SQLite3_result();
 	void dump_to_stderr();
