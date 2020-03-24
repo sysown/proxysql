@@ -544,6 +544,13 @@ int main(int argc, char *argv[]) {
 				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
+	//
+	// create stored procedure for test case
+	MYSQL_QUERY(mysql, "drop database if exists t1");
+	MYSQL_QUERY(mysql, "create database t1");
+	MYSQL_QUERY(mysql, "use t1");
+	MYSQL_QUERY(mysql, "CREATE PROCEDURE test() BEGIN set names latin7; SET @@SESSION.max_join_size=2000000000; END");
+
 	MYSQL_QUERY(mysql, "select @@version");
 	MYSQL_RES *result = mysql_store_result(mysql);
 	MYSQL_ROW row;
