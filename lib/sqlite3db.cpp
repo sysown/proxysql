@@ -605,15 +605,22 @@ SQLite3_result::SQLite3_result(sqlite3_stmt *stmt, int * found_rows, unsigned in
 		add_column_definition(sqlite3_column_type(stmt,i), sqlite3_column_name(stmt,i));
 	}
 	int rc = SQLITE_ROW;
-	while (offset > 0 && rc==SQLITE_ROW) {
-		rc = add_row(stmt, true);
-		if (rc == SQLITE_ROW) fr++;
-		offset--;
-	}
-	while (limit > 0 && rc==SQLITE_ROW) {
-		rc = add_row(stmt, false);
-		if (rc == SQLITE_ROW) fr++;
-		limit--;
+	if (offset > 0 || limit > 0) {
+		while (offset > 0 && rc==SQLITE_ROW) {
+			rc = add_row(stmt, true);
+			if (rc == SQLITE_ROW) fr++;
+			offset--;
+		}
+		while (limit > 0 && rc==SQLITE_ROW) {
+			rc = add_row(stmt, false);
+			if (rc == SQLITE_ROW) fr++;
+			limit--;
+		}
+	} else {
+		while (rc == SQLITE_ROW) {
+			rc=add_row(stmt, false);
+			if (rc == SQLITE_ROW) fr++;
+		}
 	}
 	while (rc == SQLITE_ROW) {
 		rc=add_row(stmt, true);
