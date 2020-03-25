@@ -3905,6 +3905,7 @@ handler_again:
 		case SETTING_CHARSET:
 		case SETTING_SET_NAMES:
 		case SETTING_SQL_LOG_BIN:
+		case SETTING_WSREP_SYNC_WAIT:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
 				if (mysql_variables->update_variable(status, rc)) {
