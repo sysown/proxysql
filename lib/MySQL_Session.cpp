@@ -2568,6 +2568,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, ch
 				}
 				myds->fd=0;
 				RequestEnd(myds);
+				ret=true;
 			}
 		} else {
 			// rc==1 , nothing to do for now
@@ -4714,13 +4715,15 @@ handler_again:
 			break;
 
 		case SETTING_NET_WRITE_TIMEOUT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_NET_WRITE_TIMEOUT(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
+		case SETTING_MAX_JOIN_SIZE:
+		case SETTING_CHARSET:
+		case SETTING_SET_NAMES:
+		case SETTING_SQL_LOG_BIN:
+		case SETTING_WSREP_SYNC_WAIT:
+			for (auto i = 0; i < SQL_NAME_LAST; i++) {
+				int rc = 0;
+				if (mysql_variables->update_variable(status, rc)) {
+					goto handler_again;
 				}
 			}
 			break;
@@ -5653,7 +5656,22 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						exit_after_SetParse = true;
-					} else if (var == "sql_auto_is_null") {
+					} else if (var == "wsrep_sync_wait") {
+						std::string value1 = *values;
+						if ((strcasecmp(value1.c_str(),"0")==0) || (strcasecmp(value1.c_str(),"1")==0)) {
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET wsrep_sync_wait value %s\n", value1.c_str());
+							uint32_t wsrep_sync_wait_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+							if (mysql_variables->client_get_hash(SQL_WSREP_SYNC_WAIT) != wsrep_sync_wait_int) {
+								if (!mysql_variables->client_set_value(SQL_WSREP_SYNC_WAIT, value1.c_str()))
+									return false;
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection session_track_gtids to %s\n", value1.c_str());
+							}
+							exit_after_SetParse = true;
+						} else {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
 						std::string value1 = *values;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET sql_auto_is_null value %s\n", value1.c_str());
 						int __tmp_value = -1;
