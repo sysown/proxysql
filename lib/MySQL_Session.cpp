@@ -7224,3 +7224,4 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Unable to parse SET query but NOT setting lock_hostgroup %s\n", nqn.c_str());
 	}
 }
+
