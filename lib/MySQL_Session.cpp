@@ -3456,7 +3456,6 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
-
 					if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 						if (mysql_thread___client_session_track_gtid) {
 							gtid_hid = current_hostgroup;
@@ -3912,44 +3911,6 @@ handler_again:
 					goto handler_again;
 				}
 				if (rc == -1) {
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_COLLATION_CONNECTION:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_COLLATION_CONNECTION(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_NET_WRITE_TIMEOUT:
-		case SETTING_MAX_JOIN_SIZE:
-		case SETTING_CHARSET:
-		case SETTING_SET_NAMES:
-		case SETTING_SQL_LOG_BIN:
-		case SETTING_WSREP_SYNC_WAIT:
-			for (auto i = 0; i < SQL_NAME_LAST; i++) {
-				int rc = 0;
-				if (mysql_variables->update_variable(status, rc)) {
-					goto handler_again;
-				}
-			}
-			break;
-
-		case SETTING_MAX_JOIN_SIZE:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_MAX_JOIN_SIZE(&rc))
-					goto handler_again; // we changed status
-				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
 					return handler_ret;
 				}
@@ -6410,4 +6371,3 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Unable to parse SET query but NOT setting lock_hostgroup %s\n", nqn.c_str());
 	}
 }
-
