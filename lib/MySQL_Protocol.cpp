@@ -6,9 +6,6 @@
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
-#include "MySQL_Variables.h"
-
-#include <sstream>
 
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
@@ -34,7 +31,6 @@ typedef uint8_t uchar;
 #endif
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -1216,14 +1212,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
-  const MARIADB_CHARSET_INFO *ci = NULL;
-  ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
-  if (!ci) {
-	  proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable.\n",
-			  mysql_thread___default_variables[SQL_CHARACTER_SET], mysql_tracked_variables[SQL_CHARACTER_SET].internal_variable_name);
-	  assert(0);
-  }
-  uint8_t uint8_charset = ci->nr & 255;
+  uint8_t uint8_charset = mysql_thread___default_charset & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
   memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
@@ -1569,13 +1558,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	}
 	// see bug #810
 	if (charset==0) {
-		const MARIADB_CHARSET_INFO *ci = NULL;
-		ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
-		if (!ci) {
-			proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
-			assert(0);
-		}
-		charset=ci->nr;
+		charset=mysql_thread___default_charset;
 	}
 	(*myds)->tmp_charset=charset;
 	pkt     += 24;
@@ -1969,19 +1952,7 @@ __exit_do_auth:
 	assert(sess->client_myds);
 	myconn=sess->client_myds->myconn;
 	assert(myconn);
-	myconn->set_charset(charset, CONNECT_START);
-	{
-		std::stringstream ss;
-		ss << charset;
-
-		/* We are processing handshake from client. Client sends us a character set it will use in communication.
-		 * we store this character set in the client's variables to use later in multiplexing with different backends
-		 */
-		sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
-		sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
-		sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
-		sess->mysql_variables->client_set_value(SQL_COLLATION_CONNECTION, ss.str().c_str());
-	}
+	myconn->set_charset(charset, NAMES);
 	// enable compression
 	if (capabilities & CLIENT_COMPRESS) {
 		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {

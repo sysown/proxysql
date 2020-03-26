@@ -2,87 +2,12 @@
 #include "cpp.h"
 #include "SpookyV2.h"
 #include <fcntl.h>
-#include <sstream>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
-#include "MySQL_Variables.h"
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
-
-void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
-	if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CONNECTION ||
-			idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE) {
-		const MARIADB_CHARSET_INFO *ci = NULL;
-		if (!value)
-			ci = proxysql_find_charset_name(mysql_tracked_variables[idx].default_value);
-		else
-			ci = proxysql_find_charset_nr(atoi(value));
-		if (!ci) {
-			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
-				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-			}
-			else {
-				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
-				assert(0);
-			}
-		}
-
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
-	} else if (idx == SQL_COLLATION_CONNECTION) {
-		const MARIADB_CHARSET_INFO *ci = NULL;
-		if (!value)
-			ci = proxysql_find_charset_collate(mysql_tracked_variables[idx].default_value);
-		else
-			ci = proxysql_find_charset_nr(atoi(value));
-		if (!ci) {
-			proxy_error("Cannot find charset [%s] for variable %d\n", value, idx);
-			assert(0);
-		}
-
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->name)?ci->name:"");
-	} else if (idx == SQL_LOG_BIN) {
-		if (!value)
-			value = mysql_tracked_variables[idx].default_value;
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(!strcmp("1",value)?"ON":"OFF");
-	} else {
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value?value:"");
-	}
-}
-
-void Variable::fill_client_internal_session(json &j, int idx) {
-	if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CONNECTION ||
-			idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE) {
-		const MARIADB_CHARSET_INFO *ci = NULL;
-		ci = proxysql_find_charset_nr(atoi(value));
-		if (!ci) {
-			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
-				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-			}
-			else {
-				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
-				assert(0);
-			}
-		}
-
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-
-	} else if (idx == SQL_COLLATION_CONNECTION) {
-		const MARIADB_CHARSET_INFO *ci = NULL;
-		ci = proxysql_find_charset_nr(atoi(value));
-		if (!ci) {
-			assert(0);
-		}
-
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
-	}  else if (idx == SQL_LOG_BIN) {
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = !strcmp("1", value)?"ON":"OFF";
-	} else {
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value?value:"";
-	}
-}
 
 #define PROXYSQL_USE_RESULT
 
@@ -277,12 +202,6 @@ MySQL_Connection::MySQL_Connection() {
 	fd=-1;
 	status_flags=0;
 	last_time_used=0;
-
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
-		variables[i].value = NULL;
-		var_hash[i] = 0;
-	}
-
 	options.client_flag = 0;
 	options.compression_min_length=0;
 	options.server_version=NULL;
@@ -291,9 +210,50 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.character_set_results = NULL;
+	options.isolation_level = NULL;
+	options.tx_isolation = NULL;
+	options.transaction_read = NULL;
+	options.session_track_gtids = NULL;
+	options.sql_auto_is_null = NULL;
+	options.sql_select_limit = NULL;
+	options.sql_safe_updates = NULL;
+	options.collation_connection = NULL;
+	options.net_write_timeout = NULL;
+	options.max_join_size = NULL;
+	options.isolation_level_sent = false;
+	options.tx_isolation_sent = false;
+	options.transaction_read_sent = false;
+	options.character_set_results_sent = false;
+	options.session_track_gtids_sent = false;
+	options.sql_auto_is_null_sent = false;
+	options.sql_select_limit_sent = false;
+	options.sql_safe_updates_sent = false;
+	options.collation_connection_sent = false;
+	options.net_write_timeout_sent = false;
+	options.max_join_size_sent = false;
+	options.sql_mode_sent=false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
+	options.sql_log_bin=1;	// default #818
+	options.sql_mode=NULL;	// #509
+	options.sql_mode_int=0;	// #509
+	options.time_zone=NULL;	// #819
+	options.time_zone_int=0;	// #819
+	options.isolation_level_int=0;
+	options.tx_isolation_int=0;
+	options.transaction_read_int=0;
+	options.character_set_results_int=0;
+	options.session_track_gtids_int=0;
+	options.sql_auto_is_null_int=0;
+	options.sql_select_limit_int=0;
+	options.sql_safe_updates_int=0;
+	options.collation_connection_int=0;
+	options.net_write_timeout_int=0;
+	options.max_join_size_int=0;
+	options.charset=0;
+	options.charset_action=UNKNOWN;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -362,15 +322,46 @@ MySQL_Connection::~MySQL_Connection() {
 	if (query.stmt) {
 		query.stmt=NULL;
 	}
-
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
-		if (variables[i].value) {
-			free(variables[i].value);
-			variables[i].value = NULL;
-		}
+	if (options.sql_mode) {
+		free(options.sql_mode);
+		options.sql_mode=NULL;
 	}
-
-/*
+	if (options.time_zone) {
+		free(options.time_zone);
+		options.time_zone=NULL;
+	}
+	if (options.isolation_level) {
+		free(options.isolation_level);
+		options.isolation_level=NULL;
+	}
+	if (options.tx_isolation) {
+		free(options.tx_isolation);
+		options.tx_isolation=NULL;
+	}
+	if (options.transaction_read) {
+		free(options.transaction_read);
+		options.transaction_read=NULL;
+	}
+	if (options.character_set_results) {
+		free(options.character_set_results);
+		options.character_set_results=NULL;
+	}
+	if (options.session_track_gtids) {
+		free(options.session_track_gtids);
+		options.session_track_gtids=NULL;
+	}
+	if (options.sql_auto_is_null) {
+		free(options.sql_auto_is_null);
+		options.sql_auto_is_null=NULL;
+	}
+	if (options.sql_select_limit) {
+		free(options.sql_select_limit);
+		options.sql_select_limit=NULL;
+	}
+	if (options.sql_safe_updates) {
+		free(options.sql_safe_updates);
+		options.sql_safe_updates=NULL;
+	}
 	if (options.collation_connection) {
 		free(options.collation_connection);
 		options.collation_connection=NULL;
@@ -383,7 +374,6 @@ MySQL_Connection::~MySQL_Connection() {
 		free(options.max_join_size);
 		options.max_join_size=NULL;
 	}
-*/
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -398,23 +388,10 @@ bool MySQL_Connection::set_no_backslash_escapes(bool _ac) {
 	return _ac;
 }
 
-void print_backtrace(void);
-
 unsigned int MySQL_Connection::set_charset(unsigned int _c, enum charset_action action) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting charset %d\n", _c);
-
-	// SQL_CHARACTER_SET should be set befor setting SQL_CHRACTER_ACTION
-	std::stringstream ss;
-	ss << _c;
-	myds->sess->mysql_variables->client_set_value(SQL_CHARACTER_SET, ss.str());
-
-	// When SQL_CHARACTER_ACTION is set character set variables are set according to
-	// SQL_CHRACTER_SET value
-	ss.str(std::string());
-	ss.clear();
-	ss << action;
-	myds->sess->mysql_variables->client_set_value(SQL_CHARACTER_ACTION, ss.str());
-
+	options.charset=_c;
+	options.charset_action = action;
 	return _c;
 }
 
@@ -586,24 +563,13 @@ void MySQL_Connection::connect_start() {
 		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
 	}
 	unsigned int timeout= 1;
-	const char *csname = NULL;
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
-	/* Take client character set and use it to connect to backend */
-	if (myds && myds->sess) {
-		csname = myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET);
-	}
-
-	const MARIADB_CHARSET_INFO * c = NULL;
-	if (csname)
-		c = proxysql_find_charset_nr(atoi(csname));
-	else
-		c = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
-
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(mysql_thread___default_charset);
 	if (!c) {
-		proxy_error("Not existing charset number %s\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
+		proxy_error("Not existing charset number %u\n", mysql_thread___default_charset);
 		assert(0);
 	}
-	set_charset(c->nr, CONNECT_START);
+	set_charset(c->nr, NAMES);
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	unsigned long client_flags = 0;
 	//if (mysql_thread___client_found_rows)
@@ -731,12 +697,12 @@ void MySQL_Connection::set_autocommit_cont(short event) {
 
 void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
-	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(options.charset);
 	if (!c) {
-		proxy_error("Not existing charset number %u\n", atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
+		proxy_error("Not existing charset number %u\n", options.charset);
 		assert(0);
 	}
-	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
+	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, options.charset);
 }
 
 void MySQL_Connection::set_names_cont(short event) {
@@ -1787,8 +1753,7 @@ int MySQL_Connection::async_set_names(short event, unsigned int c) {
 			return -1;
 			break;
 		case ASYNC_IDLE:
-			/* useless statement. should be removed after thorough testing */
-			//set_charset(c, CONNECT_START);
+			set_charset(c, NAMES);
 			async_state_machine=ASYNC_SET_NAMES_START;
 		default:
 			handler(event);
@@ -2222,19 +2187,89 @@ void MySQL_Connection::reset() {
 	status_flags=0;
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
-
+	{ // bug #1160
+		options.sql_mode_int = 0;
+		if (options.sql_mode) {
+			free(options.sql_mode);
+			options.sql_mode = NULL;
+			options.sql_mode_sent = false;
+			
+		}
+		options.time_zone_int = 0;
+		if (options.time_zone) {
+			free(options.time_zone);
+			options.time_zone = NULL;
+		}
+	}
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
-
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
-		var_hash[i] = 0;
-		if (variables[i].value) {
-			free(variables[i].value);
-			variables[i].value = NULL;
-		}
+	options.isolation_level_int = 0;
+	if (options.isolation_level) {
+		free (options.isolation_level);
+		options.isolation_level = NULL;
+		options.isolation_level_sent = false;
 	}
-
+	options.tx_isolation_int = 0;
+	if (options.tx_isolation) {
+		free (options.tx_isolation);
+		options.tx_isolation = NULL;
+		options.tx_isolation_sent = false;
+	}
+	options.transaction_read_int = 0;
+	if (options.transaction_read) {
+		free (options.transaction_read);
+		options.transaction_read = NULL;
+		options.transaction_read_sent = false;
+	}
+	options.character_set_results_int = 0;
+	if (options.character_set_results) {
+		free (options.character_set_results);
+		options.character_set_results = NULL;
+		options.character_set_results_sent = false;
+	}
+	options.session_track_gtids_int = 0;
+	if (options.session_track_gtids) {
+		free (options.session_track_gtids);
+		options.session_track_gtids = NULL;
+		options.session_track_gtids_sent = false;
+	}
+	options.sql_auto_is_null_int = 0;
+	if (options.sql_auto_is_null) {
+		free (options.sql_auto_is_null);
+		options.sql_auto_is_null = NULL;
+		options.sql_auto_is_null_sent = false;
+	}
+	options.sql_select_limit_int = 0;
+	if (options.sql_select_limit) {
+		free (options.sql_select_limit);
+		options.sql_select_limit = NULL;
+		options.sql_select_limit_sent = false;
+	}
+	options.sql_safe_updates_int = 0;
+	if (options.sql_safe_updates) {
+		free (options.sql_safe_updates);
+		options.sql_safe_updates = NULL;
+		options.sql_safe_updates_sent = false;
+	}
+	options.collation_connection_int = 0;
+	if (options.collation_connection) {
+		free (options.collation_connection);
+		options.collation_connection = NULL;
+		options.collation_connection_sent = false;
+	}
+	options.net_write_timeout_int = 0;
+	if (options.net_write_timeout) {
+		free (options.net_write_timeout);
+		options.net_write_timeout = NULL;
+		options.net_write_timeout_sent = false;
+	}
+	options.max_join_size_int = 0;
+	if (options.max_join_size) {
+		free (options.max_join_size);
+		options.max_join_size = NULL;
+		options.max_join_size_sent = false;
+	}
 	if (options.init_connect) {
 		free(options.init_connect);
 		options.init_connect = NULL;
