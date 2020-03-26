@@ -3082,12 +3082,12 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					pta[6] = strdup(conn->options.init_connect);
 				}
 				pta[7] = NULL;
-				if (conn->options.time_zone) {
-					pta[7] = strdup(conn->options.time_zone);
+				if (conn->variables[SQL_TIME_ZONE].value) {
+					pta[7] = strdup(conn->variables[SQL_TIME_ZONE].value);
 				}
 				pta[8] = NULL;
-				if (conn->options.sql_mode) {
-					pta[8] = strdup(conn->options.sql_mode);
+				if (conn->variables[SQL_SQL_MODE].value) {
+					pta[8] = strdup(conn->variables[SQL_SQL_MODE].value);
 				}
 				sprintf(buf,"%d", conn->options.autocommit);
 				pta[9]=strdup(buf);
