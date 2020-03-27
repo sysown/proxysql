@@ -4102,6 +4102,7 @@ handler_again:
 		case SETTING_CHARSET:
 		case SETTING_SQL_LOG_BIN:
 		case SETTING_WSREP_SYNC_WAIT:
+		case SETTING_FOREIGN_KEY_CHECKS:
 			for (auto i = 0; i < SQL_NAME_LAST; i++) {
 				int rc = 0;
 				if (mysql_variables.update_variable(this, status, rc)) {
@@ -5032,6 +5033,21 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
 						exit_after_SetParse = true;
+					} else if (var == "foreign_key_checks") {
+						std::string value1 = *values;
+						if ((strcasecmp(value1.c_str(),"0")==0) || (strcasecmp(value1.c_str(),"1")==0)) {
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET foreign_key_checks value %s\n", value1.c_str());
+							uint32_t hash_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+							if (mysql_variables->client_get_hash(SQL_FOREIGN_KEY_CHECKS) != hash_int) {
+								if (!mysql_variables->client_set_value(SQL_FOREIGN_KEY_CHECKS, value1.c_str()))
+									return false;
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection foreign_key_checks to %s\n", value1.c_str());
+							}
+							exit_after_SetParse = true;
+						} else {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
 					} else if (var == "wsrep_sync_wait") {
 						std::string value1 = *values;
 						if ((strcasecmp(value1.c_str(),"0")==0) || (strcasecmp(value1.c_str(),"1")==0)) {
@@ -5040,7 +5056,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							if (mysql_variables.client_get_hash(this, SQL_WSREP_SYNC_WAIT) != wsrep_sync_wait_int) {
 								if (!mysql_variables.client_set_value(this, SQL_WSREP_SYNC_WAIT, value1.c_str()))
 									return false;
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection session_track_gtids to %s\n", value1.c_str());
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection wsrep_sync_wait to %s\n", value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {

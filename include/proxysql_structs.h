@@ -166,6 +166,7 @@ enum variable_name {
 	SQL_MAX_JOIN_SIZE,
 	SQL_LOG_BIN,
 	SQL_WSREP_SYNC_WAIT,
+	SQL_FOREIGN_KEY_CHECKS,
 	SQL_NAME_LAST
 };
 
@@ -202,6 +203,7 @@ enum session_status {
 	SETTING_COLLATION_CONNECTION,
 	SETTING_NET_WRITE_TIMEOUT,
 	SETTING_MAX_JOIN_SIZE,
+	SETTING_FOREIGN_KEY_CHECKS,
 	SETTING_WSREP_SYNC_WAIT,
 	SETTING_MULTI_STMT,
 	FAST_FORWARD,
@@ -1006,6 +1008,7 @@ mysql_variable_st mysql_tracked_variables[] {
     { SQL_MAX_JOIN_SIZE, SETTING_MAX_JOIN_SIZE,                 false, false, true, (char *)"MAX_JOIN_SIZE", (char *)"max_join_size", (char *)"18446744073709551615" } ,
     { SQL_LOG_BIN, SETTING_SQL_LOG_BIN,                         false, false, true, (char *)"SQL_LOG_BIN", (char *)"sql_log_bin", (char *)"1" } ,
     { SQL_WSREP_SYNC_WAIT, SETTING_WSREP_SYNC_WAIT,             false, false, true, (char *)"WSREP_SYNC_WAIT", (char *)"wsrep_sync_wait", (char *)"0" } ,
+	{ SQL_FOREIGN_KEY_CHECKS, SETTING_FOREIGN_KEY_CHECKS,	    	false, false, true, (char *)"FOREIGN_KEY_CHECKS", (char *)"foreign_key_checks", (char *)"1" },
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];

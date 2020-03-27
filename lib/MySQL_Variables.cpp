@@ -29,6 +29,7 @@ MySQL_Variables::MySQL_Variables() {
 			case SQL_NET_WRITE_TIMEOUT:
 			case SQL_MAX_JOIN_SIZE:
 			case SQL_WSREP_SYNC_WAIT:
+			case SQL_FOREIGN_KEY_CHECKS:
 				MySQL_Variables::verifiers[i] = verify_server_variable;
 				MySQL_Variables::updaters[i] = update_server_variable;
 				break;
