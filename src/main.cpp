@@ -1270,9 +1270,6 @@ static void LoadPlugins() {
 void ProxySQL_Main_init_phase2___not_started() {
 	LoadPlugins();
 
-	GloAdmin->init_ldap();
-	GloAdmin->load_ldap_variables_to_runtime();
-
 	ProxySQL_Main_init_main_modules();
 	ProxySQL_Main_init_Admin_module();
 	GloMTH->print_version();
