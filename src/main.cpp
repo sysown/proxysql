@@ -1260,7 +1260,7 @@ static void LoadPlugins() {
 			//if (GloMyLdapAuth) {
 			//	GloAdmin->init_ldap();
 			//	GloAdmin->load_ldap_variables_to_runtime();
-			}
+			//}
 		}
 	}
 }
