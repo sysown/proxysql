@@ -1252,9 +1252,14 @@ static void LoadPlugins() {
 			exit(EXIT_FAILURE);
 		} else {
 			GloMyLdapAuth = create_MySQL_LDAP_Authentication();
-			if (GloMyLdapAuth) {
-				GloAdmin->init_ldap();
-				GloAdmin->load_ldap_variables_to_runtime();
+			// we are removing this from here, and copying in
+			//     ProxySQL_Main_init_phase2___not_started
+			// the keep record of these two lines to make sure we don't
+			// do a similar mistakes with other plugins
+			//
+			//if (GloMyLdapAuth) {
+			//	GloAdmin->init_ldap();
+			//	GloAdmin->load_ldap_variables_to_runtime();
 			}
 		}
 	}
@@ -1264,6 +1269,9 @@ static void LoadPlugins() {
 
 void ProxySQL_Main_init_phase2___not_started() {
 	LoadPlugins();
+
+	GloAdmin->init_ldap();
+	GloAdmin->load_ldap_variables_to_runtime();
 
 	ProxySQL_Main_init_main_modules();
 	ProxySQL_Main_init_Admin_module();
@@ -1281,6 +1289,10 @@ void ProxySQL_Main_init_phase2___not_started() {
 		GloVars.confFile->CloseFile();
 	}
 
+	if (GloMyLdapAuth) {
+		GloAdmin->init_ldap();
+		GloAdmin->load_ldap_variables_to_runtime();
+	}
 
 	ProxySQL_Main_init_Auth_module();
 
