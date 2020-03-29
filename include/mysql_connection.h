@@ -4,6 +4,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+
 #define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001
 #define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
@@ -16,10 +19,20 @@
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 #define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
 
+class Variable {
+public:
+	char *value = (char*)"";
+	void fill_server_internal_session(json &j, int conn_num, int idx);
+	void fill_client_internal_session(json &j, int idx);
+	static const char set_name[SQL_NAME_LAST][64];
+	static const char proxysql_internal_session_name[SQL_NAME_LAST][64];
+};
+
 enum charset_action {
 	UNKNOWN,
 	NAMES,
-	CHARSET
+	CHARSET,
+	CONNECT_START
 };
 
 class MySQL_Connection_userinfo {
@@ -46,61 +59,22 @@ class MySQL_Connection {
 	public:
 	struct {
 		char *server_version;
-		char *sql_mode;
-		char *time_zone;
-		uint32_t sql_mode_int;
-		uint32_t time_zone_int;
-		uint32_t character_set_results_int;
-		uint32_t isolation_level_int;
-		uint32_t transaction_read_int;
-		uint32_t tx_isolation_int;
-		uint32_t session_track_gtids_int;
-		uint32_t sql_auto_is_null_int;
-		uint32_t sql_select_limit_int;
-		uint32_t sql_safe_updates_int;
-		uint32_t collation_connection_int;
-		uint32_t net_write_timeout_int;
-		uint32_t max_join_size_int;
 		uint32_t max_allowed_pkt;
 		uint32_t server_capabilities;
 		uint32_t client_flag;
 		unsigned int compression_min_length;
 		char *init_connect;
 		bool init_connect_sent;
-		char * character_set_results;
-		char * isolation_level;
-		char * transaction_read;
-		char * tx_isolation;
-		char * session_track_gtids;
-		char * sql_auto_is_null;
-		char * sql_select_limit;
-		char * sql_safe_updates;
-		char * collation_connection;
-		char * net_write_timeout;
-		char * max_join_size;
-		bool isolation_level_sent;
-		bool tx_isolation_sent;
-		bool transaction_read_sent;
-		bool character_set_results_sent;
-		bool session_track_gtids_sent;
-		bool sql_auto_is_null_sent;
-		bool sql_select_limit_sent;
-		bool sql_safe_updates_sent;
-		bool collation_connection_sent;
-		bool net_write_timeout_sent;
-		bool max_join_size_sent;
-		bool sql_mode_sent;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
-		unsigned int charset;
-		enum charset_action charset_action;
-		uint8_t sql_log_bin;
 		int8_t last_set_autocommit;
 		bool autocommit;
 		bool no_backslash_escapes;
 	} options;
+	Variable variables[SQL_NAME_LAST];
+	uint32_t var_hash[SQL_NAME_LAST];
 	struct {
 		unsigned long length;
 		char *ptr;
