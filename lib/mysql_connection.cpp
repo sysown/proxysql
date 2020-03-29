@@ -2220,7 +2220,9 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 
 void MySQL_Connection::query_close_stmt() {
 	if (query.stmt) {
-		mysql_stmt_close(query.stmt);
+		/* clear memory */
+
+		mysql_stmt_close_no_command(query.stmt);
 		query.stmt = NULL;
 	}
 }

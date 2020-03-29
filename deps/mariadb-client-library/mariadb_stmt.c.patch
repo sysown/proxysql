@@ -14,3 +14,57 @@
        case MYSQL_TYPE_VAR_STRING:
        case MYSQL_TYPE_BLOB:
        case MYSQL_TYPE_TINY_BLOB:
+@@ -1341,6 +1343,53 @@
+   return(0);
+ }
+ 
++static my_bool net_stmt_close_no_command(MYSQL_STMT *stmt, my_bool remove)
++{
++  char stmt_id[STMT_ID_LENGTH];
++  MA_MEM_ROOT *fields_ma_alloc_root= &((MADB_STMT_EXTENSION *)stmt->extension)->fields_ma_alloc_root;
++
++  /* clear memory */
++  ma_free_root(&stmt->result.alloc, MYF(0)); /* allocated in mysql_stmt_store_result */
++  ma_free_root(&stmt->mem_root,MYF(0));
++  ma_free_root(fields_ma_alloc_root, MYF(0));
++
++  if (stmt->mysql)
++  {
++    CLEAR_CLIENT_ERROR(stmt->mysql);
++
++    /* remove from stmt list */
++    if (remove)
++      stmt->mysql->stmts= list_delete(stmt->mysql->stmts, &stmt->list);
++
++    /* check if all data are fetched */
++    if (stmt->mysql->status != MYSQL_STATUS_READY)
++    {
++      do {
++        stmt->mysql->methods->db_stmt_flush_unbuffered(stmt);
++      } while(mysql_stmt_more_results(stmt));
++      stmt->mysql->status= MYSQL_STATUS_READY;
++    }
++  }
++  return 0;
++}
++
++my_bool STDCALL mysql_stmt_close_no_command(MYSQL_STMT *stmt)
++{
++  my_bool rc= 1;
++
++  if (stmt)
++  {
++    if (stmt->mysql && stmt->mysql->net.pvio)
++      mysql_stmt_internal_reset(stmt, 1);
++
++    rc= net_stmt_close_no_command(stmt, 1);
++
++    free(stmt->extension);
++    free(stmt);
++  }
++  return(rc);
++}
++
+ static my_bool net_stmt_close(MYSQL_STMT *stmt, my_bool remove)
+ {
+   char stmt_id[STMT_ID_LENGTH];
