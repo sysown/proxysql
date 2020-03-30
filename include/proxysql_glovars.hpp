@@ -1,8 +1,12 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
 
+#include <memory>
+
 #include "configfile.hpp"
 #include "proxy_defines.h"
+
+#include <prometheus/registry.h>
 
 namespace ez {
 class ezOptionParser;
@@ -60,6 +64,7 @@ class ProxySQL_GlobalVariables {
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
 	std::string prometheus_plugin {""};
+	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };
 	struct  {
 		unsigned long long start_time;
 		bool gdbg;

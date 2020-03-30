@@ -1,4 +1,5 @@
 #include "ezOptionParser.hpp"
+#include "prometheus/registry.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include <string>
@@ -44,7 +45,9 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	}
 };
 
-ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
+ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
+	prometheus_registry(std::make_shared<prometheus::Registry>())
+{
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
 	__cmd_proxysql_datadir=NULL;
