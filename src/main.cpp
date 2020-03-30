@@ -6,6 +6,8 @@
 #if defined(__FreeBSD__) || defined(__APPLE__)
 #include <fcntl.h>
 #endif
+#include <fcntl.h>
+#include <unistd.h>
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
