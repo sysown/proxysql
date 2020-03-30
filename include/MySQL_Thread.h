@@ -9,6 +9,10 @@
 #endif // IDLE_THREADS
 #include <atomic>
 
+// Headers for declaring Prometheus counters
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
 #define MY_EPOLL_THREAD_MAXEVENTS 128
@@ -394,6 +398,59 @@ class MySQL_Threads_Handler
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
+
+		//////////////////////////////////////////////////////
+		///              Prometheus Metrics                ///
+		//////////////////////////////////////////////////////
+
+		prometheus::Gauge* p_active_transations { nullptr };
+		prometheus::Gauge* p_non_idle_client_connections { nullptr };
+		prometheus::Counter* p_queries_backends_bytes_recv { nullptr };
+		prometheus::Counter* p_queries_backends_bytes_sent { nullptr };
+		prometheus::Counter* p_queries_frontends_bytes_recv { nullptr };
+		prometheus::Counter* p_queries_frontends_bytes_sent { nullptr };
+		prometheus::Counter* p_query_processor_time { nullptr };
+		prometheus::Counter* p_backend_query_time { nullptr };
+		prometheus::Gauge* p_mysql_backend_buffers_bytes { nullptr };
+		prometheus::Gauge* p_mysql_frontend_buffers_bytes { nullptr };
+		prometheus::Gauge* p_mysql_session_internal_bytes { nullptr };
+		prometheus::Counter* p_total_backend_stmt_prepare { nullptr };
+		prometheus::Counter* p_total_backend_stmt_execute { nullptr };
+		prometheus::Counter* p_total_backend_stmt_close { nullptr };
+		prometheus::Counter* p_total_frontend_stmt_prepare { nullptr };
+		prometheus::Counter* p_total_frontend_stmt_execute { nullptr };
+		prometheus::Counter* p_total_frontend_stmt_close { nullptr };
+		prometheus::Gauge* p_mirror_sessions_current { nullptr };
+		prometheus::Gauge* p_total_mirror_queue { nullptr };
+		prometheus::Counter* p_total_queries { nullptr };
+		prometheus::Counter* p_slow_queries { nullptr };
+		prometheus::Counter* p_gtid_queries { nullptr };
+		prometheus::Counter* p_gtid_session_collected { nullptr };
+		prometheus::Counter* p_servers_table_version { nullptr };
+		prometheus::Gauge* p_num_threads { nullptr };
+		prometheus::Counter* p_ConnPool_get_conn_latency_awareness { nullptr };
+		prometheus::Counter* p_ConnPool_get_conn_immediate { nullptr };
+		prometheus::Counter* p_ConnPool_get_conn_success { nullptr };
+		prometheus::Counter* p_ConnPool_get_conn_failure { nullptr };
+		prometheus::Counter* p_generated_error_packets { nullptr };
+		prometheus::Counter* p_max_connect_timeout { nullptr };
+		prometheus::Counter* p_backend_lagging_during_query { nullptr };
+		prometheus::Counter* p_backend_offline_during_query { nullptr };
+		prometheus::Counter* p_queries_with_max_lag_ms { nullptr };
+		prometheus::Counter* p_queries_with_max_lag_ms__delayed { nullptr };
+		prometheus::Counter* p_queries_with_max_lag_ms__total_wait_time_us { nullptr };
+		prometheus::Counter* p_mysql_unexpected_frontend_com_quit { nullptr };
+		prometheus::Counter* p_get_hostgroup_locked { nullptr };
+		prometheus::Counter* p_hostgroup_locked_set_cmds { nullptr };
+		prometheus::Counter* p_hostgroup_locked_queries { nullptr };
+		prometheus::Counter* p_mysql_unexpected_frontend_packets { nullptr };
+		prometheus::Counter* p_aws_aurora_replicas_skipped_during_query { nullptr };
+		prometheus::Counter* p_automatic_detected_sqli { nullptr };
+		prometheus::Counter* p_whitelisted_sqli_fingerprint { nullptr };
+		prometheus::Counter* p_killed_connections { nullptr };
+		prometheus::Counter* p_killed_queries { nullptr };
+
+		//////////////////////////////////////////////////////
 	} status_variables;
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;

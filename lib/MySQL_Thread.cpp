@@ -653,6 +653,116 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
 	MLM = new MySQL_Listeners_Manager();
+
+	// Create and register prometheus metrics
+	auto& new_gauge_family {
+		prometheus::BuildGauge()
+			.Name("MySQL_Threads_Handler_Gauges")
+			.Register(*GloVars.prometheus_registry)
+	};
+	auto& new_counter_family {
+		prometheus::BuildCounter()
+			.Name("MySQL_Threads_Handler_Counters")
+			.Register(*GloVars.prometheus_registry)
+	};
+
+	// Initialize prometheus metrics
+	this->status_variables.p_active_transations =
+		std::addressof(new_gauge_family.Add({{ "id", "Active_Transactions" }}));
+	this->status_variables.p_non_idle_client_connections =
+		std::addressof(new_gauge_family.Add({{ "id", "Client_Connections_non_idle" }}));
+	this->status_variables.p_queries_backends_bytes_sent =
+		std::addressof(new_counter_family.Add({{ "id", "Queries_backends_bytes_sent" }}));
+	this->status_variables.p_queries_backends_bytes_recv =
+		std::addressof(new_counter_family.Add({{ "id", "Queries_backends_bytes_recv" }}));
+	this->status_variables.p_queries_frontends_bytes_sent =
+		std::addressof(new_counter_family.Add({{ "id", "Queries_frontends_bytes_sent" }}));
+	this->status_variables.p_queries_frontends_bytes_recv =
+		std::addressof(new_counter_family.Add({{ "id", "Queries_frontends_bytes_recv" }}));
+	this->status_variables.p_query_processor_time =
+		std::addressof(new_counter_family.Add({{ "id", "Query_Processor_time_nsec" }}));
+	this->status_variables.p_backend_query_time =
+		std::addressof(new_counter_family.Add({{ "id", "Backend_query_time_nsec" }}));
+	this->status_variables.p_mysql_backend_buffers_bytes =
+		std::addressof(new_gauge_family.Add({{ "id", "mysql_backend_buffers_bytes" }}));
+	this->status_variables.p_mysql_frontend_buffers_bytes =
+		std::addressof(new_gauge_family.Add({{ "id", "mysql_frontend_buffers_bytes" }}));
+	this->status_variables.p_mysql_session_internal_bytes =
+		std::addressof(new_gauge_family.Add({{ "id", "mysql_session_internal_bytes" }}));
+	this->status_variables.p_total_backend_stmt_prepare =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_prepare" }}));
+	this->status_variables.p_total_backend_stmt_execute =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_execute" }}));
+	this->status_variables.p_total_backend_stmt_prepare =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_prepare" }}));
+	this->status_variables.p_total_backend_stmt_execute =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_execute" }}));
+	this->status_variables.p_total_backend_stmt_close =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_close" }}));
+	this->status_variables.p_total_frontend_stmt_prepare =
+		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_stmt_prepare" }}));
+	this->status_variables.p_total_frontend_stmt_execute =
+		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_stmt_execute" }}));
+	this->status_variables.p_total_frontend_stmt_close =
+		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_stmt_close" }}));
+	this->status_variables.p_mirror_sessions_current =
+		std::addressof(new_gauge_family.Add({{ "id", "Mirror_concurrency" }}));
+	this->status_variables.p_total_mirror_queue =
+		std::addressof(new_gauge_family.Add({{ "id", "Mirror_queue_length" }}));
+	this->status_variables.p_total_queries =
+		std::addressof(new_counter_family.Add({{ "id", "Questions" }}));
+	this->status_variables.p_slow_queries =
+		std::addressof(new_counter_family.Add({{ "id", "Slow_queries" }}));
+	this->status_variables.p_gtid_queries =
+		std::addressof(new_counter_family.Add({{ "id", "GTID_consistent_queries" }}));
+	this->status_variables.p_gtid_session_collected =
+		std::addressof(new_counter_family.Add({{ "id", "GTID_session_collected" }}));
+	this->status_variables.p_num_threads =
+		std::addressof(new_gauge_family.Add({{ "id", "MySQL_Thread_Workers" }}));
+	this->status_variables.p_ConnPool_get_conn_latency_awareness =
+		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_latency_awareness" }}));
+	this->status_variables.p_ConnPool_get_conn_immediate =
+		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_immediate" }}));
+	this->status_variables.p_ConnPool_get_conn_success =
+		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_success" }}));
+	this->status_variables.p_ConnPool_get_conn_failure =
+		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_failure" }}));
+	this->status_variables.p_ConnPool_get_conn_latency_awareness =
+		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_latency_awareness" }}));
+	this->status_variables.p_generated_error_packets =
+		std::addressof(new_counter_family.Add({{ "id", "generated_error_packets" }}));
+	this->status_variables.p_max_connect_timeout =
+		std::addressof(new_counter_family.Add({{ "id", "max_connect_timeouts" }}));
+	this->status_variables.p_backend_lagging_during_query =
+		std::addressof(new_counter_family.Add({{ "id", "backend_lagging_during_query" }}));
+	this->status_variables.p_backend_offline_during_query =
+		std::addressof(new_counter_family.Add({{ "id", "backend_offline_during_query" }}));
+	this->status_variables.p_queries_with_max_lag_ms =
+		std::addressof(new_counter_family.Add({{ "id", "queries_with_max_lag_ms" }}));
+	this->status_variables.p_queries_with_max_lag_ms__delayed =
+		std::addressof(new_counter_family.Add({{ "id", "queries_with_max_lag_ms__delayed" }}));
+	this->status_variables.p_queries_with_max_lag_ms__total_wait_time_us =
+		std::addressof(new_counter_family.Add({{ "id", "queries_with_max_lag_ms__total_wait_time_us" }}));
+	this->status_variables.p_mysql_unexpected_frontend_com_quit =
+		std::addressof(new_counter_family.Add({{ "id", "mysql_unexpected_frontend_com_quit" }}));
+	this->status_variables.p_get_hostgroup_locked =
+		std::addressof(new_counter_family.Add({{ "id", "Client_Connections_hostgroup_locked" }}));
+	this->status_variables.p_hostgroup_locked_set_cmds =
+		std::addressof(new_counter_family.Add({{ "id", "hostgroup_locked_set_cmds" }}));
+	this->status_variables.p_hostgroup_locked_queries =
+		std::addressof(new_counter_family.Add({{ "id", "hostgroup_locked_queries" }}));
+	this->status_variables.p_mysql_unexpected_frontend_packets =
+		std::addressof(new_counter_family.Add({{ "id", "mysql_unexpected_frontend_packets" }}));
+	this->status_variables.p_aws_aurora_replicas_skipped_during_query =
+		std::addressof(new_counter_family.Add({{ "id", "aws_aurora_replicas_skipped_during_query" }}));
+	this->status_variables.p_automatic_detected_sqli =
+		std::addressof(new_counter_family.Add({{ "id", "automatic_detected_sql_injection" }}));
+	this->status_variables.p_whitelisted_sqli_fingerprint =
+		std::addressof(new_counter_family.Add({{ "id", "automatic_detected_sql_injection" }}));
+	this->status_variables.p_killed_connections =
+		std::addressof(new_counter_family.Add({{ "id", "mysql_killed_backend_connections" }}));
+	this->status_variables.p_killed_queries =
+		std::addressof(new_counter_family.Add({{ "id", "mysql_killed_backend_queries" }}));
 }
 
 
@@ -3520,6 +3630,7 @@ __run_skip_1:
 				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 				goto __mysql_thread_exit_add_mirror; // we can't add more mirror sessions at runtime
 			} else {
+				GloMTH->status_variables.p_mirror_sessions_current->Increment();
 				int idx;
 				idx=fastrand()%(mirror_queue_mysql_sessions->len);
 				MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
@@ -3538,6 +3649,7 @@ __run_skip_1:
 						}
 						if (to_cache) {
 							__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+							GloMTH->status_variables.p_mirror_sessions_current->Decrement();
 							mirror_queue_mysql_sessions_cache->add(newsess);
 						} else {
 							delete newsess;
@@ -3787,6 +3899,7 @@ __run_skip_1a:
 				while (mirror_queue_mysql_sessions_cache->len > mirror_queue_mysql_sessions->len && mirror_queue_mysql_sessions_cache->len > l) {
 					MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
 					__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+					GloMTH->status_variables.p_mirror_sessions_current->Increment();
 					delete newsess;
 				}
 			}
@@ -4210,6 +4323,7 @@ void MySQL_Thread::process_all_sessions() {
 					}
 					if (to_cache) {
 						__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+						GloMTH->status_variables.p_mirror_sessions_current->Decrement();
 						mirror_queue_mysql_sessions_cache->add(sess);
 					} else {
 						delete sess;
@@ -4630,6 +4744,10 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
 		}
+		// Update metrics
+		MyHGM->status.p_client_connections_created->Increment();
+		MyHGM->status.p_client_connections->Increment();
+
 		sess->client_myds->client_addrlen=addrlen;
 		sess->client_myds->client_addr=addr;
 
@@ -5630,6 +5748,8 @@ unsigned long long MySQL_Threads_Handler::get_total_mirror_queue() {
 				q+=thr->mirror_queue_mysql_sessions->len; // this is a dirty read
 		}
 	}
+	this->status_variables.p_total_mirror_queue->Set(q);
+
 	return q;
 }
 
@@ -5643,6 +5763,9 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_prepare() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_stmt_prepare,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_total_backend_stmt_prepare->Value() };
+	this->status_variables.p_total_backend_stmt_prepare->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5656,6 +5779,9 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_execute() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_stmt_execute,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_total_backend_stmt_execute->Value() };
+	this->status_variables.p_total_backend_stmt_execute->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5669,6 +5795,9 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_close() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_stmt_close,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_total_backend_stmt_close->Value() };
+	this->status_variables.p_total_backend_stmt_close->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5682,6 +5811,9 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_prepare() {
 				q+=__sync_fetch_and_add(&thr->status_variables.frontend_stmt_prepare,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_total_frontend_stmt_prepare->Value() };
+	this->status_variables.p_total_frontend_stmt_prepare->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5695,6 +5827,9 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_execute() {
 				q+=__sync_fetch_and_add(&thr->status_variables.frontend_stmt_execute,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_total_frontend_stmt_execute->Value() };
+	this->status_variables.p_total_frontend_stmt_execute->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5708,6 +5843,9 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_close() {
 				q+=__sync_fetch_and_add(&thr->status_variables.frontend_stmt_close,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_total_frontend_stmt_close->Value() };
+	this->status_variables.p_total_frontend_stmt_close->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5721,6 +5859,9 @@ unsigned long long MySQL_Threads_Handler::get_total_queries() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_total_queries->Value() };
+	this->status_variables.p_total_queries->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5734,6 +5875,9 @@ unsigned long long MySQL_Threads_Handler::get_slow_queries() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_slow,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_slow_queries->Value() };
+	this->status_variables.p_slow_queries->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5747,6 +5891,9 @@ unsigned long long MySQL_Threads_Handler::get_gtid_queries() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_gtid,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_gtid_queries->Value() };
+	this->status_variables.p_gtid_queries->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5760,6 +5907,9 @@ unsigned long long MySQL_Threads_Handler::get_gtid_session_collected() {
 				q+=__sync_fetch_and_add(&thr->status_variables.gtid_session_collected,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_gtid_session_collected->Value() };
+	this->status_variables.p_gtid_session_collected->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5773,6 +5923,9 @@ unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_recv() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_backends_bytes_recv,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_queries_backends_bytes_recv->Value() };
+	this->status_variables.p_queries_backends_bytes_recv->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5786,6 +5939,9 @@ unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_sent() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_backends_bytes_sent,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_queries_backends_bytes_sent->Value() };
+	this->status_variables.p_queries_backends_bytes_sent->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5799,6 +5955,9 @@ unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_recv() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_frontends_bytes_recv,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_queries_frontends_bytes_recv->Value() };
+	this->status_variables.p_queries_frontends_bytes_recv->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5812,6 +5971,9 @@ unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_sent() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_frontends_bytes_sent,0);
 		}
 	}
+	const auto& curValue { this->status_variables.p_queries_frontends_bytes_sent->Value() };
+	this->status_variables.p_queries_frontends_bytes_sent->Increment(q - curValue);
+
 	return q;
 }
 
@@ -5825,6 +5987,8 @@ unsigned int MySQL_Threads_Handler::get_active_transations() {
 				q+=__sync_fetch_and_add(&thr->status_variables.active_transactions,0);
 		}
 	}
+	this->status_variables.p_active_transations->Set(q);
+
 	return q;
 }
 
@@ -5839,6 +6003,8 @@ unsigned int MySQL_Threads_Handler::get_non_idle_client_connections() {
 				q+=__sync_fetch_and_add(&thr->mysql_sessions->len,0);
 		}
 	}
+	status_variables.p_non_idle_client_connections->Set(q);
+
 	return q;
 }
 #endif // IDLE_THREADS
@@ -5853,6 +6019,9 @@ unsigned long long MySQL_Threads_Handler::get_query_processor_time() {
 				q+=__sync_fetch_and_add(&thr->status_variables.query_processor_time,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_query_processor_time->Value() };
+	status_variables.p_query_processor_time->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -5866,6 +6035,9 @@ unsigned long long MySQL_Threads_Handler::get_backend_query_time() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_query_time,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_backend_query_time->Value() };
+	status_variables.p_backend_query_time->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -5879,6 +6051,8 @@ unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 				q+=__sync_fetch_and_add(&thr->status_variables.mysql_backend_buffers_bytes,0);
 		}
 	}
+	status_variables.p_mysql_backend_buffers_bytes->Set(q);
+
 	return q;
 }
 
@@ -5902,6 +6076,8 @@ unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 		}
 	}
 #endif // IDLE_THREADS
+	status_variables.p_mysql_frontend_buffers_bytes->Set(q);
+
 	return q;
 }
 
@@ -5923,6 +6099,8 @@ unsigned long long MySQL_Threads_Handler::get_mysql_session_internal_bytes() {
 		}
 #endif // IDLE_THREADS
 	}
+	status_variables.p_mysql_session_internal_bytes->Set(q);
+
 	return q;
 }
 
@@ -6089,6 +6267,9 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_latency_awarenes
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_latency_awareness,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_ConnPool_get_conn_latency_awareness->Value() };
+	status_variables.p_ConnPool_get_conn_latency_awareness->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6102,6 +6283,9 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_immediate,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_ConnPool_get_conn_immediate->Value() };
+	status_variables.p_ConnPool_get_conn_immediate->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6115,6 +6299,9 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_success() {
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_success,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_ConnPool_get_conn_success->Value() };
+	status_variables.p_ConnPool_get_conn_success->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6128,6 +6315,9 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_failure() {
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_failure,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_ConnPool_get_conn_failure->Value() };
+	status_variables.p_ConnPool_get_conn_failure->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6141,6 +6331,9 @@ unsigned long long MySQL_Threads_Handler::get_generated_pkt_err() {
 				q+=__sync_fetch_and_add(&thr->status_variables.generated_pkt_err,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_generated_error_packets->Value() };
+	status_variables.p_generated_error_packets->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6154,6 +6347,9 @@ unsigned long long MySQL_Threads_Handler::get_backend_lagging_during_query() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_lagging_during_query,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_backend_lagging_during_query->Value() };
+	status_variables.p_backend_lagging_during_query->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6167,6 +6363,9 @@ unsigned long long MySQL_Threads_Handler::get_backend_offline_during_query() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_offline_during_query,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_backend_offline_during_query->Value() };
+	status_variables.p_backend_offline_during_query->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6180,6 +6379,9 @@ unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_queries_with_max_lag_ms->Value() };
+	status_variables.p_queries_with_max_lag_ms->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6193,6 +6395,9 @@ unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__delayed()
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms__delayed,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_queries_with_max_lag_ms__delayed->Value() };
+	status_variables.p_queries_with_max_lag_ms__delayed->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6206,6 +6411,9 @@ unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__total_wai
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_with_max_lag_ms__total_wait_time_us,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_queries_with_max_lag_ms__total_wait_time_us->Value() };
+	status_variables.p_queries_with_max_lag_ms__total_wait_time_us->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6219,6 +6427,9 @@ unsigned long long MySQL_Threads_Handler::get_max_connect_timeout() {
 				q+=__sync_fetch_and_add(&thr->status_variables.max_connect_timeout_err,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_max_connect_timeout->Value() };
+	status_variables.p_max_connect_timeout->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6271,6 +6482,9 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_com_quit() {
 				q+=__sync_fetch_and_add(&thr->status_variables.unexpected_com_quit,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_mysql_unexpected_frontend_com_quit->Value() };
+	status_variables.p_mysql_unexpected_frontend_com_quit->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6284,6 +6498,9 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_packet() {
 				q+=__sync_fetch_and_add(&thr->status_variables.unexpected_packet,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_mysql_unexpected_frontend_packets->Value() };
+	status_variables.p_mysql_unexpected_frontend_packets->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6297,6 +6514,9 @@ unsigned long long MySQL_Threads_Handler::get_automatic_detected_sqli() {
 				q+=__sync_fetch_and_add(&thr->status_variables.automatic_detected_sqli,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_automatic_detected_sqli->Value() };
+	status_variables.p_automatic_detected_sqli->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6310,6 +6530,9 @@ unsigned long long MySQL_Threads_Handler::get_whitelisted_sqli_fingerprint() {
 				q+=__sync_fetch_and_add(&thr->status_variables.whitelisted_sqli_fingerprint,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_whitelisted_sqli_fingerprint->Value() };
+	status_variables.p_whitelisted_sqli_fingerprint->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6323,6 +6546,9 @@ unsigned long long MySQL_Threads_Handler::get_aws_aurora_replicas_skipped_during
 				q+=__sync_fetch_and_add(&thr->status_variables.aws_aurora_replicas_skipped_during_query,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_aws_aurora_replicas_skipped_during_query->Value() };
+	status_variables.p_aws_aurora_replicas_skipped_during_query->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6336,6 +6562,9 @@ unsigned long long MySQL_Threads_Handler::get_killed_connections() {
 				q+=__sync_fetch_and_add(&thr->status_variables.killed_connections,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_killed_connections->Value() };
+	status_variables.p_killed_connections->Increment(q - cur_val);
+
 	return q;
 }
 
@@ -6349,6 +6578,9 @@ unsigned long long MySQL_Threads_Handler::get_killed_queries() {
 				q+=__sync_fetch_and_add(&thr->status_variables.killed_queries,0);
 		}
 	}
+	const auto& cur_val { status_variables.p_killed_queries->Value() };
+	status_variables.p_killed_queries->Increment(q - cur_val);
+
 	return q;
 }
 

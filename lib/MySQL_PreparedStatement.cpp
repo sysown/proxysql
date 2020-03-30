@@ -170,12 +170,14 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 					p += ql - 11;
 					if (strncasecmp(p, " FOR UPDATE", 11) == 0) {  // is a SELECT FOR UPDATE
 						__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+						MyHGM->status.p_select_for_update_or_equivalent->Increment();
 						goto __exit_MySQL_STMT_Global_info___search_select;
 					}
 					p = q;
 					p += ql-10;
 					if (strncasecmp(p, " FOR SHARE", 10) == 0) {  // is a SELECT FOR SHARE
 						__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+						MyHGM->status.p_select_for_update_or_equivalent->Increment();
 						goto __exit_MySQL_STMT_Global_info___search_select;
 					}
 					if (ql >= 25) {
@@ -183,6 +185,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 						p += ql-19;
 						if (strncasecmp(p, " LOCK IN SHARE MODE", 19) == 0) {  // is a SELECT LOCK IN SHARE MODE
 							__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+							MyHGM->status.p_select_for_update_or_equivalent->Increment();
 							goto __exit_MySQL_STMT_Global_info___search_select;
 						}
 						p = q;
@@ -190,6 +193,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 						if (strncasecmp(p," NOWAIT",7)==0) {
 							// let simplify. If NOWAIT is used, we assume FOR UPDATE|SHARE is used
 							__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+							MyHGM->status.p_select_for_update_or_equivalent->Increment();
 							goto __exit_MySQL_STMT_Global_info___search_select;
 /*
 							if (strcasestr(q," FOR UPDATE ")) {
@@ -207,6 +211,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 						if (strncasecmp(p," SKIP LOCKED",12)==0) {
 							// let simplify. If SKIP LOCKED is used, we assume FOR UPDATE|SHARE is used
 							__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+							MyHGM->status.p_select_for_update_or_equivalent->Increment();
 							goto __exit_MySQL_STMT_Global_info___search_select;
 /*
 							if (strcasestr(q," FOR UPDATE ")==NULL) {
@@ -232,10 +237,12 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 						if (strcasestr(buf," FOR ")) {
 							if (strcasestr(buf," FOR UPDATE ")) {
 								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								MyHGM->status.p_select_for_update_or_equivalent->Increment();
 								goto __exit_MySQL_STMT_Global_info___search_select;
 							}
 							if (strcasestr(buf," FOR SHARE ")) {
 								__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+								MyHGM->status.p_select_for_update_or_equivalent->Increment();
 								goto __exit_MySQL_STMT_Global_info___search_select;
 							}
 						}

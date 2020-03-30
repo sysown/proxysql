@@ -10,6 +10,9 @@
 #include "thread.h"
 #include "wqueue.h"
 
+// Headers for declaring Prometheus counters
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
 
 #include "ev.h"
 
@@ -352,6 +355,49 @@ class MySQL_HostGroups_Manager {
 		unsigned long long access_denied_max_connections;
 		unsigned long long access_denied_max_user_connections;
 		unsigned long long select_for_update_or_equivalent;
+
+		//////////////////////////////////////////////////////
+		///              Prometheus Metrics                ///
+		//////////////////////////////////////////////////////
+
+		/// Prometheus client metrics
+		prometheus::Counter* p_client_connections_created { nullptr };
+		prometheus::Counter* p_client_connections_aborted { nullptr };
+		prometheus::Gauge*   p_client_connections { nullptr };
+		/// Prometheus server metrics
+		prometheus::Counter* p_server_connections_aborted { nullptr };
+		prometheus::Counter* p_server_connections_created { nullptr };
+		prometheus::Counter* p_server_connections_delayed { nullptr };
+		prometheus::Gauge*   p_server_connections_connected { nullptr };
+		/// Prometheus access metrics
+		prometheus::Counter* p_access_denied_wrong_password { nullptr };
+		prometheus::Counter* p_access_denied_max_connections { nullptr };
+		prometheus::Counter* p_access_denied_max_user_connections { nullptr };
+		/// TODO: Prometheus myconnpoll metrics
+		prometheus::Counter* p_myconnpoll_get { nullptr };
+		prometheus::Counter* p_myconnpoll_get_ok { nullptr };
+		prometheus::Counter* p_myconnpoll_get_ping { nullptr };
+		prometheus::Counter* p_myconnpoll_push { nullptr };
+		prometheus::Counter* p_myconnpoll_reset { nullptr };
+		prometheus::Counter* p_myconnpoll_destroy { nullptr };
+		/// Prometheus backend metrics
+		prometheus::Counter* p_backend_change_user { nullptr };
+		prometheus::Counter* p_backend_init_db { nullptr };
+		prometheus::Counter* p_backend_set_names { nullptr };
+		/// Prometheus frontend metrics
+		prometheus::Counter* p_frontend_init_db { nullptr };
+		prometheus::Counter* p_frontend_set_names { nullptr };
+		prometheus::Counter* p_frontend_use_db { nullptr };
+		/// Prometheus ** metrics
+		prometheus::Counter* p_autocommit_cnt { nullptr };
+		prometheus::Counter* p_commit_cnt { nullptr };
+		prometheus::Counter* p_rollback_cnt { nullptr };
+		prometheus::Counter* p_autocommit_cnt_filtered { nullptr };
+		prometheus::Counter* p_commit_cnt_filtered { nullptr };
+		prometheus::Counter* p_rollback_cnt_filtered { nullptr };
+		prometheus::Counter* p_select_for_update_or_equivalent { nullptr };
+
+		//////////////////////////////////////////////////////
 	} status;
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();

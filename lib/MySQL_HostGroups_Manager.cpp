@@ -1,9 +1,12 @@
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
+#include <memory>
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
@@ -855,6 +858,7 @@ void MySrvC::connect_error(int err_num) {
 	// as a single connection failure won't make a significant difference
 	__sync_fetch_and_add(&connect_ERR,1);
 	__sync_fetch_and_add(&MyHGM->status.server_connections_aborted,1);
+	MyHGM->status.p_server_connections_aborted->Increment();
 	if (err_num >= 1048 && err_num <= 1052)
 		return;
 	if (err_num >= 1054 && err_num <= 1075)
@@ -1020,6 +1024,68 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 		rand_del[7] = 0;
 	}
 	pthread_mutex_init(&mysql_errors_mutex, NULL);
+
+	// Create and register prometheus metrics
+	auto& new_gauge_family {
+		prometheus::BuildGauge()
+			.Name("MySQL_HostGroups_Manager_Gauges")
+			.Register(*GloVars.prometheus_registry)
+	};
+	auto& new_counter_family {
+		prometheus::BuildCounter()
+			.Name("MySQL_HostGroups_Manager_Counters")
+			.Register(*GloVars.prometheus_registry)
+	};
+
+	// Server_Connections counters
+	this->status.p_server_connections_connected =
+		std::addressof(new_gauge_family.Add({{ "id", "Server_Connections_connected" }}));
+	this->status.p_server_connections_created =
+		std::addressof(new_counter_family.Add({{ "id", "Server_Connections_created" }}));
+	this->status.p_server_connections_delayed =
+		std::addressof(new_counter_family.Add({{ "id", "Server_Connections_delayed" }}));
+	this->status.p_server_connections_aborted =
+		std::addressof(new_counter_family.Add({{ "id", "Server_Connections_aborted" }}));
+
+	// Client_Connections counters
+	this->status.p_client_connections_created =
+		std::addressof(new_counter_family.Add({{ "id", "Client_Connections_created" }}));
+	this->status.p_client_connections_aborted =
+		std::addressof(new_counter_family.Add({{ "id", "Client_Connections_aborted" }}));
+	this->status.p_client_connections =
+		std::addressof(new_gauge_family.Add({{ "id", "Client_Connections_connected" }}));
+
+	// Com_* counters
+	this->status.p_autocommit_cnt =
+		std::addressof(new_counter_family.Add({{ "id", "Com_autocommit" }}));
+	this->status.p_autocommit_cnt_filtered =
+		std::addressof(new_counter_family.Add({{ "id", "Com_autocommit_filtered" }}));
+	this->status.p_rollback_cnt =
+		std::addressof(new_counter_family.Add({{ "id", "Com_rollback" }}));
+	this->status.p_rollback_cnt_filtered =
+		std::addressof(new_counter_family.Add({{ "id", "Com_rollback_filtered" }}));
+	this->status.p_backend_change_user =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_change_user" }}));
+	this->status.p_backend_init_db =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_init_db" }}));
+	this->status.p_backend_set_names =
+		std::addressof(new_counter_family.Add({{ "id", "Com_backend_set_names" }}));
+	this->status.p_frontend_init_db =
+		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_init_db" }}));
+	this->status.p_frontend_set_names =
+		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_set_names" }}));
+	this->status.p_frontend_use_db =
+		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_use_db" }}));
+	this->status.p_select_for_update_or_equivalent =
+		std::addressof(new_counter_family.Add({{ "id", "Selects_for_update__autocommit0" }}));
+
+	// Access_* errors
+	this->status.p_access_denied_wrong_password =
+		std::addressof(new_counter_family.Add({{ "id", "Access_Denied_Wrong_Password" }}));
+	this->status.p_access_denied_max_connections =
+		std::addressof(new_counter_family.Add({{ "id", "Access_Denied_Max_Connections" }}));
+	this->status.p_access_denied_max_user_connections =
+		std::addressof(new_counter_family.Add({{ "id", "Access_Denied_Max_User_Connections" }}));
 }
 
 void MySQL_HostGroups_Manager::init() {
@@ -2743,6 +2809,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					conn = new MySQL_Connection();
 					conn->parent=mysrvc;
 					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+					MyHGM->status.p_server_connections_created->Increment();
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 				} else {
 					// we may consider creating a new connection
@@ -2752,6 +2819,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 						conn = new MySQL_Connection();
 						conn->parent=mysrvc;
 						__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+						MyHGM->status.p_server_connections_created->Increment();
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					} else {
 						conn=(MySQL_Connection *)conns->remove_index_fast(i);
@@ -2774,11 +2842,13 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		_myhgc->new_connections_now++;
 		if (_myhgc->new_connections_now > (unsigned int) mysql_thread___throttle_connections_per_sec_to_hostgroup) {
 			__sync_fetch_and_add(&MyHGM->status.server_connections_delayed, 1);
+			MyHGM->status.p_server_connections_delayed->Increment();
 			return NULL;
 		} else {
 			conn = new MySQL_Connection();
 			conn->parent=mysrvc;
 			__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+			MyHGM->status.p_server_connections_created->Increment();
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 			return  conn;
 		}

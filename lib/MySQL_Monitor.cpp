@@ -608,6 +608,38 @@ MySQL_Monitor::MySQL_Monitor() {
 		num_threads=16;	// limit to 16
 	}
 */
+
+	// Create and register prometheus metrics families
+	auto& new_gauge_family {
+		prometheus::BuildGauge()
+			.Name("MySQL_Monitor_Gauges")
+			.Register(*GloVars.prometheus_registry)
+	};
+	auto& new_counter_family {
+		prometheus::BuildCounter()
+			.Name("MySQL_Monitor_Counters")
+			.Register(*GloVars.prometheus_registry)
+	};
+
+	// Initialize prometheus metrics
+	this->metrics.p_num_threads =
+		std::addressof(new_gauge_family.Add({{ "id", "MySQL_Monitor_Workers" }}));
+	this->metrics.p_aux_threads =
+		std::addressof(new_gauge_family.Add({{ "id", "MySQL_Monitor_Workers_Aux" }}));
+	this->metrics.p_started_threads =
+		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_Workers_Started" }}));
+	this->metrics.p_connect_check_OK =
+		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_connect_check_OK" }}));
+	this->metrics.p_connect_check_ERR =
+		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_connect_check_ERR" }}));
+	this->metrics.p_ping_check_OK =
+		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_ping_check_OK" }}));
+	this->metrics.p_ping_check_ERR =
+		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_ping_check_ERR" }}));
+	this->metrics.p_replication_lag_check_OK =
+		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_read_only_check_OK" }}));
+	this->metrics.p_replication_lag_check_ERR =
+		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_read_only_check_ERR" }}));
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -3055,6 +3087,7 @@ __monitor_run:
 		threads[i]->start(2048,false);
 	}
 	started_threads += num_threads;
+	this->metrics.p_started_threads->Increment(num_threads);
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize (&attr, 2048*1024);
@@ -3104,6 +3137,7 @@ __monitor_run:
 				unsigned int threads_min = (unsigned int)mysql_thread___monitor_threads_min;
 				if (old_num_threads < threads_min) {
 					num_threads = threads_min;
+					this->metrics.p_num_threads->Set(static_cast<double>(threads_min));
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += (num_threads - old_num_threads);
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
@@ -3132,6 +3166,7 @@ __monitor_run:
 				if (new_threads) {
 					unsigned int old_num_threads = num_threads;
 					num_threads += new_threads;
+					this->metrics.p_num_threads->Increment(num_threads);
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += new_threads;
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
