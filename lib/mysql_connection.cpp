@@ -85,7 +85,7 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 			ci = proxysql_find_charset_collate(mysql_tracked_variables[idx].default_value);
 		else
 			ci = proxysql_find_charset_nr(atoi(value));
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
+				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
 	}  else if (idx == SQL_LOG_BIN) {
 		if (!value)
 			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = mysql_tracked_variables[idx].default_value;
