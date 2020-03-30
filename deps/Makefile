@@ -165,6 +165,7 @@ prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar --strip-components=1 -zxf v0.9.0.tar.gz -C .
 	cd prometheus-cpp && git submodule init
 	cd prometheus-cpp && git submodule update
+	cd prometheus-cpp && git apply patches/serial_exposer.patch
 	cd prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF
 	cd prometheus-cpp && make -j 4
 
