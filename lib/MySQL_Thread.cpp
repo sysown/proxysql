@@ -2933,7 +2933,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 char ** MySQL_Threads_Handler::get_variables_list() {
 	size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
-	char **ret=(char **)malloc(sizeof(char *)*l+SQL_NAME_LAST);
+	char **ret=(char **)malloc(sizeof(char *)*(l+SQL_NAME_LAST));
 	for (i=0; i < SQL_NAME_LAST ; i++) {
 		char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
 		sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
