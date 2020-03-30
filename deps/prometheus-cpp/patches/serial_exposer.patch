@@ -1,0 +1,245 @@
+diff --git a/pull/include/prometheus/exposer.h b/pull/include/prometheus/exposer.h
+index c730360..bd06f7c 100644
+--- a/pull/include/prometheus/exposer.h
++++ b/pull/include/prometheus/exposer.h
+@@ -5,6 +5,7 @@
+ #include <memory>
+ #include <string>
+ #include <vector>
++#include <functional>
+ 
+ #include "prometheus/collectable.h"
+ #include "prometheus/detail/pull_export.h"
+@@ -34,4 +35,18 @@ class PROMETHEUS_CPP_PULL_EXPORT Exposer {
+   std::string uri_;
+ };
+ 
++class SerialExposer {
++public:
++	explicit SerialExposer(const std::function<void()> update_callback = std::function<void()> {});
++	std::pair<std::map<std::string, std::string>, std::string>
++	operator()(const std::map<std::string, std::string>& req_headers);
++	void RegisterCollectable(const std::weak_ptr<Collectable>& collectable);
++	~SerialExposer();
++
++private:
++	std::vector<std::weak_ptr<Collectable>> collectables_;
++	std::shared_ptr<Registry> exposer_registry_;
++	std::unique_ptr<detail::SerialMetricsHandler> metrics_handler_;
++};
++
+ }  // namespace prometheus
+diff --git a/pull/src/exposer.cc b/pull/src/exposer.cc
+index 966d04a..17f7ef3 100644
+--- a/pull/src/exposer.cc
++++ b/pull/src/exposer.cc
+@@ -30,4 +30,29 @@ void Exposer::RegisterCollectable(
+     const std::weak_ptr<Collectable>& collectable) {
+   collectables_.push_back(collectable);
+ }
++
++SerialExposer::SerialExposer(
++	const std::function<void()> update_callback
++) :
++	exposer_registry_(std::make_shared<Registry>()),
++	metrics_handler_(new detail::SerialMetricsHandler {
++		collectables_, *exposer_registry_, update_callback
++	})
++{
++	RegisterCollectable(exposer_registry_);
++}
++
++SerialExposer::~SerialExposer() {}
++
++std::pair<std::map<std::string, std::string>, std::string>
++SerialExposer::operator()(const std::map<std::string, std::string>& req_headers) {
++	return (*this->metrics_handler_)(req_headers);
++}
++
++void SerialExposer::RegisterCollectable(
++	const std::weak_ptr<Collectable>& collectable
++) {
++	collectables_.push_back(collectable);
++}
++
+ }  // namespace prometheus
+diff --git a/pull/src/handler.cc b/pull/src/handler.cc
+index ea94365..15dc09e 100644
+--- a/pull/src/handler.cc
++++ b/pull/src/handler.cc
+@@ -150,5 +150,124 @@ std::vector<MetricFamily> MetricsHandler::CollectMetrics() const {
+ 
+   return collected_metrics;
+ }
++
++//////////////////////////////////////////////////////
++///          Serial Metrics Handler                ///
++//////////////////////////////////////////////////////
++
++SerialMetricsHandler::SerialMetricsHandler(
++	const std::vector<std::weak_ptr<Collectable>>& collectables,
++	Registry& registry,
++	const std::function<void()> update_callback)
++:
++	collectables_(collectables),
++	bytes_transferred_family_(
++	BuildCounter()
++		.Name("exposer_transferred_bytes_total")
++		.Help("Transferred bytes to metrics services")
++		.Register(registry)),
++	bytes_transferred_(bytes_transferred_family_.Add({})),
++	num_scrapes_family_(BuildCounter()
++		.Name("exposer_scrapes_total")
++		.Help("Number of times metrics were scraped")
++		.Register(registry)),
++	num_scrapes_(num_scrapes_family_.Add({})),
++	request_latencies_family_(
++	BuildSummary()
++		.Name("exposer_request_latencies")
++		.Help("Latencies of serving scrape requests, in microseconds")
++		.Register(registry)),
++	request_latencies_(request_latencies_family_.Add(
++		{}, Summary::Quantiles{{0.5, 0.05}, {0.9, 0.01}, {0.99, 0.001}})),
++	update_callback_(update_callback)
++{}
++
++std::vector<MetricFamily> SerialMetricsHandler::CollectMetrics() const {
++  auto collected_metrics = std::vector<MetricFamily>{};
++
++  for (auto&& wcollectable : collectables_) {
++    auto collectable = wcollectable.lock();
++    if (!collectable) {
++      continue;
++    }
++
++    auto&& metrics = collectable->Collect();
++    collected_metrics.insert(collected_metrics.end(),
++                             std::make_move_iterator(metrics.begin()),
++                             std::make_move_iterator(metrics.end()));
++  }
++
++  return collected_metrics;
++}
++
++using std::pair;
++using std::vector;
++using std::string;
++using std::map;
++
++#ifdef HAVE_ZLIB
++static bool IsEncodingAccepted(const map<string, string>& headers, string encoding) {
++	auto accept_encoding = headers.find("Accept-Encoding");
++	if (accept_encoding == headers.end()) {
++		return false;
++	}
++	return accept_encoding->second == encoding;
++}
++#endif
++
++static pair<map<string, string>, std::string> WriteResponse(
++	const std::map<std::string, std::string>& req_headers,
++	const std::string& body
++) {
++	map<string, string> headers {};
++
++	headers.insert({ "Content-Type", "text/plain" });
++
++#ifdef HAVE_ZLIB
++	auto acceptsGzip { IsEncodingAccepted(req_headers, "gzip") };
++
++	if (acceptsGzip) {
++		auto compressed { GZipCompress(body) };
++
++		if (!compressed.empty()) {
++			headers.insert({"Content-Encoding", "gzip"});
++			headers.insert({"Content-Length", std::to_string(static_cast<unsigned long>(compressed.size()))});
++
++			// Convert the vector<BYTE> into std::string
++			std::string res_body { compressed.begin(), compressed.end() };
++
++			return { headers, res_body };
++		}
++	}
++#endif
++	headers.insert({"Content-Length", std::to_string(static_cast<unsigned long>(body.size()))});
++
++	return { headers, body };
++}
++
++pair<map<string, string>, string> SerialMetricsHandler::operator()(
++	const map<string, string>& req_headers
++) {
++	auto start_time_of_request = std::chrono::steady_clock::now();
++
++	// Execute the callback updating the metrics
++	this->update_callback_();
++
++	auto metrics { CollectMetrics() };
++	auto serializer { std::unique_ptr<Serializer>{ new TextSerializer() } };
++	auto headers_body { WriteResponse(req_headers, serializer->Serialize(metrics)) };
++
++	auto stop_time_of_request { std::chrono::steady_clock::now() };
++	auto duration { std::chrono::duration_cast<std::chrono::microseconds>(
++		stop_time_of_request - start_time_of_request
++	)};
++
++	request_latencies_.Observe(duration.count());
++	bytes_transferred_.Increment(headers_body.second.size());
++	num_scrapes_.Increment();
++
++	return headers_body;
++}
++
+ }  // namespace detail
+ }  // namespace prometheus
+diff --git a/pull/src/handler.h b/pull/src/handler.h
+index 112267a..d603369 100644
+--- a/pull/src/handler.h
++++ b/pull/src/handler.h
+@@ -2,8 +2,9 @@
+ 
+ #include <memory>
+ #include <vector>
+-
++#include <functional>
+ #include "CivetServer.h"
++
+ #include "prometheus/counter.h"
+ #include "prometheus/registry.h"
+ #include "prometheus/summary.h"
+@@ -27,6 +28,35 @@ class MetricsHandler : public CivetHandler {
+   Counter& num_scrapes_;
+   Family<Summary>& request_latencies_family_;
+   Summary& request_latencies_;
++  std::function<void()> update_callback_ {};
++};
++
++//////////////////////////////////////////////////////
++///          Serial Metrics Handler                ///
++//////////////////////////////////////////////////////
++
++class SerialMetricsHandler {
++ public:
++  SerialMetricsHandler(
++    const std::vector<std::weak_ptr<Collectable>>& collectables,
++    Registry& registry,
++    const std::function<void()> update_callback = std::function<void()> {}
++  );
++
++  std::pair<std::map<std::string, std::string>, std::string>
++  operator()(const std::map<std::string, std::string>& req_headers);
++
++ private:
++  std::vector<MetricFamily> CollectMetrics() const;
++
++  const std::vector<std::weak_ptr<Collectable>>& collectables_;
++  Family<Counter>& bytes_transferred_family_;
++  Counter& bytes_transferred_;
++  Family<Counter>& num_scrapes_family_;
++  Counter& num_scrapes_;
++  Family<Summary>& request_latencies_family_;
++  Summary& request_latencies_;
++  std::function<void()> update_callback_ {};
+ };
+ }  // namespace detail
+ }  // namespace prometheus
