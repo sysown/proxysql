@@ -1,6 +1,7 @@
 #ifndef __CLASS_PROXYSQL_ADMIN_H
 #define __CLASS_PROXYSQL_ADMIN_H
 
+#include "prometheus/exposer.h"
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -71,8 +72,7 @@ class ProxySQL_Admin {
 	rwlock_t mysql_servers_rwlock;
 #endif
 
-	
-
+	prometheus::SerialExposer serial_exposer;
 
 	void wrlock();
 	void wrunlock();

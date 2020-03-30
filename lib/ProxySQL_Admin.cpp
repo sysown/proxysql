@@ -2,6 +2,7 @@
 #include <fstream>
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
+#include "prometheus/exposer.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -4724,7 +4725,42 @@ __end_while_pool:
 #endif /* DEBUG */
 #define PROXYSQL_ADMIN_VERSION "2.0.6.0805" DEB
 
-ProxySQL_Admin::ProxySQL_Admin() {
+/**
+ * @brief Routine to be called before each scrape from prometheus.
+ */
+void update_GloMTH_metrics() {
+	GloMTH->get_queries_backends_bytes_recv();
+	GloMTH->get_queries_backends_bytes_sent();
+	GloMTH->get_queries_frontends_bytes_recv();
+	GloMTH->get_queries_frontends_bytes_sent();
+
+	GloMTH->get_total_mirror_queue();
+
+	GloMTH->get_total_backend_stmt_prepare();
+	GloMTH->get_total_backend_stmt_execute();
+	GloMTH->get_total_backend_stmt_close();
+
+	GloMTH->get_total_frontend_stmt_prepare();
+	GloMTH->get_total_frontend_stmt_execute();
+	GloMTH->get_total_frontend_stmt_close();
+
+	GloMTH->get_total_queries();
+	GloMTH->get_slow_queries();
+	GloMTH->get_gtid_queries();
+	GloMTH->get_gtid_session_collected();
+
+	GloMTH->get_active_transations();
+	GloMTH->get_non_idle_client_connections();
+	GloMTH->get_query_processor_time();
+	GloMTH->get_backend_query_time();
+	GloMTH->get_mysql_backend_buffers_bytes();
+	GloMTH->get_mysql_frontend_buffers_bytes();
+	GloMTH->get_mysql_session_internal_bytes();
+}
+
+ProxySQL_Admin::ProxySQL_Admin() :
+	serial_exposer(std::function<void()> { update_GloMTH_metrics })
+{
 #ifdef DEBUG
 		if (glovars.has_debug==false) {
 #else
@@ -5302,6 +5338,30 @@ void ProxySQL_Admin::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
 	}
 };
 
+std::map<string,string> request_headers(const httpserver::http_request& request) {
+	auto req_headers { request.get_headers() };
+	std::map<string,string> result {};
+
+	for (const auto& header : req_headers) {
+		result.insert({header.first, header.second});
+	}
+
+	return result;
+}
+
+std::shared_ptr<httpserver::http_response> make_response(
+	const std::pair<std::map<std::string,std::string>, std::string>& res_data
+) {
+	std::shared_ptr<httpserver::string_response> response {
+		new httpserver::string_response(res_data.second)
+	};
+
+	for (const auto& h_key_val : res_data.first) {
+		response->with_header(h_key_val.first, h_key_val.second);
+	}
+
+	return response;
+}
 
 void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
@@ -5351,7 +5411,19 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		{
 			if (variables.restapi_enabled != variables.restapi_enabled_old) {
 				if (variables.restapi_enabled) {
-					AdminRestApiServer = new ProxySQL_RESTAPI_Server(variables.restapi_port);
+					std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
+						[this](const httpserver::http_request& request) {
+							auto headers { request_headers(request) };
+							auto serial_response { this->serial_exposer(headers) };
+							auto http_response { make_response(serial_response) };
+
+							return http_response;
+						}
+					};
+					AdminRestApiServer = new ProxySQL_RESTAPI_Server(
+						variables.restapi_port, {{"/metrics", prometheus_callback}}
+					);
+					this->serial_exposer.RegisterCollectable(GloVars.prometheus_registry);
 				} else {
 					delete AdminRestApiServer;
 					AdminRestApiServer = NULL;
