@@ -1,6 +1,5 @@
 #include <iostream>
 #include <thread>
-#include <functional>
 #include "btree_map.h"
 #include "proxysql.h"
 #if defined(__FreeBSD__) || defined(__APPLE__)
@@ -858,14 +857,6 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			rc=root.lookupValue("ldap_auth_plugin", ldap_auth_plugin);
 			if (rc==true) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
-			}
-		}
-		if (root.exists("prometheus_plugin")==true) {
-			string prometheus_plugin { "" };
-			bool rc { root.lookupValue("prometheus_plugin", prometheus_plugin) };
-
-			if (rc == true) {
-				GloVars.prometheus_plugin = prometheus_plugin;
 			}
 		}
 	} else {
