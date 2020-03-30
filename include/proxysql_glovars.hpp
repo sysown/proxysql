@@ -63,7 +63,6 @@ class ProxySQL_GlobalVariables {
 	char * execute_on_exit_failure;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
-	std::string prometheus_plugin {""};
 	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };
 	struct  {
 		unsigned long long start_time;
