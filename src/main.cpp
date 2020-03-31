@@ -30,6 +30,8 @@
 
 #include "curl/curl.h"
 
+#include <openssl/x509v3.h>
+
 #include <sys/mman.h>
 
 /*
@@ -348,6 +350,8 @@ X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, i
 	if (ca_x509) {
 		rc = X509_set_issuer_name(x, X509_get_subject_name(ca_x509));
 	} else {
+		X509_EXTENSION* extension = X509V3_EXT_conf_nid(NULL, NULL, NID_basic_constraints, "critical, CA:TRUE");
+		X509_add_ext(x, extension, -1);
 		rc = X509_set_issuer_name(x, name);
 	}
 	if (rc==0) {
