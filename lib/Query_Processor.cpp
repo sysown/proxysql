@@ -440,13 +440,8 @@ Query_Processor::Query_Processor() {
 	global_mysql_firewall_whitelist_rules_map___size = 0;
 	global_mysql_firewall_whitelist_rules_result___size = 0;
 
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_init(&rwlock, NULL);
 	pthread_rwlock_init(&digest_rwlock, NULL);
-#else
-	spinlock_rwlock_init(&rwlock);
-	spinlock_rwlock_init(&digest_rwlock);
-#endif
 	version=0;
 	rules_mem_used=0;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) commands_counters[i]=new Command_Counter(i);
@@ -587,19 +582,11 @@ void Query_Processor::print_version() {
 };
 
 void Query_Processor::wrlock() {
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&rwlock);
-#else
-	spin_wrlock(&rwlock);
-#endif
 };
 
 void Query_Processor::wrunlock() {
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
-#else
-	spin_wrunlock(&rwlock);
-#endif
 };
 
 unsigned long long Query_Processor::get_rules_mem_used() {
@@ -699,11 +686,7 @@ void Query_Processor::delete_query_rule(QP_rule_t *qr) {
 
 void Query_Processor::reset_all(bool lock) {
 	if (lock)
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_wrlock(&rwlock);
-#else
-		spin_wrlock(&rwlock);
-#endif
 	__reset_rules(&rules);
 	if (rules_fast_routing) {
 		kh_destroy(khStrInt, rules_fast_routing);
@@ -714,65 +697,37 @@ void Query_Processor::reset_all(bool lock) {
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
 	if (lock)
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
-#else
-		spin_wrunlock(&rwlock);
-#endif
 	rules_mem_used=0;
 };
 
 bool Query_Processor::insert(QP_rule_t *qr, bool lock) {
 	bool ret=true;
 	if (lock)
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_wrlock(&rwlock);
-#else
-		spin_wrlock(&rwlock);
-#endif
 	rules.push_back(qr);
 	rules_mem_used += mem_used_rule(qr);
 	if (lock)
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
-#else
-		spin_wrunlock(&rwlock);
-#endif
 	return ret;
 };
 
 void Query_Processor::sort(bool lock) {
 	if (lock)
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_wrlock(&rwlock);
-#else
-		spin_wrlock(&rwlock);
-#endif
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Sorting rules\n");
 	std::sort (rules.begin(), rules.end(), rules_sort_comp_function);
 	if (lock)
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
-#else
-		spin_wrunlock(&rwlock);
-#endif
 };
 
 // when commit is called, the version number is increased and the this will trigger the mysql threads to get a new Query Processor Table
 // The operation is asynchronous
 void Query_Processor::commit() {
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_wrlock(&rwlock);
-#else
-		spin_wrlock(&rwlock);
-#endif
 	__sync_add_and_fetch(&version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Increasing version number to %d - all threads will notice this and refresh their rules\n", version);
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
-#else
-		spin_wrunlock(&rwlock);
-#endif
 };
 
 SQLite3_result * Query_Processor::get_stats_commands_counters() {
@@ -803,11 +758,7 @@ SQLite3_result * Query_Processor::get_stats_commands_counters() {
 SQLite3_result * Query_Processor::get_stats_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping query rules statistics, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(2);
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&rwlock);
-#else
-	spin_rdlock(&rwlock);
-#endif
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
 	result->add_column_definition(SQLITE_TEXT,"hits");
@@ -820,22 +771,14 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 			delete qt;
 		}
 	}
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
-#else
-	spin_rdunlock(&rwlock);
-#endif
 	return result;
 }
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(35);
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&rwlock);
-#else
-	spin_rdlock(&rwlock);
-#endif
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
 	result->add_column_definition(SQLITE_TEXT,"active");
@@ -879,22 +822,14 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 		result->add_row(qt->pta);
 		delete qt;
 	}
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
-#else
-	spin_rdunlock(&rwlock);
-#endif
 	return result;
 }
 
 SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules fast_routing, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(5);
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&rwlock);
-#else
-	spin_rdlock(&rwlock);
-#endif
 	//QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"username");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
@@ -914,11 +849,7 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 		SQLite3_row *r=*it;
 		result->add_row(r);
 	}
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
-#else
-	spin_rdunlock(&rwlock);
-#endif
 	return result;
 }
 
@@ -1056,11 +987,7 @@ unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool p
 
 unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	unsigned long long ret = 0;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
-#else
-	spin_rdlock(&digest_rwlock);
-#endif
 	unsigned long long curtime1=monotonic_time();
 	size_t map1_size = digest_umap.size();
 	size_t map2_size = digest_text_umap.size();
@@ -1083,11 +1010,7 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	}
 	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
-#else
-	spin_rdunlock(&digest_rwlock);
-#endif
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
@@ -1112,11 +1035,7 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 
 unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 	unsigned long long ret = 0;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
-#else
-	spin_rdlock(&digest_rwlock);
-#endif
 	size_t map_size = digest_umap.size();
 	if (parallel && map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel purge
 		int n=DIGEST_STATS_FAST_THREADS;
@@ -1148,21 +1067,13 @@ unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 	}
 	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
-#else
-	spin_rdunlock(&digest_rwlock);
-#endif
 	return ret;
 }
 
 unsigned long long Query_Processor::get_query_digests_total_size() {
 	unsigned long long ret=0;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
-#else
-	spin_rdlock(&digest_rwlock);
-#endif
 	size_t map_size = digest_umap.size();
 	ret += sizeof(QP_query_digest_stats)*map_size;
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel search
@@ -1209,22 +1120,14 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 	ret += ((sizeof(uint64_t) + sizeof(void *) + 32) * digest_text_umap.size() );
 #endif
 
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
-#else
-	spin_rdunlock(&digest_rwlock);
-#endif
 	return ret;
 }
 
 SQLite3_result * Query_Processor::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result = NULL;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&digest_rwlock);
-#else
-	spin_rdlock(&digest_rwlock);
-#endif
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap.size();
@@ -1276,11 +1179,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 			free(a);
 		}
 	}
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
-#else
-	spin_rdunlock(&digest_rwlock);
-#endif
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
@@ -1292,27 +1191,15 @@ SQLite3_result * Query_Processor::get_query_digests() {
 
 
 void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&digest_rwlock);
-#else
-	spin_wrlock(&digest_rwlock);
-#endif
 	digest_umap.swap(*uqd);
 	digest_text_umap.swap(*uqdt);
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
-#else
-	spin_wrunlock(&digest_rwlock);
-#endif
 }
 
 SQLite3_result * Query_Processor::get_query_digests_reset() {
 	SQLite3_result *result = NULL;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&digest_rwlock);
-#else
-	spin_wrlock(&digest_rwlock);
-#endif
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	bool free_me = true;
@@ -1381,11 +1268,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 		free(it->second);
 	}
 	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
-#else
-	spin_wrunlock(&digest_rwlock);
-#endif
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
@@ -1430,11 +1313,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	if (__sync_add_and_fetch(&version,0) > _thr_SQP_version) {
 		// update local rules;
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Detected a changed in version. Global:%d , local:%d . Refreshing...\n", version, _thr_SQP_version);
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_rdlock(&rwlock);
-#else
-		spin_rdlock(&rwlock);
-#endif
 		_thr_SQP_version=__sync_add_and_fetch(&version,0);
 		__reset_rules(_thr_SQP_rules);
 		QP_rule_t *qr1;
@@ -1502,11 +1381,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		//for (std::unordered_map<std::string, int>::iterator it = rules_fast_routing.begin(); it != rules_fast_routing.end(); ++it) {
 		//	_thr_SQP_rules_fast_routing->insert(
 		//}
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
-#else
-		spin_rdunlock(&rwlock); // unlock should be after the copy
-#endif
 	}
 	QP_rule_t *qr = NULL;
 	re2_t *re2p;
@@ -1928,11 +1803,7 @@ void Query_Processor::update_query_processor_stats() {
 	// It acquires a read lock to ensure that the rules table doesn't change
 	// Yet, because it has to update vales, it uses atomic operations
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 8, "Updating query rules statistics\n");
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&rwlock);
-#else
-	spin_rdlock(&rwlock);
-#endif
 	if (__sync_add_and_fetch(&version,0) == _thr_SQP_version) {
 		QP_rule_t *qr;
 		for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
@@ -1943,11 +1814,7 @@ void Query_Processor::update_query_processor_stats() {
 			}
 		}
 	}
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
-#else
-	spin_rdunlock(&rwlock);
-#endif
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) {
 		for (int j=0; j<13; j++) {
 			if (_thr_commands_counters[i]->counters[j]) {
@@ -2052,11 +1919,7 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 }
 
 void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, MySQL_Session *sess) {
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&digest_rwlock);
-#else
-	spin_wrlock(&digest_rwlock);
-#endif
 	QP_query_digest_stats *qds;
 
 	unsigned long long rows_affected = 0;
@@ -2119,11 +1982,7 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 		}
 	}
 
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&digest_rwlock);
-#else
-	spin_wrunlock(&digest_rwlock);
-#endif
 }
 
 char * Query_Processor::get_digest_text(SQP_par_t *qp) {
@@ -2827,11 +2686,7 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 
 int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN) {
 	int ret = -1;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&rwlock);
-#else
-	spin_rdlock(&rwlock);
-#endif
 	if (rules_fast_routing) {
 		char keybuf[256];
 		char * keybuf_ptr = keybuf;
@@ -2849,11 +2704,7 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 			free(keybuf_ptr);
 		}
 	}
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
-#else
-	spin_rdunlock(&rwlock);
-#endif
 	return ret;
 }
 

@@ -16,8 +16,6 @@
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
 
-#define PROXYSQL_QPRO_PTHREAD_MUTEX
-
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
 
@@ -253,19 +251,10 @@ class Query_Processor {
 	char rand_del[16];
 	umap_query_digest digest_umap;
 	umap_query_digest_text digest_text_umap;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_t digest_rwlock;
-#else
-	rwlock_t digest_rwlock;
-	int64_t padding;	// to get rwlock cache aligned
-#endif
 	enum MYSQL_COM_QUERY_command __query_parser_command_type(SQP_par_t *qp);
 	protected:
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_t rwlock;
-#else
-	rwlock_t rwlock;
-#endif
 	std::vector<QP_rule_t *> rules;
 	khash_t(khStrInt) * rules_fast_routing;
 	char * rules_fast_routing___keys_values;
