@@ -48,7 +48,7 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->name)?ci->name:"");
 	} else if (idx == SQL_LOG_BIN) {
 		if (!value)
-			j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = mysql_tracked_variables[idx].default_value;
+			j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = "";
 		else
 			j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(!strcmp("1",value)?"ON":"OFF");
 	} else {
@@ -88,7 +88,7 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
 	}  else if (idx == SQL_LOG_BIN) {
 		if (!value)
-			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = mysql_tracked_variables[idx].default_value;
+			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = "";
 		else
 			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = !strcmp("1", value)?"ON":"OFF";
 	} else {
