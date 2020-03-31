@@ -436,7 +436,7 @@ X509 * read_x509(const char *filen) {
 }
 
 
-int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
+int ssl_mkit(X509 **x509ca, X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
 	X509 *x1;
 	X509 *x2;
 	EVP_PKEY *pk;
@@ -544,9 +544,11 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days) {
 	} else {
 		proxy_info("SSL keys/certificates found in datadir (%s): loading them.\n", GloVars.datadir);
 		pk = rsa_key_read(ssl_key_fp);
-		x1 = read_x509(ssl_cert_fp);
+		x1 = read_x509(ssl_ca_fp);
+		x2 = read_x509(ssl_cert_fp);
 	}
-	*x509p = x1;
+	*x509ca = x1;
+	*x509p = x2;
 	*pkeyp = pk;
 
 	dh = get_dh2048();
@@ -601,21 +603,26 @@ void ProxySQL_Main_init_SSL_module() {
 #endif
 	BIO *bio_err;
 	X509 *x509 = NULL;
+	X509 *x509ca = NULL;
 	EVP_PKEY *pkey = NULL;
 
 	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_OFF);
 
 	bio_err = BIO_new_fp(stderr, BIO_NOCLOSE);
 
-	if (ssl_mkit(&x509, &pkey, 2048, 0, 730) == 0) {
+	if (ssl_mkit(&x509ca, &x509, &pkey, 2048, 0, 730) == 0) {
 		proxy_error("Unable to initialize SSL. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 
-
 	if ( SSL_CTX_use_certificate(GloVars.global.ssl_ctx, x509) <= 0 )	{
 		ERR_print_errors_fp(stderr);
 		proxy_error("Unable to use SSL certificate. Shutting down...\n");
+		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
+	}
+	if ( SSL_CTX_add_extra_chain_cert(GloVars.global.ssl_ctx, x509ca) <= 0 )	{
+		ERR_print_errors_fp(stderr);
+		proxy_error("Unable to use SSL CA chain. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 	if ( SSL_CTX_use_PrivateKey(GloVars.global.ssl_ctx, pkey) <= 0 ) {
