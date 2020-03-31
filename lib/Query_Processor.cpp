@@ -2684,6 +2684,9 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 	rules_mem_used += fast_routing_resultset->get_size();
 };
 
+// this testing function doesn't care if the user exists or not
+// the arguments are coming from this query:
+// SELECT username, schemaname, flagIN, destination_hostgroup FROM mysql_query_rules_fast_routing ORDER BY RANDOM()
 int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN) {
 	int ret = -1;
 	pthread_rwlock_rdlock(&rwlock);
@@ -2699,6 +2702,49 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 		if (k == kh_end(rules_fast_routing)) {
 		} else {
 			ret = kh_val(rules_fast_routing,k);
+		}
+		if (keylen > 250) {
+			free(keybuf_ptr);
+		}
+	}
+	pthread_rwlock_unlock(&rwlock);
+	return ret;
+}
+
+// this testing function implement the dual search: with and without username
+// if the length of username is 0 , it will search for random username (that shouldn't exist!)
+int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN) {
+	int ret = -1;
+	const char * random_user = (char *)"my_ReaLLy_Rand_User_123456";
+	char * u = NULL;
+	if (strlen(username)) {
+		u = username;
+	} else {
+		u = (char *)random_user;
+	}
+	pthread_rwlock_rdlock(&rwlock);
+	if (rules_fast_routing) {
+		char keybuf[256];
+		char * keybuf_ptr = keybuf;
+		size_t keylen = strlen(u)+strlen(rand_del)+strlen(schemaname)+30; // 30 is a big number
+		if (keylen > 250) {
+			keybuf_ptr = (char *)malloc(keylen);
+		}
+		sprintf(keybuf_ptr,"%s%s%s---%d", username, rand_del, schemaname, flagIN);
+		khiter_t k = kh_get(khStrInt, rules_fast_routing, keybuf_ptr);
+		if (k == kh_end(rules_fast_routing)) {
+		} else {
+			ret = kh_val(rules_fast_routing,k);
+		}
+		if (ret == -1) { // we didn't find it
+			if (strlen(username)==0) { // we need to search for empty username
+				sprintf(keybuf_ptr,"%s%s---%d", rand_del, schemaname, flagIN); // no username here
+				khiter_t k = kh_get(khStrInt, rules_fast_routing, keybuf_ptr);
+				if (k == kh_end(rules_fast_routing)) {
+				} else {
+					ret = kh_val(rules_fast_routing,k);
+				}
+			}
 		}
 		if (keylen > 250) {
 			free(keybuf_ptr);

@@ -3321,7 +3321,11 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						if (test_arg1==0) {
 							test_arg1=10000;
 						}
-						r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1);
+						if (test_arg2) {
+							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, true);
+						} else {
+							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, false);
+						}
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Generated new mysql_query_rules_fast_routing table", r1);
 						run_query=false;
 						break;
@@ -3330,7 +3334,11 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						if (test_arg1==0) {
 							test_arg1=10000;
 						}
-						r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1);
+						if (test_arg2) {
+							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, true);
+						} else {
+							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, false);
+						}
 						msg = SPA->load_mysql_query_rules_to_runtime();
 						if (msg==NULL) {
 							SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Generated new mysql_query_rules_fast_routing table and loaded to runtime", r1);
@@ -3340,7 +3348,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						run_query=false;
 						break;
 					case 13:
-						// generate random mysql_query_rules_fast_routing and LOAD TO RUNTIME
+						// LOAD MYSQL QUERY RULES TO RUNTIME for N times
 						if (test_arg1==0) {
 							test_arg1=1;
 						}
@@ -3360,7 +3368,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						}
 						{
 							int ret1, ret2;
-							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1);
+							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1, test_arg2);
 							if (bret) {
 								SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Verified all rules in mysql_query_rules_fast_routing", ret1);
 							} else {
@@ -5882,7 +5890,8 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 	return ret;
 }
 
-bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt) {
+// if dual is not 0 , we call the new search algorithm
+bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual) {
 	char *q = (char *)"SELECT username, schemaname, flagIN, destination_hostgroup FROM mysql_query_rules_fast_routing ORDER BY RANDOM()";
 	char *error=NULL;
 	int cols=0;
@@ -5900,7 +5909,13 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			int dest_HG = atoi(r->fields[3]);
-			int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+			int ret_HG;
+			if (dual==0) {
+				// legacy algorithm
+				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+			} else {
+				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing_dual(r->fields[0], r->fields[1], atoi(r->fields[2]));
+			}
 			if (dest_HG == ret_HG) {
 				matching_rows++;
 			}
@@ -5916,7 +5931,13 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 					SQLite3_row *r=*it;
 					int dest_HG = atoi(r->fields[3]);
-					int ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+					int ret_HG;
+					if (dual==0) {
+						// legacy algorithm
+						ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+					} else {
+						ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing_dual(r->fields[0], r->fields[1], atoi(r->fields[2]));
+					}
 					assert(dest_HG==ret_HG);
 				}
 			}
@@ -5926,7 +5947,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *
 	return ret;
 }
 
-unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt) {
+unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt, bool empty) {
 	char *a = (char *)"INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
 	int rc;
 	sqlite3_stmt *statement1=NULL;
@@ -5937,16 +5958,22 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	char * schemaname_buf = (char *)malloc(64);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
-	strcpy(username_buf,"user_name_");
+	if (empty==false) {
+		strcpy(username_buf,"user_name_");
+	} else {
+		strcpy(username_buf,"");
+	}
 	strcpy(schemaname_buf,"shard_name_");
 	int _k;
 	for (unsigned int i=0; i<cnt; i++) {
 		_k = fastrand()%20 + 1;
-		for (int _i=0 ; _i<_k ; _i++) {
-			int b = fastrand()%10;
-			username_buf[10+_i]='0' + b;
+		if (empty == false) {
+			for (int _i=0 ; _i<_k ; _i++) {
+				int b = fastrand()%10;
+				username_buf[10+_i]='0' + b;
+			}
+			username_buf[10+_k]='\0';
 		}
-		username_buf[10+_k]='\0';
 		_k = fastrand()%30 + 1;
 		for (int _i=0 ; _i<_k ; _i++) {
 			int b = fastrand()%10;
