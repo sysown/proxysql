@@ -415,12 +415,8 @@ static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
-#ifdef FAST_ROUTING_NEW208
 __thread khash_t(khStrInt) * _thr_SQP_rules_fast_routing;
 __thread char * _thr___rules_fast_routing___keys_values;
-#else
-__thread std::unordered_map<std::string, int> * _thr_SQP_rules_fast_routing;
-#endif
 __thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
 
 Query_Processor::Query_Processor() {
@@ -522,26 +518,20 @@ Query_Processor::Query_Processor() {
 		rand_del[14] = 0;
 	}
 	fast_routing_resultset = NULL;
-#ifdef FAST_ROUTING_NEW208
 	rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
-#endif
 };
 
 Query_Processor::~Query_Processor() {
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete commands_counters[i];
 	__reset_rules(&rules);
-#ifdef FAST_ROUTING_NEW208
 	kh_destroy(khStrInt, rules_fast_routing);
 	if (rules_fast_routing___keys_values) {
 		free(rules_fast_routing___keys_values);
 		rules_fast_routing___keys_values = NULL;
 		rules_fast_routing___keys_values___size = 0;
 	}
-#else
-	rules_fast_routing.clear();
-#endif
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
 		delete qds;
@@ -574,12 +564,8 @@ void Query_Processor::init_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Per-Thread Query Processor Table with version=0\n");
 	_thr_SQP_version=0;
 	_thr_SQP_rules=new std::vector<QP_rule_t *>;
-#ifdef FAST_ROUTING_NEW208
 	_thr_SQP_rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	_thr___rules_fast_routing___keys_values = NULL;
-#else
-	_thr_SQP_rules_fast_routing = new std::unordered_map<std::string, int>;
-#endif
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) _thr_commands_counters[i] = new Command_Counter(i);
 };
 
@@ -588,15 +574,11 @@ void Query_Processor::end_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Destroying Per-Thread Query Processor Table with version=%d\n", _thr_SQP_version);
 	__reset_rules(_thr_SQP_rules);
 	delete _thr_SQP_rules;
-#ifdef FAST_ROUTING_NEW208
 	kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
 	if (_thr___rules_fast_routing___keys_values) {
 		free(_thr___rules_fast_routing___keys_values);
 		_thr___rules_fast_routing___keys_values = NULL;
 	}
-#else
-	delete _thr_SQP_rules_fast_routing;
-#endif
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete _thr_commands_counters[i];
 };
 
@@ -723,7 +705,6 @@ void Query_Processor::reset_all(bool lock) {
 		spin_wrlock(&rwlock);
 #endif
 	__reset_rules(&rules);
-#ifdef FAST_ROUTING_NEW208
 	if (rules_fast_routing) {
 		kh_destroy(khStrInt, rules_fast_routing);
 		rules_fast_routing = NULL;
@@ -732,9 +713,6 @@ void Query_Processor::reset_all(bool lock) {
 	free(rules_fast_routing___keys_values);
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
-#else
-	rules_fast_routing.clear();
-#endif
 	if (lock)
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 		pthread_rwlock_unlock(&rwlock);
@@ -1502,7 +1480,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				_thr_SQP_rules->push_back(qr2);
 			}
 		}
-#ifdef FAST_ROUTING_NEW208
 		kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
 		_thr_SQP_rules_fast_routing = kh_init(khStrInt); // create a hashtable
 		if (_thr___rules_fast_routing___keys_values) {
@@ -1522,10 +1499,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				ptr = ptr2+strlen(ptr2)+1;
 			}
 		}
-#else
-		delete _thr_SQP_rules_fast_routing;
-		_thr_SQP_rules_fast_routing = new std::unordered_map<std::string, int>(rules_fast_routing);
-#endif
 		//for (std::unordered_map<std::string, int>::iterator it = rules_fast_routing.begin(); it != rules_fast_routing.end(); ++it) {
 		//	_thr_SQP_rules_fast_routing->insert(
 		//}
@@ -1800,7 +1773,6 @@ __exit_process_mysql_query:
 	if (qr == NULL || qr->apply == false) {
 		// now it is time to check mysql_query_rules_fast_routing
 		// it is only check if "apply" is not true
-#ifdef FAST_ROUTING_NEW208
 		if (_thr___rules_fast_routing___keys_values) {
 			char keybuf[256];
 			char * keybuf_ptr = keybuf;
@@ -1820,22 +1792,6 @@ __exit_process_mysql_query:
 				free(keybuf_ptr);
 			}
 		}
-#else
-		size_t mapl = 0;
-		mapl = _thr_SQP_rules_fast_routing->size();
-		if (mapl) { // trigger new routing algorithm only if rules exists
-			string s = sess->client_myds->myconn->userinfo->username;
-			s.append(rand_del);
-			s.append(sess->client_myds->myconn->userinfo->schemaname);
-			s.append("---");
-			s.append(std::to_string(flagIN));
-			std::unordered_map<std::string, int>:: iterator it;
-			it = _thr_SQP_rules_fast_routing->find(s);
-			if (it != _thr_SQP_rules_fast_routing->end()) {
-				ret->destination_hostgroup = it->second;
-			}
-		}
-#endif
 	}
 	// FIXME : there is too much data being copied around
 	if (len < stackbuffer_size) {
@@ -2828,7 +2784,6 @@ void Query_Processor::load_mysql_firewall_rules(SQLite3_result *resultset) {
 }
 
 void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
-#ifdef FAST_ROUTING_NEW208
 	unsigned long long tot_size = 0;
 	size_t rand_del_size = strlen(rand_del);
 	int num_rows = resultset->rows_count;
@@ -2865,31 +2820,6 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 			rules_mem_used += ((sizeof(int) + sizeof(char *) + 4 ) * nt); // per-thread . not sure about memory overhead
 		}
 	}
-#else
-	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
-		string s = r->fields[0];
-		s.append(rand_del);
-		s.append(r->fields[1]);
-		s.append("---");
-		s.append(r->fields[2]);
-		int destination_hostgroup = atoi(r->fields[3]);
-		rules_fast_routing[s] = destination_hostgroup;
-		rules_mem_used += s.length() + sizeof(int);
-	}
-	{
-		size_t count = 0;
-		for (unsigned i = 0; i < rules_fast_routing.bucket_count(); ++i) {
-			size_t bucket_size = rules_fast_routing.bucket_size(i);
-			if (bucket_size == 0) {
-				count++;
-			} else {
-				count += bucket_size;
-			}
-		}
-		rules_mem_used += count;
-	}
-#endif
 	delete fast_routing_resultset;
 	fast_routing_resultset = resultset; // save it
 	rules_mem_used += fast_routing_resultset->get_size();
@@ -2902,7 +2832,6 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 #else
 	spin_rdlock(&rwlock);
 #endif
-#ifdef FAST_ROUTING_NEW208
 	if (rules_fast_routing) {
 		char keybuf[256];
 		char * keybuf_ptr = keybuf;
@@ -2920,21 +2849,6 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 			free(keybuf_ptr);
 		}
 	}
-#else
-	size_t mapl = rules_fast_routing.size();
-	if (mapl) { // trigger new routing algorithm only if rules exists
-		string s = username;
-		s.append(rand_del);
-		s.append(schemaname);
-		s.append("---");
-		s.append(std::to_string(flagIN));
-		std::unordered_map<std::string, int>:: iterator it;
-		it = rules_fast_routing.find(s);
-		if (it != rules_fast_routing.end()) {
-			ret = it->second;
-		}
-	}
-#endif
 #ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&rwlock);
 #else

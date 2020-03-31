@@ -11,13 +11,10 @@
 #define DIGEST_STATS_FAST_THREADS   4
 
 
-#define FAST_ROUTING_NEW208
 
 
-#ifdef FAST_ROUTING_NEW208
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
-#endif
 
 #define PROXYSQL_QPRO_PTHREAD_MUTEX
 
@@ -270,13 +267,9 @@ class Query_Processor {
 	rwlock_t rwlock;
 #endif
 	std::vector<QP_rule_t *> rules;
-#ifdef FAST_ROUTING_NEW208
 	khash_t(khStrInt) * rules_fast_routing;
 	char * rules_fast_routing___keys_values;
 	unsigned long long rules_fast_routing___keys_values___size;
-#else
-	std::unordered_map<std::string,int> rules_fast_routing;
-#endif
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 
 	// firewall
