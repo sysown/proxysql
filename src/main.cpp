@@ -334,7 +334,7 @@ X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, i
 		proxy_error("Unable to run X509_new()\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	X509_set_version(x, 3);
+	X509_set_version(x, 2);
 	ASN1_INTEGER_set(X509_get_serialNumber(x), serial);
 	X509_gmtime_adj(X509_get_notBefore(x), 0);
 	X509_gmtime_adj(X509_get_notAfter(x), (long)60 * 60 * 24 * days);
