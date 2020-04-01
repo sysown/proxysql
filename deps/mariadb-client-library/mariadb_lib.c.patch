@@ -15,7 +15,23 @@
  
    if (mysql->client_flag & CLIENT_COMPRESS)
      net->compress= 1;
-@@ -1647,7 +1654,7 @@
+@@ -1568,6 +1575,15 @@
+   return(mysql);
+ 
+ error:
++  // fix for proxysql bug #2623
++  if (mysql->net.extension) {
++     free(mysql->net.extension);
++     mysql->net.extension=NULL;
++  }
++  if (mysql->extension) {
++     free(mysql->extension);
++     mysql->extension=NULL;
++  }
+   /* Free alloced memory */
+   end_server(mysql);
+   /* only free the allocated memory, user needs to call mysql_close */
+@@ -1647,7 +1663,7 @@
    if (!mysql_real_connect(&tmp_mysql,mysql->host,mysql->user,mysql->passwd,
  			  mysql->db, mysql->port, mysql->unix_socket,
  			  mysql->client_flag | CLIENT_REMEMBER_OPTIONS) ||
@@ -24,7 +40,7 @@
    {
      if (ctxt)
        my_context_install_suspend_resume_hook(ctxt, NULL, NULL);
-@@ -1693,6 +1700,7 @@
+@@ -1693,6 +1709,7 @@
  {
    if (mysql->stmts)
    {
@@ -32,7 +48,7 @@
      LIST *li_stmt= mysql->stmts;
  
      for (; li_stmt; li_stmt= li_stmt->next)
-@@ -1701,6 +1709,7 @@
+@@ -1701,6 +1718,7 @@
        stmt->mysql= NULL;
        SET_CLIENT_STMT_ERROR(stmt, CR_STMT_CLOSED, SQLSTATE_UNKNOWN, function_name);
      }
@@ -40,7 +56,7 @@
      mysql->stmts= NULL;
    }
  }
-@@ -1970,6 +1979,33 @@
+@@ -1970,6 +1988,33 @@
    return;
  }
  
@@ -74,7 +90,7 @@
  
  /**************************************************************************
  ** Do a query. If query returned rows, free old rows.
-@@ -2036,6 +2072,8 @@
+@@ -2036,6 +2081,8 @@
              old_pos= pos;
              si_type= (enum enum_session_state_type)net_field_length(&pos);
              switch(si_type) {
@@ -83,7 +99,7 @@
              case SESSION_TRACK_SCHEMA:
              case SESSION_TRACK_STATE_CHANGE:
              case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
-@@ -3474,18 +3512,27 @@
+@@ -3474,18 +3521,27 @@
    mariadb_get_charset_info(mysql, cs);
  }
  
@@ -117,7 +133,7 @@
      if (!mysql_real_query(mysql, buff, (unsigned long)strlen(buff)))
      {
        mysql->charset= cs;
-@@ -3494,6 +3541,7 @@
+@@ -3494,6 +3550,7 @@
    }
  
  error:
