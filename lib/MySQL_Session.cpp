@@ -1974,6 +1974,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
 	if (query) {
+		myconn->set_query(NULL, 0);
 		free(query);
 		query=NULL;
 	}
@@ -2079,6 +2080,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
 	if (query) {
+		myconn->set_query(NULL, 0);
 		free(query);
 		query=NULL;
 	}
