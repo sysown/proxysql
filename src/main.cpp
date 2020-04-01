@@ -1450,14 +1450,19 @@ void ProxySQL_daemonize_wait_daemon() {
 
 bool ProxySQL_daemonize_phase2() {
 	int rc;
-	/* Close FDs */
+/*
+	// we DO NOT close FDs anymore. See:
+	// https://github.com/sysown/proxysql/issues/2628
+	//
+	// Close FDs
 	if (daemon_close_all(-1) < 0) {
 		daemon_log(LOG_ERR, "Failed to close all file descriptors: %s", strerror(errno));
 
-		/* Send the error condition to the parent process */
+		// Send the error condition to the parent process
 		daemon_retval_send(1);
 		return false;
 	}
+*/
 
 	rc=chdir(GloVars.datadir);
 	if (rc) {
