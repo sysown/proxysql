@@ -3316,12 +3316,13 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
-					case 11:
+					case 11: // generate username
+					case 15: // no username, empty string
 						// generate random mysql_query_rules_fast_routing
 						if (test_arg1==0) {
 							test_arg1=10000;
 						}
-						if (test_arg2) {
+						if (test_n==15) {
 							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, true);
 						} else {
 							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, false);
@@ -3329,12 +3330,13 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Generated new mysql_query_rules_fast_routing table", r1);
 						run_query=false;
 						break;
-					case 12:
+					case 12: // generate username
+					case 16: // no username, empty string
 						// generate random mysql_query_rules_fast_routing and LOAD TO RUNTIME
 						if (test_arg1==0) {
 							test_arg1=10000;
 						}
-						if (test_arg2) {
+						if (test_n==16) {
 							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, true);
 						} else {
 							r1 = SPA->ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(test_arg1, false);
@@ -3361,14 +3363,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						run_query=false;
 						free(msg);
 						break;
-					case 14:
+					case 14: // old algorithm
+					case 17: // perform dual lookup, with and without username
 						// verify all mysql_query_rules_fast_routing rules
 						if (test_arg1==0) {
 							test_arg1=1;
 						}
 						{
 							int ret1, ret2;
-							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1, test_arg2);
+							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1, (test_n==14 ? 0 : 1));
 							if (bret) {
 								SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Verified all rules in mysql_query_rules_fast_routing", ret1);
 							} else {
@@ -5996,7 +5999,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	sqlite3_finalize(statement1);
 	free(username_buf);
 	free(schemaname_buf);
-	return 0;
+	return cnt;
 }
 
 void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
