@@ -1660,6 +1660,12 @@ __exit_process_mysql_query:
 			sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
 			khiter_t k = kh_get(khStrInt, _thr_SQP_rules_fast_routing, keybuf_ptr);
 			if (k == kh_end(_thr_SQP_rules_fast_routing)) {
+				sprintf(keybuf_ptr,"%s%s---%d", rand_del, s, flagIN);
+				khiter_t k2 = kh_get(khStrInt, _thr_SQP_rules_fast_routing, keybuf_ptr);
+				if (k2 == kh_end(_thr_SQP_rules_fast_routing)) {
+				} else {
+					ret->destination_hostgroup = kh_val(_thr_SQP_rules_fast_routing,k2);
+				}
 			} else {
 				ret->destination_hostgroup = kh_val(_thr_SQP_rules_fast_routing,k);
 			}
