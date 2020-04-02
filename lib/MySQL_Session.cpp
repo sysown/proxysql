@@ -5035,13 +5035,20 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						exit_after_SetParse = true;
 					} else if (var == "foreign_key_checks") {
 						std::string value1 = *values;
-						if ((strcasecmp(value1.c_str(),"0")==0) || (strcasecmp(value1.c_str(),"1")==0)) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET foreign_key_checks value %s\n", value1.c_str());
-							uint32_t hash_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						std::string _tmp_value="";
+						if ((strcasecmp(value1.c_str(),"0")==0) || (strcasecmp(value1.c_str(),"OFF")==0)) {
+							_tmp_value = "0";
+						}
+						if ((strcasecmp(value1.c_str(),"1")==0) || (strcasecmp(value1.c_str(),"ON")==0)) {
+							_tmp_value = "1";
+						}
+						if (!_tmp_value.empty()) {
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET foreign_key_checks value %s\n", _tmp_value.c_str());
+							uint32_t hash_int=SpookyHash::Hash32(_tmp_value.c_str(),_tmp_value.length(),10);
 							if (mysql_variables->client_get_hash(SQL_FOREIGN_KEY_CHECKS) != hash_int) {
-								if (!mysql_variables->client_set_value(SQL_FOREIGN_KEY_CHECKS, value1.c_str()))
+								if (!mysql_variables->client_set_value(SQL_FOREIGN_KEY_CHECKS, _tmp_value.c_str()))
 									return false;
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection foreign_key_checks to %s\n", value1.c_str());
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection foreign_key_checks to %s\n", _tmp_value.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {
@@ -6653,6 +6660,18 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						mysql_variables->server_set_value(idx, id);
 						mysql_variables->client_set_value(SQL_CHARACTER_SET_CONNECTION, id);
 						mysql_variables->server_set_value(SQL_CHARACTER_SET_CONNECTION, id);
+					}
+					else if (idx == SQL_FOREIGN_KEY_CHECKS) {
+						char value[1024];
+						memcpy(value, data, length);
+						value[length] = '\0';
+						if (value[1] == 'N') {
+							mysql_variables->client_set_value(idx, "1");
+							mysql_variables->server_set_value(idx, "1");
+						} else {
+							mysql_variables->client_set_value(idx, "0");
+							mysql_variables->server_set_value(idx, "0");
+						}
 					}
 					else if (idx == SQL_LOG_BIN) {
 						char value[1024];
