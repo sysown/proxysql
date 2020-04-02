@@ -26,9 +26,12 @@ bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
 char* collation_id_from_charset_name_r(const char *name, char* collation_id, int length);
 char* collation_id_from_collate_r(const char *collation, char* collation_id, int length);
 
+bool process_on_off(MySQL_Session& session, enum variable_name var, const std::string& value, bool* lock_hostgroup);
+
 class MySQL_Variables {
 	static verify_var verifiers[SQL_NAME_LAST];
 	static update_var updaters[SQL_NAME_LAST];
+
 
 public:
 	MySQL_Variables();
@@ -48,6 +51,9 @@ public:
 	bool verify_variable(MySQL_Session* session, int idx) const;
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
 	bool on_connect_to_backend(MySQL_Session* session);
+
+
+	static const std::map<std::string, std::function<bool(MySQL_Session& session, enum variable_name, const std::string&, bool*)>> functions;
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H

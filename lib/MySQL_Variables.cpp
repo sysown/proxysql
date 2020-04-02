@@ -10,35 +10,42 @@
 verify_var MySQL_Variables::verifiers[SQL_NAME_LAST];
 update_var MySQL_Variables::updaters[SQL_NAME_LAST];
 
+bool process_on_off(MySQL_Session& session, enum variable_name var, const std::string& value, bool* lock_hostgroup) {
+	proxy_warning("TRACE : process_on_off var %s, value %s\n", mysql_tracked_variables[var].internal_variable_name, value.c_str());
+	std::string _tmp_value="";
+	if ((strcasecmp(value.c_str(),"0")==0) || (strcasecmp(value.c_str(),"OFF")==0)) {
+		_tmp_value = "0";
+	}
+	if ((strcasecmp(value.c_str(),"1")==0) || (strcasecmp(value.c_str(),"ON")==0)) {
+		_tmp_value = "1";
+	}
+	if (!_tmp_value.empty()) {
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", mysql_tracked_variables[var].internal_variable_name, _tmp_value.c_str());
+		uint32_t hash_int=SpookyHash::Hash32(_tmp_value.c_str(),_tmp_value.length(),10);
+		if (session.mysql_variables->client_get_hash(var) != hash_int) {
+			if (!session.mysql_variables->client_set_value(var, _tmp_value.c_str()))
+				return false;
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[var].internal_variable_name, _tmp_value.c_str());
+		}
+		return true;
+	} else {
+		session.unable_to_parse_set_statement(lock_hostgroup);
+		return false;
+	}
+}
+
+const std::map<std::string, std::function<bool(MySQL_Session& session, enum variable_name, const std::string&, bool*)>> MySQL_Variables::functions = { std::make_pair(std::string("foreign_key_checks"), process_on_off) };
 
 MySQL_Variables::MySQL_Variables() {
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
-		switch(i) {
-			case SQL_SAFE_UPDATES:
-			case SQL_SELECT_LIMIT:
-			case SQL_SQL_MODE:
-			case SQL_TIME_ZONE:
-			case SQL_CHARACTER_SET_RESULTS:
-			case SQL_CHARACTER_SET_CONNECTION:
-			case SQL_CHARACTER_SET_CLIENT:
-			case SQL_CHARACTER_SET_DATABASE:
-			case SQL_ISOLATION_LEVEL:
-			case SQL_TRANSACTION_READ:
-			case SQL_SQL_AUTO_IS_NULL:
-			case SQL_COLLATION_CONNECTION:
-			case SQL_NET_WRITE_TIMEOUT:
-			case SQL_MAX_JOIN_SIZE:
-			case SQL_WSREP_SYNC_WAIT:
-			case SQL_FOREIGN_KEY_CHECKS:
-				MySQL_Variables::verifiers[i] = verify_server_variable;
-				MySQL_Variables::updaters[i] = update_server_variable;
-				break;
-			case SQL_LOG_BIN:
-				MySQL_Variables::verifiers[i] = verify_server_variable;
-				MySQL_Variables::updaters[i] = logbin_update_server_variable;
-				break;
-			default:
-				MySQL_Variables::updaters[i] = NULL;
+		updaters[i] = NULL;
+		verifiers[i] = NULL;
+		if (i == SQL_LOG_BIN) {
+			verifiers[i] = verify_server_variable;
+			updaters[i] = logbin_update_server_variable;
+		} else {
+			verifiers[i] = verify_iserver_variable;
+			updaters[i] = update_server_variable;
 		}
 	}
 }
