@@ -368,6 +368,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_charset",
 	(char *)"handle_unknown_charset",
 	(char *)"free_connections_pct",
+	(char *)"connection_warming",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_ms",
 #endif // IDLE_THREADS
@@ -566,6 +567,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.wait_timeout=8*3600*1000;
 	variables.throttle_max_bytes_per_second_to_client=0;
 	variables.throttle_ratio_server_to_client=0;
+	variables.connection_warming=false;
 	variables.max_connections=10*1000;
 	variables.max_stmts_per_connection=20;
 	variables.max_stmts_cache=10000;
@@ -912,6 +914,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 				if (!strcmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
 				if (!strcmp(name,"connection_delay_multiplex_ms")) return (int)variables.connection_delay_multiplex_ms;
 				if (!strcmp(name,"connection_max_age_ms")) return (int)variables.connection_max_age_ms;
+				if (!strcmp(name,"connection_warming")) return (int)variables.connection_warming;
 				if (!strcmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
 			}
 			break;
@@ -1489,6 +1492,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"forward_autocommit")) {
 		return strdup((variables.forward_autocommit ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"connection_warming")) {
+		return strdup((variables.connection_warming ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"enforce_autocommit_on_reads")) {
 		return strdup((variables.enforce_autocommit_on_reads ? "true" : "false"));
@@ -2843,6 +2849,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.query_cache_stores_empty_result=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"connection_warming")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.connection_warming=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.connection_warming=false;
 			return true;
 		}
 		return false;
@@ -4439,6 +4456,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
 	mysql_thread___log_unhealthy_connections=(bool)GloMTH->get_variable_int((char *)"log_unhealthy_connections");
+	mysql_thread___connection_warming=(bool)GloMTH->get_variable_int((char*)"connection_warming");
 	mysql_thread___forward_autocommit=(bool)GloMTH->get_variable_int((char *)"forward_autocommit");
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___autocommit_false_not_reusable=(bool)GloMTH->get_variable_int((char *)"autocommit_false_not_reusable");

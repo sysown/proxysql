@@ -2684,7 +2684,13 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int l=conns_length();
-	if (l && ff==false) {
+	bool needs_warming = false;
+	unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
+	unsigned int expected_warm_connections = mysql_thread___free_connections_pct*mysrvc->max_connections/100;
+	if (mysql_thread___connection_warming && (total_connections < expected_warm_connections)) {
+		needs_warming = true;
+	}
+	if (l && ff==false && needs_warming==false) {
 		if (l>32768) {
 			i=rand()%l;
 		} else {
