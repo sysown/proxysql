@@ -28,10 +28,16 @@ char* collation_id_from_collate_r(const char *collation, char* collation_id, int
 
 bool process_on_off(MySQL_Session& session, enum variable_name var, const std::string& value, bool* lock_hostgroup);
 
+struct Query_Handler {
+	Query_Handler(enum variable_name _var, std::function<bool(MySQL_Session& session, enum variable_name, const std::string&, bool*)> _function) :
+		var(_var), function(_function) {}
+	enum variable_name var;
+	std::function<bool(MySQL_Session& session, enum variable_name, const std::string&, bool*)> function;
+};
+
 class MySQL_Variables {
 	static verify_var verifiers[SQL_NAME_LAST];
 	static update_var updaters[SQL_NAME_LAST];
-
 
 public:
 	MySQL_Variables();
@@ -53,7 +59,7 @@ public:
 	bool on_connect_to_backend(MySQL_Session* session);
 
 
-	static const std::map<std::string, std::function<bool(MySQL_Session& session, enum variable_name, const std::string&, bool*)>> functions;
+	static const std::map<std::string, Query_Handler> functions;
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H

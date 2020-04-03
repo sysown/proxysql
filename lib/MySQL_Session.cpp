@@ -5366,6 +5366,16 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						exit_after_SetParse = true;
 					} else {
+						auto f = MySQL_Variables::functions.find(var);
+						if (f != MySQL_Variables::functions.end()) {
+							if ((f->second.function)(*this, f->second.var, *values, lock_hostgroup)) {
+								exit_after_SetParse = true;
+							} else {
+								unable_to_parse_set_statement(lock_hostgroup);
+								return false;
+							}
+						}
+
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
 						if (found_at != std::string::npos) {
