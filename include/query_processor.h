@@ -11,15 +11,10 @@
 #define DIGEST_STATS_FAST_THREADS   4
 
 
-#define FAST_ROUTING_NEW208
 
 
-#ifdef FAST_ROUTING_NEW208
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
-#endif
-
-#define PROXYSQL_QPRO_PTHREAD_MUTEX
 
 typedef std::unordered_map<std::uint64_t, void *> umap_query_digest;
 typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
@@ -256,27 +251,14 @@ class Query_Processor {
 	char rand_del[16];
 	umap_query_digest digest_umap;
 	umap_query_digest_text digest_text_umap;
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_t digest_rwlock;
-#else
-	rwlock_t digest_rwlock;
-	int64_t padding;	// to get rwlock cache aligned
-#endif
 	enum MYSQL_COM_QUERY_command __query_parser_command_type(SQP_par_t *qp);
 	protected:
-#ifdef PROXYSQL_QPRO_PTHREAD_MUTEX
 	pthread_rwlock_t rwlock;
-#else
-	rwlock_t rwlock;
-#endif
 	std::vector<QP_rule_t *> rules;
-#ifdef FAST_ROUTING_NEW208
 	khash_t(khStrInt) * rules_fast_routing;
 	char * rules_fast_routing___keys_values;
 	unsigned long long rules_fast_routing___keys_values___size;
-#else
-	std::unordered_map<std::string,int> rules_fast_routing;
-#endif
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 
 	// firewall
@@ -344,6 +326,7 @@ class Query_Processor {
 	void load_fast_routing(SQLite3_result *resultset);
 	SQLite3_result * get_current_query_rules_fast_routing();
 	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
+	int testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN);
 
 	// firewall
 	void load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, SQLite3_result *sf);
