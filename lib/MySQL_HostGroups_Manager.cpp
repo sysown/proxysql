@@ -1439,7 +1439,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	unsigned int l=conns_length();
 	bool needs_warming = false;
 	unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
-	unsigned int expected_warm_connections = mysql_thread___free_connections_pct*mysrvc->max_connections/100;
+	unsigned int expected_warm_connections = (mysql_thread___free_connections_pct / 100.0) * mysrvc->max_connections;
 	if (mysql_thread___connection_warming && (total_connections < expected_warm_connections)) {
 		needs_warming = true;
 	}
