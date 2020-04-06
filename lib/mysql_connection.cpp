@@ -16,37 +16,22 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 	if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CONNECTION ||
 			idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
-		if (!value)
-			ci = proxysql_find_charset_name(mysql_tracked_variables[idx].default_value);
-		else
-			ci = proxysql_find_charset_nr(atoi(value));
+		ci = proxysql_find_charset_nr(atoi(value));
 		if (!ci) {
-			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
-				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-			}
-			else {
-				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
-				assert(0);
-			}
+			proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
+			assert(0);
 		}
 
 		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
 	} else if (idx == SQL_COLLATION_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
-		if (!value)
-			ci = proxysql_find_charset_collate(mysql_tracked_variables[idx].default_value);
-		else
-			ci = proxysql_find_charset_nr(atoi(value));
+		ci = proxysql_find_charset_nr(atoi(value));
 		if (!ci) {
 			proxy_error("Cannot find charset [%s] for variable %d\n", value, idx);
 			assert(0);
 		}
 
 		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->name)?ci->name:"");
-	} else if (idx == SQL_LOG_BIN) {
-		if (!value)
-			value = mysql_tracked_variables[idx].default_value;
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(!strcmp("1",value)?"ON":"OFF");
 	} else {
 		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value?value:"");
 	}
@@ -58,13 +43,8 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_nr(atoi(value));
 		if (!ci) {
-			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
-				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-			}
-			else {
-				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
-				assert(0);
-			}
+			proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
+			assert(0);
 		}
 
 		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
@@ -77,8 +57,6 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 		}
 
 		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->name)?ci->name:"";
-	}  else if (idx == SQL_LOG_BIN) {
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = !strcmp("1", value)?"ON":"OFF";
 	} else {
 		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value?value:"";
 	}
@@ -280,7 +258,7 @@ MySQL_Connection::MySQL_Connection() {
 
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
 		variables[i].value = NULL;
-		var_hash[i] = 0;
+		variables[i].hash = 0;
 	}
 
 	options.client_flag = 0;
@@ -291,9 +269,19 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+//	options.collation_connection = NULL;
+//	options.net_write_timeout = NULL;
+//	options.max_join_size = NULL;
+//	options.collation_connection_sent = false;
+//	options.net_write_timeout_sent = false;
+//	options.max_join_size_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
+	options.sql_log_bin=1;	// default #818
+//	options.collation_connection_int=0;
+//	options.net_write_timeout_int=0;
+//	options.max_join_size_int=0;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -603,6 +591,7 @@ void MySQL_Connection::connect_start() {
 		proxy_error("Not existing charset number %s\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		assert(0);
 	}
+	proxy_warning("TRACE : INITIAL ACTION client %s, server %s\n", myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_ACTION), myds->sess->mysql_variables->server_get_value(SQL_CHARACTER_ACTION));
 	set_charset(c->nr, CONNECT_START);
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	unsigned long client_flags = 0;
@@ -736,6 +725,7 @@ void MySQL_Connection::set_names_start() {
 		proxy_error("Not existing charset number %u\n", atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
 		assert(0);
 	}
+	proxy_warning("TRACE : START SET NAMES %s\n", myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET));
 	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
 }
 
@@ -758,6 +748,7 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 void MySQL_Connection::real_query_start() {
 	PROXY_TRACE();
 	async_exit_status = mysql_real_query_start(&interr , mysql, query.ptr, query.length);
+	proxy_warning("TRACE : START SET %s\n", query.ptr);
 }
 
 void MySQL_Connection::real_query_cont(short event) {
@@ -2228,7 +2219,7 @@ void MySQL_Connection::reset() {
 	creation_time = monotonic_time();
 
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
-		var_hash[i] = 0;
+		variables[i].hash = 0;
 		if (variables[i].value) {
 			free(variables[i].value);
 			variables[i].value = NULL;
