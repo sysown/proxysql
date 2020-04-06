@@ -9,12 +9,17 @@
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 
+const char Variable::set_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "session transaction isolation level",
+	"session transaction read", "session_track_gtids", "sql_auto_is_null"};
+const char Variable::proxysql_internal_session_name[SQL_NAME_LAST][64] = {"sql_safe_updates", "sql_select_limit", "sql_mode", "time_zone", "character_set_results", "isolation_level",
+	"transaction_read", "session_track_gtids", "sql_auto_is_null"};
+
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
-	j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string(value);
+	j["backends"][conn_num]["conn"][Variable::proxysql_internal_session_name[idx]] = std::string(value);
 }
 
 void Variable::fill_client_internal_session(json &j, int idx) {
-	j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
+	j["conn"][Variable::proxysql_internal_session_name[idx]] = value;
 }
 
 #define PROXYSQL_USE_RESULT
@@ -224,19 +229,19 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
-//	options.collation_connection = NULL;
-//	options.net_write_timeout = NULL;
-//	options.max_join_size = NULL;
-//	options.collation_connection_sent = false;
-//	options.net_write_timeout_sent = false;
-//	options.max_join_size_sent = false;
+	options.collation_connection = NULL;
+	options.net_write_timeout = NULL;
+	options.max_join_size = NULL;
+	options.collation_connection_sent = false;
+	options.net_write_timeout_sent = false;
+	options.max_join_size_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.sql_log_bin=1;	// default #818
-//	options.collation_connection_int=0;
-//	options.net_write_timeout_int=0;
-//	options.max_join_size_int=0;
+	options.collation_connection_int=0;
+	options.net_write_timeout_int=0;
+	options.max_join_size_int=0;
 	options.charset=0;
 	options.charset_action=UNKNOWN;
 	compression_pkt_id=0;
@@ -315,7 +320,6 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
-/*
 	if (options.collation_connection) {
 		free(options.collation_connection);
 		options.collation_connection=NULL;
@@ -328,7 +332,6 @@ MySQL_Connection::~MySQL_Connection() {
 		free(options.max_join_size);
 		options.max_join_size=NULL;
 	}
-*/
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -2155,6 +2158,24 @@ void MySQL_Connection::reset() {
 		}
 	}
 
+	options.collation_connection_int = 0;
+	if (options.collation_connection) {
+		free (options.collation_connection);
+		options.collation_connection = NULL;
+		options.collation_connection_sent = false;
+	}
+	options.net_write_timeout_int = 0;
+	if (options.net_write_timeout) {
+		free (options.net_write_timeout);
+		options.net_write_timeout = NULL;
+		options.net_write_timeout_sent = false;
+	}
+	options.max_join_size_int = 0;
+	if (options.max_join_size) {
+		free (options.max_join_size);
+		options.max_join_size = NULL;
+		options.max_join_size_sent = false;
+	}
 	if (options.init_connect) {
 		free(options.init_connect);
 		options.init_connect = NULL;
