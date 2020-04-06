@@ -1873,7 +1873,7 @@ bool MySQL_Session::handler_again___verify_backend_net_write_timeout() {
 }
 
 bool MySQL_Session::handler_again___verify_backend_multi_statement() {
-	if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS != mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) {
+	if ((client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)) {
 
 		if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)
 			mybe->server_myds->myconn->options.client_flag |= CLIENT_MULTI_STATEMENTS;
