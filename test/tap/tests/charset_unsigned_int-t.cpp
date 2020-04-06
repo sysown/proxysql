@@ -13,7 +13,7 @@
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if(cl.getEnv())
+	if(cl.parse(argc, argv))
 		return exit_status();
 
 	plan(6);
@@ -29,12 +29,6 @@ int main(int argc, char** argv) {
 	if (!mysqlAdmin) return exit_status();
 	if (!mysql_real_connect(mysqlAdmin, cl.host, "admin", "admin", NULL, 6032, NULL, 0)) return exit_status();
 	set_admin_global_variable(mysqlAdmin, "mysql-handle_unknown_charset", "1");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_charset", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_client", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_results", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_connection", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_database", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_collation_connection", "utf8mb4_general_ci");
 	if (mysql_query(mysqlAdmin, "load mysql variables to runtime")) return exit_status();
 	if (mysql_query(mysqlAdmin, "save mysql variables to disk")) return exit_status();
 
@@ -54,7 +48,7 @@ int main(int argc, char** argv) {
 	if (version.data()[0] == '5') {
 		ok(var_value.compare("utf8mb4_general_ci") == 0, "Backend is mysql version < 8.0. Actual collation %s", var_value.c_str()); // ok_2
 	} else {
-		ok(var_value.compare("utf8mb4_croatian_ci") == 0, "Backend is mysql version >= 8.0. Actual collation %s",var_value.c_str()); // ok_2
+		ok(var_value.compare("utf8mb4_croatian_ci") == 0, "Backend is mysql version >= 8.0. Collation is set as expected to utf8mb4_croatian_ci"); // ok_2
 	}
 
 	mysql_close(mysql);
@@ -82,6 +76,7 @@ int main(int argc, char** argv) {
 	mysql_close(mysql_a);
 
 
+	// Now default charset is utf8mb4 and new client connection should use it by default
 	MYSQL* mysql_b = mysql_init(NULL);
 	if (!mysql_b) return exit_status();
 	if (!mysql_real_connect(mysql_b, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) return exit_status();
@@ -99,8 +94,6 @@ int main(int argc, char** argv) {
 
 
 	/* check initial options */
-	//set_admin_global_variable(mysqlAdmin, "mysql-default_collation_connection", "utf8mb4_general_ci");
-	//if (mysql_query(mysqlAdmin, "load mysql variables to runtime")) return exit_status();
 	MYSQL * mysql_c = mysql_init(NULL);
 	if (!mysql_c) return exit_status();
 	if (mysql_options(mysql_c, MYSQL_SET_CHARSET_NAME, "utf8mb4")) return exit_status();
