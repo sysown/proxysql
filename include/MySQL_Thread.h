@@ -100,13 +100,15 @@ class MySQL_Thread
 
 #ifdef IDLE_THREADS
 	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
-	void worker_threads_get_sessions_from_idle_threads();
+	void worker_thread_gets_sessions_from_idle_thread();
+	void idle_thread_gets_sessions_from_worker_thread();
 	void idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr);
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
 #endif // IDLE_THREADS
 
 	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
 	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
+	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
 
 	protected:
 	int nfds;
