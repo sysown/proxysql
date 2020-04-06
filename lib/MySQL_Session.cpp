@@ -2607,7 +2607,11 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
-		proxy_error("Error setting multistatemnt on server\n");
+		if (rc==-1) {
+			proxy_error("Error setting multistatement on server %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql), mysql_error(myconn->mysql));
+		} else {
+			// rc==1 , nothing to do for now
+		}
 	}
 	return ret;
 }
