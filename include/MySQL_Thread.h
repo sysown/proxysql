@@ -109,6 +109,7 @@ class MySQL_Thread
 	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
 	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
 	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
+	void handle_mirror_queue_mysql_sessions();
 
 	protected:
 	int nfds;

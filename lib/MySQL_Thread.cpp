@@ -3741,6 +3741,7 @@ void MySQL_Thread::unregister_session(int idx) {
 }
 
 
+
 // main loop
 void MySQL_Thread::run() {
 	unsigned int n;
@@ -3818,41 +3819,9 @@ __run_skip_1:
 			goto __run_skip_1a;
 		}
 #endif // IDLE_THREADS
-		while (mirror_queue_mysql_sessions->len) {
-			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > (unsigned int)mysql_thread___mirror_max_concurrency ) {
-				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-				goto __mysql_thread_exit_add_mirror; // we can't add more mirror sessions at runtime
-			} else {
-				int idx;
-				idx=fastrand()%(mirror_queue_mysql_sessions->len);
-				MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
-				register_session(newsess);
-				newsess->handler(); // execute immediately
-				if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
-					unregister_session(mysql_sessions->len-1);
-					unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
-					if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
-					if (mirror_queue_mysql_sessions_cache->len <= l) {
-						bool to_cache=true;
-						if (newsess->mybe) {
-							if (newsess->mybe->server_myds) {
-								to_cache=false;
-							}
-						}
-						if (to_cache) {
-							__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-							mirror_queue_mysql_sessions_cache->add(newsess);
-						} else {
-							delete newsess;
-						}
-					} else {
-						delete newsess;
-					}
-				}
-				//newsess->to_process=0;
-			}
-		}
-__mysql_thread_exit_add_mirror:
+
+		handle_mirror_queue_mysql_sessions();
+
 		for (n = 0; n < mypolls.len; n++) {
 			MySQL_Data_Stream *myds=NULL;
 			myds=mypolls.myds[n];
@@ -6789,4 +6758,42 @@ void MySQL_Thread::idle_thread_gets_sessions_from_worker_thread() {
 		//fprintf(stderr,"Adding session %p idx, DS %p idx %d\n",mysess,myds,myds->poll_fds_idx);
 	}
 	pthread_mutex_unlock(&myexchange.mutex_idles);
+}
+
+void MySQL_Thread::handle_mirror_queue_mysql_sessions() {
+	while (mirror_queue_mysql_sessions->len) {
+		if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > (unsigned int)mysql_thread___mirror_max_concurrency ) {
+			__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+			//goto __mysql_thread_exit_add_mirror; // we can't add more mirror sessions at runtime
+			return;
+		} else {
+			int idx;
+			idx=fastrand()%(mirror_queue_mysql_sessions->len);
+			MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
+			register_session(newsess);
+			newsess->handler(); // execute immediately
+			if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed
+				unregister_session(mysql_sessions->len-1);
+				unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
+				if (mirror_queue_mysql_sessions->len*0.3 > l) l=mirror_queue_mysql_sessions->len*0.3;
+				if (mirror_queue_mysql_sessions_cache->len <= l) {
+					bool to_cache=true;
+					if (newsess->mybe) {
+						if (newsess->mybe->server_myds) {
+							to_cache=false;
+						}
+					}
+					if (to_cache) {
+						__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+						mirror_queue_mysql_sessions_cache->add(newsess);
+					} else {
+						delete newsess;
+					}
+				} else {
+					delete newsess;
+				}
+			}
+			//newsess->to_process=0;
+		}
+	}
 }
