@@ -3848,10 +3848,10 @@ __run_skip_1:
 						tune_timeout_for_session_needs_pause(myds);
 					}
 				}
-			myds->revents=0;
-			if (myds->myds_type!=MYDS_LISTENER) {
-				configure_pollout(myds, n);
-			}
+				myds->revents=0;
+				if (myds->myds_type!=MYDS_LISTENER) {
+					configure_pollout(myds, n);
+				}
 			}
 			proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 		}
@@ -4007,40 +4007,7 @@ __run_skip_1a:
 				}
 			}
 			if (mysql_sessions->len && maintenance_loop) {
-#define	SESS_TO_SCAN	128
-				if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
-					mysess_idx=0;
-				}
-				unsigned int i;
-				unsigned long long min_idle = 0;
-				if (curtime > (unsigned long long)mysql_thread___wait_timeout*1000) {
-					min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
-				}
-				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
-					uint32_t sess_pos=mysess_idx;
-					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
-					if (mysess->idle_since < min_idle) {
-						mysess->killed=true;
-						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
-						int dsidx=tmp_myds->poll_fds_idx;
-						//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
-						mypolls.remove_index_fast(dsidx);
-						tmp_myds->mypolls=NULL;
-						mysess->thread=NULL;
-						// we first delete the association in sessmap
-						sessmap.erase(mysess->thread_session_id);
-						if (mysql_sessions->len > 1) {
-						// take the last element and adjust the map
-							MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
-							if (mysess->thread_session_id != mysess_last->thread_session_id)
-								sessmap[mysess_last->thread_session_id]=sess_pos;
-						}
-						unregister_session(sess_pos);
-						resume_mysql_sessions->add(mysess);
-						epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
-					}
-					mysess_idx++;
-				}
+				idle_thread_to_kill_idle_sessions();
 			}
 			goto __run_skip_2;
 		}
@@ -4114,6 +4081,43 @@ unsigned int MySQL_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *ses
 }
 
 #ifdef IDLE_THREADS
+void MySQL_Thread::idle_thread_to_kill_idle_sessions() {
+#define	SESS_TO_SCAN	128
+	if (mysess_idx + SESS_TO_SCAN > mysql_sessions->len) {
+		mysess_idx=0;
+	}
+	unsigned int i;
+	unsigned long long min_idle = 0;
+	if (curtime > (unsigned long long)mysql_thread___wait_timeout*1000) {
+		min_idle = curtime - (unsigned long long)mysql_thread___wait_timeout*1000;
+	}
+	for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
+		uint32_t sess_pos=mysess_idx;
+		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
+		if (mysess->idle_since < min_idle) {
+			mysess->killed=true;
+			MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+			int dsidx=tmp_myds->poll_fds_idx;
+			//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
+			mypolls.remove_index_fast(dsidx);
+			tmp_myds->mypolls=NULL;
+			mysess->thread=NULL;
+			// we first delete the association in sessmap
+			sessmap.erase(mysess->thread_session_id);
+			if (mysql_sessions->len > 1) {
+			// take the last element and adjust the map
+				MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+				if (mysess->thread_session_id != mysess_last->thread_session_id)
+					sessmap[mysess_last->thread_session_id]=sess_pos;
+			}
+			unregister_session(sess_pos);
+			resume_mysql_sessions->add(mysess);
+			epoll_ctl(efd, EPOLL_CTL_DEL, tmp_myds->fd, NULL);
+		}
+		mysess_idx++;
+	}
+}
+
 void MySQL_Thread::idle_thread_prepares_session_to_send_to_worker_thread(int i) {
 	// NOTE: not sure why, sometime events returns odd values. If set, we take it out as normal worker threads know how to handle it
 	if (events[i].events) {
