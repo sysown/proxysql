@@ -7226,3 +7226,13 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	}
 }
 
+bool MySQL_Session::has_any_backend() {
+	for (unsigned int j=0;j < mybes->len;j++) {
+		MySQL_Backend *tmp_mybe=(MySQL_Backend *)mybes->index(j);
+		MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
+		if (__myds->myconn) {
+			return true;
+		}
+	}
+	return false;
+}

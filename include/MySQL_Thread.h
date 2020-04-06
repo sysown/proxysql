@@ -98,6 +98,14 @@ class MySQL_Thread
 
 	Session_Regex **match_regexes;
 
+#ifdef IDLE_THREADS
+	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
+	void worker_threads_get_sessions_from_idle_threads();
+#endif // IDLE_THREADS
+
+	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
+	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
+
 	protected:
 	int nfds;
 
