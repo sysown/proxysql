@@ -4241,35 +4241,9 @@ __run_skip_2:
 			unsigned int w=rand()%(GloMTH->num_threads);
 			MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
-				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
-				if (shutdown==0 && thr->shutdown==0)
-				while (resume_mysql_sessions->len) {
-					MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
-					thr->myexchange.resume_mysql_sessions->add(mysess);
-				}
-				pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
-				{
-					unsigned char c=0;
-					//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
-					int fd=thr->pipefd[1];
-					if (write(fd,&c,1)==-1) {
-						//proxy_error("Error while signaling maintenance thread\n");
-					}
-				}
+				idle_thread_assigns_sessions_to_worker_thread(thr);
 			} else {
-				//VALGRIND_DISABLE_ERROR_REPORTING;
-				pthread_mutex_lock(&thr->myexchange.mutex_resumes);
-				//VALGRIND_ENABLE_ERROR_REPORTING;
-				if (shutdown==0 && thr->shutdown==0 && thr->myexchange.resume_mysql_sessions->len) {
-					unsigned char c=0;
-					int fd=thr->pipefd[1];
-					if (write(fd,&c,1)==-1) {
-						//proxy_error("Error while signaling maintenance thread\n");
-					}
-				}
-				//VALGRIND_DISABLE_ERROR_REPORTING;
-				pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
-				//VALGRIND_ENABLE_ERROR_REPORTING;
+				idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(thr);
 			}
 		} else {
 #endif // IDLE_THREADS
@@ -4295,6 +4269,37 @@ unsigned int MySQL_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *ses
 }
 
 #ifdef IDLE_THREADS
+void MySQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr) {
+	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
+	if (shutdown==0 && thr->shutdown==0 && thr->myexchange.resume_mysql_sessions->len) {
+		unsigned char c=0;
+		int fd=thr->pipefd[1];
+		if (write(fd,&c,1)==-1) {
+			//proxy_error("Error while signaling maintenance thread\n");
+		}
+	}
+	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
+}
+
+void MySQL_Thread::idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr) {
+	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
+	if (shutdown==0 && thr->shutdown==0)
+	while (resume_mysql_sessions->len) {
+		MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
+		thr->myexchange.resume_mysql_sessions->add(mysess);
+	}
+	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
+	{
+		unsigned char c=0;
+		//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
+		// we signal the thread to inform there are sessions
+		int fd=thr->pipefd[1];
+		if (write(fd,&c,1)==-1) {
+			//proxy_error("Error while signaling maintenance thread\n");
+		}
+	}
+}
+
 void MySQL_Thread::worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr) {
 	if (shutdown==0 && thr->shutdown==0 && idle_mysql_sessions->len) {
 		pthread_mutex_lock(&thr->myexchange.mutex_idles);
