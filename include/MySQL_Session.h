@@ -241,6 +241,10 @@ class MySQL_Session
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
+
+	// This method processes tracked variables according to the session_track_system_variables
+	// This method is called in all places where the async call to MySQL server is ended
+	// successfully (rc==0)
 	void track_session_variables(MYSQL* mysql);
 };
 
