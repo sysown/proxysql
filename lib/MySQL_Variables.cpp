@@ -53,6 +53,7 @@ bool MySQL_Variables::on_connect_to_backend(MySQL_Session* session) {
 	// assume galera cluster has two dashes in a version
 	char* first_dash = strstr(be_version, "-");
 	if (!first_dash || !strstr(first_dash+1, "-")) {
+		session->mybe->server_myds->myconn->var_absent[SQL_WSREP_SYNC_WAIT] = true;
 	}
 
 	return true;

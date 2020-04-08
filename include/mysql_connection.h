@@ -73,8 +73,11 @@ class MySQL_Connection {
 		bool autocommit;
 		bool no_backslash_escapes;
 	} options;
+
 	Variable variables[SQL_NAME_LAST];
 	uint32_t var_hash[SQL_NAME_LAST];
+	bool var_absent[SQL_NAME_LAST] = {false};
+
 	struct {
 		unsigned long length;
 		char *ptr;

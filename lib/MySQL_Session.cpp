@@ -2109,7 +2109,29 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 				return ret;
 			} else {
 				proxy_warning("Error while setting %s to \"%s\" on %s:%d hg %d :  %d, %s\n", var_name, var_value, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-					// we won't go back to PROCESSING_QUERY
+				if (myerr == 1193) { // variable is not found
+					int idx = SQL_NAME_LAST;
+					for (int i=0; i<SQL_NAME_LAST; i++) {
+						if (strcasecmp(mysql_tracked_variables[i].set_variable_name, var_name) == 0) {
+							idx = i;
+							break;
+						}
+					}
+					if (idx != SQL_NAME_LAST) {
+						myconn->var_absent[idx] = true;
+
+						myds->myconn->async_free_result();
+						myconn->compute_unknown_transaction_status();
+
+						myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+						myds->DSS = STATE_MARIADB_GENERIC;
+						st=previous_status.top();
+						previous_status.pop();
+						NEXT_IMMEDIATE_NEW(st);
+					}
+				}
+
+				// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
@@ -2335,6 +2357,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->myconn->send_quit = false;
 					myds->myconn->reusable = false;
 				}
+				mysql_variables.on_connect_to_backend(this);
 				NEXT_IMMEDIATE_NEW(st);
 				break;
 			case -1:
@@ -3382,7 +3405,7 @@ handler_again:
 								}
 
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
-									if(mysql_variables.verify_variable(this, i)) {
+									if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
 										goto handler_again;
 									}
 								}
@@ -5730,7 +5753,6 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		status=CONNECTING_SERVER;
 		mybe->server_myds->myconn->reusable=true;
 	} else {
-		mysql_variables.on_connect_to_backend(this);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection found = %p\n", this, mybe->server_myds->myconn);
 		mybe->server_myds->assign_fd_from_mysql_conn();
 		mybe->server_myds->myds_type=MYDS_BACKEND;
@@ -6139,6 +6161,7 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
+	mysql_variables.on_connect_to_backend(this);
 	if (new_myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, new_myds->fd, new_myds, thread->curtime);
 	}
