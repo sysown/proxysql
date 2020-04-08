@@ -14,7 +14,6 @@
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
-#include "MySQL_Variables.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -3309,7 +3308,7 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 			}
 			std::stringstream ss;
 			ss << ci->nr;
-			sess->mysql_variables->client_set_value(i, ss.str());
+			mysql_variables.client_set_value(sess, i, ss.str());
 		} else if (i == SQL_COLLATION_CONNECTION) {
 			const MARIADB_CHARSET_INFO *ci = NULL;
 			ci = proxysql_find_charset_collate(mysql_thread___default_variables[i]);
@@ -3320,9 +3319,9 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 			}
 			std::stringstream ss;
 			ss << ci->nr;
-			sess->mysql_variables->client_set_value(i, ss.str());
+			mysql_variables.client_set_value(sess, i, ss.str());
 		} else {
-			sess->mysql_variables->client_set_value(i, mysql_thread___default_variables[i]);
+			mysql_variables.client_set_value(sess, i, mysql_thread___default_variables[i]);
 		}
 	}
 

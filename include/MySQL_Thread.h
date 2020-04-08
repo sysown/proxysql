@@ -3,6 +3,7 @@
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Variables.h"
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
@@ -21,6 +22,8 @@
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
 #define MYSQL_DEFAULT_MAX_JOIN_SIZE	"18446744073709551615"
+
+extern class MySQL_Variables mysql_variables;
 
 #ifdef IDLE_THREADS
 typedef struct __attribute__((aligned(64))) _conn_exchange_t {

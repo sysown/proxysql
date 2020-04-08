@@ -1,13 +1,13 @@
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
-#include "MySQL_Variables.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Variables.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 
-class MySQL_Variables;
+extern class MySQL_Variables mysql_variables;
 
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
@@ -151,7 +151,6 @@ class MySQL_Session
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
 	char * default_schema;
-	std::unique_ptr<MySQL_Variables> mysql_variables {nullptr};
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()

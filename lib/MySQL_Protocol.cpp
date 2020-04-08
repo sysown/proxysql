@@ -1977,10 +1977,10 @@ __exit_do_auth:
 		/* We are processing handshake from client. Client sends us a character set it will use in communication.
 		 * we store this character set in the client's variables to use later in multiplexing with different backends
 		 */
-		sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
-		sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
-		sess->mysql_variables->client_set_value(SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
-		sess->mysql_variables->client_set_value(SQL_COLLATION_CONNECTION, ss.str().c_str());
+		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
+		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
+		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
+		mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
 	// enable compression
 	if (capabilities & CLIENT_COMPRESS) {

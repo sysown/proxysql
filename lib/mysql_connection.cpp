@@ -406,14 +406,14 @@ unsigned int MySQL_Connection::set_charset(unsigned int _c, enum charset_action 
 	// SQL_CHARACTER_SET should be set befor setting SQL_CHRACTER_ACTION
 	std::stringstream ss;
 	ss << _c;
-	myds->sess->mysql_variables->client_set_value(SQL_CHARACTER_SET, ss.str());
+	mysql_variables.client_set_value(myds->sess, SQL_CHARACTER_SET, ss.str());
 
 	// When SQL_CHARACTER_ACTION is set character set variables are set according to
 	// SQL_CHRACTER_SET value
 	ss.str(std::string());
 	ss.clear();
 	ss << action;
-	myds->sess->mysql_variables->client_set_value(SQL_CHARACTER_ACTION, ss.str());
+	mysql_variables.client_set_value(myds->sess, SQL_CHARACTER_ACTION, ss.str());
 
 	return _c;
 }
@@ -590,7 +590,7 @@ void MySQL_Connection::connect_start() {
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
 	/* Take client character set and use it to connect to backend */
 	if (myds && myds->sess) {
-		csname = myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET);
+		csname = mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET);
 	}
 
 	const MARIADB_CHARSET_INFO * c = NULL;
@@ -731,12 +731,12 @@ void MySQL_Connection::set_autocommit_cont(short event) {
 
 void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
-	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
 	if (!c) {
-		proxy_error("Not existing charset number %u\n", atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
+		proxy_error("Not existing charset number %u\n", atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
 		assert(0);
 	}
-	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(myds->sess->mysql_variables->client_get_value(SQL_CHARACTER_SET)));
+	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
 }
 
 void MySQL_Connection::set_names_cont(short event) {
