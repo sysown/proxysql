@@ -45,34 +45,14 @@ MySQL_Variables::MySQL_Variables() {
 
 MySQL_Variables::~MySQL_Variables() {}
 
-bool MySQL_Variables::on_connect_to_backend(MySQL_Session* session, mysql_variable_st *tracked_variables) {
+bool MySQL_Variables::on_connect_to_backend(MySQL_Session* session) {
 	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn) return false;
 	auto be_version = session->mybe->server_myds->myconn->mysql->server_version;
-
-	// verify mariadb
-	if (be_version[0] == '1') {
-		int idx = SQL_NAME_LAST;
-		for (auto i=0; i<SQL_NAME_LAST; i++) {
-			if (tracked_variables[i].idx == SQL_SESSION_TRACK_GTIDS) {
-				idx = i;
-				break;
-			}
-		}
-		tracked_variables[idx].special_handling = false;
-	}
 
 	// verify this is not galera cluster
 	// assume galera cluster has two dashes in a version
 	char* first_dash = strstr(be_version, "-");
 	if (!first_dash || !strstr(first_dash+1, "-")) {
-		int idx = SQL_NAME_LAST;
-		for (auto i=0; i<SQL_NAME_LAST; i++) {
-			if (tracked_variables[i].idx == SQL_WSREP_SYNC_WAIT) {
-				idx = i;
-				break;
-			}
-		}
-		tracked_variables[idx].special_handling = false;
 	}
 
 	return true;

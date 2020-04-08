@@ -42,7 +42,7 @@ public:
 
 	bool verify_variable(MySQL_Session* session, int idx) const;
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
-	bool on_connect_to_backend(MySQL_Session* session, mysql_variable_st* tracked_variables);
+	bool on_connect_to_backend(MySQL_Session* session);
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H
