@@ -3381,11 +3381,9 @@ handler_again:
 									goto handler_again;
 								}
 
-								if (mysql_variables.is_connected_to_backend) {
-									for (auto i = 0; i < SQL_NAME_LAST; i++) {
-										if(mysql_tracked_variables[i].special_handling && mysql_variables.verify_variable(this, i)) {
-											goto handler_again;
-										}
+								for (auto i = 0; i < SQL_NAME_LAST; i++) {
+									if(mysql_tracked_variables[i].special_handling && mysql_variables.verify_variable(this, i)) {
+										goto handler_again;
 									}
 								}
 

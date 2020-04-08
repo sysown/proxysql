@@ -75,7 +75,6 @@ bool MySQL_Variables::on_connect_to_backend(MySQL_Session* session, mysql_variab
 		tracked_variables[idx].special_handling = false;
 	}
 
-	is_connected_to_backend = true;
 	return true;
 }
 

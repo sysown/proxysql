@@ -30,7 +30,6 @@ class MySQL_Variables {
 public:
 	MySQL_Variables();
 
-	bool is_connected_to_backend;
 	virtual ~MySQL_Variables();
 
 	bool client_set_value(MySQL_Session* session, int idx, const std::string& value);
