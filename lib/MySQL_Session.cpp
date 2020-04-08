@@ -958,6 +958,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["client"]["DSS"] = client_myds->DSS;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["transaction_persistent"] = transaction_persistent;
+	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
 		if(mysql_tracked_variables[idx].special_handling) {
 			client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
@@ -1008,6 +1009,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["myconnpoll_get"] = _myconn->statuses.myconnpoll_get;
 				j["backends"][i]["conn"]["myconnpoll_put"] = _myconn->statuses.myconnpoll_put;
 				//j["backend"][i]["conn"]["charset"] = _myds->myconn->options.charset; // not used for backend
+				j["backends"][i]["conn"]["session_track_gtids"] = ( _myconn->options.session_track_gtids ? _myconn->options.session_track_gtids : "") ;
 				j["backends"][i]["conn"]["init_connect"] = ( _myconn->options.init_connect ? _myconn->options.init_connect : "");
 				j["backends"][i]["conn"]["init_connect_sent"] = _myds->myconn->options.init_connect_sent;
 				j["backends"][i]["conn"]["autocommit"] = ( _myds->myconn->options.autocommit ? "ON" : "OFF" );
@@ -1575,6 +1577,54 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 // true should jump to handler_again
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
+bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status) {
+	// be_int = backend int (hash)
+	// be_var = backend value
+	// def = default
+	// fe_int = frontend int (has)
+	// fe_var = frontend value
+	if (*be_int == 0) {
+		// it is the first time we use this backend. Set value to default
+		if (*be_var) {
+			free(*be_var);
+			*be_var = NULL;
+		}
+		*be_var = strdup(def);
+		uint32_t tmp_int = SpookyHash::Hash32(*be_var, strlen(*be_var), 10);
+		*be_int = tmp_int;
+	}
+	if (*fe_int) {
+		if (*fe_int != *be_int) {
+			{
+				*be_int = *fe_int;
+				if (*be_var) {
+					free(*be_var);
+					*be_var = NULL;
+				}
+				if (fe_var) {
+					*be_var = strdup(fe_var);
+				}
+			}
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			NEXT_IMMEDIATE_NEW(next_sess_status);
+		}
+	}
+	return false;
+}
+
 bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 	if ((client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)) {
 
@@ -1627,6 +1677,20 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 		}
 	}
 	return false;
+}
+
+bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
+	bool ret = false;
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.session_track_gtids, mybe->server_myds->myconn->options.session_track_gtids);
+	ret = handler_again___verify_backend__generic_variable(
+			&mybe->server_myds->myconn->options.session_track_gtids_int,
+			&mybe->server_myds->myconn->options.session_track_gtids,
+			mysql_thread___default_session_track_gtids,
+			&client_myds->myconn->options.session_track_gtids_int,
+			client_myds->myconn->options.session_track_gtids,
+			SETTING_SESSION_TRACK_GTIDS
+			);
+	return ret;
 }
 
 bool MySQL_Session::handler_again___verify_ldap_user_variable() {
@@ -2197,6 +2261,13 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 			// rc==1 , nothing to do for now
 		}
 	}
+	return ret;
+}
+
+bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc) {
+	bool ret=false;
+	assert(mybe->server_myds->myconn);
+	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
 	return ret;
 }
 
@@ -3404,6 +3475,10 @@ handler_again:
 									goto handler_again;
 								}
 
+								if (handler_again___verify_backend_session_track_gtids()) {
+									goto handler_again;
+								}
+
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
 									if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
 										goto handler_again;
@@ -3911,6 +3986,19 @@ handler_again:
 			}
 			break;
 
+		case SETTING_SESSION_TRACK_GTIDS:
+			{
+				int rc=0;
+				if (handler_again___status_SETTING_SESSION_TRACK_GTIDS(&rc))
+					goto handler_again;     // we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
+			break;
+
+
 		case SETTING_SQL_MODE:
 		case SETTING_SQL_SELECT_LIMIT:
 		case SETTING_SQL_SAFE_UPDATES:
@@ -3921,7 +4009,6 @@ handler_again:
 		case SETTING_CHARACTER_SET_DATABASE:
 		case SETTING_ISOLATION_LEVEL:
 		case SETTING_TRANSACTION_READ:
-		case SETTING_SESSION_TRACK_GTIDS:
 		case SETTING_SQL_AUTO_IS_NULL:
 		case SETTING_COLLATION_CONNECTION:
 		case SETTING_NET_WRITE_TIMEOUT:
@@ -5001,10 +5088,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if ((strcasecmp(value1.c_str(),"OWN_GTID")==0) || (strcasecmp(value1.c_str(),"OFF")==0)) {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET session_track_gtids value %s\n", value1.c_str());
 							uint32_t session_track_gtids_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (mysql_variables.client_get_hash(this, SQL_SESSION_TRACK_GTIDS) != session_track_gtids_int) {
-								if (!mysql_variables.client_set_value(this, SQL_SESSION_TRACK_GTIDS, value1.c_str()))
-									return false;
+							if (client_myds->myconn->options.session_track_gtids_int != session_track_gtids_int) {
+								client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
+								if (client_myds->myconn->options.session_track_gtids) {
+									free(client_myds->myconn->options.session_track_gtids);
+								}
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection session_track_gtids to %s\n", value1.c_str());
+								client_myds->myconn->options.session_track_gtids=strdup(value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {

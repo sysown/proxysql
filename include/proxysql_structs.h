@@ -160,7 +160,6 @@ enum variable_name {
 	SQL_CHARACTER_SET_DATABASE,
 	SQL_ISOLATION_LEVEL,
 	SQL_TRANSACTION_READ,
-	SQL_SESSION_TRACK_GTIDS,
 	SQL_SQL_AUTO_IS_NULL,
 	SQL_COLLATION_CONNECTION,
 	SQL_NET_WRITE_TIMEOUT,
@@ -696,6 +695,7 @@ __thread char *mysql_thread___keep_multiplexing_variables;
 __thread char *mysql_thread___init_connect;
 __thread char *mysql_thread___ldap_user_variable;
 __thread char *mysql_thread___default_tx_isolation;
+__thread char *mysql_thread___default_session_track_gtids;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___automatic_detect_sqli;
@@ -840,6 +840,7 @@ extern __thread char *mysql_thread___keep_multiplexing_variables;
 extern __thread char *mysql_thread___init_connect;
 extern __thread char *mysql_thread___ldap_user_variable;
 extern __thread char *mysql_thread___default_tx_isolation;
+extern __thread char *mysql_thread___default_session_track_gtids;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___automatic_detect_sqli;
@@ -999,7 +1000,6 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_CHARACTER_SET_DATABASE, SETTING_CHARACTER_SET_DATABASE,   false,  false, true, (char *)"character_set_database", (char *)"character_set_database", (char *)"UTF8" } ,
 	{ SQL_ISOLATION_LEVEL, SETTING_ISOLATION_LEVEL,             false, true,  true,  (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" } ,
 	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ,           false, true,  true,  (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" } ,
-	{ SQL_SESSION_TRACK_GTIDS, SETTING_SESSION_TRACK_GTIDS,     false, false, true, (char *)"session_track_gtids" , (char *)"session_track_gtids" , (char *)"OFF" } ,
     { SQL_SQL_AUTO_IS_NULL, SETTING_SQL_AUTO_IS_NULL,           true, false, true, (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" } ,
     { SQL_COLLATION_CONNECTION, SETTING_COLLATION_CONNECTION,   true,  false, true, (char *)"COLLATION_CONNECTION", (char *)"collation_connection", (char *)"utf8_general_ci" } ,
     { SQL_NET_WRITE_TIMEOUT, SETTING_NET_WRITE_TIMEOUT,         false, false, true, (char *)"NET_WRITE_TIMEOUT", (char *)"net_write_timeout", (char *)"60" } ,

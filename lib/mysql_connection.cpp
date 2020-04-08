@@ -291,9 +291,12 @@ MySQL_Connection::MySQL_Connection() {
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
+	options.session_track_gtids = NULL;
+	options.session_track_gtids_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
+	options.session_track_gtids_int=0;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -361,6 +364,11 @@ MySQL_Connection::~MySQL_Connection() {
 	}
 	if (query.stmt) {
 		query.stmt=NULL;
+	}
+
+	if (options.session_track_gtids) {
+		free(options.session_track_gtids);
+		options.session_track_gtids=NULL;
 	}
 
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
@@ -2248,6 +2256,12 @@ void MySQL_Connection::reset() {
 		}
 		options.ldap_user_variable = NULL;
 		options.ldap_user_variable_sent = false;
+	}
+	options.session_track_gtids_int = 0;
+	if (options.session_track_gtids) {
+		free (options.session_track_gtids);
+		options.session_track_gtids = NULL;
+		options.session_track_gtids_sent = false;
 	}
 }
 
