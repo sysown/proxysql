@@ -1,6 +1,6 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
-#include "prometheus/gauge.h"
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "thread.h"
@@ -272,6 +272,7 @@ class MySQL_Monitor {
 		prometheus::Counter* p_replication_lag_check_OK { nullptr };
 		prometheus::Counter* p_replication_lag_check_ERR { nullptr };
 	} metrics;
+	void p_update_metrics();
 	std::unique_ptr<wqueue<WorkItem*>> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
 	bool shutdown;

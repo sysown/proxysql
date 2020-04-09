@@ -10,6 +10,8 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <prometheus/counter.h>
+#include "MySQL_Monitor.hpp"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -609,37 +611,96 @@ MySQL_Monitor::MySQL_Monitor() {
 	}
 */
 
-	// Create and register prometheus metrics families
-	auto& new_gauge_family {
-		prometheus::BuildGauge()
-			.Name("MySQL_Monitor_Gauges")
-			.Register(*GloVars.prometheus_registry)
-	};
-	auto& new_counter_family {
-		prometheus::BuildCounter()
-			.Name("MySQL_Monitor_Counters")
-			.Register(*GloVars.prometheus_registry)
-	};
-
 	// Initialize prometheus metrics
+	auto& mysql_monitor_workers {
+		prometheus::BuildGauge()
+			.Name("proxysql_mysql_monitor_workers")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_num_threads =
-		std::addressof(new_gauge_family.Add({{ "id", "MySQL_Monitor_Workers" }}));
+		std::addressof(mysql_monitor_workers.Add({}));
+
+	auto& mysql_monitor_workers_aux {
+		prometheus::BuildGauge()
+			.Name("proxysql_mysql_monitor_workers_aux")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_aux_threads =
-		std::addressof(new_gauge_family.Add({{ "id", "MySQL_Monitor_Workers_Aux" }}));
+		std::addressof(mysql_monitor_workers_aux.Add({}));
+
+	auto& mysql_monitor_workers_started {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_workers_started")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_started_threads =
-		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_Workers_Started" }}));
+		std::addressof(mysql_monitor_workers_started.Add({}));
+
+	// TODO: Check unit
+	auto& mysql_monitor_connect_check_ok {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_connect_check_ok")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_connect_check_OK =
-		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_connect_check_OK" }}));
+		std::addressof(mysql_monitor_connect_check_ok.Add({}));
+
+	auto& mysql_monitor_connect_check_err {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_connect_check_err")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_connect_check_ERR =
-		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_connect_check_ERR" }}));
+		std::addressof(mysql_monitor_connect_check_err.Add({}));
+
+	auto& mysql_monitor_ping_check_ok {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_ping_check_ok")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_ping_check_OK =
-		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_ping_check_OK" }}));
+		std::addressof(mysql_monitor_ping_check_ok.Add({}));
+
+	auto& mysql_monitor_ping_check_err {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_ping_check_err")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_ping_check_ERR =
-		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_ping_check_ERR" }}));
+		std::addressof(mysql_monitor_ping_check_err.Add({}));
+
+	auto& mysql_monitor_read_only_check_ok {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_read_only_check_ok")
+			.Register(*GloVars.prometheus_registry)
+	};
+	this->metrics.p_read_only_check_OK =
+		std::addressof(mysql_monitor_read_only_check_ok.Add({}));
+
+	auto& mysql_monitor_read_only_check_err {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_read_only_check_err")
+			.Register(*GloVars.prometheus_registry)
+	};
+	this->metrics.p_read_only_check_ERR =
+		std::addressof(mysql_monitor_read_only_check_err.Add({}));
+
+	auto& mysql_monitor_replication_lag_check_ok {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_replication_lag_check_ok")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_replication_lag_check_OK =
-		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_read_only_check_OK" }}));
+		std::addressof(mysql_monitor_replication_lag_check_ok.Add({}));
+
+	auto& mysql_monitor_replication_lag_check_err {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_monitor_replication_lag_check_err")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->metrics.p_replication_lag_check_ERR =
-		std::addressof(new_counter_family.Add({{ "id", "MySQL_Monitor_read_only_check_ERR" }}));
+		std::addressof(mysql_monitor_replication_lag_check_err.Add({}));
+
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -669,6 +730,34 @@ MySQL_Monitor::~MySQL_Monitor() {
 	AWS_Aurora_Hosts_Map.clear();
 };
 
+void MySQL_Monitor::p_update_metrics() {
+	if (GloMyMon) {
+		this->metrics.p_num_threads->Set(GloMyMon->num_threads);
+		this->metrics.p_aux_threads->Set(GloMyMon->aux_threads);
+		const auto& cur_started_threads { this->metrics.p_started_threads->Value() };
+		this->metrics.p_started_threads->Increment(GloMyMon->started_threads - cur_started_threads);
+
+		const auto& cur_connect_ok { this->metrics.p_connect_check_OK->Value() };
+		this->metrics.p_connect_check_OK->Increment(GloMyMon->connect_check_OK - cur_connect_ok);
+		const auto& cur_connect_err { this->metrics.p_connect_check_ERR->Value() };
+		this->metrics.p_connect_check_ERR->Increment(GloMyMon->connect_check_ERR - cur_connect_err);
+
+		const auto& cur_ping_check_ok { this->metrics.p_ping_check_OK->Value() };
+		this->metrics.p_ping_check_OK->Increment(GloMyMon->ping_check_OK - cur_ping_check_ok);
+		const auto& cur_ping_check_err { this->metrics.p_ping_check_ERR->Value() };
+		this->metrics.p_ping_check_ERR->Increment(GloMyMon->ping_check_ERR - cur_ping_check_err);
+
+		const auto& cur_read_only_check_ok { this->metrics.p_read_only_check_OK->Value() };
+		this->metrics.p_read_only_check_OK->Increment(GloMyMon->read_only_check_OK - cur_read_only_check_ok);
+		const auto& cur_read_only_check_err { this->metrics.p_read_only_check_ERR->Value() };
+		this->metrics.p_read_only_check_ERR->Increment(GloMyMon->read_only_check_ERR - cur_read_only_check_err);
+
+		const auto& cur_replication_lag_check_ok { this->metrics.p_replication_lag_check_OK->Value() };
+		this->metrics.p_replication_lag_check_OK->Increment(GloMyMon->replication_lag_check_OK - cur_replication_lag_check_ok);
+		const auto& cur_replication_lag_check_err { this->metrics.p_replication_lag_check_ERR->Value() };
+		this->metrics.p_replication_lag_check_ERR->Increment(GloMyMon->replication_lag_check_ERR - cur_replication_lag_check_err);
+	}
+}
 
 void MySQL_Monitor::print_version() {
 	fprintf(stderr,"Standard MySQL Monitor (StdMyMon) rev. %s -- %s -- %s\n", MYSQL_MONITOR_VERSION, __FILE__, __TIMESTAMP__);
