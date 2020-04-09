@@ -60,11 +60,18 @@ bool MySQL_Variables::on_connect_to_backend(MySQL_Session* session) {
 
 
 bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx, const std::string& value, uint32_t hash) {
+	if (!session || !session->client_myds || !session->client_myds->myconn) {
+		proxy_warning("Session validation failed\n");
+		return false;
+	}
+
 	session->client_myds->myconn->var_hash[idx] = hash;
 	if (session->client_myds->myconn->variables[idx].value) {
 		free(session->client_myds->myconn->variables[idx].value);
 	}
 	session->client_myds->myconn->variables[idx].value = strdup(value.c_str());
+
+	return true;
 }
 
 bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const std::string& value) {
@@ -83,17 +90,23 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 		// SET NAMES command from client
 		if (value == "1") {
 			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET)) {
-				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CONNECTION, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_hash_and_value(session, SQL_COLLATION_CONNECTION, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
+				const char* value = mysql_variables.client_get_value(session, SQL_CHARACTER_SET);
+				uint32_t hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET);
+
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, value, hash);
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, value, hash);
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CONNECTION, value, hash);
+				mysql_variables.client_set_hash_and_value(session, SQL_COLLATION_CONNECTION, value, hash);
 			}
 		}
 		// SET CHARSET command from client
 		else if (value == "2") {
 			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET)) {
-				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
+				const char* value = mysql_variables.client_get_value(session, SQL_CHARACTER_SET);
+				uint32_t hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET);
+
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, value, hash);
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, value, hash);
 			}
 			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET_DATABASE)) {
 				const MARIADB_CHARSET_INFO *ci = NULL;
