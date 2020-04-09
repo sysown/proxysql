@@ -33,6 +33,7 @@ public:
 	virtual ~MySQL_Variables();
 
 	bool client_set_value(MySQL_Session* session, int idx, const std::string& value);
+	bool client_set_hash_and_value(MySQL_Session* session, int idx, const std::string& value, uint32_t hash);
 	const char* client_get_value(MySQL_Session* session, int idx) const;
 	uint32_t client_get_hash(MySQL_Session* session, int idx) const;
 

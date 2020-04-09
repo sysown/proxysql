@@ -58,6 +58,15 @@ bool MySQL_Variables::on_connect_to_backend(MySQL_Session* session) {
 	return true;
 }
 
+
+bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx, const std::string& value, uint32_t hash) {
+	session->client_myds->myconn->var_hash[idx] = hash;
+	if (session->client_myds->myconn->variables[idx].value) {
+		free(session->client_myds->myconn->variables[idx].value);
+	}
+	session->client_myds->myconn->variables[idx].value = strdup(value.c_str());
+}
+
 bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const std::string& value) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");
@@ -74,17 +83,17 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 		// SET NAMES command from client
 		if (value == "1") {
 			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET)) {
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.client_get_value(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.client_get_value(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_CONNECTION, mysql_variables.client_get_value(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_value(session, SQL_COLLATION_CONNECTION, mysql_variables.client_get_value(session, SQL_CHARACTER_SET));
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CONNECTION, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
+				mysql_variables.client_set_hash_and_value(session, SQL_COLLATION_CONNECTION, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
 			}
 		}
 		// SET CHARSET command from client
 		else if (value == "2") {
 			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET)) {
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.client_get_value(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.client_get_value(session, SQL_CHARACTER_SET));
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.client_get_value(session, SQL_CHARACTER_SET), mysql_variables.client_get_hash(session, SQL_CHARACTER_SET));
 			}
 			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET_DATABASE)) {
 				const MARIADB_CHARSET_INFO *ci = NULL;
@@ -103,15 +112,6 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 				ss << nr;
 
 				mysql_variables.client_set_value(session, SQL_COLLATION_CONNECTION, ss.str());
-			}
-		}
-		// SET NAMES during handshake etc.
-		else if (value == "3") {
-			if (mysql_variables.server_get_value(session, SQL_CHARACTER_SET)) {
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.server_get_value(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.server_get_value(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_CONNECTION, mysql_variables.server_get_value(session, SQL_CHARACTER_SET));
-				mysql_variables.client_set_value(session, SQL_COLLATION_CONNECTION, mysql_variables.server_get_value(session, SQL_CHARACTER_SET));
 			}
 		}
 	}

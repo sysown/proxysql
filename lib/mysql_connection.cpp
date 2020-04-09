@@ -611,7 +611,19 @@ void MySQL_Connection::connect_start() {
 		proxy_error("Not existing charset number %s\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		assert(0);
 	}
-	set_charset(c->nr, CONNECT_START);
+	{
+		/* We are connecting to backend setting charset in mysql_options.
+		 * Client already has sent us a character set and client connection variables have been already set.
+		 * Now we store this charset in server connection variables to avoid updating this variables on backend.
+		 */
+		std::stringstream ss;
+		ss << c->nr;
+
+		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
+		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
+		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
+		mysql_variables.server_set_value(myds->sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
+	}
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	unsigned long client_flags = 0;
 	//if (mysql_thread___client_found_rows)
