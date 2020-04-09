@@ -1,5 +1,6 @@
 #ifndef __CLASS_QUERY_CACHE_H
 #define __CLASS_QUERY_CACHE_H
+
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -11,6 +12,8 @@
 #define DEFAULT_purge_threshold_pct_min 3
 #define DEFAULT_purge_threshold_pct_max 90
 
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
 
 class KV_BtreeArray;
 
@@ -35,7 +38,18 @@ class Query_Cache {
 	KV_BtreeArray * KVs[SHARED_QUERY_CACHE_HASH_TABLES];
 	uint64_t get_data_size_total();
 	unsigned int current_used_memory_pct();
+	struct {
+		prometheus::Gauge* p_query_cache_mem_bytes { nullptr };
+		prometheus::Counter* p_query_cache_count_get { nullptr };
+		prometheus::Counter* p_query_cache_count_get_ok { nullptr };
+		prometheus::Counter* p_query_cache_count_set { nullptr };
+		prometheus::Counter* p_query_cache_bytes_in { nullptr };
+		prometheus::Counter* p_query_cache_bytes_out { nullptr };
+		prometheus::Counter* p_query_cache_purged { nullptr };
+		prometheus::Counter* p_query_cache_entries { nullptr };
+	} metrics;
 	public:
+	void p_update_metrics();
 	void * purgeHash_thread(void *);
 	int size;
 	int shutdown;
