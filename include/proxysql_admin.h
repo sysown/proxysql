@@ -1,7 +1,10 @@
 #ifndef __CLASS_PROXYSQL_ADMIN_H
 #define __CLASS_PROXYSQL_ADMIN_H
 
-#include "prometheus/exposer.h"
+#include <prometheus/exposer.h>
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -120,6 +123,34 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 	} variables;
 
+	struct {
+		prometheus::Gauge* p_sqlite3_memory_bytes { nullptr };
+		prometheus::Gauge* p_jemalloc_resident { nullptr };
+		prometheus::Gauge* p_jemalloc_active { nullptr };
+		prometheus::Counter* p_jemalloc_allocated { nullptr };
+		prometheus::Gauge* p_jemalloc_mapped { nullptr };
+		prometheus::Gauge* p_jemalloc_metadata { nullptr };
+		prometheus::Gauge* p_jemalloc_retained { nullptr };
+		prometheus::Gauge* p_auth_memory { nullptr };
+		prometheus::Gauge* p_query_digest_memory { nullptr };
+		prometheus::Gauge* p_mysql_query_rules_memory { nullptr };
+		prometheus::Gauge* p_mysql_firewall_users_table { nullptr };
+		prometheus::Gauge* p_mysql_firewall_users_config { nullptr };
+		prometheus::Gauge* p_mysql_firewall_rules_table { nullptr };
+		prometheus::Gauge* p_mysql_firewall_rules_config { nullptr };
+		prometheus::Gauge* p_stack_memory_mysql_threads { nullptr };
+		prometheus::Gauge* p_stack_memory_admin_threads { nullptr };
+		prometheus::Gauge* p_stack_memory_cluster_threads { nullptr };
+	} p_stats_memory_metrics;
+
+	struct {
+		prometheus::Gauge* p_stmt_client_active_total { nullptr };
+		prometheus::Gauge* p_stmt_client_active_unique { nullptr };
+		prometheus::Gauge* p_stmt_server_active_total { nullptr };
+		prometheus::Gauge* p_stmt_server_active_unique { nullptr };
+		prometheus::Gauge* p_stmt_max_stmt_id { nullptr };
+		prometheus::Gauge* p_stmt_cached { nullptr };
+	} p_stmt_metrics;
 
 	ProxySQL_External_Scheduler *scheduler;
 
@@ -270,6 +301,10 @@ class ProxySQL_Admin {
 	void stats___proxysql_servers_metrics();
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
+
+	// Update prometheus metrics
+	void p_stats___memory_metrics();
+	void p_update_stmt_metrics();
 
 	ProxySQL_Config& proxysql_config();
 	ProxySQL_Restapi& proxysql_restapi();
