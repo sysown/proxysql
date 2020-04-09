@@ -373,21 +373,17 @@ class MySQL_HostGroups_Manager {
 		prometheus::Counter* p_access_denied_wrong_password { nullptr };
 		prometheus::Counter* p_access_denied_max_connections { nullptr };
 		prometheus::Counter* p_access_denied_max_user_connections { nullptr };
-		/// TODO: Prometheus myconnpoll metrics
-		prometheus::Counter* p_myconnpoll_get { nullptr };
-		prometheus::Counter* p_myconnpoll_get_ok { nullptr };
-		prometheus::Counter* p_myconnpoll_get_ping { nullptr };
-		prometheus::Counter* p_myconnpoll_push { nullptr };
-		prometheus::Counter* p_myconnpoll_reset { nullptr };
-		prometheus::Counter* p_myconnpoll_destroy { nullptr };
+
 		/// Prometheus backend metrics
 		prometheus::Counter* p_backend_change_user { nullptr };
 		prometheus::Counter* p_backend_init_db { nullptr };
 		prometheus::Counter* p_backend_set_names { nullptr };
+
 		/// Prometheus frontend metrics
 		prometheus::Counter* p_frontend_init_db { nullptr };
 		prometheus::Counter* p_frontend_set_names { nullptr };
 		prometheus::Counter* p_frontend_use_db { nullptr };
+
 		/// Prometheus ** metrics
 		prometheus::Counter* p_autocommit_cnt { nullptr };
 		prometheus::Counter* p_commit_cnt { nullptr };
@@ -397,8 +393,35 @@ class MySQL_HostGroups_Manager {
 		prometheus::Counter* p_rollback_cnt_filtered { nullptr };
 		prometheus::Counter* p_select_for_update_or_equivalent { nullptr };
 
+		/// TODO: Prometheus myconnpoll metrics
+		prometheus::Counter* p_myconnpoll_get { nullptr };
+		prometheus::Counter* p_myconnpoll_get_ok { nullptr };
+		prometheus::Counter* p_myconnpoll_push { nullptr };
+		prometheus::Counter* p_myconnpoll_reset { nullptr };
+		prometheus::Counter* p_myconnpoll_destroy { nullptr };
+
+		/// Prometheus connection_pool metrics
+		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_recv_map {};
+		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_sent_map {};
+		std::map<std::string, prometheus::Counter*> p_connection_pool_conn_err_map {};
+		std::map<std::string, prometheus::Gauge*> p_connection_pool_conn_free_map {};
+		std::map<std::string, prometheus::Counter*> p_connection_pool_conn_ok_map {};
+		std::map<std::string, prometheus::Gauge*> p_connection_pool_conn_used_map {};
+		std::map<std::string, prometheus::Gauge*> p_connection_pool_latency_us_map {};
+		std::map<std::string, prometheus::Counter*> p_connection_pool_queries_map {};
+		std::map<std::string, prometheus::Gauge*> p_connection_pool_status_map {};
+
 		//////////////////////////////////////////////////////
 	} status;
+	/**
+	 * @brief Update the prometheus connection_pool counters.
+	 */
+	void p_update_connection_pool();
+	/**
+	 * @brief Update 'myconnpoll' prometheus counters.
+	 */
+	void p_update_myconnpoll();
+
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
