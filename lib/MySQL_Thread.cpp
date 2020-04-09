@@ -654,115 +654,370 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	__global_MySQL_Thread_Variables_version=1;
 	MLM = new MySQL_Listeners_Manager();
 
-	// Create and register prometheus metrics
-	auto& new_gauge_family {
-		prometheus::BuildGauge()
-			.Name("MySQL_Threads_Handler_Gauges")
-			.Register(*GloVars.prometheus_registry)
-	};
-	auto& new_counter_family {
-		prometheus::BuildCounter()
-			.Name("MySQL_Threads_Handler_Counters")
-			.Register(*GloVars.prometheus_registry)
-	};
-
 	// Initialize prometheus metrics
+	auto& active_transactions {
+		prometheus::BuildGauge()
+			.Name("proxysql_active_transactions")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_active_transations =
-		std::addressof(new_gauge_family.Add({{ "id", "Active_Transactions" }}));
+		std::addressof(active_transactions.Add({}));
+
+	auto& non_idle_client_connections {
+		prometheus::BuildGauge()
+			.Name("proxysql_non_idle_client_connections")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_non_idle_client_connections =
-		std::addressof(new_gauge_family.Add({{ "id", "Client_Connections_non_idle" }}));
+		std::addressof(non_idle_client_connections.Add({}));
+
+	auto& queries_backends_bytes_sent {
+		prometheus::BuildCounter()
+			.Name("proxysql_queries_backends_bytes_sent")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_queries_backends_bytes_sent =
-		std::addressof(new_counter_family.Add({{ "id", "Queries_backends_bytes_sent" }}));
+		std::addressof(queries_backends_bytes_sent.Add({}));
+
+	auto& queries_backends_bytes_recv {
+		prometheus::BuildCounter()
+			.Name("proxysql_queries_backends_bytes_recv")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_queries_backends_bytes_recv =
-		std::addressof(new_counter_family.Add({{ "id", "Queries_backends_bytes_recv" }}));
+		std::addressof(queries_backends_bytes_recv.Add({}));
+
+	auto& queries_frontends_bytes_sent {
+		prometheus::BuildCounter()
+			.Name("proxysql_queries_frontends_bytes_sent")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_queries_frontends_bytes_sent =
-		std::addressof(new_counter_family.Add({{ "id", "Queries_frontends_bytes_sent" }}));
+		std::addressof(queries_frontends_bytes_sent.Add({}));
+
+	auto& queries_frontends_bytes_recv {
+		prometheus::BuildCounter()
+			.Name("proxysql_queries_frontends_bytes_recv")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_queries_frontends_bytes_recv =
-		std::addressof(new_counter_family.Add({{ "id", "Queries_frontends_bytes_recv" }}));
+		std::addressof(queries_frontends_bytes_recv.Add({}));
+
+	// TODO: Change the unit
+	auto& query_processor_time_nsec {
+		prometheus::BuildCounter()
+			.Name("proxysql_query_processor_time_nsec")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_query_processor_time =
-		std::addressof(new_counter_family.Add({{ "id", "Query_Processor_time_nsec" }}));
+		std::addressof(query_processor_time_nsec.Add({}));
+
+	auto& backend_query_time_nsec {
+		prometheus::BuildCounter()
+			.Name("proxysql_backend_query_time_nsec")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_backend_query_time =
-		std::addressof(new_counter_family.Add({{ "id", "Backend_query_time_nsec" }}));
+		std::addressof(backend_query_time_nsec.Add({}));
+
+	auto& mysql_backend_buffers_bytes {
+		prometheus::BuildGauge()
+			.Name("proxysql_mysql_backend_buffers_bytes")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_mysql_backend_buffers_bytes =
-		std::addressof(new_gauge_family.Add({{ "id", "mysql_backend_buffers_bytes" }}));
+		std::addressof(mysql_backend_buffers_bytes.Add({}));
+
+	auto& mysql_frontend_buffers_bytes {
+		prometheus::BuildGauge()
+			.Name("proxysql_mysql_frontend_buffers_bytes")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_mysql_frontend_buffers_bytes =
-		std::addressof(new_gauge_family.Add({{ "id", "mysql_frontend_buffers_bytes" }}));
+		std::addressof(mysql_frontend_buffers_bytes.Add({}));
+
+	auto& proxysql_mysql_session_internal_bytes {
+		prometheus::BuildGauge()
+			.Name("proxysql_mysql_session_internal_bytes")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_mysql_session_internal_bytes =
-		std::addressof(new_gauge_family.Add({{ "id", "mysql_session_internal_bytes" }}));
+		std::addressof(proxysql_mysql_session_internal_bytes.Add({}));
+
+	auto& com_backend_stmt_prepare {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_backend_stmt_prepare")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_backend_stmt_prepare =
-		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_prepare" }}));
+		std::addressof(com_backend_stmt_prepare.Add({}));
+
+	auto& com_backend_stmt_execute {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_backend_stmt_execute")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_backend_stmt_execute =
-		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_execute" }}));
-	this->status_variables.p_total_backend_stmt_prepare =
-		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_prepare" }}));
-	this->status_variables.p_total_backend_stmt_execute =
-		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_execute" }}));
+		std::addressof(com_backend_stmt_execute.Add({}));
+
+	auto& com_backend_stmt_close {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_backend_stmt_close")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_backend_stmt_close =
-		std::addressof(new_counter_family.Add({{ "id", "Com_backend_stmt_close" }}));
+		std::addressof(com_backend_stmt_close.Add({}));
+
+	auto& com_frontend_stmt_prepare {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_frontend_stmt_prepare")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_frontend_stmt_prepare =
-		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_stmt_prepare" }}));
+		std::addressof(com_frontend_stmt_prepare.Add({}));
+
+	auto& com_frontend_stmt_execute {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_frontend_stmt_execute")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_frontend_stmt_execute =
-		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_stmt_execute" }}));
+		std::addressof(com_frontend_stmt_execute.Add({}));
+
+	auto& com_frontend_stmt_close {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_frontend_stmt_close")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_frontend_stmt_close =
-		std::addressof(new_counter_family.Add({{ "id", "Com_frontend_stmt_close" }}));
+		std::addressof(com_frontend_stmt_close.Add({}));
+
+	auto& mirror_concurrency {
+		prometheus::BuildGauge()
+			.Name("proxysql_mirror_concurrency")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_mirror_sessions_current =
-		std::addressof(new_gauge_family.Add({{ "id", "Mirror_concurrency" }}));
+		std::addressof(mirror_concurrency.Add({}));
+
+	// TODO: Check units
+	auto& mirror_queue_lengths {
+		prometheus::BuildGauge()
+			.Name("proxysql_mirror_queue_lengths")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_mirror_queue =
-		std::addressof(new_gauge_family.Add({{ "id", "Mirror_queue_length" }}));
+		std::addressof(mirror_queue_lengths.Add({}));
+
+	auto& questions {
+		prometheus::BuildCounter()
+			.Name("proxysql_questions")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_total_queries =
-		std::addressof(new_counter_family.Add({{ "id", "Questions" }}));
+		std::addressof(questions.Add({}));
+
+	auto& slow_queries {
+		prometheus::BuildCounter()
+			.Name("proxysql_slow_queries")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_slow_queries =
-		std::addressof(new_counter_family.Add({{ "id", "Slow_queries" }}));
+		std::addressof(slow_queries.Add({}));
+
+	// TODO: Always lowercase?
+	auto& gtid_consistent_queries {
+		prometheus::BuildCounter()
+			.Name("proxysql_gtid_consistent_queries")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_gtid_queries =
-		std::addressof(new_counter_family.Add({{ "id", "GTID_consistent_queries" }}));
+		std::addressof(gtid_consistent_queries.Add({}));
+
+	auto& gtid_session_collected {
+		prometheus::BuildCounter()
+			.Name("proxysql_gtid_session_collected")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_gtid_session_collected =
-		std::addressof(new_counter_family.Add({{ "id", "GTID_session_collected" }}));
+		std::addressof(gtid_session_collected.Add({}));
+
+	auto& num_threads {
+		prometheus::BuildGauge()
+			.Name("proxysql_mysql_thread_workers")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_num_threads =
-		std::addressof(new_gauge_family.Add({{ "id", "MySQL_Thread_Workers" }}));
+		std::addressof(num_threads.Add({}));
+
+	auto& connpool_get_conn_latency_awareness {
+		prometheus::BuildCounter()
+			.Name("proxysql_connpool_get_conn_latency_awareness")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_ConnPool_get_conn_latency_awareness =
-		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_latency_awareness" }}));
+		std::addressof(connpool_get_conn_latency_awareness.Add({}));
+
+	auto& connpool_get_conn_immediate {
+		prometheus::BuildCounter()
+			.Name("proxysql_connpool_get_conn_immediate")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_ConnPool_get_conn_immediate =
-		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_immediate" }}));
+		std::addressof(connpool_get_conn_immediate.Add({}));
+
+	auto& connpool_get_conn_success {
+		prometheus::BuildCounter()
+			.Name("proxysql_connpool_get_conn_success")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_ConnPool_get_conn_success =
-		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_success" }}));
+		std::addressof(connpool_get_conn_success.Add({}));
+
+	auto& connpool_get_conn_failure {
+		prometheus::BuildCounter()
+			.Name("proxysql_connpool_get_conn_failure")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_ConnPool_get_conn_failure =
-		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_failure" }}));
-	this->status_variables.p_ConnPool_get_conn_latency_awareness =
-		std::addressof(new_counter_family.Add({{ "id", "ConnPool_get_conn_latency_awareness" }}));
+		std::addressof(connpool_get_conn_failure.Add({}));
+
+	auto& generated_error_packets {
+		prometheus::BuildCounter()
+			.Name("proxysql_generated_error_packets")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_generated_error_packets =
-		std::addressof(new_counter_family.Add({{ "id", "generated_error_packets" }}));
+		std::addressof(generated_error_packets.Add({}));
+
+	auto& max_connect_timeouts {
+		prometheus::BuildCounter()
+			.Name("proxysql_max_connect_timeouts")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_max_connect_timeout =
-		std::addressof(new_counter_family.Add({{ "id", "max_connect_timeouts" }}));
+		std::addressof(max_connect_timeouts.Add({}));
+
+	auto& backend_lagging_during_query {
+		prometheus::BuildCounter()
+			.Name("proxysql_backend_lagging_during_query")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_backend_lagging_during_query =
-		std::addressof(new_counter_family.Add({{ "id", "backend_lagging_during_query" }}));
+		std::addressof(backend_lagging_during_query.Add({}));
+
+	auto& backend_offline_during_query {
+		prometheus::BuildCounter()
+			.Name("proxysql_backend_offline_during_query")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_backend_offline_during_query =
-		std::addressof(new_counter_family.Add({{ "id", "backend_offline_during_query" }}));
+		std::addressof(backend_offline_during_query.Add({}));
+
+	auto& queries_with_max_lag_ms {
+		prometheus::BuildCounter()
+			.Name("proxysql_queries_with_max_lag_ms")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_queries_with_max_lag_ms =
-		std::addressof(new_counter_family.Add({{ "id", "queries_with_max_lag_ms" }}));
+		std::addressof(queries_with_max_lag_ms.Add({}));
+
+	auto& queries_with_max_lag_ms__delayed {
+		prometheus::BuildCounter()
+			.Name("proxysql_queries_with_max_lag_ms__delayed")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_queries_with_max_lag_ms__delayed =
-		std::addressof(new_counter_family.Add({{ "id", "queries_with_max_lag_ms__delayed" }}));
+		std::addressof(queries_with_max_lag_ms__delayed.Add({}));
+
+	auto& queries_with_max_lag_ms__total_wait_time_us {
+		prometheus::BuildCounter()
+			.Name("proxysql_queries_with_max_lag_ms__total_wait_time_us")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_queries_with_max_lag_ms__total_wait_time_us =
-		std::addressof(new_counter_family.Add({{ "id", "queries_with_max_lag_ms__total_wait_time_us" }}));
+		std::addressof(queries_with_max_lag_ms__total_wait_time_us.Add({}));
+
+	auto& mysql_unexpected_frontend_com_quit {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_unexpected_frontend_com_quit")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_mysql_unexpected_frontend_com_quit =
-		std::addressof(new_counter_family.Add({{ "id", "mysql_unexpected_frontend_com_quit" }}));
+		std::addressof(mysql_unexpected_frontend_com_quit.Add({}));
+
+	// TODO: Check unit
+	auto& client_connections_hostgroup_locked {
+		prometheus::BuildCounter()
+			.Name("proxysql_client_connections_hostgroup_locked")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_get_hostgroup_locked =
-		std::addressof(new_counter_family.Add({{ "id", "Client_Connections_hostgroup_locked" }}));
+		std::addressof(client_connections_hostgroup_locked.Add({}));
+
+	auto& hostgroup_locked_set_cmds {
+		prometheus::BuildCounter()
+			.Name("proxysql_hostgroup_locked_set_cmds")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_hostgroup_locked_set_cmds =
-		std::addressof(new_counter_family.Add({{ "id", "hostgroup_locked_set_cmds" }}));
+		std::addressof(hostgroup_locked_set_cmds.Add({}));
+
+	auto& hostgroup_locked_queries {
+		prometheus::BuildCounter()
+			.Name("proxysql_hostgroup_locked_queries")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_hostgroup_locked_queries =
-		std::addressof(new_counter_family.Add({{ "id", "hostgroup_locked_queries" }}));
+		std::addressof(hostgroup_locked_queries.Add({}));
+
+	auto& mysql_unexpected_frontend_packets {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_unexpected_frontend_packets")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_mysql_unexpected_frontend_packets =
-		std::addressof(new_counter_family.Add({{ "id", "mysql_unexpected_frontend_packets" }}));
+		std::addressof(mysql_unexpected_frontend_packets.Add({}));
+
+	auto& aws_aurora_replicas_skipped_during_query {
+		prometheus::BuildCounter()
+			.Name("proxysql_aws_aurora_replicas_skipped_during_query")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_aws_aurora_replicas_skipped_during_query =
-		std::addressof(new_counter_family.Add({{ "id", "aws_aurora_replicas_skipped_during_query" }}));
+		std::addressof(aws_aurora_replicas_skipped_during_query.Add({}));
+
+	auto& automatic_detected_sql_injection {
+		prometheus::BuildCounter()
+			.Name("proxysql_automatic_detected_sql_injection")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_automatic_detected_sqli =
-		std::addressof(new_counter_family.Add({{ "id", "automatic_detected_sql_injection" }}));
+		std::addressof(automatic_detected_sql_injection.Add({}));
+
+	auto& whitelisted_sqli_fingerprint {
+		prometheus::BuildCounter()
+			.Name("proxysql_whitelisted_sqli_fingerprint")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_whitelisted_sqli_fingerprint =
-		std::addressof(new_counter_family.Add({{ "id", "automatic_detected_sql_injection" }}));
+		std::addressof(whitelisted_sqli_fingerprint.Add({}));
+
+	auto& mysql_killed_backend_connections {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_killed_backend_connections")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_killed_connections =
-		std::addressof(new_counter_family.Add({{ "id", "mysql_killed_backend_connections" }}));
+		std::addressof(mysql_killed_backend_connections.Add({}));
+
+	auto& mysql_killed_backend_queries {
+		prometheus::BuildCounter()
+			.Name("proxysql_mysql_killed_backend_queries")
+			.Register(*GloVars.prometheus_registry)
+	};
 	this->status_variables.p_killed_queries =
-		std::addressof(new_counter_family.Add({{ "id", "mysql_killed_backend_queries" }}));
+		std::addressof(mysql_killed_backend_queries.Add({}));
 }
 
 
