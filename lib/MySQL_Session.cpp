@@ -2096,10 +2096,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
-	char msg[128];
-	const MARIADB_CHARSET_INFO *ci = NULL;
-	const char* replace_collation = "";
-	const char* not_supported_collation = "";
 
 	/* Validate that server can support client's charset */
 	if (!validate_charset(this, SQL_CHARACTER_SET_CLIENT, *_rc)) {

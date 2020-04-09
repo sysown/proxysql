@@ -121,24 +121,11 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 
 				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, value, hash);
 				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, value, hash);
-			}
-			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET_DATABASE)) {
-				const MARIADB_CHARSET_INFO *ci = NULL;
-				ci = proxysql_find_charset_name(mysql_tracked_variables[SQL_CHARACTER_SET_CONNECTION].default_value);
 
-				unsigned int nr = ci->nr;
-				std::stringstream ss;
-				ss << nr;
-
-				mysql_variables.client_set_value(session, SQL_CHARACTER_SET_CONNECTION, ss.str());
-				ci = proxysql_find_charset_collate(mysql_tracked_variables[SQL_COLLATION_CONNECTION].default_value);
-
-				nr = ci->nr;
-				ss.str(std::string());
-				ss.clear();
-				ss << nr;
-
-				mysql_variables.client_set_value(session, SQL_COLLATION_CONNECTION, ss.str());
+				// Setting connection and collation connection to NULL
+				// because we do not know database character set
+				mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET_CONNECTION, "", 0);
+				mysql_variables.client_set_hash_and_value(session, SQL_COLLATION_CONNECTION, "", 0);
 			}
 		}
 	}
@@ -320,21 +307,25 @@ bool update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_nr(atoi(mysql_variables.client_get_value(session, SQL_COLLATION_CONNECTION)));
 
-		std::stringstream ss;
-		ss << ci->nr;
+		if (ci) {
+			std::stringstream ss;
+			ss << ci->nr;
 
-		mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));
-		ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, ci->name, no_quote, st);
+			mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));
+			ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, ci->name, no_quote, st);
+		}
 	} else if (idx==SQL_CHARACTER_SET_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_nr(atoi(mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CONNECTION)));
 
-		unsigned int nr = ci->nr;
-		std::stringstream ss;
-		ss << nr;
+		if (ci) {
+			unsigned int nr = ci->nr;
+			std::stringstream ss;
+			ss << nr;
 
-		mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));
-		ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, ci->csname, no_quote, st);
+			mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));
+			ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, ci->csname, no_quote, st);
+		}
 	} else if (idx==SQL_CHARACTER_SET_CLIENT || idx==SQL_CHARACTER_SET_DATABASE) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_nr(atoi(mysql_variables.client_get_value(session, idx)));
@@ -401,6 +392,14 @@ bool verify_set_names(MySQL_Session* session) {
 
 inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash) {
 	if (client_hash != server_hash) {
+		// Edge case for set charset command, because we do not know database character set
+		// for now we are setting connection and collation to empty
+		if (idx == SQL_CHARACTER_SET_CONNECTION || idx == SQL_COLLATION_CONNECTION ) {
+			if (mysql_variables.client_get_hash(session, idx) == 0) {
+					mysql_variables.server_set_hash_and_value(session, idx, "", 0);
+					return false;
+			}
+		}
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
 				session->previous_status.push(PROCESSING_QUERY);
