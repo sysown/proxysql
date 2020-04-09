@@ -21,6 +21,7 @@ typedef bool (*update_var)(MySQL_Session* session, int idx, int &_rc);
 bool validate_charset(MySQL_Session* session, int idx, int &_rc);
 bool update_server_variable(MySQL_Session* session, int idx, int &_rc);
 bool verify_server_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
+bool verify_set_names(MySQL_Session* session);
 bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
 
 class MySQL_Variables {
@@ -38,6 +39,7 @@ public:
 	uint32_t client_get_hash(MySQL_Session* session, int idx) const;
 
 	void server_set_value(MySQL_Session* session, int idx, const char* value);
+	void server_set_hash_and_value(MySQL_Session* session, int idx, const char* value, uint32_t hash);
 	const char* server_get_value(MySQL_Session* session, int idx) const;
 	inline uint32_t server_get_hash(MySQL_Session* session, int idx) const;
 

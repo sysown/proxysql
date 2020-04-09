@@ -74,6 +74,20 @@ bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx,
 	return true;
 }
 
+void MySQL_Variables::server_set_hash_and_value(MySQL_Session* session, int idx, const char* value, uint32_t hash) {
+	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn || !value) {
+		proxy_warning("Session validation failed\n");
+		return;
+	}
+
+	session->mybe->server_myds->myconn->var_hash[idx] = hash;
+	if (session->mybe->server_myds->myconn->variables[idx].value) {
+		free(session->mybe->server_myds->myconn->variables[idx].value);
+	}
+	session->mybe->server_myds->myconn->variables[idx].value = strdup(value);
+}
+
+
 bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const std::string& value) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");
@@ -336,61 +350,75 @@ bool update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 	return ret;
 }
 
+bool verify_set_names(MySQL_Session* session) {
+	uint32_t client_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
+	uint32_t results_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_RESULTS);
+	if (client_charset_hash != results_charset_hash)
+		return false;
+
+	uint32_t connection_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CONNECTION);
+	if (client_charset_hash != connection_charset_hash)
+		return false;
+
+	uint32_t collation_hash = mysql_variables.client_get_hash(session, SQL_COLLATION_CONNECTION);
+	if (client_charset_hash != collation_hash)
+		return false;
+
+	if (client_charset_hash != mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_CLIENT) ||
+			results_charset_hash != mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_RESULTS) ||
+			connection_charset_hash != mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_CONNECTION) ||
+			collation_hash != mysql_variables.server_get_hash(session, SQL_COLLATION_CONNECTION)) {
+
+		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				session->previous_status.push(PROCESSING_QUERY);
+				break;
+			case PROCESSING_STMT_PREPARE:
+				session->previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+			case PROCESSING_STMT_EXECUTE:
+				session->previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				proxy_error("Wrong status %d\n", session->status);
+				assert(0);
+				break;
+		}
+		session->set_status(SETTING_SET_NAMES);
+		uint32_t hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
+		const char* value = mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CLIENT);
+		mysql_variables.server_set_hash_and_value(session, SQL_CHARACTER_SET_CLIENT, value, hash);
+		mysql_variables.server_set_hash_and_value(session, SQL_CHARACTER_SET_RESULTS, value, hash);
+		mysql_variables.server_set_hash_and_value(session, SQL_CHARACTER_SET_CONNECTION, value, hash);
+		mysql_variables.server_set_hash_and_value(session, SQL_COLLATION_CONNECTION, value, hash);
+		mysql_variables.client_set_hash_and_value(session, SQL_CHARACTER_SET, value, hash);
+		mysql_variables.server_set_hash_and_value(session, SQL_CHARACTER_SET, value, hash);
+		return true;
+	}
+
+	return false;
+}
+
 inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash) {
 	if (client_hash != server_hash) {
-		uint32_t client_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
-		uint32_t results_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_RESULTS);
-		uint32_t connection_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CONNECTION);
-		uint32_t collation_hash = mysql_variables.client_get_hash(session, SQL_COLLATION_CONNECTION);
-
-		bool process_charset_variable = ((idx == SQL_CHARACTER_SET_CLIENT) || (idx == SQL_CHARACTER_SET_RESULTS) || (idx == SQL_CHARACTER_SET_CONNECTION) || (idx == SQL_COLLATION_CONNECTION));
-		bool is_set_names_hash = ((client_charset_hash == results_charset_hash) && (client_charset_hash == connection_charset_hash) && (client_charset_hash == collation_hash));
-
-		if (process_charset_variable && is_set_names_hash) {
-				switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					session->previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					session->previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					session->previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					proxy_error("Wrong status %d\n", session->status);
-					assert(0);
-					break;
-			}
-			session->set_status(SETTING_SET_NAMES);
-			mysql_variables.server_set_value(session, SQL_CHARACTER_SET_CLIENT, mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CLIENT));
-			mysql_variables.server_set_value(session, SQL_CHARACTER_SET_RESULTS, mysql_variables.client_get_value(session, SQL_CHARACTER_SET_RESULTS));
-			mysql_variables.server_set_value(session, SQL_CHARACTER_SET_CONNECTION, mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CONNECTION));
-			mysql_variables.server_set_value(session, SQL_COLLATION_CONNECTION, mysql_variables.client_get_value(session, SQL_COLLATION_CONNECTION));
-			mysql_variables.client_set_value(session, SQL_CHARACTER_SET, mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CLIENT));
-			mysql_variables.server_set_value(session, SQL_CHARACTER_SET, mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CLIENT));
-			return true;
-		} else {
-			switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					session->previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					session->previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					session->previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					proxy_error("Wrong status %d\n", session->status);
-					assert(0);
-					break;
-			}
-			session->set_status(mysql_tracked_variables[idx].status);
-			mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));
-			return true;
+		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				session->previous_status.push(PROCESSING_QUERY);
+				break;
+			case PROCESSING_STMT_PREPARE:
+				session->previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+			case PROCESSING_STMT_EXECUTE:
+				session->previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				proxy_error("Wrong status %d\n", session->status);
+				assert(0);
+				break;
 		}
-
+		session->set_status(mysql_tracked_variables[idx].status);
+		mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));
+		return true;
 	}
 	return false;
 }

@@ -3553,6 +3553,11 @@ handler_again:
 									goto handler_again;
 								}
 
+								// Optimize network traffic when we can use 'SET NAMES'
+								if (verify_set_names(this)) {
+									goto handler_again;
+								}
+
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
 									if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
 										goto handler_again;
