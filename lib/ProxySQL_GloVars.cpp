@@ -1,9 +1,9 @@
 #include "ezOptionParser.hpp"
-#include "prometheus/registry.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include <string>
 #include <sys/utsname.h>
+#include <prometheus/registry.h>
 #include "SpookyV2.h"
 
 static void term_handler(int sig) {
