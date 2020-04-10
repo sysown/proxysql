@@ -1,0 +1,4 @@
+#cmakedefine01 Backtrace_FOUND
+#if Backtrace_FOUND
+# include <${Backtrace_HEADER}>
+#endif
