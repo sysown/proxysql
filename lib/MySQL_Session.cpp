@@ -4099,7 +4099,6 @@ handler_again:
 		case SETTING_COLLATION_CONNECTION:
 		case SETTING_NET_WRITE_TIMEOUT:
 		case SETTING_MAX_JOIN_SIZE:
-		case SETTING_CHARSET:
 		case SETTING_SQL_LOG_BIN:
 		case SETTING_WSREP_SYNC_WAIT:
 		case SETTING_FOREIGN_KEY_CHECKS:
@@ -5033,25 +5032,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
 						exit_after_SetParse = true;
-					} else if (var == "foreign_key_checks") {
-						auto f = MySQL_Variables::functions.find(var);
-						if (f != MySQL_Variables::functions.end())
-							(f->second)(*this, SQL_FOREIGN_KEY_CHECKS, *values, lock_hostgroup);
-					} else if (var == "wsrep_sync_wait") {
-						std::string value1 = *values;
-						if ((strcasecmp(value1.c_str(),"0")==0) || (strcasecmp(value1.c_str(),"1")==0)) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET wsrep_sync_wait value %s\n", value1.c_str());
-							uint32_t wsrep_sync_wait_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (mysql_variables.client_get_hash(this, SQL_WSREP_SYNC_WAIT) != wsrep_sync_wait_int) {
-								if (!mysql_variables.client_set_value(this, SQL_WSREP_SYNC_WAIT, value1.c_str()))
-									return false;
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection wsrep_sync_wait to %s\n", value1.c_str());
-							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
 					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
 						std::string value1 = *values;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
@@ -5943,7 +5923,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		status=CONNECTING_SERVER;
 		mybe->server_myds->myconn->reusable=true;
 	} else {
-		mysql_variables->on_connect_to_backend(mysql_tracked_variables);
+		mysql_variables.on_connect_to_backend(this);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- MySQL Connection found = %p\n", this, mybe->server_myds->myconn);
 		mybe->server_myds->assign_fd_from_mysql_conn();
 		mybe->server_myds->myds_type=MYDS_BACKEND;
@@ -6621,8 +6601,8 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						memcpy(name, data, length);
 						name[length] = '\0';
 						collation_id_from_charset_name_r(name, id, sizeof(id));
-						mysql_variables->client_set_value(idx, id);
-						mysql_variables->server_set_value(idx, id);
+						mysql_variables.client_set_value(this, idx, id);
+						mysql_variables.server_set_value(this, idx, id);
 					}
 					else if (idx == SQL_CHARACTER_SET_CONNECTION) {
 						// The SQL_CHARACTER_SET_CONNECTION should be tracked for SET CHARSET command
@@ -6634,11 +6614,11 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						collation_id_from_charset_name_r(name, id, sizeof(id));
 
 						const MARIADB_CHARSET_INFO *ci = NULL;
-						ci = proxysql_find_charset_collate(mysql_variables->server_get_value(SQL_COLLATION_CONNECTION));
+						ci = proxysql_find_charset_collate(mysql_variables.server_get_value(this, SQL_COLLATION_CONNECTION));
 						if (ci) {
-							if (strcasecmp(ci->csname, name)!=0 || mysql_variables->client_get_value(idx) == NULL) {
-								mysql_variables->client_set_value(idx, id);
-								mysql_variables->server_set_value(idx, id);
+							if (strcasecmp(ci->csname, name)!=0 || mysql_variables.client_get_value(this, idx) == NULL) {
+								mysql_variables.client_set_value(this, idx, id);
+								mysql_variables.server_set_value(this, idx, id);
 							}
 						}
 					}
@@ -6648,21 +6628,21 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						memcpy(collation, data, length);
 						collation[length] = '\0';
 						collation_id_from_collate_r(collation, id, sizeof(id));
-						mysql_variables->client_set_value(idx, id);
-						mysql_variables->server_set_value(idx, id);
-						mysql_variables->client_set_value(SQL_CHARACTER_SET_CONNECTION, id);
-						mysql_variables->server_set_value(SQL_CHARACTER_SET_CONNECTION, id);
+						mysql_variables.client_set_value(this, idx, id);
+						mysql_variables.server_set_value(this, idx, id);
+						mysql_variables.client_set_value(this, SQL_CHARACTER_SET_CONNECTION, id);
+						mysql_variables.server_set_value(this, SQL_CHARACTER_SET_CONNECTION, id);
 					}
 					else if (idx == SQL_FOREIGN_KEY_CHECKS) {
 						char value[1024];
 						memcpy(value, data, length);
 						value[length] = '\0';
 						if (value[1] == 'N') {
-							mysql_variables->client_set_value(idx, "1");
-							mysql_variables->server_set_value(idx, "1");
+							mysql_variables.client_set_value(this, idx, "1");
+							mysql_variables.server_set_value(this, idx, "1");
 						} else {
-							mysql_variables->client_set_value(idx, "0");
-							mysql_variables->server_set_value(idx, "0");
+							mysql_variables.client_set_value(this, idx, "0");
+							mysql_variables.server_set_value(this, idx, "0");
 						}
 					}
 					else if (idx == SQL_LOG_BIN) {
@@ -6670,11 +6650,11 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						memcpy(value, data, length);
 						value[length] = '\0';
 						if (value[1] == 'N') {
-							mysql_variables->client_set_value(idx, "1");
-							mysql_variables->server_set_value(idx, "1");
+							mysql_variables.client_set_value(this, idx, "1");
+							mysql_variables.server_set_value(this, idx, "1");
 						} else {
-							mysql_variables->client_set_value(idx, "0");
-							mysql_variables->server_set_value(idx, "0");
+							mysql_variables.client_set_value(this, idx, "0");
+							mysql_variables.server_set_value(this, idx, "0");
 						}
 					} else {
 						if (idx >= SQL_NAME_LAST) {
@@ -6687,8 +6667,8 @@ void MySQL_Session::track_session_variables(MYSQL* mysql) {
 						char value[1024];
 						memcpy(value, data, length);
 						value[length] = '\0';
-						mysql_variables->client_set_value(idx, value);
-						mysql_variables->server_set_value(idx, value);
+						mysql_variables.client_set_value(this, idx, value);
+						mysql_variables.server_set_value(this, idx, value);
 					}
 				}
 			} else {

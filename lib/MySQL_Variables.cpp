@@ -11,7 +11,6 @@ verify_var MySQL_Variables::verifiers[SQL_NAME_LAST];
 update_var MySQL_Variables::updaters[SQL_NAME_LAST];
 
 bool process_on_off(MySQL_Session& session, enum variable_name var, const std::string& value, bool* lock_hostgroup) {
-	proxy_warning("TRACE : process_on_off var %s, value %s\n", mysql_tracked_variables[var].internal_variable_name, value.c_str());
 	std::string _tmp_value="";
 	if ((strcasecmp(value.c_str(),"0")==0) || (strcasecmp(value.c_str(),"OFF")==0)) {
 		_tmp_value = "0";
@@ -22,8 +21,8 @@ bool process_on_off(MySQL_Session& session, enum variable_name var, const std::s
 	if (!_tmp_value.empty()) {
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", mysql_tracked_variables[var].internal_variable_name, _tmp_value.c_str());
 		uint32_t hash_int=SpookyHash::Hash32(_tmp_value.c_str(),_tmp_value.length(),10);
-		if (session.mysql_variables->client_get_hash(var) != hash_int) {
-			if (!session.mysql_variables->client_set_value(var, _tmp_value.c_str()))
+		if (mysql_variables.client_get_hash(&session, var) != hash_int) {
+			if (!mysql_variables.client_set_value(&session, var, _tmp_value.c_str()))
 				return false;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[var].internal_variable_name, _tmp_value.c_str());
 		}
@@ -46,8 +45,10 @@ MySQL_Variables::MySQL_Variables() {
 		if (i == SQL_LOG_BIN) {
 			verifiers[i] = verify_server_variable;
 			updaters[i] = logbin_update_server_variable;
+		} else if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
+			// these are not mysql variables. skip them.
 		} else {
-			verifiers[i] = verify_iserver_variable;
+			verifiers[i] = verify_server_variable;
 			updaters[i] = update_server_variable;
 		}
 	}
