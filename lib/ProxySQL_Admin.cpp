@@ -5385,6 +5385,8 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							MHD_OPTION_HTTPS_MEM_KEY, key_pem,
 							MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
 							MHD_OPTION_END);
+							free(key_pem);
+							free(cert_pem);
 					} else {
 						GloWebInterface->start(variables.web_port);
 					}
@@ -5416,6 +5418,8 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 								MHD_OPTION_HTTPS_MEM_KEY, key_pem,
 								MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
 								MHD_OPTION_END);
+							free(key_pem);
+							free(cert_pem);
 						} else {
 							GloWebInterface->start(variables.web_port);
 						}
@@ -5493,8 +5497,8 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			}
 		}
 
-		const char* connection = GloMTH->get_variable_string((char *)"default_character_set_connection");
-		const char* collation= GloMTH->get_variable_string((char *)"default_collation_connection");
+		char* connection = GloMTH->get_variable_string((char *)"default_character_set_connection");
+		char* collation= GloMTH->get_variable_string((char *)"default_collation_connection");
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		char q[1000];
 		ci = proxysql_find_charset_name(connection);
@@ -5513,6 +5517,8 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")","default_collation_connection",ci->name);
 			db->execute(q);
 		}
+		free(connection);
+		free(collation);
 
 		GloMTH->commit();
 		GloMTH->wrunlock();
