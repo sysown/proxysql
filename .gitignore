@@ -170,3 +170,6 @@ heaptrack.*
 
 #tap tests
 *-t
+
+#cmake generated files
+include/backtrace.h

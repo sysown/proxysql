@@ -43,7 +43,8 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <poll.h>
-#include <execinfo.h>
+
+#include "backtrace.h"
 
 #include <dlfcn.h>
 
