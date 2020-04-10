@@ -3331,36 +3331,6 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	}
 	sess->client_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
-		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_SET_RESULTS ||
-			i == SQL_CHARACTER_SET_CONNECTION || i == SQL_CHARACTER_SET_CLIENT ||
-			i == SQL_CHARACTER_SET_DATABASE) {
-			const MARIADB_CHARSET_INFO *ci = NULL;
-			ci = proxysql_find_charset_name(mysql_thread___default_variables[i]);
-			if (!ci) {
-				proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable. Using character set 33.\n", 
-						mysql_thread___default_variables[i], mysql_tracked_variables[i].internal_variable_name);
-				assert(0);
-			}
-			std::stringstream ss;
-			ss << ci->nr;
-			mysql_variables.client_set_value(sess, i, ss.str());
-		} else if (i == SQL_COLLATION_CONNECTION) {
-			const MARIADB_CHARSET_INFO *ci = NULL;
-			ci = proxysql_find_charset_collate(mysql_thread___default_variables[i]);
-			if (!ci) {
-				proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable. Using character set 33.\n", 
-						mysql_thread___default_variables[SQL_COLLATION_CONNECTION], mysql_tracked_variables[SQL_COLLATION_CONNECTION].internal_variable_name);
-				assert(0);
-			}
-			std::stringstream ss;
-			ss << ci->nr;
-			mysql_variables.client_set_value(sess, i, ss.str());
-		} else {
-			mysql_variables.client_set_value(sess, i, mysql_thread___default_variables[i]);
-		}
-	}
-
 	return sess;
 }
 

@@ -343,6 +343,9 @@ bool update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 
 bool verify_set_names(MySQL_Session* session) {
 	uint32_t client_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
+	if (client_charset_hash == 0)
+		return false;
+
 	uint32_t results_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_RESULTS);
 	if (client_charset_hash != results_charset_hash)
 		return false;
@@ -391,7 +394,7 @@ bool verify_set_names(MySQL_Session* session) {
 }
 
 inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash) {
-	if (client_hash != server_hash) {
+	if (client_hash && client_hash != server_hash) {
 		// Edge case for set charset command, because we do not know database character set
 		// for now we are setting connection and collation to empty
 		if (idx == SQL_CHARACTER_SET_CONNECTION || idx == SQL_COLLATION_CONNECTION ) {
