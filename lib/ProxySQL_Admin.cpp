@@ -67,6 +67,8 @@ extern char *ssl_cert_fp;
 extern char *ssl_ca_fp;
 
 
+MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
+
 static long
 get_file_size (const char *filename) {
 	FILE *fp;
@@ -5383,6 +5385,8 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							MHD_OPTION_HTTPS_MEM_KEY, key_pem,
 							MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
 							MHD_OPTION_END);
+							free(key_pem);
+							free(cert_pem);
 					} else {
 						GloWebInterface->start(variables.web_port);
 					}
@@ -5414,6 +5418,8 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 								MHD_OPTION_HTTPS_MEM_KEY, key_pem,
 								MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
 								MHD_OPTION_END);
+							free(key_pem);
+							free(cert_pem);
 						} else {
 							GloWebInterface->start(variables.web_port);
 						}
@@ -5441,37 +5447,79 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		GloMTH->wrlock();
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			bool rc=GloMTH->set_variable(r->fields[0],r->fields[1]);
-			if (rc==false) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-				if (replace) {
-					char *val=GloMTH->get_variable(r->fields[0]);
-					char q[1000];
-					if (val) {
-						if (strcmp(val,r->fields[1])) {
-							proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],r->fields[1], val);
-							sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
-							db->execute(q);
-						}
-						free(val);
-					} else {
-						if (strcmp(r->fields[0],(char *)"session_debug")==0) {
-							sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
-							db->execute(q);
-						} else {
-							proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
-						}
-						sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
-						db->execute(q);
-					}
+			const char *value = r->fields[1];
+			if (!strcasecmp(r->fields[0], "default_character_set_results") || !strcasecmp(r->fields[0], "default_character_set_client") ||
+					!strcasecmp(r->fields[0], "default_character_set_database") || !strcasecmp(r->fields[0], "default_character_set_connection") ||
+					!strcasecmp(r->fields[0], "default_charset")) {
+				const MARIADB_CHARSET_INFO *ci = NULL;
+				char q[1000];
+				ci = proxysql_find_charset_name(value);
+				if (!ci) {
+					proxy_warning("The %s set to invalid value in the configuration file. Changing to default utf8\n", r->fields[0]);
+					sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],"utf8");
+					db->execute(q);
+					value = "utf8";
+					GloMTH->set_variable(r->fields[0],"utf8");
+				} else {
+					GloMTH->set_variable(r->fields[0],ci->csname);
 				}
 			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
-				if (strcmp(r->fields[0],(char *)"show_processlist_extended")==0) {
-					variables.mysql_show_processlist_extended = atoi(r->fields[1]);
+				bool rc=GloMTH->set_variable(r->fields[0],value);
+				if (rc==false) {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],value);
+					if (replace) {
+						char *val=GloMTH->get_variable(r->fields[0]);
+						char q[1000];
+						if (val) {
+							if (strcmp(val,value)) {
+								proxy_warning("Impossible to set variable %s with value \"%s\". Resetting to current \"%s\".\n", r->fields[0],value, val);
+								sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
+								db->execute(q);
+							}
+							free(val);
+						} else {
+							if (strcmp(r->fields[0],(char *)"session_debug")==0) {
+								sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
+								db->execute(q);
+							} else {
+								proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+							}
+							sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
+							db->execute(q);
+						}
+					}
+				} else {
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],value);
+					if (strcmp(r->fields[0],(char *)"show_processlist_extended")==0) {
+						variables.mysql_show_processlist_extended = atoi(value);
+					}
 				}
 			}
 		}
+
+		char* connection = GloMTH->get_variable_string((char *)"default_character_set_connection");
+		char* collation= GloMTH->get_variable_string((char *)"default_collation_connection");
+		const MARIADB_CHARSET_INFO *ci = NULL;
+		char q[1000];
+		ci = proxysql_find_charset_name(connection);
+		if (strcasecmp(ci->name, collation)) {
+			proxy_warning("Changing default_collation_connection to %s\n", ci->name);
+			bool rc=GloMTH->set_variable("default_collation_connection",ci->name);
+			sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")","default_collation_connection",ci->name);
+			GloMTH->set_variable("default_collation_connection",ci->name);
+			if (ci->nr == 45) {
+				rc=GloMTH->set_variable("default_collation_connection","utf8mb4_general_ci");
+				db->execute("INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"utf8mb4_general_ci\")");
+				GloMTH->set_variable("default_collation_connection","utf8mb4_general_ci");
+			}
+		} else {
+			GloMTH->set_variable("default_collation_connection",ci->name);
+			sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")","default_collation_connection",ci->name);
+			db->execute(q);
+		}
+		free(connection);
+		free(collation);
+
 		GloMTH->commit();
 		GloMTH->wrunlock();
 	}

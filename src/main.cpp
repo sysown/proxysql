@@ -718,6 +718,7 @@ MySQL_Monitor *GloMyMon;
 std::thread *MyMon_thread = NULL;
 
 MySQL_Logger *GloMyLogger;
+MySQL_Variables mysql_variables;
 
 SQLite3_Server *GloSQLite3Server;
 #ifdef PROXYSQLCLICKHOUSE
