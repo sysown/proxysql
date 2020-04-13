@@ -36,7 +36,7 @@ oldcode/tests/connect_speed
 *.db
 *.db-shm
 *.db-wal
-
+*.db-journal
 
 #pidfile and errorlog
 *.pid
