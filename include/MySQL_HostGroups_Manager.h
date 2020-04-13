@@ -365,6 +365,7 @@ class MySQL_HostGroups_Manager {
 		prometheus::Counter* p_client_connections_aborted { nullptr };
 		prometheus::Gauge*   p_client_connections { nullptr };
 		/// Prometheus server metrics
+		prometheus::Counter* p_servers_table_version { nullptr };
 		prometheus::Counter* p_server_connections_aborted { nullptr };
 		prometheus::Counter* p_server_connections_created { nullptr };
 		prometheus::Counter* p_server_connections_delayed { nullptr };
@@ -393,7 +394,7 @@ class MySQL_HostGroups_Manager {
 		prometheus::Counter* p_rollback_cnt_filtered { nullptr };
 		prometheus::Counter* p_select_for_update_or_equivalent { nullptr };
 
-		/// TODO: Prometheus myconnpoll metrics
+		/// Prometheus myconnpoll metrics
 		prometheus::Counter* p_myconnpoll_get { nullptr };
 		prometheus::Counter* p_myconnpoll_get_ok { nullptr };
 		prometheus::Counter* p_myconnpoll_push { nullptr };

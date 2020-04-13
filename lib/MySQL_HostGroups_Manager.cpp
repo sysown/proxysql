@@ -1028,7 +1028,15 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 
 	// Initialize prometheus metrics
 
-	// server_connections_* metrics
+	// server_* metrics
+	auto& servers_table_version {
+		prometheus::BuildCounter()
+			.Name("proxysql_servers_table_version")
+			.Register(*GloVars.prometheus_registry)
+	};
+	this->status.p_servers_table_version =
+		std::addressof(servers_table_version.Add({}));
+
 	auto& server_connections_connected {
 		prometheus::BuildGauge()
 			.Name("proxysql_server_connections_connected")
@@ -1167,6 +1175,22 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	};
 	this->status.p_frontend_use_db =
 		std::addressof(com_frontend_use_db.Add({}));
+
+	auto& com_commit_cnt {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_commit_cnt")
+			.Register(*GloVars.prometheus_registry)
+	};
+	this->status.p_commit_cnt =
+		std::addressof(com_commit_cnt.Add({}));
+
+	auto& com_commit_cnt_filtered {
+		prometheus::BuildCounter()
+			.Name("proxysql_com_commit_cnt_filtered")
+			.Register(*GloVars.prometheus_registry)
+	};
+	this->status.p_commit_cnt_filtered =
+		std::addressof(com_commit_cnt_filtered.Add({}));
 
 	// TODO: Check name
 	auto& select_for_update_or_equivalent {
@@ -1841,6 +1865,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
+	this->status.p_servers_table_version->Increment(1);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 	wrunlock();
