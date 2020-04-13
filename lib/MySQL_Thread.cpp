@@ -2444,19 +2444,21 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
-		char buf[128];
-		sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
-		if (!strcasecmp(name,buf)) {
-			if (variables.default_variables[i]) free(variables.default_variables[i]);
-			variables.default_variables[i] = NULL;
-			if (vallen) {
-				if (strcmp(value,"(null)"))
-					variables.default_variables[i] = strdup(value);
+	if (!strncmp(name,"default_",8)) {
+		for (int i=0; i<SQL_NAME_LAST; i++) {
+			char buf[128];
+			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
+			if (!strcasecmp(name,buf)) {
+				if (variables.default_variables[i]) free(variables.default_variables[i]);
+				variables.default_variables[i] = NULL;
+				if (vallen) {
+					if (strcmp(value,"(null)"))
+						variables.default_variables[i] = strdup(value);
+				}
+				if (variables.default_variables[i] == NULL)
+					variables.default_variables[i] = strdup(mysql_tracked_variables[i].default_value);
+				return true;
 			}
-			if (variables.default_variables[i] == NULL)
-				variables.default_variables[i] = strdup(mysql_tracked_variables[i].default_value);
-			return true;
 		}
 	}
 
