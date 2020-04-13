@@ -185,10 +185,15 @@ uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const
 
 bool MySQL_Variables::update_variable(MySQL_Session* session, session_status status, int &_rc) {
 	int idx = SQL_NAME_LAST;
-	for (int i=0; i<SQL_NAME_LAST; i++) {
-		if (mysql_tracked_variables[i].status == status) {
-			idx = i;
-			break;
+	if (session->status == SETTING_VARIABLE) {
+		// if status is SETTING_VARIABLE , what variable needs to be changed is defined in changing_variable_idx
+		idx = session->changing_variable_idx;
+	} else {
+		for (int i=0; i<SQL_NAME_LAST; i++) {
+			if (mysql_tracked_variables[i].status == status) {
+				idx = i;
+				break;
+			}
 		}
 	}
 	assert(idx != SQL_NAME_LAST);
@@ -200,7 +205,9 @@ bool MySQL_Variables::verify_variable(MySQL_Session* session, int idx) const {
 	if (likely(verifiers[idx])) {
 		auto client_hash = session->client_myds->myconn->var_hash[idx];
 		auto server_hash = session->mybe->server_myds->myconn->var_hash[idx];
-		ret = verifiers[idx](session, idx, client_hash, server_hash);
+		if (client_hash && client_hash != server_hash) {
+			ret = verifiers[idx](session, idx, client_hash, server_hash);
+		}
 	}
 	return ret;
 }
@@ -417,6 +424,8 @@ inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t cli
 					return false;
 			}
 		}
+		// this variable is relevant only if status == SETTING_VARIABLE
+		session->changing_variable_idx = (enum variable_name)idx;
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
 				session->previous_status.push(PROCESSING_QUERY);

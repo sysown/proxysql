@@ -3551,8 +3551,14 @@ handler_again:
 								}
 
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
-									if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
-										goto handler_again;
+									auto client_hash = client_myds->myconn->var_hash[i];
+									if (client_hash) {
+										auto server_hash = myconn->var_hash[i];
+										if (client_hash != server_hash) {
+											if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
+												goto handler_again;
+											}
+										}
 									}
 								}
 
@@ -4081,24 +4087,11 @@ handler_again:
 			}
 			break;
 
-		case SETTING_SQL_MODE:
-		case SETTING_SQL_SELECT_LIMIT:
-		case SETTING_SQL_SAFE_UPDATES:
-		case SETTING_TIME_ZONE:
-		case SETTING_CHARACTER_SET_RESULTS:
-		case SETTING_CHARACTER_SET_CONNECTION:
-		case SETTING_CHARACTER_SET_CLIENT:
-		case SETTING_CHARACTER_SET_DATABASE:
 		case SETTING_ISOLATION_LEVEL:
 		case SETTING_TRANSACTION_READ:
-		case SETTING_SQL_AUTO_IS_NULL:
-		case SETTING_COLLATION_CONNECTION:
-		case SETTING_NET_WRITE_TIMEOUT:
-		case SETTING_MAX_JOIN_SIZE:
 		case SETTING_CHARSET:
-		case SETTING_SQL_LOG_BIN:
-		case SETTING_WSREP_SYNC_WAIT:
-			for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		case SETTING_VARIABLE:
+			{
 				int rc = 0;
 				if (mysql_variables.update_variable(this, status, rc)) {
 					goto handler_again;

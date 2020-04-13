@@ -209,6 +209,9 @@ class MySQL_Session
 
 	void *ldap_ctx;
 
+	// this variable is relevant only if status == SETTING_VARIABLE
+	enum variable_name changing_variable_idx;
+
 	MySQL_Session();
 	~MySQL_Session();
 

@@ -5427,6 +5427,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case SETTING_INIT_CONNECT:
                                                 pta[11]=strdup("Setting init connect");
                                                 break;
+/*
 					case SETTING_SQL_LOG_BIN:
                                                 pta[11]=strdup("Set log bin");
                                                 break;
@@ -5435,6 +5436,19 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
                                                 break;
 					case SETTING_TIME_ZONE:
                                                 pta[11]=strdup("Set TZ");
+                                                break;
+*/
+					case SETTING_VARIABLE:
+						{
+							int idx = sess->changing_variable_idx;
+							if (idx < SQL_NAME_LAST) {
+								char buf[128];
+								sprintf(buf, "Setting variable %s", mysql_tracked_variables[idx].set_variable_name);
+								pta[11]=strdup(buf);
+							} else {
+								pta[11]=strdup("Setting variable");
+							}
+						}
                                                 break;
 					case FAST_FORWARD:
                                                 pta[11]=strdup("Fast forward");
