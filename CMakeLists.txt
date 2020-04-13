@@ -403,6 +403,13 @@ SET(LIBMICROHTTPD_INCLUDE_DIRS ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libmicrohttp
 add_library(microhttpd STATIC IMPORTED)
 set_target_properties(microhttpd PROPERTIES IMPORTED_LOCATION ${LIBMICROHTTPD_LIB_DIR}/libmicrohttpd.a)
 
+# Until https://github.com/etr/libhttpserver/pull/192 is merged, and the deps is updated here, we need this one.
+if (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+  set(libhttpserver_patch_cmd patch -p1 < ${CMAKE_SOURCE_DIR}/deps/libhttpserver/libhttpserver_freebsd.patch)
+else()
+  set(libhttpserver_patch_cmd "")
+endif()
+
 # Note: This project needs GNU make
 ExternalProject_Add(libhttpserver_ext
 	PREFIX						deps
@@ -416,7 +423,7 @@ ExternalProject_Add(libhttpserver_ext
   BUILD_COMMAND     ${MAKE_EXE} -C build
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
-  PATCH_COMMAND			""
+  PATCH_COMMAND			${libhttpserver_patch_cmd}
   DEPENDS           libmicrohttpd_ext
 )
 

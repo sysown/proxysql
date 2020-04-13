@@ -1,0 +1,26 @@
+diff -ruN libhttpserver_ext.orig/src/http_utils.cpp libhttpserver_ext/src/http_utils.cpp
+--- libhttpserver_ext.orig/src/http_utils.cpp	2020-03-29 11:55:40.569197655 +0000
++++ libhttpserver_ext/src/http_utils.cpp	2020-03-29 11:56:42.143585853 +0000
+@@ -24,6 +24,9 @@
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+ #else
++#if defined(__FreeBSD__)
++#include <netinet/in.h>
++#endif
+ #include <sys/socket.h>
+ #include <netdb.h>
+ #include <arpa/inet.h>
+diff -ruN libhttpserver_ext.orig/src/webserver.cpp libhttpserver_ext/src/webserver.cpp
+--- libhttpserver_ext.orig/src/webserver.cpp	2020-03-13 16:16:26.000000000 +0000
++++ libhttpserver_ext/src/webserver.cpp	2020-03-29 11:55:13.934026151 +0000
+@@ -25,6 +25,9 @@
+ #include <ws2tcpip.h>
+ #define _WINDOWS
+ #else
++#if defined(__FreeBSD__)
++#include <netinet/in.h>
++#endif
+ #include <netinet/ip.h>
+ #include <netinet/tcp.h>
+ #endif
