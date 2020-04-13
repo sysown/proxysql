@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 
 # set the project name
 project(proxysql
-        VERSION 2.0.11
+        VERSION 2.0.13
         DESCRIPTION "High-performance MySQL proxy with a GPL license"
         HOMEPAGE_URL "https://www.proxysql.com")
 
@@ -108,6 +108,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
     endif()
 endif()
 
+find_program(GNU_MAKE_EXE NAMES gmake)
 find_program(MAKE_EXE NAMES gmake make nmake)
 
 find_package(Patch)
@@ -124,8 +125,7 @@ if (GIT_FOUND)
 
   message(STATUS "Using GITVERSION=${repo_git_version}")
 else()
-  message(WARNING "No GIT_VERSION will be added to resulting binary.")
-  set(repo_git_version "undefined")
+  message(FATAL_ERROR "You need to clone the proxysql repo using git.")
 endif()
 
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION}-${repo_git_version})
@@ -284,7 +284,7 @@ if (WITH_CLICKHOUSE)
     URL               file://${CMAKE_SOURCE_DIR}/deps/lz4/lz4-1.7.5.tar.gz
     CONFIGURE_COMMAND ""
     BUILD_IN_SOURCE 1
-    BUILD_COMMAND     "gmake"
+    BUILD_COMMAND     "${GNU_MAKE_EXE}"
     UPDATE_COMMAND    ""
     INSTALL_COMMAND   ""
     PATCH_COMMAND			""
@@ -406,14 +406,14 @@ set_target_properties(microhttpd PROPERTIES IMPORTED_LOCATION ${LIBMICROHTTPD_LI
 # Note: This project needs GNU make
 ExternalProject_Add(libhttpserver_ext
 	PREFIX						deps
-  URL               file://${CMAKE_SOURCE_DIR}/deps/libhttpserver/libhttpserver-master_20191121.tar.gz
-  CONFIGURE_COMMAND rm -rf build && MAKE=${MAKE_EXE} autoreconf -i && mkdir build && cd build && ../configure --enable-static --disable-shared
+  URL               file://${CMAKE_SOURCE_DIR}/deps/libhttpserver/libhttpserver-master_20200416.tar.gz
+  CONFIGURE_COMMAND rm -rf build && MAKE=${GNU_MAKE_EXE} autoreconf -i && mkdir build && cd build && ../configure --enable-static --disable-shared
                         --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
                         --disable-examples "CFLAGS=${CMAKE_C_FLAGS}" "LD_LIBRARY_PATH=${LIBMICROHTTPD_LIB_DIR}"
 			                "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
                       "MAKE=${MAKE_EXE}" "CPPFLAGS=-I${LIBMICROHTTPD_INCLUDE_DIR}" "LIBS=-lmicrohttpd" "LDFLAGS=-L${LIBMICROHTTPD_LIB_DIR}"
   BUILD_IN_SOURCE 1
-  BUILD_COMMAND     ${MAKE_EXE} -C build
+  BUILD_COMMAND     ${GNU_MAKE_EXE} -C build
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
   PATCH_COMMAND			""
@@ -495,7 +495,7 @@ set_target_properties(pcrecpp PROPERTIES IMPORTED_LOCATION ${PCRE_LIB_DIR}/libpc
 
 ExternalProject_Add(sqlite3_ext
 	PREFIX						deps
-  URL               https://www.sqlite.org/2017/sqlite-amalgamation-3190200.zip
+  URL               file://${CMAKE_SOURCE_DIR}/deps/sqlite3/sqlite-amalgamation-3190200.tar.gz
   CONFIGURE_COMMAND ""
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${CMAKE_C_COMPILER} -O0 -ggdb -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1
@@ -516,7 +516,7 @@ SET(libproxysql_FILES lib/ProxySQL_GloVars.cpp lib/network.cpp lib/debug.cpp lib
             lib/MySQL_HostGroups_Manager.cpp lib/mysql_data_stream.cpp lib/MySQL_Thread.cpp lib/MySQL_Session.cpp lib/MySQL_Protocol.cpp
             lib/mysql_backend.cpp lib/Query_Processor.cpp lib/ProxySQL_Admin.cpp lib/ProxySQL_Config.cpp lib/ProxySQL_Restapi.cpp
             lib/MySQL_Monitor.cpp lib/MySQL_Logger.cpp lib/thread.cpp lib/MySQL_PreparedStatement.cpp lib/ProxySQL_Cluster.cpp
-             lib/ProxySQL_Statistics.cpp lib/Chart_bundle_js.cpp
+            lib/ProxySQL_Statistics.cpp lib/Chart_bundle_js.cpp lib/MySQL_Variables.cpp
             lib/ProxySQL_HTTP_Server.cpp lib/ProxySQL_RESTAPI_Server.cpp lib/font-awesome.min.css.cpp lib/main-bundle.min.css.cpp
             lib/set_parser.cpp lib/c_tokenizer.c)
 
