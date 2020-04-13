@@ -2494,7 +2494,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->myconn->send_quit = false;
 					myds->myconn->reusable = false;
 				}
-				mysql_variables.on_connect_to_backend(this);
+				mysql_variables.on_connect_to_backend(myds->myconn);
 				NEXT_IMMEDIATE_NEW(st);
 				break;
 			case -1:
@@ -6332,7 +6332,7 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
-	mysql_variables.on_connect_to_backend(this);
+	mysql_variables.on_connect_to_backend(mc);
 	if (new_myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, new_myds->fd, new_myds, thread->curtime);
 	}

@@ -44,15 +44,15 @@ MySQL_Variables::MySQL_Variables() {
 
 MySQL_Variables::~MySQL_Variables() {}
 
-bool MySQL_Variables::on_connect_to_backend(MySQL_Session* session) {
-	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn) return false;
-	auto be_version = session->mybe->server_myds->myconn->mysql->server_version;
+bool MySQL_Variables::on_connect_to_backend(MySQL_Connection *myconn) {
+	assert(myconn);
+	auto be_version = myconn->mysql->server_version;
 
 	// verify this is not galera cluster
 	// assume galera cluster has two dashes in a version
 	char* first_dash = strstr(be_version, "-");
 	if (!first_dash || !strstr(first_dash+1, "-")) {
-		session->mybe->server_myds->myconn->var_absent[SQL_WSREP_SYNC_WAIT] = true;
+		myconn->var_absent[SQL_WSREP_SYNC_WAIT] = true;
 	}
 
 	return true;
