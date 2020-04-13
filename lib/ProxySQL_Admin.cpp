@@ -4731,54 +4731,30 @@ __end_while_pool:
 /**
  * @brief Routine to be called before each scrape from prometheus.
  */
-void update_GloMTH_metrics() {
-	GloMTH->get_queries_backends_bytes_recv();
-	GloMTH->get_queries_backends_bytes_sent();
-	GloMTH->get_queries_frontends_bytes_recv();
-	GloMTH->get_queries_frontends_bytes_sent();
-
-	GloMTH->get_total_mirror_queue();
-
-	GloMTH->get_total_backend_stmt_prepare();
-	GloMTH->get_total_backend_stmt_execute();
-	GloMTH->get_total_backend_stmt_close();
-
-	GloMTH->get_total_frontend_stmt_prepare();
-	GloMTH->get_total_frontend_stmt_execute();
-	GloMTH->get_total_frontend_stmt_close();
-
-	GloMTH->get_total_queries();
-	GloMTH->get_slow_queries();
-	GloMTH->get_gtid_queries();
-	GloMTH->get_gtid_session_collected();
-
-	GloMTH->get_active_transations();
-	GloMTH->get_non_idle_client_connections();
-	GloMTH->get_query_processor_time();
-	GloMTH->get_backend_query_time();
-	GloMTH->get_mysql_backend_buffers_bytes();
-	GloMTH->get_mysql_frontend_buffers_bytes();
-	GloMTH->get_mysql_session_internal_bytes();
-
+void update_modules_metrics() {
+	// Update mysql_threads_handler metrics
+	if (GloMTH) {
+		GloMTH->p_update_metrics();
+	}
 	// Update mysql_hostgroups_manager metrics
-	MyHGM->p_update_connection_pool();
-	MyHGM->p_update_myconnpoll();
-
+	if (MyHGM) {
+		MyHGM->p_update_connection_pool();
+		MyHGM->p_update_myconnpoll();
+	}
 	// Update monitor metrics
-	GloMyMon->p_update_metrics();
-
+	if (GloMyMon) {
+		GloMyMon->p_update_metrics();
+	}
 	// Update query_cache metrics
 	if (GloQC) {
 		GloQC->p_update_metrics();
 	}
-
 	// Update admin metrics
-	GloAdmin->p_stats___memory_metrics();
-	GloAdmin->p_update_stmt_metrics();
+	GloAdmin->p_update_metrics();
 }
 
 ProxySQL_Admin::ProxySQL_Admin() :
-	serial_exposer(std::function<void()> { update_GloMTH_metrics })
+	serial_exposer(std::function<void()> { update_modules_metrics })
 {
 #ifdef DEBUG
 		if (glovars.has_debug==false) {
@@ -4885,6 +4861,22 @@ ProxySQL_Admin::ProxySQL_Admin() :
 
 	// Initialize prometheus memory metrics
 	// ====================================
+	auto& proxysql_uptime {
+		prometheus::BuildCounter()
+			.Name("proxysql_uptime")
+			.Register(*GloVars.prometheus_registry)
+	};
+	this->p_proxysql_uptime =
+		std::addressof(proxysql_uptime.Add({}));
+
+	// proxysql_connpool_memory_bytes metric
+	auto& connpool_memory_bytes {
+		prometheus::BuildGauge()
+			.Name("proxysql_connpool_memory_bytes")
+			.Register(*GloVars.prometheus_registry)
+	};
+	this->p_stats_memory_metrics.p_connpool_memory_bytes =
+		std::addressof(connpool_memory_bytes.Add({}));
 
 	// proxysql_sqlite3_memory_bytes metric
 	auto& sqlite3_mem_bytes_gauge {
@@ -7246,8 +7238,25 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	return false;
 }
 
+void ProxySQL_Admin::p_update_metrics() {
+	// Update proxysql_uptime
+	auto t1 { monotonic_time() };
+	auto new_uptime { (t1 - GloVars.global.start_time)/1000/1000 };
+	auto cur_uptime { this->p_proxysql_uptime->Value() };
+	this->p_proxysql_uptime->Increment(new_uptime - cur_uptime);
+
+	// Update memory metrics
+	this->p_stats___memory_metrics();
+	// Update stmt metrics
+	this->p_update_stmt_metrics();
+}
+
 void ProxySQL_Admin::p_stats___memory_metrics() {
 	if (!GloMTH) return;
+
+	// proxysql_connpool_memory_bytes metric
+	const auto connpool_mem { MyHGM->Get_Memory_Stats() };
+	this->p_stats_memory_metrics.p_connpool_memory_bytes->Set(connpool_mem);
 
 	// proxysql_sqlite3_memory_bytes metric
 	int highwater { 0 };
@@ -7278,8 +7287,8 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	const auto cur_allocated { p_stats_memory_metrics.p_jemalloc_allocated->Value() };
 	p_stats_memory_metrics.p_jemalloc_allocated->Increment(allocated - cur_allocated);
 	p_stats_memory_metrics.p_jemalloc_mapped->Set(mapped);
-	p_stats_memory_metrics.p_jemalloc_metadata->Set(mapped);
-	p_stats_memory_metrics.p_jemalloc_retained->Set(mapped);
+	p_stats_memory_metrics.p_jemalloc_metadata->Set(metadata);
+	p_stats_memory_metrics.p_jemalloc_retained->Set(retained);
 
 	// ===============================================================
 

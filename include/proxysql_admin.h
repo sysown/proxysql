@@ -125,6 +125,7 @@ class ProxySQL_Admin {
 
 	struct {
 		prometheus::Gauge* p_sqlite3_memory_bytes { nullptr };
+		prometheus::Gauge* p_connpool_memory_bytes { nullptr };
 		prometheus::Gauge* p_jemalloc_resident { nullptr };
 		prometheus::Gauge* p_jemalloc_active { nullptr };
 		prometheus::Counter* p_jemalloc_allocated { nullptr };
@@ -151,6 +152,8 @@ class ProxySQL_Admin {
 		prometheus::Gauge* p_stmt_max_stmt_id { nullptr };
 		prometheus::Gauge* p_stmt_cached { nullptr };
 	} p_stmt_metrics;
+
+	prometheus::Counter* p_proxysql_uptime { nullptr };
 
 	ProxySQL_External_Scheduler *scheduler;
 
@@ -285,6 +288,7 @@ class ProxySQL_Admin {
 	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 
+	void p_update_metrics();
 	void stats___mysql_query_rules();
 	void stats___mysql_query_digests(bool reset, bool copy=false);
 	//void stats___mysql_query_digests_reset();
