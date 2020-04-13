@@ -1741,8 +1741,12 @@ __end_process_galera_result:
 		std::map<std::string, Galera_monitor_node *>::iterator it2;
 		it2 = GloMyMon->Galera_Hosts_Map.find(s);
 		Galera_monitor_node *node=NULL;
+		bool is_node_back = false;
 		if (it2!=GloMyMon->Galera_Hosts_Map.end()) {
 			node=it2->second;
+			proxy_warning("TRACE : pxc_maint_mode last entry %d\n", node->last_entry()->pxc_maint_mode);
+			if (node->last_entry()->pxc_maint_mode && pxc_maint_mode == false)
+				is_node_back = true;
 			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
 			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, pxc_maint_mode, mmsd->mysql_error_msg);
 		} else {
@@ -1793,6 +1797,7 @@ __end_process_galera_result:
 				}
 			}
 		}
+
 		pthread_mutex_unlock(&GloMyMon->galera_mutex);
 
 		// NOTE: we update MyHGM outside the mutex galera_mutex
@@ -1844,7 +1849,9 @@ __end_process_galera_result:
 							} else {
 								// the node is a writer
 								// TODO: for now we don't care about the number of writers
-								MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
+								proxy_warning("TRACE : pxc_main_mode is_node_back %d, host %s\n", is_node_back, mmsd->hostname);
+								MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, is_node_back);
+								is_node_back = false;
 							}
 						}
 					}

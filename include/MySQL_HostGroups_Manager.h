@@ -403,8 +403,8 @@ class MySQL_HostGroups_Manager {
 
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
-	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);
-	void converge_galera_config(int _writer_hostgroup);
+	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup, bool soft=false);
+	void converge_galera_config(int _writer_hostgroup, bool soft=0);
 
 	// FIXME : add action functions for AWS Aurora
 	//void aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, float current_replication_lag, bool enable, bool verbose=true);

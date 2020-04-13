@@ -1252,6 +1252,7 @@ bool MySQL_HostGroups_Manager::commit() {
 		}
 		if (resultset) { delete resultset; resultset=NULL; }
 	}
+
   char *query=NULL;
 	query=(char *)"SELECT mem_pointer, t1.hostgroup_id, t1.hostname, t1.port FROM mysql_servers t1 LEFT OUTER JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE t2.hostgroup_id IS NULL";
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -4546,7 +4547,7 @@ Galera_Info *MySQL_HostGroups_Manager::get_galera_node_info(int hostgroup) {
 	return info;
 }
 
-void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
+void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup, bool soft) {
 	std::mutex local_mutex;
 	std::lock_guard<std::mutex> lock(local_mutex);
 	int cols=0;
@@ -4558,7 +4559,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
-  mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
+	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
 		error=NULL;
@@ -4670,7 +4671,30 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				sprintf(query,q,read_HG,_writer_hostgroup,_hostname,_port);
 				mydb->execute(query);
 			}
-			converge_galera_config(_writer_hostgroup);
+
+			{
+				proxy_warning("TRACE : mysql_servers_incoming before converge\n");
+				std::unique_ptr<SQLite3_result> res = std::unique_ptr<SQLite3_result>(mydb->execute_statement("select * from mysql_servers_incoming"));
+				res->dump_to_stderr();
+				proxy_warning("TRACE : mysql_servers_incoming before converge\n");
+			}
+
+			if (soft) {
+				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='172.18.0.20' AND port=%d AND hostgroup_id=%d";
+				//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
+				sprintf(query,q,_port,_writer_hostgroup);
+				mydb->execute(query);
+			}
+
+			converge_galera_config(_writer_hostgroup, soft);
+
+			{
+				proxy_warning("TRACE : mysql_servers_incoming after converge\n");
+				std::unique_ptr<SQLite3_result> res = std::unique_ptr<SQLite3_result>(mydb->execute_statement("select * from mysql_servers_incoming"));
+				res->dump_to_stderr();
+				proxy_warning("TRACE : mysql_servers_incoming after converge\n");
+			}
+
 			uint64_t checksum_current = 0;
 			uint64_t checksum_incoming = 0;
 			{
@@ -4757,7 +4781,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 // * GloAdmin->mysql_servers_wrlock() was already called
 // * mysql_servers_incoming has already entries copied from mysql_servers and ready to be loaded
 // at this moment, it is only used to check if there are more than one writer
-void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
+void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup, bool soft) {
 
 	// we first gather info about the cluster
 	pthread_mutex_lock(&Galera_Info_mutex);
@@ -4777,6 +4801,13 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 		free(query);
+
+
+
+		proxy_warning("TRACE : ===============\n");
+		resultset->dump_to_stderr();
+		proxy_warning("TRACE : ===============\n");
+
 		if (resultset) {
 			if (resultset->rows_count) {
 				int num_writers=0;
@@ -4802,9 +4833,13 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 						if (to_move) {
 							int hostgroup=atoi(r->fields[0]);
 							if (hostgroup==info->writer_hostgroup) {
-								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								if (soft)
+									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d AND status <> 1";
+								else
+									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
 								sprintf(query,q,info->backup_writer_hostgroup,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+								proxy_warning("TRACE : move writer to backup query %s\n", query);
 								mydb->execute(query);
 								free(query);
 								to_move--;
