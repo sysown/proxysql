@@ -140,17 +140,25 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 }
 
 const char* MySQL_Variables::client_get_value(MySQL_Session* session, int idx) const {
-	if (!session || !session->client_myds || !session->client_myds->myconn) return NULL;
+	assert(session);
+	assert(session->client_myds);
+	assert(session->client_myds->myconn);
 	return session->client_myds->myconn->variables[idx].value;
 }
 
 uint32_t MySQL_Variables::client_get_hash(MySQL_Session* session, int idx) const {
-	if (!session || !session->client_myds || !session->client_myds->myconn) return 0;
+	assert(session);
+	assert(session->client_myds);
+	assert(session->client_myds->myconn);
 	return session->client_myds->myconn->var_hash[idx];
 }
 
 void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const char* value) {
-	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn || !value) return;
+	assert(session);
+	assert(session->mybe);
+	assert(session->mybe->server_myds);
+	assert(session->mybe->server_myds->myconn);
+	if (!value) return; // FIXME: I am not sure about this implementation . If value == NULL , show the variable be reset?
 	session->mybe->server_myds->myconn->var_hash[idx] = SpookyHash::Hash32(value,strlen(value),10);
 
 	if (session->mybe->server_myds->myconn->variables[idx].value) {
@@ -160,12 +168,18 @@ void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const ch
 }
 
 const char* MySQL_Variables::server_get_value(MySQL_Session* session, int idx) const {
-	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn) return NULL;
+	assert(session);
+	assert(session->mybe);
+	assert(session->mybe->server_myds);
+	assert(session->mybe->server_myds->myconn);
 	return session->mybe->server_myds->myconn->variables[idx].value;
 }
 
 uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const {
-	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn) return 0;
+	assert(session);
+	assert(session->mybe);
+	assert(session->mybe->server_myds);
+	assert(session->mybe->server_myds->myconn);
 	return session->mybe->server_myds->myconn->var_hash[idx];
 }
 
