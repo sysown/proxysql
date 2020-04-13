@@ -960,9 +960,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["transaction_persistent"] = transaction_persistent;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
-		if(mysql_tracked_variables[idx].special_handling) {
-			client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
-		}
+		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
 	j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
 	j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
@@ -996,9 +994,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			if (_myds->myconn) {
 				MySQL_Connection * _myconn = _myds->myconn;
 				for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
-					if(mysql_tracked_variables[idx].special_handling) {
-						_myconn->variables[idx].fill_server_internal_session(j, i, idx);
-					}
+					_myconn->variables[idx].fill_server_internal_session(j, i, idx);
 				}
 				sprintf(buff,"%p",_myconn);
 				j["backends"][i]["conn"]["address"] = buff;
