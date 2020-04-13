@@ -452,6 +452,10 @@ class MySQL_Threads_Handler
 
 		//////////////////////////////////////////////////////
 	} status_variables;
+	/**
+	 * @brief Callback to update the metrics.
+	 */
+	void p_update_metrics();
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 #ifdef IDLE_THREADS

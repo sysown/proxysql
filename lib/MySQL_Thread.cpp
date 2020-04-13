@@ -665,7 +665,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 
 	auto& non_idle_client_connections {
 		prometheus::BuildGauge()
-			.Name("proxysql_non_idle_client_connections")
+			.Name("proxysql_client_connections_non_idle")
 			.Register(*GloVars.prometheus_registry)
 	};
 	this->status_variables.p_non_idle_client_connections =
@@ -3005,6 +3005,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		unsigned int intv=atoi(value);
 		if ((num_threads==0 || num_threads==intv || mysql_threads==NULL) && intv > 0 && intv < 256) {
 			num_threads=intv;
+			this->status_variables.p_num_threads->Set(intv);
 			return true;
 		} else {
 			return false;
@@ -3393,8 +3394,12 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	}
 	if (num) {
 		num_threads=num;
+		this->status_variables.p_num_threads->Set(num);
 	} else {
-		if (num_threads==0) num_threads=DEFAULT_NUM_THREADS; //default
+		if (num_threads==0)  {
+			num_threads=DEFAULT_NUM_THREADS; //default
+			this->status_variables.p_num_threads->Set(DEFAULT_NUM_THREADS);
+		}
 	}
 	int rc=pthread_attr_setstacksize(&attr, stacksize);
 	assert(rc==0);
@@ -6357,6 +6362,54 @@ unsigned long long MySQL_Threads_Handler::get_mysql_session_internal_bytes() {
 	status_variables.p_mysql_session_internal_bytes->Set(q);
 
 	return q;
+}
+
+void MySQL_Threads_Handler::p_update_metrics() {
+	get_total_mirror_queue();
+	get_total_backend_stmt_prepare();
+	get_total_backend_stmt_execute();
+	get_total_backend_stmt_close();
+	get_total_frontend_stmt_prepare();
+	get_total_frontend_stmt_execute();
+	get_total_frontend_stmt_close();
+	get_total_queries();
+	get_slow_queries();
+	get_gtid_queries();
+	get_gtid_session_collected();
+	get_queries_backends_bytes_recv();
+	get_queries_backends_bytes_sent();
+	get_queries_frontends_bytes_recv();
+	get_queries_frontends_bytes_sent();
+	get_active_transations();
+#ifdef IDLE_THREADS
+	get_non_idle_client_connections();
+#endif // IDLE_THREADS
+	get_query_processor_time();
+	get_backend_query_time();
+	get_mysql_backend_buffers_bytes();
+	get_mysql_frontend_buffers_bytes();
+	get_mysql_session_internal_bytes();
+	get_ConnPool_get_conn_immediate();
+	get_ConnPool_get_conn_success();
+	get_ConnPool_get_conn_failure();
+	get_ConnPool_get_conn_latency_awareness();
+	get_generated_pkt_err();
+	get_max_connect_timeout();
+	get_unexpected_com_quit();
+	get_unexpected_packet();
+	get_hostgroup_locked();
+	get_hostgroup_locked_set_cmds();
+	get_hostgroup_locked_queries();
+	get_aws_aurora_replicas_skipped_during_query();
+	get_automatic_detected_sqli();
+	get_whitelisted_sqli_fingerprint();
+	get_backend_lagging_during_query();
+	get_backend_offline_during_query();
+	get_queries_with_max_lag_ms();
+	get_queries_with_max_lag_ms__delayed();
+	get_queries_with_max_lag_ms__total_wait_time_us();
+	get_killed_connections();
+	get_killed_queries();
 }
 
 void MySQL_Thread::Get_Memory_Stats() {
