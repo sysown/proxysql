@@ -351,7 +351,7 @@ MySQL_Connection::~MySQL_Connection() {
 		// always decrease the counter
 		if (ret_mysql) {
 			__sync_fetch_and_sub(&MyHGM->status.server_connections_connected,1);
-			MyHGM->status.p_server_connections_connected->Decrement();
+			MyHGM->status.p_gauge_array[p_hg_gauge::server_connections_connected]->Decrement();
 			if (query.stmt_result) {
 				if (query.stmt_result->handle) {
 					query.stmt_result->handle->status = MYSQL_STATUS_READY; // avoid calling mthd_my_skip_result()
@@ -915,7 +915,7 @@ handler_again:
     	break;
 		case ASYNC_CONNECT_SUCCESSFUL:
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
-			MyHGM->status.p_server_connections_connected->Increment();
+			MyHGM->status.p_gauge_array[p_hg_gauge::server_connections_connected]->Increment();
 			__sync_fetch_and_add(&parent->connect_OK,1);
 			options.client_flag = mysql->client_flag;
 			//assert(mysql->net.vio->async_context);

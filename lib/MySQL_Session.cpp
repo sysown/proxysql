@@ -1,3 +1,4 @@
+#include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "re2/re2.h"
@@ -327,14 +328,14 @@ bool Query_Info::is_select_NOT_for_update() {
 		p+=ql-11;
 		if (strncasecmp(p," FOR UPDATE",11)==0) {
 			__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-			MyHGM->status.p_select_for_update_or_equivalent->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::selects_for_update__autocommit0]->Increment();
 			return false;
 		}
 		p=QP;
 		p+=ql-10;
 		if (strncasecmp(p," FOR SHARE",10)==0) {
 			__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-			MyHGM->status.p_select_for_update_or_equivalent->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::selects_for_update__autocommit0]->Increment();
 			return false;
 		}
 		if (ql>=25) {
@@ -342,7 +343,7 @@ bool Query_Info::is_select_NOT_for_update() {
 			p+=ql-19;
 			if (strncasecmp(p," LOCK IN SHARE MODE",19)==0) {
 				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-				MyHGM->status.p_select_for_update_or_equivalent->Increment();
+				MyHGM->status.p_counter_array[p_hg_counter::selects_for_update__autocommit0]->Increment();
 				return false;
 			}
 			p=QP;
@@ -350,7 +351,7 @@ bool Query_Info::is_select_NOT_for_update() {
 			if (strncasecmp(p," NOWAIT",7)==0) {
 				// let simplify. If NOWAIT is used, we assume FOR UPDATE|SHARE is used
 				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-				MyHGM->status.p_select_for_update_or_equivalent->Increment();
+				MyHGM->status.p_counter_array[p_hg_counter::selects_for_update__autocommit0]->Increment();
 				return false;
 /*
 				if (strcasestr(QP," FOR UPDATE ")==NULL) {
@@ -368,7 +369,7 @@ bool Query_Info::is_select_NOT_for_update() {
 			if (strncasecmp(p," SKIP LOCKED",12)==0) {
 				// let simplify. If SKIP LOCKED is used, we assume FOR UPDATE|SHARE is used
 				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-				MyHGM->status.p_select_for_update_or_equivalent->Increment();
+				MyHGM->status.p_counter_array[p_hg_counter::selects_for_update__autocommit0]->Increment();
 				return false;
 /*
 				if (strcasestr(QP," FOR UPDATE ")) {
@@ -394,12 +395,12 @@ bool Query_Info::is_select_NOT_for_update() {
 			if (strcasestr(buf," FOR ")) {
 				if (strcasestr(buf," FOR UPDATE ")) {
 					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					MyHGM->status.p_select_for_update_or_equivalent->Increment();
+					MyHGM->status.p_counter_array[p_hg_counter::selects_for_update__autocommit0]->Increment();
 					return false;
 				}
 				if (strcasestr(buf," FOR SHARE ")) {
 					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					MyHGM->status.p_select_for_update_or_equivalent->Increment();
+					MyHGM->status.p_counter_array[p_hg_counter::selects_for_update__autocommit0]->Increment();
 					return false;
 				}
 			}
@@ -574,7 +575,7 @@ MySQL_Session::~MySQL_Session() {
 	delete command_counters;
 	if (session_type==PROXYSQL_SESSION_MYSQL && connections_handler==false && mirror==false) {
 		__sync_fetch_and_sub(&MyHGM->status.client_connections,1);
-		MyHGM->status.p_client_connections->Decrement();
+		MyHGM->status.p_gauge_array[p_hg_gauge::client_connections_connected]->Decrement();
 	}
 	assert(qpo);
 	delete qpo;
@@ -742,14 +743,14 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	if (c=='c' || c=='C') {
 		if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
 				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
-				MyHGM->status.p_commit_cnt->Increment();
+				MyHGM->status.p_counter_array[p_hg_counter::com_commit_cnt]->Increment();
 				ret=true;
 			}
 		} else {
 			if (c=='r' || c=='R') {
 				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
 					__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
-					MyHGM->status.p_rollback_cnt->Increment();
+					MyHGM->status.p_counter_array[p_hg_counter::com_rollback]->Increment();
 					ret=true;
 				}
 			}
@@ -776,10 +777,10 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		if (c=='c' || c=='C') {
 			__sync_fetch_and_add(&MyHGM->status.commit_cnt_filtered, 1);
-			MyHGM->status.p_commit_cnt_filtered->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::com_commit_cnt_filtered]->Increment();
 		} else {
 			__sync_fetch_and_add(&MyHGM->status.rollback_cnt_filtered, 1);
-			MyHGM->status.p_rollback_cnt_filtered->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::com_rollback_filtered]->Increment();
 		}
 		return true;
 	}
@@ -872,7 +873,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Setting autocommit to = %d\n", fd);
 #endif
 				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
-				MyHGM->status.p_autocommit_cnt->Increment();
+				MyHGM->status.p_counter_array[p_hg_counter::com_autocommit]->Increment();
 				// we immediately process the number of transactions
 				unsigned int nTrx=NumActiveTransactions();
 				if (fd==1 && autocommit==true) {
@@ -917,7 +918,7 @@ __ret_autocommit_OK:
 				}
 				l_free(pkt->size,pkt->ptr);
 				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
-				MyHGM->status.p_autocommit_cnt_filtered->Increment();
+				MyHGM->status.p_counter_array[p_hg_counter::com_autocommit_filtered]->Increment();
 				free(_new_pkt.ptr);
 				return true;
 			}
@@ -1318,7 +1319,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			}
 			l_free(pkt->size,pkt->ptr);
 			__sync_fetch_and_add(&MyHGM->status.frontend_set_names, 1);
-			MyHGM->status.p_frontend_set_names->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::com_frontend_set_names]->Increment();
 			return true;
 		}
 	}
@@ -1502,7 +1503,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	int rc=myconn->async_change_user(myds->revents);
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
-		MyHGM->status.p_backend_change_user->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::com_backend_change_user]->Increment();
 		//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
 		myconn->async_state_machine=ASYNC_IDLE;
@@ -2356,7 +2357,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	int rc=myconn->async_select_db(myds->revents);
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_init_db, 1);
-		MyHGM->status.p_backend_init_db->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::com_backend_init_db]->Increment();
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
@@ -2578,7 +2579,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	int rc=myconn->async_change_user(myds->revents);
 	if (rc==0) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
-		MyHGM->status.p_backend_change_user->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::com_backend_change_user]->Increment();
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
 		st=previous_status.top();
@@ -4279,7 +4280,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_CHANGE_USER_ERR, this, NULL);
 		free(_s);
 		__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
-		MyHGM->status.p_access_denied_wrong_password->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::access_denied_wrong_password]->Increment();
 	}
 }
 
@@ -4434,10 +4435,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					proxy_warning("mysql-max_connections reached. Returning 'Too many connections'\n");
 					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL, (char *)"mysql-max_connections reached");
 					__sync_fetch_and_add(&MyHGM->status.access_denied_max_connections, 1);
-					MyHGM->status.p_access_denied_max_connections->Increment();
+					MyHGM->status.p_counter_array[p_hg_counter::access_denied_max_connections]->Increment();
 				} else { // see issue #794
 					__sync_fetch_and_add(&MyHGM->status.access_denied_max_user_connections, 1);
-					MyHGM->status.p_access_denied_max_user_connections->Increment();
+					MyHGM->status.p_counter_array[p_hg_counter::access_denied_max_user_connections]->Increment();
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", this, client_myds, client_myds->myconn->userinfo->username, used_users);
 					char *a=(char *)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
 					char *b=(char *)malloc(strlen(a)+strlen(client_myds->myconn->userinfo->username)+16);
@@ -4448,7 +4449,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					free(b);
 				}
 				__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
-				MyHGM->status.p_client_connections_aborted->Increment();
+				MyHGM->status.p_counter_array[p_hg_counter::client_connections_aborted]->Increment();
 				client_myds->DSS=STATE_SLEEP;
 			} else {
 				if (
@@ -4532,10 +4533,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Access denied for user '%s' (using password: %s). SSL is required\n", this, client_myds, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 						__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
-						MyHGM->status.p_client_connections_aborted->Increment();
+						MyHGM->status.p_counter_array[p_hg_counter::client_connections_aborted]->Increment();
 						free(_s);
 						__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
-						MyHGM->status.p_access_denied_wrong_password->Increment();
+						MyHGM->status.p_counter_array[p_hg_counter::access_denied_wrong_password]->Increment();
 					} else {
 						// we are good!
 						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
@@ -4616,11 +4617,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			free(_s);
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
-			MyHGM->status.p_access_denied_wrong_password->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::access_denied_wrong_password]->Increment();
 		}
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
-		MyHGM->status.p_client_connections_aborted->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::client_connections_created]->Increment();
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -4735,7 +4736,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_init_db, 1);
-		MyHGM->status.p_frontend_init_db->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::com_frontend_init_db]->Increment();
 		client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -4763,7 +4764,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
-		MyHGM->status.p_frontend_use_db->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::com_frontend_use_db]->Increment();
 		char *schemaname=strndup((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
 		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
 /*
@@ -5096,7 +5097,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (__tmp_autocommit >= 0 && autocommit_handled==false) {
 							int fd = __tmp_autocommit;
 							__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
-							MyHGM->status.p_autocommit_cnt->Increment();
+							MyHGM->status.p_counter_array[p_hg_counter::com_autocommit]->Increment();
 							// we immediately process the number of transactions
 							unsigned int nTrx=NumActiveTransactions();
 							if (fd==1 && autocommit==true) {
@@ -5732,7 +5733,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
 			free(_s);
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
-			MyHGM->status.p_access_denied_wrong_password->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::access_denied_wrong_password]->Increment();
 		}
 	} else {
 		//FIXME: send an error message saying "not supported" or disconnect

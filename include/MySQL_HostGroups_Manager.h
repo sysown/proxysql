@@ -263,6 +263,367 @@ class AWS_Aurora_Info {
 	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	~AWS_Aurora_Info();
 };
+struct p_hg_counter {
+	enum metric {
+		servers_table_version = 0,
+		server_connections_created,
+		server_connections_delayed,
+		server_connections_aborted,
+		client_connections_created,
+		client_connections_aborted,
+		com_autocommit,
+		com_autocommit_filtered,
+		com_rollback,
+		com_rollback_filtered,
+		com_backend_change_user,
+		com_backend_init_db,
+		// TODO: https://sysown-team.monday.com/boards/484798975/pulses/529413331
+		com_backend_set_names,
+		com_frontend_init_db,
+		com_frontend_set_names,
+		com_frontend_use_db,
+		com_commit_cnt,
+		com_commit_cnt_filtered,
+		selects_for_update__autocommit0,
+		access_denied_wrong_password,
+		access_denied_max_connections,
+		access_denied_max_user_connections,
+		myhgm_myconnpoll_get,
+		myhgm_myconnpoll_get_ok,
+		myhgm_myconnpoll_push,
+		myhgm_myconnpoll_reset,
+		myhgm_myconnpoll_destroy,
+		__size
+	};
+};
+
+struct p_hg_gauge {
+	enum metric {
+		server_connections_connected = 0,
+		client_connections_connected,
+		__size
+	};
+};
+
+struct p_hg_dyn_counter {
+	enum metric {
+		conn_pool_bytes_data_recv = 0,
+		conn_pool_bytes_data_sent,
+		connection_pool_conn_err,
+		connection_pool_conn_ok,
+		connection_pool_queries,
+		gtid_executed,
+		__size
+	};
+};
+
+struct p_hg_dyn_gauge {
+	enum metric {
+		connection_pool_conn_free = 0,
+		connection_pool_conn_used,
+		connection_pool_latency_us,
+		connection_pool_status,
+		__size
+	};
+};
+
+using active_flag = bool;
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+struct hg_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges,
+		dyn_counters,
+		dyn_gauges,
+	};
+};
+
+const static std::tuple<
+	std::vector<
+		std::tuple<
+			p_hg_counter::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>,
+	std::vector<
+		std::tuple<
+			p_hg_gauge::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>,
+	std::vector<
+		std::tuple<
+			p_hg_dyn_counter::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>,
+	std::vector<
+		std::tuple<
+			p_hg_dyn_gauge::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>
+>
+hg_metrics_map {
+	{
+		{
+			p_hg_counter::servers_table_version,
+			"proxysql_servers_table_version",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::server_connections_created,
+			"proxysql_server_connections_created",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::server_connections_delayed,
+			"proxysql_server_connections_delayed",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::server_connections_aborted,
+			"proxysql_server_connections_aborted",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::client_connections_created,
+			"proxysql_client_connections_created",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::client_connections_aborted,
+			"proxysql_client_connections_aborted",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_autocommit,
+			"proxysql_com_autocommit",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_autocommit_filtered,
+			"proxysql_com_autocommit_filtered",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_rollback,
+			"proxysql_com_rollback",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_rollback_filtered,
+			"proxysql_com_rollback_filtered",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_backend_change_user,
+			"proxysql_com_backend_change_user",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_backend_init_db,
+			"proxysql_com_backend_init_db",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_frontend_init_db,
+			"proxysql_com_frontend_init_db",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_frontend_set_names,
+			"proxysql_com_frontend_set_names",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_frontend_use_db,
+			"proxysql_com_frontend_use_db",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_commit_cnt,
+			"proxysql_com_commit_cnt",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_commit_cnt_filtered,
+			"proxysql_com_commit_cnt_filtered",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::com_commit_cnt_filtered,
+			"proxysql_com_commit_cnt_filtered",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::selects_for_update__autocommit0,
+			"proxysql_selects_for_update__autocommit0",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::access_denied_wrong_password,
+			"proxysql_access_denied_wrong_password",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::access_denied_max_connections,
+			"proxysql_access_denied_max_connections",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::access_denied_max_user_connections,
+			"proxysql_access_denied_max_user_connections",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::myhgm_myconnpoll_get,
+			"proxysql_myhgm_myconnpoll_get",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::myhgm_myconnpoll_get_ok,
+			"proxysql_myhgm_myconnpoll_get_ok",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::myhgm_myconnpoll_push,
+			"proxysql_myhgm_myconnpoll_push",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::myhgm_myconnpoll_reset,
+			"proxysql_myhgm_myconnpoll_reset",
+			"",
+			{}
+		},
+		{
+			p_hg_counter::myhgm_myconnpoll_destroy,
+			"proxysql_myhgm_myconnpoll_destroy",
+			"",
+			{}
+		}
+	},
+	// prometheus gauges
+	{
+		{
+			p_hg_gauge::server_connections_connected,
+			"proxysql_server_connections_connected",
+			"Backend connections that are currently connected.",
+			{}
+		},
+		{
+			p_hg_gauge::client_connections_connected,
+			"proxysql_client_connections_connected",
+			"Client connections that are currently connected.",
+			{}
+		}
+	},
+	// prometheus dynamic counters
+	{
+		// connection_pool
+		{
+			p_hg_dyn_counter::conn_pool_bytes_data_recv,
+			"proxysql_connection_pool_bytes_data_recv",
+			"The amount of data received from the backend, excluding metadata.",
+			{}
+		},
+		{
+			p_hg_dyn_counter::conn_pool_bytes_data_sent,
+			"proxysql_connection_pool_bytes_data_sent",
+			"The amount of data sent to the backend, excluding metadata.",
+			{}
+		},
+		{
+			p_hg_dyn_counter::connection_pool_conn_err,
+			"proxysql_connection_pool_conn_err",
+			"How many connections weren't established successfully.",
+			{}
+		},
+		{
+			p_hg_dyn_counter::connection_pool_conn_ok,
+			"proxysql_connection_pool_conn_ok",
+			"How many connections were established successfully.",
+			{}
+		},
+		{
+			p_hg_dyn_counter::connection_pool_queries,
+			"proxysql_connection_pool_conn_queries",
+			"The number of queries routed towards this particular backend server.",
+			{}
+		},
+		// gtid
+		{
+			p_hg_dyn_counter::gtid_executed,
+			"proxysql_gtid_executed",
+			"Tracks the number of executed gtid per host and port.",
+			{}
+		},
+	},
+	// prometheus dynamic counters
+	{
+		{
+			p_hg_dyn_gauge::connection_pool_conn_free,
+			"proxysql_connection_pool_conn_free",
+			"How many connections are currently free.",
+			{}
+		},
+		{
+			p_hg_dyn_gauge::connection_pool_conn_used,
+			"proxysql_connection_pool_conn_used",
+			"How many connections are currently used by ProxySQL for sending queries to the backend server.",
+			{}
+		},
+		{
+			p_hg_dyn_gauge::connection_pool_latency_us,
+			"proxysql_connection_pool_conn_latency_us",
+			"The currently ping time in microseconds, as reported from Monitor.",
+			{}
+		},
+		{
+			p_hg_dyn_gauge::connection_pool_status,
+			"proxysql_connection_pool_conn_status",
+			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
+			{}
+		}
+	}
+};
 
 class MySQL_HostGroups_Manager {
 	private:
@@ -315,6 +676,23 @@ class MySQL_HostGroups_Manager {
 	pthread_mutex_t mysql_errors_mutex;
 	umap_mysql_errors mysql_errors_umap;
 
+	/**
+	 * @brief Initalizes the prometheus counters specified in hg_metrics_map.
+	 */
+	void init_prometheus_counters();
+	/**
+	 * @brief Initalizes the prometheus gauges specified in hg_metrics_map.
+	 */
+	void init_prometheus_gauges();
+	/**
+	 * @brief Initalizes the prometheus dynamic counters specified in hg_metrics_map.
+	 */
+	void init_prometheus_dyn_counters();
+	/**
+	 * @brief Initalizes the prometheus dynamic gauges specified in hg_metrics_map.
+	 */
+	void init_prometheus_dyn_gauges();
+
 	public:
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
@@ -360,46 +738,13 @@ class MySQL_HostGroups_Manager {
 		///              Prometheus Metrics                ///
 		//////////////////////////////////////////////////////
 
-		/// Prometheus client metrics
-		prometheus::Counter* p_client_connections_created { nullptr };
-		prometheus::Counter* p_client_connections_aborted { nullptr };
-		prometheus::Gauge*   p_client_connections { nullptr };
-		/// Prometheus server metrics
-		prometheus::Counter* p_servers_table_version { nullptr };
-		prometheus::Counter* p_server_connections_aborted { nullptr };
-		prometheus::Counter* p_server_connections_created { nullptr };
-		prometheus::Counter* p_server_connections_delayed { nullptr };
-		prometheus::Gauge*   p_server_connections_connected { nullptr };
-		/// Prometheus access metrics
-		prometheus::Counter* p_access_denied_wrong_password { nullptr };
-		prometheus::Counter* p_access_denied_max_connections { nullptr };
-		prometheus::Counter* p_access_denied_max_user_connections { nullptr };
+		/// Prometheus metrics arrays
+		std::array<prometheus::Counter*, p_hg_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_hg_gauge::__size> p_gauge_array {};
 
-		/// Prometheus backend metrics
-		prometheus::Counter* p_backend_change_user { nullptr };
-		prometheus::Counter* p_backend_init_db { nullptr };
-		prometheus::Counter* p_backend_set_names { nullptr };
-
-		/// Prometheus frontend metrics
-		prometheus::Counter* p_frontend_init_db { nullptr };
-		prometheus::Counter* p_frontend_set_names { nullptr };
-		prometheus::Counter* p_frontend_use_db { nullptr };
-
-		/// Prometheus ** metrics
-		prometheus::Counter* p_autocommit_cnt { nullptr };
-		prometheus::Counter* p_commit_cnt { nullptr };
-		prometheus::Counter* p_rollback_cnt { nullptr };
-		prometheus::Counter* p_autocommit_cnt_filtered { nullptr };
-		prometheus::Counter* p_commit_cnt_filtered { nullptr };
-		prometheus::Counter* p_rollback_cnt_filtered { nullptr };
-		prometheus::Counter* p_select_for_update_or_equivalent { nullptr };
-
-		/// Prometheus myconnpoll metrics
-		prometheus::Counter* p_myconnpoll_get { nullptr };
-		prometheus::Counter* p_myconnpoll_get_ok { nullptr };
-		prometheus::Counter* p_myconnpoll_push { nullptr };
-		prometheus::Counter* p_myconnpoll_reset { nullptr };
-		prometheus::Counter* p_myconnpoll_destroy { nullptr };
+		// Prometheus dyn_metrics families arrays
+		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::__size> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::__size> p_dyn_gauge_array {};
 
 		/// Prometheus connection_pool metrics
 		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_recv_map {};

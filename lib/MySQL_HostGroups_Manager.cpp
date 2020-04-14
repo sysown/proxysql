@@ -1,5 +1,7 @@
 #include "MySQL_HostGroups_Manager.h"
 #include "prometheus/counter.h"
+#include "prometheus/detail/builder.h"
+#include "prometheus/family.h"
 #include "prometheus/gauge.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -860,7 +862,7 @@ void MySrvC::connect_error(int err_num) {
 	// as a single connection failure won't make a significant difference
 	__sync_fetch_and_add(&connect_ERR,1);
 	__sync_fetch_and_add(&MyHGM->status.server_connections_aborted,1);
-	MyHGM->status.p_server_connections_aborted->Increment();
+	MyHGM->status.p_counter_array[p_hg_counter::server_connections_aborted]->Increment();
 	if (err_num >= 1048 && err_num <= 1052)
 		return;
 	if (err_num >= 1054 && err_num <= 1075)
@@ -949,6 +951,122 @@ MyHGC::~MyHGC() {
 	delete mysrvs;
 }
 
+void MySQL_HostGroups_Manager::init_prometheus_counters() {
+	for (const auto& metric : std::get<hg_metrics_map_idx::counters>(hg_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->status.p_counter_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
+
+void MySQL_HostGroups_Manager::init_prometheus_gauges() {
+	for (const auto& metric : std::get<hg_metrics_map_idx::gauges>(hg_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->status.p_gauge_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
+
+void MySQL_HostGroups_Manager::init_prometheus_dyn_counters() {
+	for (const auto& metric : std::get<hg_metrics_map_idx::dyn_counters>(hg_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->status.p_dyn_counter_array[tg_metric] = metric_family;
+	}
+}
+
+void MySQL_HostGroups_Manager::init_prometheus_dyn_gauges() {
+	for (const auto& metric : std::get<hg_metrics_map_idx::dyn_gauges>(hg_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->status.p_dyn_gauge_array[tg_metric] = metric_family;
+	}
+}
+
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&ev_loop_mutex, NULL);
 	status.client_connections=0;
@@ -1028,244 +1146,10 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&mysql_errors_mutex, NULL);
 
 	// Initialize prometheus metrics
-
-	// server_* metrics
-	auto& servers_table_version {
-		prometheus::BuildCounter()
-			.Name("proxysql_servers_table_version")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_servers_table_version =
-		std::addressof(servers_table_version.Add({}));
-
-	auto& server_connections_connected {
-		prometheus::BuildGauge()
-			.Name("proxysql_server_connections_connected")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_server_connections_connected =
-		std::addressof(server_connections_connected.Add({}));
-
-	auto& server_connections_created {
-		prometheus::BuildCounter()
-			.Name("proxysql_server_connections_created")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_server_connections_created =
-		std::addressof(server_connections_created.Add({}));
-
-	auto& server_connections_delayed {
-		prometheus::BuildCounter()
-			.Name("proxysql_server_connections_delayed")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_server_connections_delayed =
-		std::addressof(server_connections_delayed.Add({}));
-
-	auto& server_connections_aborted {
-		prometheus::BuildCounter()
-			.Name("proxysql_server_connections_aborted")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_server_connections_aborted =
-		std::addressof(server_connections_aborted.Add({}));
-
-	// client_connections_* metrics
-	auto& client_connections_created {
-		prometheus::BuildCounter()
-			.Name("proxysql_client_connections_created")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_client_connections_created =
-		std::addressof(client_connections_created.Add({}));
-
-	auto& client_connections_aborted {
-		prometheus::BuildCounter()
-			.Name("proxysql_client_connections_aborted")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_client_connections_aborted =
-		std::addressof(client_connections_aborted.Add({}));
-
-	// TODO: Check type of this one
-	auto& client_connections_connected {
-		prometheus::BuildGauge()
-			.Name("proxysql_client_connections_connected")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_client_connections =
-		std::addressof(client_connections_connected.Add({}));
-
-	// com_* counters
-	auto& com_autocommit {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_autocommit")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_autocommit_cnt =
-		std::addressof(com_autocommit.Add({}));
-
-	auto& com_autocommit_filtered {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_autocommit_filtered")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_autocommit_cnt_filtered =
-		std::addressof(com_autocommit_filtered.Add({}));
-
-	auto& com_rollback {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_rollback")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_rollback_cnt =
-		std::addressof(com_rollback.Add({}));
-
-	auto& com_rollback_filtered {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_rollback_filtered")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_rollback_cnt_filtered =
-		std::addressof(com_rollback_filtered.Add({}));
-
-	auto& com_backend_change_user {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_backend_change_user")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_backend_change_user =
-		std::addressof(com_backend_change_user.Add({}));
-
-	auto& com_backend_init_db {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_backend_init_db")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_backend_init_db =
-		std::addressof(com_backend_init_db.Add({}));
-
-	auto& com_backend_set_names {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_backend_set_names")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_backend_set_names =
-		std::addressof(com_backend_set_names.Add({}));
-
-	auto& com_frontend_init_db {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_frontend_init_db")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_frontend_init_db =
-		std::addressof(com_frontend_init_db.Add({}));
-
-	auto& com_frontend_set_names {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_frontend_set_names")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_frontend_set_names =
-		std::addressof(com_frontend_set_names.Add({}));
-
-	auto& com_frontend_use_db {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_frontend_use_db")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_frontend_use_db =
-		std::addressof(com_frontend_use_db.Add({}));
-
-	auto& com_commit_cnt {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_commit_cnt")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_commit_cnt =
-		std::addressof(com_commit_cnt.Add({}));
-
-	auto& com_commit_cnt_filtered {
-		prometheus::BuildCounter()
-			.Name("proxysql_com_commit_cnt_filtered")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_commit_cnt_filtered =
-		std::addressof(com_commit_cnt_filtered.Add({}));
-
-	// TODO: Check name
-	auto& select_for_update_or_equivalent {
-		prometheus::BuildCounter()
-			.Name("proxysql_selects_for_update__autocommit0")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_select_for_update_or_equivalent =
-		std::addressof(select_for_update_or_equivalent.Add({}));
-
-	// Access_* errors
-	auto& access_denied_wrong_password {
-		prometheus::BuildCounter()
-			.Name("proxysql_access_denied_wrong_password")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_access_denied_wrong_password =
-		std::addressof(access_denied_wrong_password.Add({}));
-
-	auto& access_denied_max_connections {
-		prometheus::BuildCounter()
-			.Name("proxysql_access_denied_max_connections")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_access_denied_max_connections =
-		std::addressof(access_denied_max_connections.Add({}));
-
-	auto& access_denied_max_user_connections {
-		prometheus::BuildCounter()
-			.Name("proxysql_access_denied_max_user_connections")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_access_denied_max_user_connections =
-		std::addressof(access_denied_max_user_connections.Add({}));
-
-	auto& myconnpoll_get {
-		prometheus::BuildCounter()
-			.Name("proxysql_myhgm_myconnpoll_get")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_myconnpoll_get =
-		std::addressof(myconnpoll_get.Add({}));
-
-	auto& myconnpoll_get_ok {
-		prometheus::BuildCounter()
-			.Name("proxysql_myhgm_myconnpoll_get_ok")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_myconnpoll_get_ok =
-		std::addressof(myconnpoll_get_ok.Add({}));
-
-	auto& myconnpoll_push {
-		prometheus::BuildCounter()
-			.Name("proxysql_myhgm_myconnpoll_push")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_myconnpoll_push =
-		std::addressof(myconnpoll_push.Add({}));
-
-	auto& myconnpoll_reset {
-		prometheus::BuildCounter()
-			.Name("proxysql_myhgm_myconnpoll_reset")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_myconnpoll_reset =
-		std::addressof(myconnpoll_reset.Add({}));
-
-	auto& myconnpoll_destroy {
-		prometheus::BuildCounter()
-			.Name("proxysql_myhgm_myconnpoll_destroy")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->status.p_myconnpoll_destroy =
-		std::addressof(myconnpoll_destroy.Add({}));
+	init_prometheus_counters();
+	init_prometheus_gauges();
+	init_prometheus_dyn_counters();
+	init_prometheus_dyn_gauges();
 }
 
 void MySQL_HostGroups_Manager::init() {
@@ -1866,7 +1750,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
-	this->status.p_servers_table_version->Increment(1);
+	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 	wrunlock();
@@ -2990,7 +2874,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					conn = new MySQL_Connection();
 					conn->parent=mysrvc;
 					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-					MyHGM->status.p_server_connections_created->Increment();
+					MyHGM->status.p_counter_array[p_hg_counter::server_connections_created]->Increment();
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 				} else {
 					// we may consider creating a new connection
@@ -3000,7 +2884,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 						conn = new MySQL_Connection();
 						conn->parent=mysrvc;
 						__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-						MyHGM->status.p_server_connections_created->Increment();
+						MyHGM->status.p_counter_array[p_hg_counter::server_connections_created]->Increment();
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					} else {
 						conn=(MySQL_Connection *)conns->remove_index_fast(i);
@@ -3023,13 +2907,13 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		_myhgc->new_connections_now++;
 		if (_myhgc->new_connections_now > (unsigned int) mysql_thread___throttle_connections_per_sec_to_hostgroup) {
 			__sync_fetch_and_add(&MyHGM->status.server_connections_delayed, 1);
-			MyHGM->status.p_server_connections_delayed->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::server_connections_delayed]->Increment();
 			return NULL;
 		} else {
 			conn = new MySQL_Connection();
 			conn->parent=mysrvc;
 			__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-			MyHGM->status.p_server_connections_created->Increment();
+			MyHGM->status.p_counter_array[p_hg_counter::server_connections_created]->Increment();
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 			return  conn;
 		}
@@ -3426,17 +3310,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				const auto& cur_val { recv_counter_id->second->Value() };
 				recv_counter_id->second->Increment(mysrvc->bytes_recv - cur_val);
 			} else {
-				const std::string name { "proxysql_connection_pool_bytes_data_recv" };
 				auto& conn_pool_bytes_data_recv {
-					prometheus::BuildCounter()
-						.Name(name)
-						.Help("The amount of data received from the backend, excluding metadata.")
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_counter_array[p_hg_dyn_counter::conn_pool_bytes_data_recv]
 				};
 				this->status.p_conn_pool_bytes_data_recv_map.insert(
 					{
 						endpoint_id,
-						std::addressof(conn_pool_bytes_data_recv.Add({
+						std::addressof(conn_pool_bytes_data_recv->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3450,17 +3330,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				const auto& cur_val { sent_counter_id->second->Value() };
 				sent_counter_id->second->Increment(mysrvc->bytes_sent - cur_val);
 			} else {
-				const std::string name { "proxysql_connection_pool_bytes_data_sent" };
-				auto& conn_pool_bytes_data_recv {
-					prometheus::BuildCounter()
-						.Name(name)
-						.Help("The amount of data sent to the backend, excluding metadata.")
-						.Register(*GloVars.prometheus_registry)
+				auto& conn_pool_bytes_data_sent {
+					this->status.p_dyn_counter_array[p_hg_dyn_counter::conn_pool_bytes_data_sent]
 				};
 				this->status.p_conn_pool_bytes_data_sent_map.insert(
 					{
 						endpoint_id,
-						std::addressof(conn_pool_bytes_data_recv.Add({
+						std::addressof(conn_pool_bytes_data_sent->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3474,17 +3350,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				const auto& cur_val { con_err_counter_id->second->Value() };
 				con_err_counter_id->second->Increment(mysrvc->connect_ERR - cur_val);
 			} else {
-				const std::string name { "proxysql_connection_pool_conn_err" };
 				auto& connection_pool_conn_err {
-					prometheus::BuildCounter()
-						.Name(name)
-						.Help("How many connections weren't established successfully.")
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_counter_array[p_hg_dyn_counter::connection_pool_conn_err]
 				};
 				this->status.p_connection_pool_conn_err_map.insert(
 					{
 						endpoint_id,
-						std::addressof(connection_pool_conn_err.Add({
+						std::addressof(connection_pool_conn_err->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3497,17 +3369,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			if (con_free_counter_id != this->status.p_connection_pool_conn_free_map.end()) {
 				con_free_counter_id->second->Set(mysrvc->ConnectionsFree->conns_length());
 			} else {
-				const std::string name { "proxysql_connection_pool_conn_free" };
 				auto& connection_pool_conn_free {
-					prometheus::BuildGauge()
-						.Name(name)
-						.Help("How many connections are currently free.")
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_free]
 				};
 				this->status.p_connection_pool_conn_free_map.insert(
 					{
 						endpoint_id,
-						std::addressof(connection_pool_conn_free.Add({
+						std::addressof(connection_pool_conn_free->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3521,16 +3389,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				const auto& cur_val { conn_pool_conn_ok->second->Value() };
 				conn_pool_conn_ok->second->Increment(mysrvc->connect_OK - cur_val);
 			} else {
-				const std::string name { "proxysql_connection_pool_conn_ok" };
 				auto& connection_pool_conn_ok {
-					prometheus::BuildCounter()
-						.Name(name)
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_counter_array[p_hg_dyn_counter::connection_pool_conn_ok]
 				};
 				this->status.p_connection_pool_conn_ok_map.insert(
 					{
 						endpoint_id,
-						std::addressof(connection_pool_conn_ok.Add({
+						std::addressof(connection_pool_conn_ok->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3543,16 +3408,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			if (conn_pool_conn_used != this->status.p_connection_pool_conn_used_map.end()) {
 				conn_pool_conn_used->second->Set(mysrvc->ConnectionsUsed->conns_length());
 			} else {
-				const std::string name { "proxysql_connection_pool_conn_used" };
 				auto& connection_pool_conn_used {
-					prometheus::BuildGauge()
-						.Name(name)
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_used]
 				};
 				this->status.p_connection_pool_conn_used_map.insert(
 					{
 						endpoint_id,
-						std::addressof(connection_pool_conn_used.Add({
+						std::addressof(connection_pool_conn_used->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3565,17 +3427,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			if (conn_pool_conn_latency_us != this->status.p_connection_pool_latency_us_map.end()) {
 				conn_pool_conn_latency_us->second->Set(mysrvc->current_latency_us);
 			} else {
-				const std::string name { "proxysql_connection_pool_conn_latency_us" };
 				auto& connection_pool_conn_latency_us {
-					prometheus::BuildGauge()
-						.Name(name)
-						.Help("The currently ping time in microseconds, as reported from Monitor.")
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_latency_us]
 				};
 				this->status.p_connection_pool_latency_us_map.insert(
 					{
 						endpoint_id,
-						std::addressof(connection_pool_conn_latency_us.Add({
+						std::addressof(connection_pool_conn_latency_us->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3589,17 +3447,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				const auto& cur_val { conn_pool_conn_queries->second->Value() };
 				conn_pool_conn_queries->second->Increment(mysrvc->queries_sent - cur_val);
 			} else {
-				const std::string name { "proxysql_connection_pool_conn_queries" };
 				auto& connection_pool_conn_queries {
-					prometheus::BuildCounter()
-						.Name(name)
-						.Help("The number of queries routed towards this particular backend server.")
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_counter_array[p_hg_dyn_counter::connection_pool_conn_ok]
 				};
 				this->status.p_connection_pool_queries_map.insert(
 					{
 						endpoint_id,
-						std::addressof(connection_pool_conn_queries.Add({
+						std::addressof(connection_pool_conn_queries->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -3612,17 +3466,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			if (conn_pool_conn_status != this->status.p_connection_pool_status_map.end()) {
 				conn_pool_conn_status->second->Set(mysrvc->status + 1);
 			} else {
-				const std::string name { "proxysql_connection_pool_conn_status" };
 				auto& connection_pool_conn_status {
-					prometheus::BuildGauge()
-						.Name(name)
-						.Help("The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).")
-						.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_status]
 				};
 				this->status.p_connection_pool_status_map.insert(
 					{
 						endpoint_id,
-						std::addressof(connection_pool_conn_status.Add({
+						std::addressof(connection_pool_conn_status->Add({
 							{"endpoint", endpoint_addr + ":" + endpoint_port},
 							{"hostgroup", hostgroup_id }
 						}))
@@ -4143,20 +3993,30 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 }
 
 void MySQL_HostGroups_Manager::p_update_myconnpoll() {
-	const auto& cur_myconnpoll_get { this->status.p_myconnpoll_get->Value() };
-	this->status.p_myconnpoll_get->Increment(status.myconnpoll_get - cur_myconnpoll_get);
+	const auto& cur_myconnpoll_get {
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get]->Value()
+	};
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get]->Increment(status.myconnpoll_get - cur_myconnpoll_get);
 
-	const auto& cur_myconnpoll_get_ok { this->status.p_myconnpoll_get_ok->Value() };
-	this->status.p_myconnpoll_get_ok->Increment(status.myconnpoll_get_ok - cur_myconnpoll_get_ok);
+	const auto& cur_myconnpoll_get_ok {
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get_ok]->Value()
+	};
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get_ok]->Increment(status.myconnpoll_get_ok - cur_myconnpoll_get_ok);
 
-	const auto& cur_myconnpoll_push { this->status.p_myconnpoll_push->Value() };
-	this->status.p_myconnpoll_push->Increment(status.myconnpoll_push - cur_myconnpoll_push);
+	const auto& cur_myconnpoll_push {
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_push]->Value()
+	};
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_push]->Increment(status.myconnpoll_push - cur_myconnpoll_push);
 
-	const auto& cur_myconnpoll_reset { this->status.p_myconnpoll_reset->Value() };
-	this->status.p_myconnpoll_reset->Increment(status.myconnpoll_reset - cur_myconnpoll_reset);
+	const auto& cur_myconnpoll_reset {
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_reset]->Value()
+	};
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_reset]->Increment(status.myconnpoll_reset - cur_myconnpoll_reset);
 
-	const auto& cur_myconnpoll_destroy { this->status.p_myconnpoll_destroy->Value() };
-	this->status.p_myconnpoll_destroy->Increment(status.myconnpoll_destroy - cur_myconnpoll_destroy);
+	const auto& cur_myconnpoll_destroy {
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_destroy]->Value()
+	};
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_destroy]->Increment(status.myconnpoll_destroy - cur_myconnpoll_destroy);
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
@@ -5457,13 +5317,10 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 
 		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
 			auto& gitd_counter {
-				prometheus::BuildCounter()
-					.Name("proxysql_gtid_executed")
-					.Help("Tracks the number of executed gtid per host and port.")
-					.Register(*GloVars.prometheus_registry)
+					this->status.p_dyn_counter_array[p_hg_dyn_counter::gtid_executed]
 			};
 
-			gtid_counter = std::addressof(gitd_counter.Add({
+			gtid_counter = std::addressof(gitd_counter->Add({
 				{ "hostname", address },
 				{ "port", port },
 			}));

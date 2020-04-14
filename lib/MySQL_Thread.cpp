@@ -1,4 +1,5 @@
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
+#include "MySQL_HostGroups_Manager.h"
 #define MYSQL_THREAD_IMPLEMENTATION
 #include "proxysql.h"
 #include "cpp.h"
@@ -5005,8 +5006,8 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 			sess->max_connections_reached=true;
 		}
 		// Update metrics
-		MyHGM->status.p_client_connections_created->Increment();
-		MyHGM->status.p_client_connections->Increment();
+		MyHGM->status.p_counter_array[p_hg_counter::client_connections_created]->Increment();
+		MyHGM->status.p_gauge_array[p_hg_gauge::client_connections_connected]->Increment();
 
 		sess->client_myds->client_addrlen=addrlen;
 		sess->client_myds->client_addr=addr;
