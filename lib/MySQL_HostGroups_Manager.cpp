@@ -4639,7 +4639,9 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				if (
 					(writer_is_also_reader==0 && found_reader==false)
 					||
-					(writer_is_also_reader > 0 && found_reader==true)
+					(writer_is_also_reader == 1 && found_reader==true)
+					||
+					(writer_is_also_reader == 2)
 				) { // either both true or both false
 					delete resultset;
 					resultset=NULL;
