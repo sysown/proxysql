@@ -163,9 +163,9 @@ libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
 prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar --strip-components=1 -zxf v0.9.0.tar.gz -C .
-	cd prometheus-cpp && git submodule init
-	cd prometheus-cpp && git submodule update
-	cd prometheus-cpp && git apply patches/serial_exposer.patch
+	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-v1.11.tar.gz -C 3rdparty/civetweb
+	cd prometheus-cpp && tar --strip-components=1 -zxf googletest-v1.10.0.tar.gz -C 3rdparty/googletest
+	cd prometheus-cpp && patch -p1 < patches/serial_exposer.patch
 	cd prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF
 	cd prometheus-cpp && make -j 4
 
