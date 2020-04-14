@@ -1009,7 +1009,7 @@ mysql_variable_st mysql_tracked_variables[] {
     { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" } ,
     { SQL_MAX_JOIN_SIZE,        SETTING_VARIABLE,     false, false, true, true,  false, (char *)"max_join_size", (char *)"max_join_size", (char *)"18446744073709551615" } ,
     { SQL_LOG_BIN,              SETTING_VARIABLE,     false, false, true, false, false, (char *)"sql_log_bin", (char *)"sql_log_bin", (char *)"1" } ,
-    { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, false, false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" } ,
+    { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" } ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];

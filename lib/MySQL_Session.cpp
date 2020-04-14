@@ -5021,21 +5021,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
 						exit_after_SetParse = true;
-					} else if (var == "wsrep_sync_wait") {
-						std::string value1 = *values;
-						if ((strcasecmp(value1.c_str(),"0")==0) || (strcasecmp(value1.c_str(),"1")==0)) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET wsrep_sync_wait value %s\n", value1.c_str());
-							uint32_t wsrep_sync_wait_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							if (mysql_variables.client_get_hash(this, SQL_WSREP_SYNC_WAIT) != wsrep_sync_wait_int) {
-								if (!mysql_variables.client_set_value(this, SQL_WSREP_SYNC_WAIT, value1.c_str()))
-									return false;
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection session_track_gtids to %s\n", value1.c_str());
-							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
 					// the following two blocks of code will be simplified later
 					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
 						int idx = SQL_NAME_LAST;
@@ -5052,7 +5037,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							}
 						}
-					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") ) {
+					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") ) {
 						int idx = SQL_NAME_LAST;
 						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
 							if (mysql_tracked_variables[i].is_number) {
