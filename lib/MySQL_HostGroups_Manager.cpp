@@ -1,3 +1,4 @@
+#include "MySQL_HostGroups_Manager.h"
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 #include "proxysql.h"
@@ -5439,6 +5440,53 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 		// we couldn't find the cluster, exits
 	}
 	pthread_mutex_unlock(&Galera_Info_mutex);
+}
+
+void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
+	pthread_rwlock_wrlock(&gtid_rwlock);
+
+	std::unordered_map<string, GTID_Server_Data*>::iterator it { gtid_map.begin() };
+	while(it != gtid_map.end()) {
+		GTID_Server_Data* gtid_si { it->second };
+		const std::string& address { gtid_si->address };
+		const std::string& port { std::to_string(gtid_si->mysql_port) };
+		const std::string& endpoint_id { address + ":" + port };
+
+		const auto& gitd_id_counter { this->status.p_gtid_executed_map.find(endpoint_id) };
+		prometheus::Counter* gtid_counter { nullptr };
+
+		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
+			auto& gitd_counter {
+				prometheus::BuildCounter()
+					.Name("proxysql_gtid_executed")
+					.Help("Tracks the number of executed gtid per host and port.")
+					.Register(*GloVars.prometheus_registry)
+			};
+
+			gtid_counter = std::addressof(gitd_counter.Add({
+				{ "hostname", address },
+				{ "port", port },
+			}));
+
+			this->status.p_gtid_executed_map.insert(
+				{
+					endpoint_id,
+					gtid_counter
+				}
+			);
+		} else {
+			gtid_counter = gitd_id_counter->second;
+		}
+
+		if (gtid_si) {
+			const auto& cur_executed_gtid { gtid_counter->Value() };
+			gtid_counter->Increment(gtid_si->events_read - cur_executed_gtid);
+		}
+
+		it++;
+	}
+
+	pthread_rwlock_unlock(&gtid_rwlock);
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {

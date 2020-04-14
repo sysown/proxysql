@@ -412,6 +412,9 @@ class MySQL_HostGroups_Manager {
 		std::map<std::string, prometheus::Counter*> p_connection_pool_queries_map {};
 		std::map<std::string, prometheus::Gauge*> p_connection_pool_status_map {};
 
+		/// Prometheus gtid_executed metrics
+		std::map<std::string, prometheus::Counter*> p_gtid_executed_map {};
+
 		//////////////////////////////////////////////////////
 	} status;
 	/**
@@ -422,6 +425,10 @@ class MySQL_HostGroups_Manager {
 	 * @brief Update 'myconnpoll' prometheus counters.
 	 */
 	void p_update_myconnpoll();
+	/**
+	 * @brief Update the stats_mysql_gtid_executed counters.
+	 */
+	void p_update_mysql_gtid_executed();
 
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();
