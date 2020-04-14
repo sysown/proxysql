@@ -5036,54 +5036,36 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
 						}
+					// the following two blocks of code will be simplified later
 					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
-						std::string value1 = *values;
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
-						int __tmp_value = -1;
-						if (
-							(strcasecmp(value1.c_str(),(char *)"0")==0) ||
-							(strcasecmp(value1.c_str(),(char *)"false")==0) ||
-							(strcasecmp(value1.c_str(),(char *)"off")==0)
-						) {
-							__tmp_value = 0;
-						} else {
-							if (
-								(strcasecmp(value1.c_str(),(char *)"1")==0) ||
-								(strcasecmp(value1.c_str(),(char *)"true")==0) ||
-								(strcasecmp(value1.c_str(),(char *)"on")==0)
-							) {
-								__tmp_value = 1;
-							}
-						}
-						if (__tmp_value >= 0) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
-							uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							int idx = SQL_NAME_LAST;
-							for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
-								if (!strcmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+						int idx = SQL_NAME_LAST;
+						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+							if (mysql_tracked_variables[i].is_bool) {
+								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
 									idx = mysql_tracked_variables[i].idx;
 									break;
 								}
 							}
-							if (idx == SQL_NAME_LAST) {
-								proxy_error("Variable %s not found in mysql_tracked_variables[]\n", var.c_str());
-								unable_to_parse_set_statement(lock_hostgroup);
+						}
+						if (idx != SQL_NAME_LAST) {
+							if (mysql_variables.parse_variable_boolean(this,idx, *values, exit_after_SetParse, lock_hostgroup)==false) {
 								return false;
 							}
-							if (mysql_variables.client_get_hash(this, idx) != var_value_int) {
-								if (__tmp_value == 0) {
-									if (!mysql_variables.client_set_value(this, idx, "OFF"))
-										return false;
-								} else {
-									if (!mysql_variables.client_set_value(this, idx, "ON"))
-										return false;
+						}
+					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") ) {
+						int idx = SQL_NAME_LAST;
+						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+							if (mysql_tracked_variables[i].is_number) {
+								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+									idx = mysql_tracked_variables[i].idx;
+									break;
 								}
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
+						}
+						if (idx != SQL_NAME_LAST) {
+							if (mysql_variables.parse_variable_number(this,idx, *values, exit_after_SetParse, lock_hostgroup)==false) {
+								return false;
+							}
 						}
 					} else if (var == "autocommit") {
 						std::string value1 = *values;
@@ -5169,48 +5151,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								}
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection session_track_gtids to %s\n", value1.c_str());
 								client_myds->myconn->options.session_track_gtids=strdup(value1.c_str());
-							}
-							exit_after_SetParse = true;
-						} else {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
-					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") ) {
-						std::string value1 = *values;
-						int vl = strlen(value1.c_str());
-						const char *v = value1.c_str();
-						bool only_digit_chars = true;
-						for (int i=0; i<vl && only_digit_chars==true; i++) {
-							if (is_digit(v[i])==0) {
-								only_digit_chars=false;
-							}
-						}
-						if (!only_digit_chars) {
-							if (var == "sql_select_limit") { // only sql_select_limit allows value "default"
-								if (strcasecmp(v,"default")==0) {
-									only_digit_chars = true;
-								}
-							}
-						}
-						if (only_digit_chars) {
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
-							uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							int idx = SQL_NAME_LAST;
-							for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
-								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
-									idx = mysql_tracked_variables[i].idx;
-									break;
-								}
-							}
-							if (idx == SQL_NAME_LAST) {
-								proxy_error("Variable %s not found in mysql_tracked_variables[]\n", var.c_str());
-								unable_to_parse_set_statement(lock_hostgroup);
-								return false;
-							}
-							if (mysql_variables.client_get_hash(this, idx) != var_value_int) {
-								if (!mysql_variables.client_set_value(this, idx, value1.c_str()))
-									return false;
-								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 							}
 							exit_after_SetParse = true;
 						} else {
