@@ -4860,218 +4860,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	rand_del[4] = '-';
 	rand_del[5] = 0;
 
-	// Initialize prometheus memory metrics
-	// ====================================
-	auto& proxysql_uptime {
-		prometheus::BuildCounter()
-			.Name("proxysql_uptime")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_proxysql_uptime =
-		std::addressof(proxysql_uptime.Add({}));
-
-	// proxysql_connpool_memory_bytes metric
-	auto& connpool_memory_bytes {
-		prometheus::BuildGauge()
-			.Name("proxysql_connpool_memory_bytes")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_connpool_memory_bytes =
-		std::addressof(connpool_memory_bytes.Add({}));
-
-	// proxysql_sqlite3_memory_bytes metric
-	auto& sqlite3_mem_bytes_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_sqlite3_memory_bytes")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_sqlite3_memory_bytes =
-		std::addressof(sqlite3_mem_bytes_gauge.Add({}));
-
-	// proxysql_jemalloc_resident metric
-	auto& jemalloc_resident_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_jemalloc_resident")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_jemalloc_resident =
-		std::addressof(jemalloc_resident_gauge.Add({}));
-
-	// proxysql_jemalloc_active metric
-	auto& jemalloc_active_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_jemalloc_active")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_jemalloc_active =
-		std::addressof(jemalloc_active_gauge.Add({}));
-
-	// proxysql_jemalloc_allocated metric
-	auto& jemalloc_allocated_counter {
-		prometheus::BuildCounter()
-			.Name("proxysql_jemalloc_allocated")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_jemalloc_allocated =
-		std::addressof(jemalloc_allocated_counter.Add({}));
-
-	// proxysql_jemalloc_mapped metric
-	auto& jemalloc_mapped_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_jemalloc_mapped")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_jemalloc_mapped =
-		std::addressof(jemalloc_mapped_gauge.Add({}));
-
-	// proxysql_jemalloc_mapped metric
-	auto& jemalloc_metadata_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_jemalloc_metadata")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_jemalloc_metadata =
-		std::addressof(jemalloc_metadata_gauge.Add({}));
-
-	// proxysql_jemalloc_mapped metric
-	auto& jemalloc_retained_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_jemalloc_retained")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_jemalloc_retained =
-		std::addressof(jemalloc_retained_gauge.Add({}));
-
-	auto& query_digest_memory_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_query_digest_memory_bytes")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_query_digest_memory =
-		std::addressof(query_digest_memory_gauge.Add({}));
-
-	auto& auth_memory {
-		prometheus::BuildGauge()
-			.Name("proxysql_auth_memory_bytes")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_auth_memory =
-		std::addressof(auth_memory.Add({}));
-
-	auto& mysql_query_rules_memory_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_mysql_query_rules_memory_bytes")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_mysql_query_rules_memory =
-		std::addressof(mysql_query_rules_memory_gauge.Add({}));
-
-	auto& mysql_firewall_users_table_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_mysql_firewall_users_table")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_mysql_firewall_users_table =
-		std::addressof(mysql_firewall_users_table_gauge.Add({}));
-
-	auto& mysql_firewall_users_config_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_mysql_firewall_users_config")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_mysql_firewall_users_config =
-		std::addressof(mysql_firewall_users_config_gauge.Add({}));
-
-	auto& mysql_firewall_rules_table_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_mysql_firewall_rules_table")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_mysql_firewall_rules_table =
-		std::addressof(mysql_firewall_rules_table_gauge.Add({}));
-
-	auto& mysql_firewall_rules_config_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_mysql_firewall_rules_config")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_mysql_firewall_rules_config =
-		std::addressof(mysql_firewall_rules_config_gauge.Add({}));
-
-	auto& stack_memory_mysql_threads_gauge {
-		prometheus::BuildGauge()
-			.Name("proxysql_stack_memory_mysql_threads")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_stack_memory_mysql_threads =
-		std::addressof(stack_memory_mysql_threads_gauge.Add({}));
-
-	auto& stack_memory_admin_threads {
-		prometheus::BuildGauge()
-			.Name("proxysql_stack_memory_admin_threads")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_stack_memory_admin_threads =
-		std::addressof(stack_memory_admin_threads.Add({}));
-
-	auto& stack_memory_cluster_threads {
-		prometheus::BuildGauge()
-			.Name("proxysql_stack_memory_cluster_threads")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stats_memory_metrics.p_stack_memory_cluster_threads =
-		std::addressof(stack_memory_cluster_threads.Add({}));
-
-	// Initialize prometheus stmt metrics
-	// ====================================
-
-	auto& stmt_client_active_total {
-		prometheus::BuildGauge()
-			.Name("proxysql_stmt_client_active_total")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stmt_metrics.p_stmt_client_active_total =
-		std::addressof(stmt_client_active_total.Add({}));
-
-	auto& stmt_client_active_unique {
-		prometheus::BuildGauge()
-			.Name("proxysql_stmt_client_active_unique")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stmt_metrics.p_stmt_client_active_unique =
-		std::addressof(stmt_client_active_unique.Add({}));
-
-	auto& stmt_server_active_total {
-		prometheus::BuildGauge()
-			.Name("proxysql_stmt_server_active_total")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stmt_metrics.p_stmt_server_active_total =
-		std::addressof(stmt_server_active_total.Add({}));
-
-	auto& stmt_server_active_unique {
-		prometheus::BuildGauge()
-			.Name("proxysql_stmt_server_active_unique")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stmt_metrics.p_stmt_server_active_unique =
-		std::addressof(stmt_server_active_unique.Add({}));
-
-	auto& stmt_max_stmt_id {
-		prometheus::BuildGauge()
-			.Name("proxysql_stmt_max_stmt_id")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stmt_metrics.p_stmt_max_stmt_id =
-		std::addressof(stmt_max_stmt_id.Add({}));
-
-	auto& stmt_cached {
-		prometheus::BuildGauge()
-			.Name("proxysql_stmt_cached")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->p_stmt_metrics.p_stmt_cached =
-		std::addressof(stmt_cached.Add({}));
+	// Initialize prometheus metrics
+	init_prometheus_counters();
+	init_prometheus_gauges();
 };
 
 void ProxySQL_Admin::wrlock() {
@@ -5390,7 +5181,65 @@ bool ProxySQL_Admin::init() {
 return true;
 };
 
+void ProxySQL_Admin::init_prometheus_counters() {
+	for (const auto& metric : std::get<admin_metrics_map_idx::counters>(admin_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
 
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->metrics.p_counter_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
+
+void ProxySQL_Admin::init_prometheus_gauges() {
+	for (const auto& metric : std::get<admin_metrics_map_idx::gauges>(admin_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->metrics.p_gauge_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
 
 #ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::init_clickhouse_variables() {
@@ -7243,8 +7092,8 @@ void ProxySQL_Admin::p_update_metrics() {
 	// Update proxysql_uptime
 	auto t1 { monotonic_time() };
 	auto new_uptime { (t1 - GloVars.global.start_time)/1000/1000 };
-	auto cur_uptime { this->p_proxysql_uptime->Value() };
-	this->p_proxysql_uptime->Increment(new_uptime - cur_uptime);
+	auto cur_uptime { this->metrics.p_counter_array[p_admin_counter::uptime]->Value() };
+	this->metrics.p_counter_array[p_admin_counter::uptime]->Increment(new_uptime - cur_uptime);
 
 	// Update memory metrics
 	this->p_stats___memory_metrics();
@@ -7257,13 +7106,13 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 
 	// proxysql_connpool_memory_bytes metric
 	const auto connpool_mem { MyHGM->Get_Memory_Stats() };
-	this->p_stats_memory_metrics.p_connpool_memory_bytes->Set(connpool_mem);
+	this->metrics.p_gauge_array[p_admin_gauge::connpool_memory_bytes]->Set(connpool_mem);
 
 	// proxysql_sqlite3_memory_bytes metric
 	int highwater { 0 };
 	int current { 0 };
 	sqlite3_status(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
-	this->p_stats_memory_metrics.p_sqlite3_memory_bytes->Set(current);
+	this->metrics.p_gauge_array[p_admin_gauge::sqlite3_memory_bytes]->Set(current);
 
 	// proxysql_jemalloc_* memory metrics
 	// ===============================================================
@@ -7283,61 +7132,61 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	mallctl("stats.metadata", &metadata, &sz, NULL, 0);
 	mallctl("stats.retained", &retained, &sz, NULL, 0);
 
-	p_stats_memory_metrics.p_jemalloc_resident->Set(resident);
-	p_stats_memory_metrics.p_jemalloc_active->Set(active);
-	const auto cur_allocated { p_stats_memory_metrics.p_jemalloc_allocated->Value() };
-	p_stats_memory_metrics.p_jemalloc_allocated->Increment(allocated - cur_allocated);
-	p_stats_memory_metrics.p_jemalloc_mapped->Set(mapped);
-	p_stats_memory_metrics.p_jemalloc_metadata->Set(metadata);
-	p_stats_memory_metrics.p_jemalloc_retained->Set(retained);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_resident]->Set(resident);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_active]->Set(active);
+	const auto cur_allocated { this->metrics.p_counter_array[p_admin_counter::jemalloc_allocated]->Value() };
+	this->metrics.p_counter_array[p_admin_counter::jemalloc_allocated]->Increment(allocated - cur_allocated);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_mapped]->Set(mapped);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_metadata]->Set(metadata);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_retained]->Set(retained);
 
 	// ===============================================================
 
 	// proxysql_auth_memory metric
 	unsigned long mu { GloMyAuth->memory_usage() };
-	p_stats_memory_metrics.p_auth_memory->Set(mu);
+	this->metrics.p_gauge_array[p_admin_gauge::auth_memory_bytes]->Set(mu);
 
 	// proxysql_query_digest_memory metric
 	const auto& query_digest_t_size { GloQPro->get_query_digests_total_size() };
-	p_stats_memory_metrics.p_query_digest_memory->Set(query_digest_t_size);
+	this->metrics.p_gauge_array[p_admin_gauge::query_digest_memory_bytes]->Set(query_digest_t_size);
 
 	// mysql_query_rules_memory metric
 	const auto& rules_mem_used { GloQPro->get_rules_mem_used() };
-	p_stats_memory_metrics.p_mysql_query_rules_memory->Set(rules_mem_used);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_query_rules_memory_bytes]->Set(rules_mem_used);
 
 	// mysql_firewall_users_table metric
 	const auto& firewall_users_table { GloQPro->get_mysql_firewall_memory_users_table() };
-	p_stats_memory_metrics.p_mysql_firewall_rules_table->Set(firewall_users_table);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_table]->Set(firewall_users_table);
 
 	// mysql_firewall_users_config metric
 	const auto& firewall_users_config { GloQPro->get_mysql_firewall_memory_users_config() };
-	p_stats_memory_metrics.p_mysql_firewall_users_config->Set(firewall_users_config);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_config]->Set(firewall_users_config);
 
 	// mysql_firewall_rules_table metric
 	const auto& firewall_rules_table { GloQPro->get_mysql_firewall_memory_rules_table() };
-	p_stats_memory_metrics.p_mysql_firewall_rules_table->Set(firewall_rules_table);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_table]->Set(firewall_rules_table);
 
 	// mysql_firewall_rules_table metric
 	const auto& firewall_rules_config { GloQPro->get_mysql_firewall_memory_rules_config() };
-	p_stats_memory_metrics.p_mysql_firewall_users_config->Set(firewall_rules_config);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_config]->Set(firewall_rules_config);
 
 	// proxysql_stack_memory_mysql_threads
 	const auto& stack_memory_mysql_threads {
 		__sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads, 0)
 	};
-	p_stats_memory_metrics.p_stack_memory_mysql_threads->Set(stack_memory_mysql_threads);
+	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_mysql_threads]->Set(stack_memory_mysql_threads);
 
 	// proxysql_stack_memory_admin_threads
 	const auto& stack_memory_admin_threads {
 		__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, 0)
 	};
-	p_stats_memory_metrics.p_stack_memory_admin_threads->Set(stack_memory_admin_threads);
+	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_admin_threads]->Set(stack_memory_admin_threads);
 
 	// proxysql_stack_memory_cluster_threads
 	const auto& stack_memory_cluster_threads {
 		__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads, 0)
 	};
-	p_stats_memory_metrics.p_stack_memory_cluster_threads->Set(stack_memory_cluster_threads);
+	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_cluster_threads]->Set(stack_memory_cluster_threads);
 }
 
 void ProxySQL_Admin::stats___memory_metrics() {
@@ -7526,14 +7375,14 @@ void ProxySQL_Admin::p_update_stmt_metrics() {
 			&stmt_server_active_total
 		);
 
-		this->p_stmt_metrics.p_stmt_client_active_total->Set(stmt_client_active_total);
-		this->p_stmt_metrics.p_stmt_client_active_unique->Set(stmt_client_active_unique);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_client_active_total]->Set(stmt_client_active_total);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_client_active_unique]->Set(stmt_client_active_unique);
 
-		this->p_stmt_metrics.p_stmt_server_active_total->Set(stmt_server_active_total);
-		this->p_stmt_metrics.p_stmt_server_active_unique->Set(stmt_server_active_unique);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_server_active_total]->Set(stmt_server_active_total);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_server_active_unique]->Set(stmt_server_active_unique);
 
-		this->p_stmt_metrics.p_stmt_max_stmt_id->Set(stmt_max_stmt_id);
-		this->p_stmt_metrics.p_stmt_cached->Set(stmt_cached);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_max_stmt_id]->Set(stmt_max_stmt_id);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_cached]->Set(stmt_cached);
 	}
 }
 
