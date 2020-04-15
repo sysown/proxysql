@@ -263,6 +263,7 @@ class AWS_Aurora_Info {
 	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
 	~AWS_Aurora_Info();
 };
+
 struct p_hg_counter {
 	enum metric {
 		servers_table_version = 0,
