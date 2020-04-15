@@ -612,95 +612,8 @@ MySQL_Monitor::MySQL_Monitor() {
 */
 
 	// Initialize prometheus metrics
-	auto& mysql_monitor_workers {
-		prometheus::BuildGauge()
-			.Name("proxysql_mysql_monitor_workers")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_num_threads =
-		std::addressof(mysql_monitor_workers.Add({}));
-
-	auto& mysql_monitor_workers_aux {
-		prometheus::BuildGauge()
-			.Name("proxysql_mysql_monitor_workers_aux")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_aux_threads =
-		std::addressof(mysql_monitor_workers_aux.Add({}));
-
-	auto& mysql_monitor_workers_started {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_workers_started")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_started_threads =
-		std::addressof(mysql_monitor_workers_started.Add({}));
-
-	// TODO: Check unit
-	auto& mysql_monitor_connect_check_ok {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_connect_check_ok")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_connect_check_OK =
-		std::addressof(mysql_monitor_connect_check_ok.Add({}));
-
-	auto& mysql_monitor_connect_check_err {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_connect_check_err")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_connect_check_ERR =
-		std::addressof(mysql_monitor_connect_check_err.Add({}));
-
-	auto& mysql_monitor_ping_check_ok {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_ping_check_ok")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_ping_check_OK =
-		std::addressof(mysql_monitor_ping_check_ok.Add({}));
-
-	auto& mysql_monitor_ping_check_err {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_ping_check_err")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_ping_check_ERR =
-		std::addressof(mysql_monitor_ping_check_err.Add({}));
-
-	auto& mysql_monitor_read_only_check_ok {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_read_only_check_ok")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_read_only_check_OK =
-		std::addressof(mysql_monitor_read_only_check_ok.Add({}));
-
-	auto& mysql_monitor_read_only_check_err {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_read_only_check_err")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_read_only_check_ERR =
-		std::addressof(mysql_monitor_read_only_check_err.Add({}));
-
-	auto& mysql_monitor_replication_lag_check_ok {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_replication_lag_check_ok")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_replication_lag_check_OK =
-		std::addressof(mysql_monitor_replication_lag_check_ok.Add({}));
-
-	auto& mysql_monitor_replication_lag_check_err {
-		prometheus::BuildCounter()
-			.Name("proxysql_mysql_monitor_replication_lag_check_err")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_replication_lag_check_ERR =
-		std::addressof(mysql_monitor_replication_lag_check_err.Add({}));
-
+	init_prometheus_counters();
+	init_prometheus_gauges();
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -732,30 +645,31 @@ MySQL_Monitor::~MySQL_Monitor() {
 
 void MySQL_Monitor::p_update_metrics() {
 	if (GloMyMon) {
-		this->metrics.p_num_threads->Set(GloMyMon->num_threads);
-		this->metrics.p_aux_threads->Set(GloMyMon->aux_threads);
-		const auto& cur_started_threads { this->metrics.p_started_threads->Value() };
-		this->metrics.p_started_threads->Increment(GloMyMon->started_threads - cur_started_threads);
+		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(GloMyMon->num_threads);
+		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers_aux]->Set(GloMyMon->aux_threads);
 
-		const auto& cur_connect_ok { this->metrics.p_connect_check_OK->Value() };
-		this->metrics.p_connect_check_OK->Increment(GloMyMon->connect_check_OK - cur_connect_ok);
-		const auto& cur_connect_err { this->metrics.p_connect_check_ERR->Value() };
-		this->metrics.p_connect_check_ERR->Increment(GloMyMon->connect_check_ERR - cur_connect_err);
+		const auto& cur_started_threads { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Increment(GloMyMon->started_threads - cur_started_threads);
 
-		const auto& cur_ping_check_ok { this->metrics.p_ping_check_OK->Value() };
-		this->metrics.p_ping_check_OK->Increment(GloMyMon->ping_check_OK - cur_ping_check_ok);
-		const auto& cur_ping_check_err { this->metrics.p_ping_check_ERR->Value() };
-		this->metrics.p_ping_check_ERR->Increment(GloMyMon->ping_check_ERR - cur_ping_check_err);
+		const auto& cur_connect_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok]->Increment(GloMyMon->connect_check_OK- cur_connect_ok);
+		const auto& cur_connect_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err]->Increment(GloMyMon->connect_check_ERR - cur_connect_err);
 
-		const auto& cur_read_only_check_ok { this->metrics.p_read_only_check_OK->Value() };
-		this->metrics.p_read_only_check_OK->Increment(GloMyMon->read_only_check_OK - cur_read_only_check_ok);
-		const auto& cur_read_only_check_err { this->metrics.p_read_only_check_ERR->Value() };
-		this->metrics.p_read_only_check_ERR->Increment(GloMyMon->read_only_check_ERR - cur_read_only_check_err);
+		const auto& cur_ping_check_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok]->Increment(GloMyMon->ping_check_OK - cur_ping_check_ok);
+		const auto& cur_ping_check_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err]->Increment(GloMyMon->ping_check_ERR - cur_ping_check_err);
 
-		const auto& cur_replication_lag_check_ok { this->metrics.p_replication_lag_check_OK->Value() };
-		this->metrics.p_replication_lag_check_OK->Increment(GloMyMon->replication_lag_check_OK - cur_replication_lag_check_ok);
-		const auto& cur_replication_lag_check_err { this->metrics.p_replication_lag_check_ERR->Value() };
-		this->metrics.p_replication_lag_check_ERR->Increment(GloMyMon->replication_lag_check_ERR - cur_replication_lag_check_err);
+		const auto& cur_read_only_check_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok]->Increment(GloMyMon->read_only_check_OK - cur_read_only_check_ok);
+		const auto& cur_read_only_check_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err]->Increment(GloMyMon->read_only_check_ERR - cur_read_only_check_err);
+
+		const auto& cur_replication_lag_check_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok]->Increment(GloMyMon->replication_lag_check_OK - cur_replication_lag_check_ok);
+		const auto& cur_replication_lag_check_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err]->Value() };
+		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err]->Increment(GloMyMon->replication_lag_check_ERR - cur_replication_lag_check_err);
 	}
 }
 
@@ -795,6 +709,66 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 	}
 	db->execute("PRAGMA foreign_keys = ON");
 };
+
+void MySQL_Monitor::init_prometheus_counters() {
+	for (const auto& metric : std::get<mon_metrics_map_idx::counters>(mon_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->metrics.p_counter_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
+
+void MySQL_Monitor::init_prometheus_gauges() {
+	for (const auto& metric : std::get<mon_metrics_map_idx::gauges>(mon_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->metrics.p_gauge_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
 
 void * monitor_connect_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
@@ -3176,7 +3150,7 @@ __monitor_run:
 		threads[i]->start(2048,false);
 	}
 	started_threads += num_threads;
-	this->metrics.p_started_threads->Increment(num_threads);
+	this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Increment(num_threads);
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize (&attr, 2048*1024);
@@ -3226,7 +3200,7 @@ __monitor_run:
 				unsigned int threads_min = (unsigned int)mysql_thread___monitor_threads_min;
 				if (old_num_threads < threads_min) {
 					num_threads = threads_min;
-					this->metrics.p_num_threads->Set(static_cast<double>(threads_min));
+					this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(threads_min);
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += (num_threads - old_num_threads);
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
@@ -3255,7 +3229,7 @@ __monitor_run:
 				if (new_threads) {
 					unsigned int old_num_threads = num_threads;
 					num_threads += new_threads;
-					this->metrics.p_num_threads->Increment(num_threads);
+					this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Increment(new_threads);
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += new_threads;
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {

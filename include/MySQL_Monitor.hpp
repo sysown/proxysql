@@ -1,6 +1,7 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
 
+#include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "thread.h"
@@ -230,12 +231,156 @@ class WorkItem {
 	~WorkItem() {}
 };
 
+struct p_mon_counter {
+	enum metric {
+		mysql_monitor_workers_started,
+		mysql_monitor_connect_check_ok,
+		mysql_monitor_connect_check_err,
+		mysql_monitor_ping_check_ok,
+		mysql_monitor_ping_check_err,
+		mysql_monitor_read_only_check_ok,
+		mysql_monitor_read_only_check_err,
+		mysql_monitor_replication_lag_check_ok,
+		mysql_monitor_replication_lag_check_err,
+		__size
+	};
+};
+
+struct p_mon_gauge {
+	enum metric {
+		mysql_monitor_workers,
+		mysql_monitor_workers_aux,
+		__size
+	};
+};
+
+struct mon_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges
+	};
+};
+
+using active_flag = bool;
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+const static std::tuple<
+	std::vector<
+		std::tuple<
+			p_mon_counter::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>,
+	std::vector<
+		std::tuple<
+			p_mon_gauge::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>
+>
+mon_metrics_map {
+	{
+		{
+			p_mon_counter::mysql_monitor_workers_started,
+			"proxysql_mysql_monitor_workers_started",
+			"Number of MySQL Monitor workers started.",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_connect_check_ok,
+			"proxysql_mysql_monitor_connect_check_ok",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_connect_check_err,
+			"proxysql_mysql_monitor_connect_check_err",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_ping_check_ok,
+			"proxysql_mysql_monitor_ping_check_ok",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_ping_check_err,
+			"proxysql_mysql_monitor_ping_check_err",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_read_only_check_ok,
+			"proxysql_mysql_monitor_read_only_check_ok",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_read_only_check_err,
+			"proxysql_mysql_monitor_read_only_check_err",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_replication_lag_check_ok,
+			"proxysql_mysql_monitor_replication_lag_check_ok",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_replication_lag_check_err,
+			"proxysql_mysql_monitor_replication_lag_check_err",
+			"",
+			{}
+		}
+	},
+	{
+		{
+			// TODO: Add meaningful help
+			p_mon_gauge::mysql_monitor_workers,
+			"proxysql_mysql_monitor_workers",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful help
+			p_mon_gauge::mysql_monitor_workers_aux,
+			"proxysql_mysql_monitor_workers_aux",
+			"",
+			{}
+		}
+	}
+};
+
 class MySQL_Monitor {
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
 	void insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
+	/**
+	 * @brief Initalizes the prometheus counters specified in mon_metrics_map.
+	 */
+	void init_prometheus_counters();
+	/**
+	 * @brief Initalizes the prometheus gagues specified in mon_metrics_map.
+	 */
+	void init_prometheus_gauges();
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
@@ -260,17 +405,9 @@ class MySQL_Monitor {
 	unsigned long long replication_lag_check_OK;
 	unsigned long long replication_lag_check_ERR;
 	struct {
-		prometheus::Gauge* p_num_threads { nullptr };
-		prometheus::Gauge* p_aux_threads { nullptr };
-		prometheus::Counter* p_started_threads { nullptr };
-		prometheus::Counter* p_connect_check_OK { nullptr };
-		prometheus::Counter* p_connect_check_ERR { nullptr };
-		prometheus::Counter* p_ping_check_OK { nullptr };
-		prometheus::Counter* p_ping_check_ERR { nullptr };
-		prometheus::Counter* p_read_only_check_OK { nullptr };
-		prometheus::Counter* p_read_only_check_ERR { nullptr };
-		prometheus::Counter* p_replication_lag_check_OK { nullptr };
-		prometheus::Counter* p_replication_lag_check_ERR { nullptr };
+		/// Prometheus metrics arrays
+		std::array<prometheus::Counter*, p_mon_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_mon_gauge::__size> p_gauge_array {};
 	} metrics;
 	void p_update_metrics();
 	std::unique_ptr<wqueue<WorkItem*>> queue;
