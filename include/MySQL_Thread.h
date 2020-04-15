@@ -245,6 +245,409 @@ class MySQL_Listeners_Manager {
 	void del(unsigned int idx);
 };
 
+struct p_th_counter {
+	enum metric {
+		queries_backends_bytes_sent = 0,
+		queries_backends_bytes_recv,
+		queries_frontends_bytes_sent,
+		queries_frontends_bytes_recv,
+		client_connections_created,
+		client_connections_aborted,
+		query_processor_time_nsec,
+		backend_query_time_nsec,
+		com_backend_stmt_prepare,
+		com_backend_stmt_execute,
+		com_backend_stmt_close,
+		com_frontend_stmt_prepare,
+		com_frontend_stmt_execute,
+		com_frontend_stmt_close,
+		questions,
+		slow_queries,
+		gtid_consistent_queries,
+		gtid_session_collected,
+		connpool_get_conn_latency_awareness,
+		connpool_get_conn_immediate,
+		connpool_get_conn_success,
+		connpool_get_conn_failure,
+		generated_error_packets,
+		max_connect_timeouts,
+		backend_lagging_during_query,
+		backend_offline_during_query,
+		queries_with_max_lag_ms,
+		queries_with_max_lag_ms__delayed,
+		queries_with_max_lag_ms__total_wait_time_us,
+		mysql_unexpected_frontend_com_quit,
+		client_connections_hostgroup_locked,
+		hostgroup_locked_set_cmds,
+		hostgroup_locked_queries,
+		mysql_unexpected_frontend_packets,
+		aws_aurora_replicas_skipped_during_query,
+		automatic_detected_sql_injection,
+		whitelisted_sqli_fingerprint,
+		mysql_killed_backend_connections,
+		mysql_killed_backend_queries,
+		__size
+	};
+};
+
+struct p_th_gauge {
+	enum metric {
+		active_transactions = 0,
+		client_connections_non_idle,
+		mysql_backend_buffers_bytes,
+		mysql_frontend_buffers_bytes,
+		mysql_session_internal_bytes,
+		mirror_concurrency,
+		mirror_queue_lengths,
+		mysql_thread_workers,
+		__size
+	};
+};
+
+struct th_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges
+	};
+};
+
+using active_flag = bool;
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+const static std::tuple<
+	std::vector<
+		std::tuple<
+			p_th_counter::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>,
+	std::vector<
+		std::tuple<
+			p_th_gauge::metric,
+			metric_name,
+			metric_help,
+			metric_tags
+		>
+	>
+>
+th_metrics_map {
+	{
+		{
+			p_th_counter::queries_backends_bytes_sent,
+			"proxysql_queries_backends_bytes_sent",
+			"Total number of bytes sent to backend.",
+			{}
+		},
+		{
+			p_th_counter::queries_backends_bytes_recv,
+			"proxysql_queries_backends_bytes_recv",
+			"Total number of bytes received from backend.",
+			{}
+		},
+		{
+			p_th_counter::queries_frontends_bytes_sent,
+			"proxysql_queries_frontends_bytes_sent",
+			"Total number of bytes sent to frontend.",
+			{}
+		},
+		{
+			p_th_counter::queries_frontends_bytes_recv,
+			"proxysql_queries_frontends_bytes_recv",
+			"Total number of bytes received from frontend.",
+			{}
+		},
+		{
+			p_th_counter::client_connections_created,
+			"proxysql_client_connections_created",
+			"Total number of client connections created.",
+			{}
+		},
+		{
+			p_th_counter::client_connections_aborted,
+			"proxysql_client_connections_aborted",
+			"Number of client failed connections (or closed improperly).",
+			{}
+		},
+		{
+			// TODO: Change unit
+			p_th_counter::query_processor_time_nsec,
+			"proxysql_query_processor_time_nsec",
+			"The time spent inside the \"Query Processor\" to determine what action needs to be taken with the query (internal module).",
+			{}
+		},
+		{
+			// TODO: Change unit
+			p_th_counter::backend_query_time_nsec,
+			"proxysql_backend_query_time_nsec",
+			"Time spent making network calls to communicate with the backends.",
+			{}
+		},
+		{
+			p_th_counter::com_backend_stmt_prepare,
+			"proxysql_com_backend_stmt_prepare",
+			"Represents the number of “PREPARE” executed by ProxySQL against the backends.",
+			{}
+		},
+		{
+			p_th_counter::com_backend_stmt_execute,
+			"proxysql_com_backend_stmt_execute",
+			"Represents the number of “EXECUTE” executed by ProxySQL against the backends.",
+			{}
+		},
+		{
+			p_th_counter::com_backend_stmt_close,
+			"proxysql_com_backend_stmt_close",
+			"Represents the number of “CLOSE” executed by ProxySQL against the backends.",
+			{}
+		},
+		{
+			p_th_counter::com_frontend_stmt_prepare,
+			"proxysql_com_frontend_stmt_prepare",
+			"Represents the number of “PREPARE” executed by clients.",
+			{}
+		},
+		{
+			p_th_counter::com_frontend_stmt_execute,
+			"proxysql_com_frontend_stmt_execute",
+			"Represents the number of “EXECUTE” executed by clients.",
+			{}
+		},
+		{
+			p_th_counter::com_frontend_stmt_close,
+			"proxysql_com_frontend_stmt_close",
+			"Represents the number of “CLOSE” executed by clients.",
+			{}
+		},
+		{
+			p_th_counter::questions,
+			"proxysql_questions",
+			"The total number of client requests / statements executed.",
+			{}
+		},
+		{
+			// TODO: Change unit
+			p_th_counter::slow_queries,
+			"proxysql_slow_queries",
+			"The total number of queries with an execution time greater than \"mysql-long_query_time\" milliseconds.",
+			{}
+		},
+		{
+			p_th_counter::gtid_consistent_queries,
+			"proxysql_gtid_consistent_queries",
+			"Total queries with GTID consistent read.",
+			{}
+		},
+		{
+			p_th_counter::gtid_session_collected,
+			"proxysql_gtid_session_collected",
+			"Total queries with GTID session state.",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::connpool_get_conn_latency_awareness,
+			"proxysql_connpool_get_conn_latency_awareness",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::connpool_get_conn_immediate,
+			"proxysql_connpool_get_conn_immediate",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::connpool_get_conn_success,
+			"proxysql_connpool_get_conn_success",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::connpool_get_conn_failure,
+			"proxysql_connpool_get_conn_failure",
+			"",
+			{}
+		},
+		{
+			p_th_counter::generated_error_packets,
+			"proxysql_generated_error_packets",
+			"Total generated error packets.",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::max_connect_timeouts,
+			"proxysql_max_connect_timeouts",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::backend_lagging_during_query,
+			"proxysql_backend_lagging_during_query",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::backend_offline_during_query,
+			"proxysql_backend_offline_during_query",
+			"Number of times a backend was offline during a query.",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::queries_with_max_lag_ms,
+			"proxysql_queries_with_max_lag_ms",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::queries_with_max_lag_ms__delayed,
+			"proxysql_queries_with_max_lag_ms__delayed",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::queries_with_max_lag_ms__total_wait_time_us,
+			"proxysql_queries_with_max_lag_ms__total_wait_time_us",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::mysql_unexpected_frontend_com_quit,
+			"proxysql_mysql_unexpected_frontend_com_quit",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::client_connections_hostgroup_locked,
+			"proxysql_client_connections_hostgroup_locked",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::hostgroup_locked_set_cmds,
+			"proxysql_hostgroup_locked_set_cmds",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::hostgroup_locked_queries,
+			"proxysql_hostgroup_locked_queries",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::mysql_unexpected_frontend_packets,
+			"proxysql_mysql_unexpected_frontend_packets",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::aws_aurora_replicas_skipped_during_query,
+			"proxysql_aws_aurora_replicas_skipped_during_query",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::automatic_detected_sql_injection,
+			"proxysql_automatic_detected_sql_injection",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::whitelisted_sqli_fingerprint,
+			"proxysql_whitelisted_sqli_fingerprint",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::mysql_killed_backend_connections,
+			"proxysql_mysql_killed_backend_connections",
+			"",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_counter::mysql_killed_backend_queries,
+			"proxysql_mysql_killed_backend_queries",
+			"",
+			{}
+		},
+	},
+	{
+		{
+			p_th_gauge::active_transactions,
+			"proxysql_active_transactions",
+			"Provides a count of how many client connection are currently processing a transaction.",
+			{}
+		},
+		{
+			p_th_gauge::client_connections_non_idle,
+			"proxysql_client_connections_non_idle",
+			"Number of client connections that are currently handled by the main worker threads.",
+			{}
+		},
+		{
+			p_th_gauge::mysql_backend_buffers_bytes,
+			"proxysql_mysql_backend_buffers_bytes",
+			"Buffers related to backend connections if \"fast_forward\" is used (0 means fast_forward is not used).",
+			{}
+		},
+		{
+			p_th_gauge::mysql_frontend_buffers_bytes,
+			"proxysql_mysql_frontend_buffers_bytes",
+			"Buffers related to frontend connections (read/write buffers and other queues).",
+			{}
+		},
+		{
+			p_th_gauge::mysql_session_internal_bytes,
+			"proxysql_mysql_session_internal_bytes",
+			"Other memory used by ProxySQL to handle MySQL Sessions.",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_gauge::mirror_concurrency,
+			"proxysql_mirror_concurrency",
+			"Mirror current concurrency",
+			{}
+		},
+		{
+			// TODO: Add meaningful HELP
+			p_th_gauge::mirror_queue_lengths,
+			"proxysql_mirror_queue_lengths",
+			"Mirror queue length",
+			{}
+		},
+		{
+			p_th_gauge::mysql_thread_workers,
+			"proxysql_mysql_thread_workers",
+			"Number of MySQL Thread workers i.e. “mysql-threads”",
+			{}
+		}
+	}
+};
+
 class MySQL_Threads_Handler
 {
 	private:
@@ -254,6 +657,14 @@ class MySQL_Threads_Handler
 	pthread_rwlock_t rwlock;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;
+	/**
+	 * @brief Initalizes the prometheus counters specified in th_metrics_map.
+	 */
+	void init_prometheus_counters();
+	/**
+	 * @brief Initalizes the prometheus gagues specified in th_metrics_map.
+	 */
+	void init_prometheus_gauges();
 	public:
 	struct {
 		int monitor_history;
@@ -398,59 +809,9 @@ class MySQL_Threads_Handler
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
-
-		//////////////////////////////////////////////////////
-		///              Prometheus Metrics                ///
-		//////////////////////////////////////////////////////
-
-		prometheus::Gauge* p_active_transations { nullptr };
-		prometheus::Gauge* p_non_idle_client_connections { nullptr };
-		prometheus::Counter* p_queries_backends_bytes_recv { nullptr };
-		prometheus::Counter* p_queries_backends_bytes_sent { nullptr };
-		prometheus::Counter* p_queries_frontends_bytes_recv { nullptr };
-		prometheus::Counter* p_queries_frontends_bytes_sent { nullptr };
-		prometheus::Counter* p_query_processor_time { nullptr };
-		prometheus::Counter* p_backend_query_time { nullptr };
-		prometheus::Gauge* p_mysql_backend_buffers_bytes { nullptr };
-		prometheus::Gauge* p_mysql_frontend_buffers_bytes { nullptr };
-		prometheus::Gauge* p_mysql_session_internal_bytes { nullptr };
-		prometheus::Counter* p_total_backend_stmt_prepare { nullptr };
-		prometheus::Counter* p_total_backend_stmt_execute { nullptr };
-		prometheus::Counter* p_total_backend_stmt_close { nullptr };
-		prometheus::Counter* p_total_frontend_stmt_prepare { nullptr };
-		prometheus::Counter* p_total_frontend_stmt_execute { nullptr };
-		prometheus::Counter* p_total_frontend_stmt_close { nullptr };
-		prometheus::Gauge* p_mirror_sessions_current { nullptr };
-		prometheus::Gauge* p_total_mirror_queue { nullptr };
-		prometheus::Counter* p_total_queries { nullptr };
-		prometheus::Counter* p_slow_queries { nullptr };
-		prometheus::Counter* p_gtid_queries { nullptr };
-		prometheus::Counter* p_gtid_session_collected { nullptr };
-		prometheus::Counter* p_servers_table_version { nullptr };
-		prometheus::Gauge* p_num_threads { nullptr };
-		prometheus::Counter* p_ConnPool_get_conn_latency_awareness { nullptr };
-		prometheus::Counter* p_ConnPool_get_conn_immediate { nullptr };
-		prometheus::Counter* p_ConnPool_get_conn_success { nullptr };
-		prometheus::Counter* p_ConnPool_get_conn_failure { nullptr };
-		prometheus::Counter* p_generated_error_packets { nullptr };
-		prometheus::Counter* p_max_connect_timeout { nullptr };
-		prometheus::Counter* p_backend_lagging_during_query { nullptr };
-		prometheus::Counter* p_backend_offline_during_query { nullptr };
-		prometheus::Counter* p_queries_with_max_lag_ms { nullptr };
-		prometheus::Counter* p_queries_with_max_lag_ms__delayed { nullptr };
-		prometheus::Counter* p_queries_with_max_lag_ms__total_wait_time_us { nullptr };
-		prometheus::Counter* p_mysql_unexpected_frontend_com_quit { nullptr };
-		prometheus::Counter* p_get_hostgroup_locked { nullptr };
-		prometheus::Counter* p_hostgroup_locked_set_cmds { nullptr };
-		prometheus::Counter* p_hostgroup_locked_queries { nullptr };
-		prometheus::Counter* p_mysql_unexpected_frontend_packets { nullptr };
-		prometheus::Counter* p_aws_aurora_replicas_skipped_during_query { nullptr };
-		prometheus::Counter* p_automatic_detected_sqli { nullptr };
-		prometheus::Counter* p_whitelisted_sqli_fingerprint { nullptr };
-		prometheus::Counter* p_killed_connections { nullptr };
-		prometheus::Counter* p_killed_queries { nullptr };
-
-		//////////////////////////////////////////////////////
+		/// Prometheus metrics arrays
+		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
 	} status_variables;
 	/**
 	 * @brief Callback to update the metrics.

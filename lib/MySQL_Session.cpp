@@ -1,4 +1,5 @@
 #include "MySQL_HostGroups_Manager.h"
+#include "MySQL_Thread.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "re2/re2.h"
@@ -594,7 +595,7 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-		GloMTH->status_variables.p_mirror_sessions_current->Decrement();
+		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 	}
 	if (ldap_ctx) {
 		GloMyLdapAuth->ldap_ctx_free(ldap_ctx);
@@ -1403,7 +1404,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 				thread->mirror_queue_mysql_sessions->add(newsess);
 			}	else {
-				GloMTH->status_variables.p_mirror_sessions_current->Increment();
+				GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
 				thread->register_session(newsess);
 				newsess->handler(); // execute immediately
 				//newsess->to_process=0;
@@ -1420,7 +1421,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						if (to_cache) {
 							__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-							GloMTH->status_variables.p_mirror_sessions_current->Decrement();
+							GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 							thread->mirror_queue_mysql_sessions_cache->add(newsess);
 						} else {
 							delete newsess;
