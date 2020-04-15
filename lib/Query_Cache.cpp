@@ -334,93 +334,93 @@ Query_Cache::Query_Cache() {
 	max_memory_size=DEFAULT_SQC_size;
 
 	// Initialize prometheus metrics
-	auto& query_cache_mem_bytes {
-		prometheus::BuildGauge()
-			.Name("proxysql_query_cache_memory_bytes")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_mem_bytes =
-		std::addressof(query_cache_mem_bytes.Add({}));
-
-	auto& query_cache_count_get {
-		prometheus::BuildCounter()
-			.Name("proxysql_query_cache_count_get")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_count_get =
-		std::addressof(query_cache_count_get.Add({}));
-
-	auto& query_cache_count_get_ok {
-		prometheus::BuildCounter()
-			.Name("proxysql_query_cache_count_get_ok")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_count_get_ok =
-		std::addressof(query_cache_count_get_ok.Add({}));
-	auto& query_cache_count_set {
-		prometheus::BuildCounter()
-			.Name("proxysql_query_cache_count_set")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_count_set =
-		std::addressof(query_cache_count_set.Add({}));
-
-	auto& query_cache_bytes_in {
-		prometheus::BuildCounter()
-			.Name("proxysql_query_cache_bytes_in")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_bytes_in =
-		std::addressof(query_cache_bytes_in.Add({}));
-
-	auto& query_cache_bytes_out {
-		prometheus::BuildCounter()
-			.Name("proxysql_query_cache_bytes_out")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_bytes_out =
-		std::addressof(query_cache_bytes_out.Add({}));
-
-	auto& query_cache_purged {
-		prometheus::BuildCounter()
-			.Name("proxysql_query_cache_purged")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_purged =
-		std::addressof(query_cache_purged.Add({}));
-
-	auto& query_cache_entries {
-		prometheus::BuildCounter()
-			.Name("proxysql_query_cache_entries")
-			.Register(*GloVars.prometheus_registry)
-	};
-	this->metrics.p_query_cache_entries =
-		std::addressof(query_cache_entries.Add({}));
+	init_prometheus_counters();
+	init_prometheus_gauges();
 };
 
+void Query_Cache::init_prometheus_counters() {
+	for (const auto& metric : std::get<qc_metrics_map_idx::counters>(qc_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildCounter()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->metrics.p_counter_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
+
+void Query_Cache::init_prometheus_gauges() {
+	for (const auto& metric : std::get<qc_metrics_map_idx::gauges>(qc_metrics_map)) {
+		const auto& tg_metric { std::get<0>(metric) };
+		const auto& metric_name { std::get<1>(metric) };
+		const auto& metric_help { std::get<2>(metric) };
+		const auto& metric_tags { std::get<3>(metric) };
+		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
+
+		if (metric_help.empty()) {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Register(*GloVars.prometheus_registry)
+				);
+		} else {
+			metric_family =
+				std::addressof(
+					prometheus::BuildGauge()
+					.Name(metric_name)
+					.Help(metric_help)
+					.Register(*GloVars.prometheus_registry)
+				);
+		}
+
+		this->metrics.p_gauge_array[tg_metric] =
+			std::addressof(metric_family->Add(metric_tags));
+	}
+}
+
 void Query_Cache::p_update_metrics() {
-	this->metrics.p_query_cache_mem_bytes->Set(get_data_size_total());
+	this->metrics.p_gauge_array[p_qc_gauge::query_cache_memory_bytes]->Set(get_data_size_total());
 
-	const auto& cur_count_get { this->metrics.p_query_cache_count_get->Value() };
-	this->metrics.p_query_cache_count_get->Increment(Glo_cntGet - cur_count_get);
+	const auto& cur_count_get { this->metrics.p_counter_array[p_qc_counter::query_cache_count_get]->Value() };
+	this->metrics.p_counter_array[p_qc_counter::query_cache_count_get]->Increment(Glo_cntGet - cur_count_get);
 
-	const auto& cur_count_get_ok { this->metrics.p_query_cache_count_get_ok->Value() };
-	this->metrics.p_query_cache_count_get_ok->Increment(Glo_cntGetOK - cur_count_get_ok);
+	const auto& cur_count_get_ok { this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok]->Value() };
+	this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok]->Increment(Glo_cntGetOK - cur_count_get_ok);
 
-	const auto& cur_count_set { this->metrics.p_query_cache_count_set->Value() };
-	this->metrics.p_query_cache_count_set->Increment(Glo_cntSet - cur_count_set);
+	const auto& cur_count_set { this->metrics.p_counter_array[p_qc_counter::query_cache_count_set]->Value() };
+	this->metrics.p_counter_array[p_qc_counter::query_cache_count_set]->Increment(Glo_cntSet - cur_count_set);
 
-	const auto& cur_bytes_in { this->metrics.p_query_cache_bytes_in->Value() };
-	this->metrics.p_query_cache_bytes_in->Increment(Glo_dataIN - cur_bytes_in);
+	const auto& cur_bytes_in { this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_in]->Value() };
+	this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_in]->Increment(Glo_dataIN - cur_bytes_in);
 
-	const auto& cur_bytes_out { this->metrics.p_query_cache_bytes_out->Value() };
-	this->metrics.p_query_cache_bytes_out->Increment(Glo_dataOUT - cur_bytes_out);
+	const auto& cur_bytes_out { this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_out]->Value() };
+	 this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_out]->Increment(Glo_dataOUT - cur_bytes_out);
 
-	const auto& cur_purged { this->metrics.p_query_cache_purged->Value() };
-	this->metrics.p_query_cache_purged->Increment(Glo_cntPurge - cur_purged);
+	const auto& cur_purged { this->metrics.p_counter_array[p_qc_counter::query_cache_purged]->Value() };
+	this->metrics.p_counter_array[p_qc_counter::query_cache_purged]->Increment(Glo_cntPurge - cur_purged);
 
-	const auto& cur_entries { this->metrics.p_query_cache_entries->Value() };
-	this->metrics.p_query_cache_entries->Increment(Glo_dataIN - cur_entries);
+	const auto& cur_entries { this->metrics.p_counter_array[p_qc_counter::query_cache_entries]->Value() };
+	this->metrics.p_counter_array[p_qc_counter::query_cache_entries]->Increment(Glo_dataIN - cur_entries);
 }
 
 void Query_Cache::print_version() {
