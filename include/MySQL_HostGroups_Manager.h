@@ -386,21 +386,27 @@ hg_metrics_map {
 		},
 		{
 			p_hg_counter::server_connections_created,
-			"proxysql_server_connections_created",
+			"proxysql_server_connections",
 			"Total number of server connections created.",
-			{}
+			{
+				{ "status", "created" }
+			}
 		},
 		{
 			p_hg_counter::server_connections_delayed,
-			"proxysql_server_connections_delayed",
+			"proxysql_server_connections",
 			"Total number of server connections delayed.",
-			{}
+			{
+				{ "status", "delayed" }
+			}
 		},
 		{
 			p_hg_counter::server_connections_aborted,
-			"proxysql_server_connections_aborted",
+			"proxysql_server_connections",
 			"Total number of backend failed connections (or closed improperly).",
-			{}
+			{
+				{ "status", "aborted" }
+			}
 		},
 		{
 			p_hg_counter::client_connections_created,
