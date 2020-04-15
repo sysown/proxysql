@@ -4379,7 +4379,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				mydb->execute(query);
 				//free(query);
 			} else {
-				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d AND hostgroup_id = %d";
+				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d";
 				sprintf(query,q,_hostname,_port,_writer_hostgroup);
 				mydb->execute(query);
 			}
