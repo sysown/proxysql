@@ -1311,6 +1311,17 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		}
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		if (!c) {
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			if (mirror==false) {
+				RequestEnd(NULL);
+			}
+			free(unstripped);
+			__sync_fetch_and_add(&MyHGM->status.frontend_set_names, 1);
+
+			return false;
+		}
+		if (!c) {
 			char *m = NULL;
 			char *errmsg = NULL;
 			if (collation_specified) {
