@@ -378,165 +378,160 @@ const static std::tuple<
 hg_metrics_map {
 	{
 		{
+			// TODO: Check this help
 			p_hg_counter::servers_table_version,
 			"proxysql_servers_table_version",
-			"",
+			"Number of times the \"servers_table\" have been modified.",
 			{}
 		},
 		{
 			p_hg_counter::server_connections_created,
 			"proxysql_server_connections_created",
-			"",
+			"Total number of server connections created.",
 			{}
 		},
 		{
 			p_hg_counter::server_connections_delayed,
 			"proxysql_server_connections_delayed",
-			"",
+			"Total number of server connections delayed.",
 			{}
 		},
 		{
 			p_hg_counter::server_connections_aborted,
 			"proxysql_server_connections_aborted",
-			"",
+			"Total number of backend failed connections (or closed improperly).",
 			{}
 		},
 		{
 			p_hg_counter::client_connections_created,
 			"proxysql_client_connections_created",
-			"",
+			"Total number of client connections created.",
 			{}
 		},
 		{
 			p_hg_counter::client_connections_aborted,
 			"proxysql_client_connections_aborted",
-			"",
+			"Total number of client failed connections (or closed improperly).",
 			{}
 		},
 		{
 			p_hg_counter::com_autocommit,
 			"proxysql_com_autocommit",
-			"",
+			"Total queries autocommited.",
 			{}
 		},
 		{
 			p_hg_counter::com_autocommit_filtered,
 			"proxysql_com_autocommit_filtered",
-			"",
+			"Total queries filtered autocommit.",
 			{}
 		},
 		{
 			p_hg_counter::com_rollback,
 			"proxysql_com_rollback",
-			"",
+			"Total queries rollbacked.",
 			{}
 		},
 		{
 			p_hg_counter::com_rollback_filtered,
 			"proxysql_com_rollback_filtered",
-			"",
+			"Total queries filtered rollbacked.",
 			{}
 		},
 		{
 			p_hg_counter::com_backend_change_user,
 			"proxysql_com_backend_change_user",
-			"",
+			"Total CHANGE_USER queries backend.",
 			{}
 		},
 		{
 			p_hg_counter::com_backend_init_db,
 			"proxysql_com_backend_init_db",
-			"",
+			"Total queries backend INIT DB.",
 			{}
 		},
 		{
 			p_hg_counter::com_frontend_init_db,
 			"proxysql_com_frontend_init_db",
-			"",
+			"Total INIT DB queries frontend.",
 			{}
 		},
 		{
 			p_hg_counter::com_frontend_set_names,
 			"proxysql_com_frontend_set_names",
-			"",
+			"Total SET NAMES frontend queries.",
 			{}
 		},
 		{
 			p_hg_counter::com_frontend_use_db,
 			"proxysql_com_frontend_use_db",
-			"",
+			"Total USE DB queries frontend.",
 			{}
 		},
 		{
 			p_hg_counter::com_commit_cnt,
 			"proxysql_com_commit_cnt",
-			"",
+			"Total queries commit.",
 			{}
 		},
 		{
 			p_hg_counter::com_commit_cnt_filtered,
 			"proxysql_com_commit_cnt_filtered",
-			"",
-			{}
-		},
-		{
-			p_hg_counter::com_commit_cnt_filtered,
-			"proxysql_com_commit_cnt_filtered",
-			"",
+			"Total queries commit filtered.",
 			{}
 		},
 		{
 			p_hg_counter::selects_for_update__autocommit0,
 			"proxysql_selects_for_update__autocommit0",
-			"",
+			"Total queries that are SELECT for update or equivalent.",
 			{}
 		},
 		{
 			p_hg_counter::access_denied_wrong_password,
 			"proxysql_access_denied_wrong_password",
-			"",
+			"Total access denied \"wrong password\".",
 			{}
 		},
 		{
 			p_hg_counter::access_denied_max_connections,
 			"proxysql_access_denied_max_connections",
-			"",
+			"Total access denied \"max connections\".",
 			{}
 		},
 		{
 			p_hg_counter::access_denied_max_user_connections,
 			"proxysql_access_denied_max_user_connections",
-			"",
+			"Total access denied \"max user connections\".",
 			{}
 		},
 		{
 			p_hg_counter::myhgm_myconnpoll_get,
 			"proxysql_myhgm_myconnpoll_get",
-			"",
+			"The number of requests made to the connection pool.",
 			{}
 		},
 		{
 			p_hg_counter::myhgm_myconnpoll_get_ok,
 			"proxysql_myhgm_myconnpoll_get_ok",
-			"",
+			"The number of successful requests to the connection pool (i.e. where a connection was available).",
 			{}
 		},
 		{
 			p_hg_counter::myhgm_myconnpoll_push,
 			"proxysql_myhgm_myconnpoll_push",
-			"",
+			"The number of connections returned to the connection pool.",
 			{}
 		},
 		{
 			p_hg_counter::myhgm_myconnpoll_reset,
 			"proxysql_myhgm_myconnpoll_reset",
-			"",
+			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
 			{}
 		},
 		{
 			p_hg_counter::myhgm_myconnpoll_destroy,
 			"proxysql_myhgm_myconnpoll_destroy",
-			"",
+			"The number of connections considered unhealthy and therefore closed.",
 			{}
 		}
 	},
