@@ -1226,7 +1226,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-  memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
+  memcpy(_ptr+l,"\x8f\x81\x15",3); l+=3;
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
 //#ifdef MARIADB_BASE_VERSION
