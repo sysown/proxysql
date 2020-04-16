@@ -471,7 +471,7 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
 
 	char buf1[1000];
 	unsigned long long t1=monotonic_time();
-	sprintf(buf1,"Uptime: %llu Threads: %d  Questions: %llu  Slow queries: %llu", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections , GloMTH->get_total_queries() , GloMTH->get_slow_queries() );
+	sprintf(buf1,"Uptime: %llu Threads: %d  Questions: %llu  Slow queries: %llu", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections , GloMTH->get_status_variable(st_var_queries,p_th_counter::questions) , GloMTH->get_status_variable(st_var_queries,p_th_counter::slow_queries) );
 	unsigned char statslen=strlen(buf1);
 	mysql_hdr myhdr;
 	myhdr.pkt_id=1;
@@ -602,7 +602,7 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 		if (*myds)
 			if ((*myds)->sess)
 				if ((*myds)->sess->thread)
-					(*myds)->sess->thread->status_variables.generated_pkt_err++;
+					(*myds)->sess->thread->status_variables.stvar[st_var_generated_pkt_err]++;
 	if (*myds) {
 		(*myds)->pkt_sid=sequence_id;
 	}

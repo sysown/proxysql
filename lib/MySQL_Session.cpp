@@ -130,13 +130,13 @@ void * kill_query_thread(void *arg) {
 			case KILL_QUERY:
 				proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
 				if (thread) {
-					thread->status_variables.killed_queries++;
+					thread->status_variables.stvar[st_var_killed_queries]++;
 				}
 				break;
 			case KILL_CONNECTION:
 				proxy_warning("KILL CONNECTION %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
 				if (thread) {
-					thread->status_variables.killed_connections++;
+					thread->status_variables.stvar[st_var_killed_connections]++;
 				}
 				break;
 			default:
@@ -236,10 +236,10 @@ void Query_Info::end() {
 	query_parser_update_counters();
 	query_parser_free();
 	if ((end_time-start_time) > (unsigned int)mysql_thread___long_query_time*1000) {
-		__sync_add_and_fetch(&sess->thread->status_variables.queries_slow,1);
+		__sync_add_and_fetch(&sess->thread->status_variables.stvar[st_var_queries_slow],1);
 	}
 	if (sess->with_gtid) {
-		__sync_add_and_fetch(&sess->thread->status_variables.queries_gtid,1);
+		__sync_add_and_fetch(&sess->thread->status_variables.stvar[st_var_queries_gtid],1);
 	}
 	assert(mysql_stmt==NULL);
 	if (stmt_info) {
@@ -551,7 +551,7 @@ MySQL_Session::~MySQL_Session() {
 	reset(); // we moved this out to allow CHANGE_USER
 
 	if (locked_on_hostgroup >= 0) {
-		thread->status_variables.hostgroup_locked--;
+		thread->status_variables.stvar[st_var_hostgroup_locked]--;
 	}
 
 	if (client_myds) {
@@ -2421,7 +2421,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			char buf[256];
 			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
 			if (thread) {
-				thread->status_variables.max_connect_timeout_err++;
+				thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 			}
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf, true);
 			RequestEnd(mybe->server_myds);
@@ -2534,7 +2534,7 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 						sprintf(buf,"Max connect failure while reaching hostgroup %d", current_hostgroup);
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9002,(char *)"HY000",buf,true);
 						if (thread) {
-							thread->status_variables.max_connect_timeout_err++;
+							thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 						}
 					}
 					if (session_fast_forward==false) {
@@ -2892,7 +2892,7 @@ __get_pkts_from_client:
 						}
 						switch ((enum_mysql_command)c) {
 							case _MYSQL_COM_QUERY:
-								__sync_add_and_fetch(&thread->status_variables.queries,1);
+								__sync_add_and_fetch(&thread->status_variables.stvar[st_var_queries],1);
 								if (session_type == PROXYSQL_SESSION_MYSQL) {
 									bool rc_break=false;
 									bool lock_hostgroup = false;
@@ -2921,11 +2921,11 @@ __get_pkts_from_client:
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									if (qpo->max_lag_ms >= 0) {
-										thread->status_variables.queries_with_max_lag_ms++;
+										thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 									}
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
-										thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
+										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +
 											(endt.tv_sec*1000000000+endt.tv_nsec) -
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
@@ -2945,9 +2945,9 @@ __get_pkts_from_client:
 														bool allow_sqli = false;
 														allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
 														if (allow_sqli) {
-															thread->status_variables.whitelisted_sqli_fingerprint++;
+															thread->status_variables.stvar[st_var_whitelisted_sqli_fingerprint]++;
 														} else {
-															thread->status_variables.automatic_detected_sqli++;
+															thread->status_variables.stvar[st_var_automatic_detected_sqli]++;
 															char * username = client_myds->myconn->userinfo->username;
 															char * client_address = client_myds->addr.addr;
 															proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
@@ -2986,8 +2986,8 @@ __get_pkts_from_client:
 													}
 												}
 												locked_on_hostgroup = current_hostgroup;
-												thread->status_variables.hostgroup_locked++;
-												thread->status_variables.hostgroup_locked_set_cmds++;
+												thread->status_variables.stvar[st_var_hostgroup_locked]++;
+												thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 											}
 										}
 										if (locked_on_hostgroup >= 0) {
@@ -3004,7 +3004,7 @@ __get_pkts_from_client:
 												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
 												sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
-												thread->status_variables.hostgroup_locked_queries++;
+												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 												RequestEnd(NULL);
 												free(buf);
 												l_free(pkt.size,pkt.ptr);
@@ -3106,8 +3106,8 @@ __get_pkts_from_client:
 								}
 								l_free(pkt.size,pkt.ptr);
 								// FIXME: this is not complete. Counters should be decreased
-								thread->status_variables.frontend_stmt_close++;
-								thread->status_variables.queries++;
+								thread->status_variables.stvar[st_var_frontend_stmt_close]++;
+								thread->status_variables.stvar[st_var_queries]++;
 								client_myds->DSS=STATE_SLEEP;
 								status=WAITING_CLIENT_DATA;
 								break;
@@ -3133,8 +3133,8 @@ __get_pkts_from_client:
 									status=WAITING_CLIENT_DATA;
 									break;
 								} else {
-									thread->status_variables.frontend_stmt_prepare++;
-									thread->status_variables.queries++;
+									thread->status_variables.stvar[st_var_frontend_stmt_prepare]++;
+									thread->status_variables.stvar[st_var_queries]++;
 									// if we reach here, we are not on MySQL module
 									bool rc_break=false;
 									bool lock_hostgroup = false;
@@ -3172,7 +3172,7 @@ __get_pkts_from_client:
 												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
 												sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
-												thread->status_variables.hostgroup_locked_queries++;
+												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 												RequestEnd(NULL);
 												free(buf);
 												l_free(pkt.size,pkt.ptr);
@@ -3228,8 +3228,8 @@ __get_pkts_from_client:
 									break;
 								} else {
 									// if we reach here, we are on MySQL module
-									thread->status_variables.frontend_stmt_execute++;
-									thread->status_variables.queries++;
+									thread->status_variables.stvar[st_var_frontend_stmt_execute]++;
+									thread->status_variables.stvar[st_var_queries]++;
 									//bool rc_break=false;
 
 									uint32_t client_stmt_id=0;
@@ -3396,7 +3396,7 @@ __get_pkts_from_client:
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 							l_free(pkt.size,pkt.ptr);
 							if (thread) {
-								thread->status_variables.unexpected_com_quit++;
+								thread->status_variables.stvar[st_var_unexpected_com_quit]++;
 							}
 							handler_ret = -1;
 							return handler_ret;
@@ -3404,7 +3404,7 @@ __get_pkts_from_client:
 					}
 					proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 					if (thread) {
-						thread->status_variables.unexpected_packet++;
+						thread->status_variables.stvar[st_var_unexpected_packet]++;
 					}
 					handler_ret = -1;
 					return handler_ret;
@@ -3635,7 +3635,7 @@ handler_again:
 				timespec endt;
 				if (thread->variables.stats_time_backend_query) {
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
-					thread->status_variables.backend_query_time=thread->status_variables.backend_query_time +
+					thread->status_variables.stvar[st_var_backend_query_time] = thread->status_variables.stvar[st_var_backend_query_time] +
 						(endt.tv_sec*1000000000+endt.tv_nsec) -
 						(begint.tv_sec*1000000000+begint.tv_nsec);
 				}
@@ -3675,7 +3675,7 @@ handler_again:
 							break;
 						case PROCESSING_STMT_PREPARE:
 							{
-								thread->status_variables.backend_stmt_prepare++;
+								thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 								GloMyStmt->wrlock();
 								uint32_t client_stmtid;
 								uint64_t global_stmtid;
@@ -3724,7 +3724,7 @@ handler_again:
 							break;
 						case PROCESSING_STMT_EXECUTE:
 							{
-								thread->status_variables.backend_stmt_execute++;
+								thread->status_variables.stvar[st_var_backend_stmt_execute]++;
 								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 								LogQuery(myds);
 								if (CurrentQuery.stmt_meta)
@@ -3769,10 +3769,10 @@ handler_again:
 							}
 							bool retry_conn=false;
 							if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
-								thread->status_variables.backend_lagging_during_query++;
+								thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
 								proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
 							} else {
-								thread->status_variables.backend_offline_during_query++;
+								thread->status_variables.stvar[st_var_backend_offline_during_query]++;
 								proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
 							}
 							if (myds->query_retries_on_failure > 0) {
@@ -4841,7 +4841,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		timespec endt;
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
-			thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
+			thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
 				(endt.tv_sec*1000000000+endt.tv_nsec) -
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
@@ -5655,7 +5655,7 @@ __exit_set_destination_hostgroup:
 				char buf[140];
 				sprintf(buf,"ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d", locked_on_hostgroup, current_hostgroup);
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"Y0000",buf);
-				thread->status_variables.hostgroup_locked_queries++;
+				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 				RequestEnd(NULL);
 				l_free(pkt->size,pkt->ptr);
 				return true;
@@ -5807,20 +5807,20 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, (int)qpo->max_lag_ms);
 			}
 		} else {
-			thread->status_variables.ConnPool_get_conn_immediate++;
+			thread->status_variables.stvar[st_var_ConnPool_get_conn_immediate]++;
 		}
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
-			thread->status_variables.ConnPool_get_conn_success++;
+			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 		} else {
-			thread->status_variables.ConnPool_get_conn_failure++;
+			thread->status_variables.stvar[st_var_ConnPool_get_conn_failure]++;
 		}
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms <= 360000) { // this is a relative time , we convert it to absolute
 				if (mc == NULL) {
 					if (CurrentQuery.waiting_since == 0) {
 						CurrentQuery.waiting_since = thread->curtime;
-						thread->status_variables.queries_with_max_lag_ms__delayed++;
+						thread->status_variables.stvar[st_var_queries_with_max_lag_ms__delayed]++;
 					}
 				}
 				if (now_us == 0) {
@@ -5833,7 +5833,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		if (mc) {
 			if (CurrentQuery.waiting_since) {
 				unsigned long long waited = thread->curtime - CurrentQuery.waiting_since;
-				thread->status_variables.queries_with_max_lag_ms__total_wait_time_us += waited;
+				thread->status_variables.stvar[st_var_queries_with_max_lag_ms__total_wait_time_us] += waited;
 				CurrentQuery.waiting_since = 0;
 			}
 		}
@@ -6242,9 +6242,9 @@ void MySQL_Session::Memory_Stats() {
 			}
 		}
   }
-	thread->status_variables.mysql_backend_buffers_bytes+=backend;
-	thread->status_variables.mysql_frontend_buffers_bytes+=frontend;
-	thread->status_variables.mysql_session_internal_bytes+=internal;
+	thread->status_variables.stvar[st_var_mysql_backend_buffers_bytes] += backend;
+	thread->status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+= frontend;
+	thread->status_variables.stvar[st_var_mysql_session_internal_bytes] += internal;
 }
 
 

@@ -1024,7 +1024,7 @@ handler_again:
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.length);
 			statuses.questions++;
-			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
+			myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent]+=query.length;
 			myds->bytes_info.bytes_sent += query.length;
 			bytes_info.bytes_sent += query.length;
 			if (myds->sess->with_gtid == true) {
@@ -1057,7 +1057,7 @@ handler_again:
 			stmt_prepare_start();
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.length);
-			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.length;
+			myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent]+=query.length;
 			myds->bytes_info.bytes_sent += query.length;
 			bytes_info.bytes_sent += query.length;
 			if (async_exit_status) {
@@ -1091,7 +1091,7 @@ handler_again:
 			stmt_execute_start();
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.stmt_meta->size);
-			myds->sess->thread->status_variables.queries_backends_bytes_sent+=query.stmt_meta->size;
+			myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_sent]+=query.stmt_meta->size;
 			myds->bytes_info.bytes_sent += query.stmt_meta->size;
 			bytes_info.bytes_sent += query.stmt_meta->size;
 			if (async_exit_status) {
@@ -1155,7 +1155,7 @@ handler_again:
 						}
 					}
 					__sync_fetch_and_add(&parent->bytes_recv,total_size);
-					myds->sess->thread->status_variables.queries_backends_bytes_recv+=total_size;
+					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=total_size;
 					myds->bytes_info.bytes_recv += total_size;
 					bytes_info.bytes_recv += total_size;
 				}
@@ -1279,7 +1279,7 @@ handler_again:
 				if (mysql_row) {
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
-					myds->sess->thread->status_variables.queries_backends_bytes_recv+=br;
+					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
 					myds->bytes_info.bytes_recv += br;
 					bytes_info.bytes_recv += br;
 					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
@@ -2313,7 +2313,7 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 						// copy to external buffer in MySQL_Backend
 						memcpy(buff,data,length);
 						buff[length]=0;
-						__sync_fetch_and_add(&myds->sess->thread->status_variables.gtid_session_collected,1);
+						__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
 						ret = true;
 					}
 				}

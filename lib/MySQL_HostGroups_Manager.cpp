@@ -2340,7 +2340,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 									num_candidates++;
 #endif // USE_MYSRVC_ARRAY
 								} else {
-									sess->thread->status_variables.aws_aurora_replicas_skipped_during_query++;
+									sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
 								}
 							} else {
 								sum+=mysrvc->weight;
@@ -2598,7 +2598,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 					// all servers have some latency.
 					// That is good. If any server have no latency, something is wrong
 					// and we will skip this algorithm
-					sess->thread->status_variables.ConnPool_get_conn_latency_awareness++;
+					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
 					unsigned int avg_latency_us = 0;
 					avg_latency_us = total_latency_us/num_candidates;
 					for (j=0; j<num_candidates; j++) {
