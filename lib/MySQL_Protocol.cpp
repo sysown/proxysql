@@ -942,6 +942,12 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 		setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
 		if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	}
+	bool deprecate_eof_active = false;
+	if (*myds && (*myds)->myconn) {
+		if ((*myds)->myconn->options.client_flag & CLIENT_DEPRECATE_EOF) {
+			deprecate_eof_active = true;
+		}
+	}
 	if (stmt_info->num_params) {
 		for (i=0; i<stmt_info->num_params; i++) {
 			generate_pkt_field(true,NULL,NULL,sid,
@@ -949,8 +955,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 				63,0,253,128,0,false,0,NULL); // NOTE: charset is 63 = binary !
 			sid++;
 		}
-		generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
-		sid++;
+		if (!deprecate_eof_active) {
+			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			sid++;
+		}
 	}
 	if (stmt_info->num_columns) {
 		for (i=0; i<stmt_info->num_columns; i++) {
@@ -962,8 +970,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 				fd->charsetnr, fd->length, fd->type, fd->flags, fd->decimals, false,0,NULL);
 			sid++;
 		}
-		generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
-		sid++;
+		if (!deprecate_eof_active) {
+			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			sid++;
+		}
 	}
 	pthread_rwlock_unlock(&stmt_info->rwlock_);
 	return true;
