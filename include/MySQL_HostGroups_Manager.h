@@ -678,23 +678,6 @@ class MySQL_HostGroups_Manager {
 	pthread_mutex_t mysql_errors_mutex;
 	umap_mysql_errors mysql_errors_umap;
 
-	/**
-	 * @brief Initalizes the prometheus counters specified in hg_metrics_map.
-	 */
-	void init_prometheus_counters();
-	/**
-	 * @brief Initalizes the prometheus gauges specified in hg_metrics_map.
-	 */
-	void init_prometheus_gauges();
-	/**
-	 * @brief Initalizes the prometheus dynamic counters specified in hg_metrics_map.
-	 */
-	void init_prometheus_dyn_counters();
-	/**
-	 * @brief Initalizes the prometheus dynamic gauges specified in hg_metrics_map.
-	 */
-	void init_prometheus_dyn_gauges();
-
 	public:
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;

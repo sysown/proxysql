@@ -9,6 +9,9 @@
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
+
+#include "prometheus_helpers.h"
+
 #include <memory>
 #include <string>
 
@@ -951,122 +954,6 @@ MyHGC::~MyHGC() {
 	delete mysrvs;
 }
 
-void MySQL_HostGroups_Manager::init_prometheus_counters() {
-	for (const auto& metric : std::get<hg_metrics_map_idx::counters>(hg_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->status.p_counter_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
-
-void MySQL_HostGroups_Manager::init_prometheus_gauges() {
-	for (const auto& metric : std::get<hg_metrics_map_idx::gauges>(hg_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->status.p_gauge_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
-
-void MySQL_HostGroups_Manager::init_prometheus_dyn_counters() {
-	for (const auto& metric : std::get<hg_metrics_map_idx::dyn_counters>(hg_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->status.p_dyn_counter_array[tg_metric] = metric_family;
-	}
-}
-
-void MySQL_HostGroups_Manager::init_prometheus_dyn_gauges() {
-	for (const auto& metric : std::get<hg_metrics_map_idx::dyn_gauges>(hg_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->status.p_dyn_gauge_array[tg_metric] = metric_family;
-	}
-}
-
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&ev_loop_mutex, NULL);
 	status.client_connections=0;
@@ -1146,10 +1033,10 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&mysql_errors_mutex, NULL);
 
 	// Initialize prometheus metrics
-	init_prometheus_counters();
-	init_prometheus_gauges();
-	init_prometheus_dyn_counters();
-	init_prometheus_dyn_gauges();
+	init_prometheus_counter_array<hg_metrics_map_idx, p_hg_counter>(hg_metrics_map, this->status.p_counter_array);
+	init_prometheus_gauge_array<hg_metrics_map_idx, p_hg_gauge>(hg_metrics_map, this->status.p_gauge_array);
+	init_prometheus_dyn_counter_array<hg_metrics_map_idx, p_hg_dyn_counter>(hg_metrics_map, this->status.p_dyn_counter_array);
+	init_prometheus_dyn_gauge_array<hg_metrics_map_idx, p_hg_dyn_gauge>(hg_metrics_map, this->status.p_dyn_gauge_array);
 }
 
 void MySQL_HostGroups_Manager::init() {
