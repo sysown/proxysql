@@ -3994,29 +3994,29 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 
 void MySQL_HostGroups_Manager::p_update_myconnpoll() {
 	const auto& cur_myconnpoll_get {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get]->Value()
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get]->Value()
 	};
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get]->Increment(status.myconnpoll_get - cur_myconnpoll_get);
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get]->Increment(status.myconnpoll_get - cur_myconnpoll_get);
 
 	const auto& cur_myconnpoll_get_ok {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get_ok]->Value()
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok]->Value()
 	};
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_get_ok]->Increment(status.myconnpoll_get_ok - cur_myconnpoll_get_ok);
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok]->Increment(status.myconnpoll_get_ok - cur_myconnpoll_get_ok);
 
 	const auto& cur_myconnpoll_push {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_push]->Value()
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_push]->Value()
 	};
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_push]->Increment(status.myconnpoll_push - cur_myconnpoll_push);
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_push]->Increment(status.myconnpoll_push - cur_myconnpoll_push);
 
 	const auto& cur_myconnpoll_reset {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_reset]->Value()
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset]->Value()
 	};
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_reset]->Increment(status.myconnpoll_reset - cur_myconnpoll_reset);
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset]->Increment(status.myconnpoll_reset - cur_myconnpoll_reset);
 
 	const auto& cur_myconnpoll_destroy {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_destroy]->Value()
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy]->Value()
 	};
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpoll_destroy]->Increment(status.myconnpoll_destroy - cur_myconnpoll_destroy);
+	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy]->Increment(status.myconnpoll_destroy - cur_myconnpoll_destroy);
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {

@@ -289,11 +289,11 @@ struct p_hg_counter {
 		access_denied_wrong_password,
 		access_denied_max_connections,
 		access_denied_max_user_connections,
-		myhgm_myconnpoll_get,
-		myhgm_myconnpoll_get_ok,
-		myhgm_myconnpoll_push,
-		myhgm_myconnpoll_reset,
-		myhgm_myconnpoll_destroy,
+		myhgm_myconnpool_get,
+		myhgm_myconnpool_get_ok,
+		myhgm_myconnpool_push,
+		myhgm_myconnpool_reset,
+		myhgm_myconnpool_destroy,
 		__size
 	};
 };
@@ -512,32 +512,32 @@ hg_metrics_map {
 			{}
 		},
 		{
-			p_hg_counter::myhgm_myconnpoll_get,
-			"proxysql_myhgm_myconnpoll_get",
+			p_hg_counter::myhgm_myconnpool_get,
+			"proxysql_myhgm_myconnpool_get",
 			"The number of requests made to the connection pool.",
 			{}
 		},
 		{
-			p_hg_counter::myhgm_myconnpoll_get_ok,
-			"proxysql_myhgm_myconnpoll_get_ok",
+			p_hg_counter::myhgm_myconnpool_get_ok,
+			"proxysql_myhgm_myconnpool_get_ok",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
 			{}
 		},
 		{
-			p_hg_counter::myhgm_myconnpoll_push,
-			"proxysql_myhgm_myconnpoll_push",
+			p_hg_counter::myhgm_myconnpool_push,
+			"proxysql_myhgm_myconnpool_push",
 			"The number of connections returned to the connection pool.",
 			{}
 		},
 		{
-			p_hg_counter::myhgm_myconnpoll_reset,
-			"proxysql_myhgm_myconnpoll_reset",
+			p_hg_counter::myhgm_myconnpool_reset,
+			"proxysql_myhgm_myconnpool_reset",
 			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
 			{}
 		},
 		{
-			p_hg_counter::myhgm_myconnpoll_destroy,
-			"proxysql_myhgm_myconnpoll_destroy",
+			p_hg_counter::myhgm_myconnpool_destroy,
+			"proxysql_myhgm_myconnpool_destroy",
 			"The number of connections considered unhealthy and therefore closed.",
 			{}
 		}
