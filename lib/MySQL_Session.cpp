@@ -1309,37 +1309,23 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		} else {
 			c = proxysql_find_charset_name(csname);
 		}
-		client_myds->DSS=STATE_QUERY_SENT_NET;
-		if (!c) {
-			char *m = NULL;
-			char *errmsg = NULL;
-			if (collation_specified) {
-				m=(char *)"Unknown character set '%s' or collation '%s'";
-				errmsg=(char *)malloc(strlen(csname)+strlen(collation_name)+strlen(m));
-				sprintf(errmsg,m,csname,collation_name);
-			} else {
-				m=(char *)"Unknown character set: '%s'";
-				errmsg=(char *)malloc(strlen(csname)+strlen(m));
-				sprintf(errmsg,m,csname);
-			}
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1115,(char *)"42000",errmsg,true);
-			free(errmsg);
-		} else {
+		free(unstripped);
+		if (c) {
+			client_myds->DSS=STATE_QUERY_SENT_NET;
 			client_myds->myconn->set_charset(c->nr, NAMES);
 			unsigned int nTrx=NumActiveTransactions();
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
+			if (mirror==false) {
+				RequestEnd(NULL);
+			}
+			l_free(pkt->size,pkt->ptr);
+			__sync_fetch_and_add(&MyHGM->status.frontend_set_names, 1);
+			return true;
 		}
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
-		if (mirror==false) {
-			RequestEnd(NULL);
-		}
-		l_free(pkt->size,pkt->ptr);
-		free(unstripped);
-		__sync_fetch_and_add(&MyHGM->status.frontend_set_names, 1);
-		return true;
 	}
 	if ( (pkt->size == 18) && (strncasecmp((char *)"SHOW WARNINGS",(char *)pkt->ptr+5,13)==0) ) {
 		SQLite3_result * resultset=new SQLite3_result(3);
