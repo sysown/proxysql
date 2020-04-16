@@ -3181,6 +3181,44 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	return result;
 }
 
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
+	const auto& counter_id { m_map.find(endpoint_id) };
+	if (counter_id != m_map.end()) {
+		const auto& cur_val { counter_id->second->Value() };
+		counter_id->second->Increment(value - cur_val);
+	} else {
+		auto& new_counter { status.p_dyn_counter_array[idx] };
+		m_map.insert(
+			{
+				endpoint_id,
+				std::addressof(new_counter->Add({
+					{"endpoint", endpoint_addr + ":" + endpoint_port},
+					{"hostgroup", hostgroup_id }
+				}))
+			}
+		);
+	}
+}
+
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
+	const auto& counter_id { m_map.find(endpoint_id) };
+	if (counter_id != m_map.end()) {
+		const auto& cur_val { counter_id->second->Value() };
+		counter_id->second->Set(value);
+	} else {
+		auto& new_counter { status.p_dyn_gauge_array[idx] };
+		m_map.insert(
+			{
+				endpoint_id,
+				std::addressof(new_counter->Add({
+					{"endpoint", endpoint_addr + ":" + endpoint_port},
+					{"hostgroup", hostgroup_id }
+				}))
+			}
+		);
+	}
+}
+
 void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	wrlock();
 	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
@@ -3193,180 +3231,42 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			std::string endpoint_id { endpoint_addr + ":" + endpoint_port + ":" + hostgroup_id };
 
 			// proxysql_connection_pool_bytes_data_recv metric
-			const auto& recv_counter_id { this->status.p_conn_pool_bytes_data_recv_map.find(endpoint_id) };
-			if (recv_counter_id != this->status.p_conn_pool_bytes_data_recv_map.end()) {
-				const auto& cur_val { recv_counter_id->second->Value() };
-				recv_counter_id->second->Increment(mysrvc->bytes_recv - cur_val);
-			} else {
-				auto& conn_pool_bytes_data_recv {
-					this->status.p_dyn_counter_array[p_hg_dyn_counter::conn_pool_bytes_data_recv]
-				};
-				this->status.p_conn_pool_bytes_data_recv_map.insert(
-					{
-						endpoint_id,
-						std::addressof(conn_pool_bytes_data_recv->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_conn_pool_bytes_data_recv_map, mysrvc->bytes_recv, p_hg_dyn_counter::conn_pool_bytes_data_recv);
 
 			// proxysql_connection_pool_bytes_data_sent metric
-			const auto& sent_counter_id { this->status.p_conn_pool_bytes_data_sent_map.find(endpoint_id) };
-			if (sent_counter_id != this->status.p_conn_pool_bytes_data_sent_map.end()) {
-				const auto& cur_val { sent_counter_id->second->Value() };
-				sent_counter_id->second->Increment(mysrvc->bytes_sent - cur_val);
-			} else {
-				auto& conn_pool_bytes_data_sent {
-					this->status.p_dyn_counter_array[p_hg_dyn_counter::conn_pool_bytes_data_sent]
-				};
-				this->status.p_conn_pool_bytes_data_sent_map.insert(
-					{
-						endpoint_id,
-						std::addressof(conn_pool_bytes_data_sent->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_conn_pool_bytes_data_sent_map, mysrvc->bytes_sent, p_hg_dyn_counter::conn_pool_bytes_data_sent);
 
 			// proxysql_connection_pool_conn_err metric
-			const auto& con_err_counter_id { this->status.p_connection_pool_conn_err_map.find(endpoint_id) };
-			if (con_err_counter_id != this->status.p_connection_pool_conn_err_map.end()) {
-				const auto& cur_val { con_err_counter_id->second->Value() };
-				con_err_counter_id->second->Increment(mysrvc->connect_ERR - cur_val);
-			} else {
-				auto& connection_pool_conn_err {
-					this->status.p_dyn_counter_array[p_hg_dyn_counter::connection_pool_conn_err]
-				};
-				this->status.p_connection_pool_conn_err_map.insert(
-					{
-						endpoint_id,
-						std::addressof(connection_pool_conn_err->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_err_map, mysrvc->connect_ERR, p_hg_dyn_counter::connection_pool_conn_err);
 
 			// proxysql_connection_pool_conn_free metric
-			const auto& con_free_counter_id { this->status.p_connection_pool_conn_free_map.find(endpoint_id) };
-			if (con_free_counter_id != this->status.p_connection_pool_conn_free_map.end()) {
-				con_free_counter_id->second->Set(mysrvc->ConnectionsFree->conns_length());
-			} else {
-				auto& connection_pool_conn_free {
-					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_free]
-				};
-				this->status.p_connection_pool_conn_free_map.insert(
-					{
-						endpoint_id,
-						std::addressof(connection_pool_conn_free->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_free_map, mysrvc->ConnectionsFree->conns_length(), p_hg_dyn_gauge::connection_pool_conn_free);
+
 
 			// proxysql_connection_pool_conn_ok metric
-			const auto& conn_pool_conn_ok { this->status.p_connection_pool_conn_ok_map.find(endpoint_id) };
-			if (conn_pool_conn_ok != this->status.p_connection_pool_conn_ok_map.end()) {
-				const auto& cur_val { conn_pool_conn_ok->second->Value() };
-				conn_pool_conn_ok->second->Increment(mysrvc->connect_OK - cur_val);
-			} else {
-				auto& connection_pool_conn_ok {
-					this->status.p_dyn_counter_array[p_hg_dyn_counter::connection_pool_conn_ok]
-				};
-				this->status.p_connection_pool_conn_ok_map.insert(
-					{
-						endpoint_id,
-						std::addressof(connection_pool_conn_ok->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_ok_map, mysrvc->connect_OK, p_hg_dyn_counter::connection_pool_conn_ok);
 
 			// proxysql_connection_pool_conn_used metric
-			const auto& conn_pool_conn_used { this->status.p_connection_pool_conn_used_map.find(endpoint_id) };
-			if (conn_pool_conn_used != this->status.p_connection_pool_conn_used_map.end()) {
-				conn_pool_conn_used->second->Set(mysrvc->ConnectionsUsed->conns_length());
-			} else {
-				auto& connection_pool_conn_used {
-					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_used]
-				};
-				this->status.p_connection_pool_conn_used_map.insert(
-					{
-						endpoint_id,
-						std::addressof(connection_pool_conn_used->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_used_map, mysrvc->ConnectionsUsed->conns_length(), p_hg_dyn_gauge::connection_pool_conn_used);
 
 			// proxysql_connection_pool_latency_us metric
-			const auto& conn_pool_conn_latency_us { this->status.p_connection_pool_latency_us_map.find(endpoint_id) };
-			if (conn_pool_conn_latency_us != this->status.p_connection_pool_latency_us_map.end()) {
-				conn_pool_conn_latency_us->second->Set(mysrvc->current_latency_us);
-			} else {
-				auto& connection_pool_conn_latency_us {
-					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_latency_us]
-				};
-				this->status.p_connection_pool_latency_us_map.insert(
-					{
-						endpoint_id,
-						std::addressof(connection_pool_conn_latency_us->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_latency_us_map, mysrvc->current_latency_us, p_hg_dyn_gauge::connection_pool_latency_us);
+
 
 			// proxysql_connection_pool_queries metric
-			const auto& conn_pool_conn_queries { this->status.p_connection_pool_queries_map.find(endpoint_id) };
-			if (conn_pool_conn_queries != this->status.p_connection_pool_queries_map.end()) {
-				const auto& cur_val { conn_pool_conn_queries->second->Value() };
-				conn_pool_conn_queries->second->Increment(mysrvc->queries_sent - cur_val);
-			} else {
-				auto& connection_pool_conn_queries {
-					this->status.p_dyn_counter_array[p_hg_dyn_counter::connection_pool_conn_ok]
-				};
-				this->status.p_connection_pool_queries_map.insert(
-					{
-						endpoint_id,
-						std::addressof(connection_pool_conn_queries->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_queries_map, mysrvc->queries_sent, p_hg_dyn_counter::connection_pool_queries);
 
 			// proxysql_connection_pool_status metric
-			const auto& conn_pool_conn_status { this->status.p_connection_pool_status_map.find(endpoint_id) };
-			if (conn_pool_conn_status != this->status.p_connection_pool_status_map.end()) {
-				conn_pool_conn_status->second->Set(mysrvc->status + 1);
-			} else {
-				auto& connection_pool_conn_status {
-					this->status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_status]
-				};
-				this->status.p_connection_pool_status_map.insert(
-					{
-						endpoint_id,
-						std::addressof(connection_pool_conn_status->Add({
-							{"endpoint", endpoint_addr + ":" + endpoint_port},
-							{"hostgroup", hostgroup_id }
-						}))
-					}
-				);
-			}
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_status_map, mysrvc->status + 1, p_hg_dyn_gauge::connection_pool_status);
 		}
 	}
 	wrunlock();
