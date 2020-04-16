@@ -9,6 +9,13 @@
 
 extern MySQL_Variables mysql_variables;
 
+/* The default mariadb-connecter 3.1.4 does not yet implement CLIENT_DEPRECATE_EOF
+ * flag.
+ */
+#ifndef CLIENT_DEPRECATE_EOF
+#define CLIENT_DEPRECATE_EOF     (1UL << 24)
+#endif
+
 class MySQL_ResultSet {
 	private:
 	bool deprecate_eof_active;
