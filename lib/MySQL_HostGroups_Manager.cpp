@@ -5308,9 +5308,20 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 	std::unordered_map<string, GTID_Server_Data*>::iterator it { gtid_map.begin() };
 	while(it != gtid_map.end()) {
 		GTID_Server_Data* gtid_si { it->second };
-		const std::string& address { gtid_si->address };
-		const std::string& port { std::to_string(gtid_si->mysql_port) };
-		const std::string& endpoint_id { address + ":" + port };
+		std::string address {};
+		std::string port {};
+		std::string endpoint_id {};
+
+		if (gtid_si) {
+			address = std::string { gtid_si->address };
+			port = std::to_string(gtid_si->mysql_port);
+		} else {
+			std::string s = it->first;
+			std::size_t found = s.find_last_of(":");
+			address = s.substr(0, found);
+			port = s.substr(found + 1);
+		}
+		endpoint_id = address + ":" + port;
 
 		const auto& gitd_id_counter { this->status.p_gtid_executed_map.find(endpoint_id) };
 		prometheus::Counter* gtid_counter { nullptr };
