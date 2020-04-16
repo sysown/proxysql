@@ -3295,6 +3295,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 }
 
 void MySQL_HostGroups_Manager::p_update_connection_pool() {
+	wrlock();
 	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
 		MyHGC *myhgc { static_cast<MyHGC*>(MyHostGroups->index(i)) };
 		for (int j = 0; j < static_cast<int>(myhgc->mysrvs->cnt()); j++) {
@@ -3481,6 +3482,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			}
 		}
 	}
+	wrunlock();
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
