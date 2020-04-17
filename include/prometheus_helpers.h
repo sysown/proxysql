@@ -3,8 +3,8 @@
 
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
+#include <prometheus/family.h>
 
-#include "prometheus/family.h"
 #include "proxysql.h"
 
 using prometheus::Counter;

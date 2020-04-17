@@ -1,8 +1,4 @@
 #include "MySQL_HostGroups_Manager.h"
-#include "prometheus/counter.h"
-#include "prometheus/detail/builder.h"
-#include "prometheus/family.h"
-#include "prometheus/gauge.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "SpookyV2.h"
@@ -10,10 +6,15 @@
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 
-#include "prometheus_helpers.h"
-
 #include <memory>
 #include <string>
+
+#include <prometheus/counter.h>
+#include <prometheus/detail/builder.h>
+#include <prometheus/family.h>
+#include <prometheus/gauge.h>
+
+#include "prometheus_helpers.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }

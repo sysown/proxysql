@@ -7,12 +7,12 @@
 #include <thread>
 #include <iostream>
 
-#include "thread.h"
-#include "wqueue.h"
-
 // Headers for declaring Prometheus counters
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
+
+#include "thread.h"
+#include "wqueue.h"
 
 #include "ev.h"
 

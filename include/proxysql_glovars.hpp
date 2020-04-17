@@ -2,11 +2,10 @@
 #define __CLASS_PROXYSQL_GLOVARS_H
 
 #include <memory>
+#include <prometheus/registry.h>
 
 #include "configfile.hpp"
 #include "proxy_defines.h"
-
-#include <prometheus/registry.h>
 
 namespace ez {
 class ezOptionParser;

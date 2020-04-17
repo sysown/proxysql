@@ -1,15 +1,14 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
 
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "thread.h"
 #include "wqueue.h"
-
-// Headers for declaring Prometheus counters
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
 
 //#define MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT "CREATE TABLE mysql_server_connect (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , time_since INT NOT NULL DEFAULT 0 , time_until INT NOT NULL DEFAULT 0 , connect_success_count INT NOT NULL DEFAULT 0 , connect_success_first INT NOT NULL DEFAULT 0 , connect_success_last INT NOT NULL DEFAULT 0 , connect_success_time_min INT NOT NULL DEFAULT 0 , connect_success_time_max INT NOT NULL DEFAULT 0 , connect_success_time_total INT NOT NULL DEFAULT 0 , connect_failure_count INT NOT NULL DEFAULT 0 , connect_failure_first INT NOT NULL DEFAULT 0 , connect_failure_last INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port))"
 

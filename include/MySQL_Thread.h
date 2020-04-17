@@ -1,6 +1,9 @@
 #ifndef __CLASS_MYSQL_THREAD_H
 #define __CLASS_MYSQL_THREAD_H
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
@@ -8,10 +11,6 @@
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
 #include <atomic>
-
-// Headers for declaring Prometheus counters
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
 
 #include "prometheus_helpers.h"
 
