@@ -1,6 +1,7 @@
 #include <iostream>     // std::cout
 #include <fstream>
 #include <algorithm>    // std::sort
+#include <memory>
 #include <vector>       // std::vector
 #include <prometheus/exposer.h>
 #include <prometheus/counter.h>
@@ -4861,8 +4862,8 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	rand_del[5] = 0;
 
 	// Initialize prometheus metrics
-	init_prometheus_counters();
-	init_prometheus_gauges();
+	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
+	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
 };
 
 void ProxySQL_Admin::wrlock() {
@@ -5181,66 +5182,6 @@ bool ProxySQL_Admin::init() {
 return true;
 };
 
-void ProxySQL_Admin::init_prometheus_counters() {
-	for (const auto& metric : std::get<admin_metrics_map_idx::counters>(admin_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->metrics.p_counter_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
-
-void ProxySQL_Admin::init_prometheus_gauges() {
-	for (const auto& metric : std::get<admin_metrics_map_idx::gauges>(admin_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->metrics.p_gauge_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
-
 #ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::init_clickhouse_variables() {
 	flush_clickhouse_variables___runtime_to_database(configdb, false, false, false);
@@ -5397,7 +5338,7 @@ void ProxySQL_Admin::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
 };
 
 std::map<string,string> request_headers(const httpserver::http_request& request) {
-	auto req_headers { request.get_headers() };
+	auto req_headers = request.get_headers();
 	std::map<string,string> result {};
 
 	for (const auto& header : req_headers) {
@@ -5410,9 +5351,8 @@ std::map<string,string> request_headers(const httpserver::http_request& request)
 std::shared_ptr<httpserver::http_response> make_response(
 	const std::pair<std::map<std::string,std::string>, std::string>& res_data
 ) {
-	std::shared_ptr<httpserver::string_response> response {
-		new httpserver::string_response(res_data.second)
-	};
+	std::shared_ptr<httpserver::string_response> response =
+		std::make_shared<httpserver::string_response>(httpserver::string_response(res_data.second));
 
 	for (const auto& h_key_val : res_data.first) {
 		response->with_header(h_key_val.first, h_key_val.second);
@@ -5471,9 +5411,9 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 				if (variables.restapi_enabled) {
 					std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
 						[this](const httpserver::http_request& request) {
-							auto headers { request_headers(request) };
-							auto serial_response { this->serial_exposer(headers) };
-							auto http_response { make_response(serial_response) };
+							auto headers = request_headers(request);
+							auto serial_response = this->serial_exposer(headers);
+							auto http_response = make_response(serial_response);
 
 							return http_response;
 						}
@@ -7090,9 +7030,9 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 
 void ProxySQL_Admin::p_update_metrics() {
 	// Update proxysql_uptime
-	auto t1 { monotonic_time() };
-	auto new_uptime { (t1 - GloVars.global.start_time)/1000/1000 };
-	auto cur_uptime { this->metrics.p_counter_array[p_admin_counter::uptime]->Value() };
+	auto t1 = monotonic_time();
+	auto new_uptime = (t1 - GloVars.global.start_time)/1000/1000;
+	auto cur_uptime = this->metrics.p_counter_array[p_admin_counter::uptime]->Value();
 	this->metrics.p_counter_array[p_admin_counter::uptime]->Increment(new_uptime - cur_uptime);
 
 	// Update memory metrics
@@ -7105,25 +7045,25 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	if (!GloMTH) return;
 
 	// proxysql_connpool_memory_bytes metric
-	const auto connpool_mem { MyHGM->Get_Memory_Stats() };
+	const auto connpool_mem = MyHGM->Get_Memory_Stats();
 	this->metrics.p_gauge_array[p_admin_gauge::connpool_memory_bytes]->Set(connpool_mem);
 
 	// proxysql_sqlite3_memory_bytes metric
-	int highwater { 0 };
-	int current { 0 };
+	int highwater = 0;
+	int current = 0;
 	sqlite3_status(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
 	this->metrics.p_gauge_array[p_admin_gauge::sqlite3_memory_bytes]->Set(current);
 
 	// proxysql_jemalloc_* memory metrics
 	// ===============================================================
 	size_t
-		allocated { 0 },
-		resident  { 0 },
-		active    { 0 },
-		mapped    { 0 },
-		metadata  { 0 },
-		retained  { 0 },
-		sz        { sizeof(size_t) };
+		allocated = 0,
+		resident  = 0,
+		active    = 0,
+		mapped    = 0,
+		metadata  = 0,
+		retained  = 0,
+		sz        = sizeof(size_t);
 
 	mallctl("stats.resident", &resident, &sz, NULL, 0);
 	mallctl("stats.active", &active, &sz, NULL, 0);
@@ -7134,7 +7074,7 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 
 	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_resident]->Set(resident);
 	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_active]->Set(active);
-	const auto cur_allocated { this->metrics.p_counter_array[p_admin_counter::jemalloc_allocated]->Value() };
+	const auto cur_allocated = this->metrics.p_counter_array[p_admin_counter::jemalloc_allocated]->Value();
 	this->metrics.p_counter_array[p_admin_counter::jemalloc_allocated]->Increment(allocated - cur_allocated);
 	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_mapped]->Set(mapped);
 	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_metadata]->Set(metadata);
@@ -7143,49 +7083,46 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	// ===============================================================
 
 	// proxysql_auth_memory metric
-	unsigned long mu { GloMyAuth->memory_usage() };
+	unsigned long mu = GloMyAuth->memory_usage();
 	this->metrics.p_gauge_array[p_admin_gauge::auth_memory_bytes]->Set(mu);
 
 	// proxysql_query_digest_memory metric
-	const auto& query_digest_t_size { GloQPro->get_query_digests_total_size() };
+	const auto& query_digest_t_size = GloQPro->get_query_digests_total_size();
 	this->metrics.p_gauge_array[p_admin_gauge::query_digest_memory_bytes]->Set(query_digest_t_size);
 
 	// mysql_query_rules_memory metric
-	const auto& rules_mem_used { GloQPro->get_rules_mem_used() };
+	const auto& rules_mem_used = GloQPro->get_rules_mem_used();
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_query_rules_memory_bytes]->Set(rules_mem_used);
 
 	// mysql_firewall_users_table metric
-	const auto& firewall_users_table { GloQPro->get_mysql_firewall_memory_users_table() };
+	const auto& firewall_users_table = GloQPro->get_mysql_firewall_memory_users_table();
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_table]->Set(firewall_users_table);
 
 	// mysql_firewall_users_config metric
-	const auto& firewall_users_config { GloQPro->get_mysql_firewall_memory_users_config() };
+	const auto& firewall_users_config = GloQPro->get_mysql_firewall_memory_users_config();
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_config]->Set(firewall_users_config);
 
 	// mysql_firewall_rules_table metric
-	const auto& firewall_rules_table { GloQPro->get_mysql_firewall_memory_rules_table() };
+	const auto& firewall_rules_table = GloQPro->get_mysql_firewall_memory_rules_table();
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_table]->Set(firewall_rules_table);
 
 	// mysql_firewall_rules_table metric
-	const auto& firewall_rules_config { GloQPro->get_mysql_firewall_memory_rules_config() };
+	const auto& firewall_rules_config = GloQPro->get_mysql_firewall_memory_rules_config();
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_config]->Set(firewall_rules_config);
 
 	// proxysql_stack_memory_mysql_threads
-	const auto& stack_memory_mysql_threads {
-		__sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads, 0)
-	};
+	const auto& stack_memory_mysql_threads =
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads, 0);
 	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_mysql_threads]->Set(stack_memory_mysql_threads);
 
 	// proxysql_stack_memory_admin_threads
-	const auto& stack_memory_admin_threads {
-		__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, 0)
-	};
+	const auto& stack_memory_admin_threads =
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, 0);
 	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_admin_threads]->Set(stack_memory_admin_threads);
 
 	// proxysql_stack_memory_cluster_threads
-	const auto& stack_memory_cluster_threads {
-		__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads, 0)
-	};
+	const auto& stack_memory_cluster_threads =
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads, 0);
 	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_cluster_threads]->Set(stack_memory_cluster_threads);
 }
 

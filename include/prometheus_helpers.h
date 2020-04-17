@@ -33,11 +33,11 @@ void init_prometheus_counter_array(
 	std::array<prometheus::Counter*, counters_enum::__size>& counter_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::counters>(map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
+		const auto& tg_metric = std::get<0>(metric);
+		const auto& metric_name = std::get<1>(metric);
+		const auto& metric_help = std::get<2>(metric);
+		const auto& metric_tags = std::get<3>(metric);
+		prometheus::Family<prometheus::Counter>* metric_family = nullptr;
 
 		if (metric_help.empty()) {
 			metric_family =
@@ -84,11 +84,11 @@ void init_prometheus_gauge_array(
 	std::array<prometheus::Gauge*, gauges_enum::__size>& gauge_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::gauges>(map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
+		const auto& tg_metric = std::get<0>(metric);
+		const auto& metric_name = std::get<1>(metric);
+		const auto& metric_help = std::get<2>(metric);
+		const auto& metric_tags = std::get<3>(metric);
+		prometheus::Family<prometheus::Gauge>* metric_family = nullptr;
 
 		if (metric_help.empty()) {
 			metric_family =
@@ -135,10 +135,10 @@ void init_prometheus_dyn_counter_array(
 	std::array<prometheus::Family<prometheus::Counter>*, dyn_counter_enum::__size>& dyn_counter_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::dyn_counters>(map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
+		const auto& tg_metric = std::get<0>(metric);
+		const auto& metric_name = std::get<1>(metric);
+		const auto& metric_help = std::get<2>(metric);
+		prometheus::Family<prometheus::Counter>* metric_family = nullptr;
 
 		if (metric_help.empty()) {
 			metric_family =
@@ -184,10 +184,10 @@ void init_prometheus_dyn_gauge_array(
 	std::array<prometheus::Family<prometheus::Gauge>*, gauges_enum::__size>& dyn_gauge_array
 ) {
 	for (const auto& metric : std::get<map_idx_enum::dyn_gauges>(map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
+		const auto& tg_metric = std::get<0>(metric);
+		const auto& metric_name = std::get<1>(metric);
+		const auto& metric_help = std::get<2>(metric);
+		prometheus::Family<prometheus::Gauge>* metric_family = nullptr;
 
 		if (metric_help.empty()) {
 			metric_family =

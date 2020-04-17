@@ -261,111 +261,112 @@ struct mon_metrics_map_idx {
 	};
 };
 
-using active_flag = bool;
 using metric_name = std::string;
 using metric_help = std::string;
 using metric_tags = std::map<std::string, std::string>;
 
-const static std::tuple<
-	std::vector<
-		std::tuple<
-			p_mon_counter::metric,
-			metric_name,
-			metric_help,
-			metric_tags
-		>
-	>,
-	std::vector<
-		std::tuple<
-			p_mon_gauge::metric,
-			metric_name,
-			metric_help,
-			metric_tags
-		>
-	>
->
-mon_metrics_map {
-	{
-		{
+using mon_counter_tuple =
+	std::tuple<
+		p_mon_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using mon_gauge_tuple =
+	std::tuple<
+		p_mon_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using mon_counter_vector = std::vector<mon_counter_tuple>;
+using mon_gauge_vector = std::vector<mon_gauge_tuple>;
+
+const static std::tuple<mon_counter_vector, mon_gauge_vector>
+mon_metrics_map = std::make_tuple(
+	mon_counter_vector {
+		std::make_tuple (
 			p_mon_counter::mysql_monitor_workers_started,
 			"proxysql_mysql_monitor_workers_started",
 			"Number of MySQL Monitor workers started.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_connect_check_ok,
 			"proxysql_mysql_monitor_connect_check_ok",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_connect_check_err,
 			"proxysql_mysql_monitor_connect_check_err",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_ping_check_ok,
 			"proxysql_mysql_monitor_ping_check_ok",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_ping_check_err,
 			"proxysql_mysql_monitor_ping_check_err",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_read_only_check_ok,
 			"proxysql_mysql_monitor_read_only_check_ok",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_read_only_check_err,
 			"proxysql_mysql_monitor_read_only_check_err",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_replication_lag_check_ok,
 			"proxysql_mysql_monitor_replication_lag_check_ok",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_replication_lag_check_err,
 			"proxysql_mysql_monitor_replication_lag_check_err",
 			"",
-			{}
-		}
+			metric_tags {}
+		)
 	},
-	{
-		{
+	mon_gauge_vector {
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_gauge::mysql_monitor_workers,
 			"proxysql_mysql_monitor_workers",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_mon_gauge::mysql_monitor_workers_aux,
 			"proxysql_mysql_monitor_workers_aux",
 			"",
-			{}
-		}
+			metric_tags {}
+		)
 	}
-};
+);
 
 class MySQL_Monitor {
 	private:
@@ -373,14 +374,6 @@ class MySQL_Monitor {
 	void insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
-	/**
-	 * @brief Initalizes the prometheus counters specified in mon_metrics_map.
-	 */
-	void init_prometheus_counters();
-	/**
-	 * @brief Initalizes the prometheus gagues specified in mon_metrics_map.
-	 */
-	void init_prometheus_gauges();
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock

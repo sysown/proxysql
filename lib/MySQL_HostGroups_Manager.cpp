@@ -3222,13 +3222,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string
 void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	wrlock();
 	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
-		MyHGC *myhgc { static_cast<MyHGC*>(MyHostGroups->index(i)) };
+		MyHGC *myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
 		for (int j = 0; j < static_cast<int>(myhgc->mysrvs->cnt()); j++) {
-			MySrvC *mysrvc { static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j)) };
-			std::string endpoint_addr { mysrvc->address };
-			std::string endpoint_port { std::to_string(mysrvc->port) };
-			std::string hostgroup_id { std::to_string(myhgc->hid) };
-			std::string endpoint_id { endpoint_addr + ":" + endpoint_port + ":" + hostgroup_id };
+			MySrvC *mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+			std::string endpoint_addr = mysrvc->address;
+			std::string endpoint_port = std::to_string(mysrvc->port);
+			std::string hostgroup_id = std::to_string(myhgc->hid);
+			std::string endpoint_id = endpoint_addr + ":" + endpoint_port + ":" + hostgroup_id;
 
 			// proxysql_connection_pool_bytes_data_recv metric
 			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
@@ -3782,29 +3782,24 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 }
 
 void MySQL_HostGroups_Manager::p_update_myconnpoll() {
-	const auto& cur_myconnpoll_get {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get]->Value()
-	};
+	const auto& cur_myconnpoll_get =
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get]->Value();
 	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get]->Increment(status.myconnpoll_get - cur_myconnpoll_get);
 
-	const auto& cur_myconnpoll_get_ok {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok]->Value()
-	};
+	const auto& cur_myconnpoll_get_ok =
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok]->Value();
 	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok]->Increment(status.myconnpoll_get_ok - cur_myconnpoll_get_ok);
 
-	const auto& cur_myconnpoll_push {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_push]->Value()
-	};
+	const auto& cur_myconnpoll_push =
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_push]->Value();
 	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_push]->Increment(status.myconnpoll_push - cur_myconnpoll_push);
 
-	const auto& cur_myconnpoll_reset {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset]->Value()
-	};
+	const auto& cur_myconnpoll_reset =
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset]->Value();
 	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset]->Increment(status.myconnpoll_reset - cur_myconnpoll_reset);
 
-	const auto& cur_myconnpoll_destroy {
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy]->Value()
-	};
+	const auto& cur_myconnpoll_destroy =
+		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy]->Value();
 	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy]->Increment(status.myconnpoll_destroy - cur_myconnpoll_destroy);
 }
 
@@ -5094,15 +5089,15 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 	pthread_rwlock_wrlock(&gtid_rwlock);
 
-	std::unordered_map<string, GTID_Server_Data*>::iterator it { gtid_map.begin() };
+	std::unordered_map<string, GTID_Server_Data*>::iterator it = gtid_map.begin();
 	while(it != gtid_map.end()) {
-		GTID_Server_Data* gtid_si { it->second };
+		GTID_Server_Data* gtid_si = it->second;
 		std::string address {};
 		std::string port {};
 		std::string endpoint_id {};
 
 		if (gtid_si) {
-			address = std::string { gtid_si->address };
+			address = std::string(gtid_si->address);
 			port = std::to_string(gtid_si->mysql_port);
 		} else {
 			std::string s = it->first;
@@ -5112,13 +5107,12 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 		}
 		endpoint_id = address + ":" + port;
 
-		const auto& gitd_id_counter { this->status.p_gtid_executed_map.find(endpoint_id) };
-		prometheus::Counter* gtid_counter { nullptr };
+		const auto& gitd_id_counter = this->status.p_gtid_executed_map.find(endpoint_id);
+		prometheus::Counter* gtid_counter = nullptr;
 
 		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
-			auto& gitd_counter {
-					this->status.p_dyn_counter_array[p_hg_dyn_counter::gtid_executed]
-			};
+			auto& gitd_counter =
+				this->status.p_dyn_counter_array[p_hg_dyn_counter::gtid_executed];
 
 			gtid_counter = std::addressof(gitd_counter->Add({
 				{ "hostname", address },
@@ -5136,7 +5130,7 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 		}
 
 		if (gtid_si) {
-			const auto& cur_executed_gtid { gtid_counter->Value() };
+			const auto& cur_executed_gtid = gtid_counter->Value();
 			gtid_counter->Increment(gtid_si->events_read - cur_executed_gtid);
 		}
 

@@ -612,8 +612,8 @@ MySQL_Monitor::MySQL_Monitor() {
 */
 
 	// Initialize prometheus metrics
-	init_prometheus_counters();
-	init_prometheus_gauges();
+	init_prometheus_counter_array<mon_metrics_map_idx, p_mon_counter>(mon_metrics_map, this->metrics.p_counter_array);
+	init_prometheus_gauge_array<mon_metrics_map_idx, p_mon_gauge>(mon_metrics_map, this->metrics.p_gauge_array);
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -648,27 +648,27 @@ void MySQL_Monitor::p_update_metrics() {
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(GloMyMon->num_threads);
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers_aux]->Set(GloMyMon->aux_threads);
 
-		const auto& cur_started_threads { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Value() };
+		const auto& cur_started_threads = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Increment(GloMyMon->started_threads - cur_started_threads);
 
-		const auto& cur_connect_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok]->Value() };
+		const auto& cur_connect_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok]->Increment(GloMyMon->connect_check_OK- cur_connect_ok);
-		const auto& cur_connect_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err]->Value() };
+		const auto& cur_connect_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err]->Increment(GloMyMon->connect_check_ERR - cur_connect_err);
 
-		const auto& cur_ping_check_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok]->Value() };
+		const auto& cur_ping_check_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok]->Increment(GloMyMon->ping_check_OK - cur_ping_check_ok);
-		const auto& cur_ping_check_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err]->Value() };
+		const auto& cur_ping_check_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err]->Increment(GloMyMon->ping_check_ERR - cur_ping_check_err);
 
-		const auto& cur_read_only_check_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok]->Value() };
+		const auto& cur_read_only_check_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok]->Increment(GloMyMon->read_only_check_OK - cur_read_only_check_ok);
-		const auto& cur_read_only_check_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err]->Value() };
+		const auto& cur_read_only_check_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err]->Increment(GloMyMon->read_only_check_ERR - cur_read_only_check_err);
 
-		const auto& cur_replication_lag_check_ok { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok]->Value() };
+		const auto& cur_replication_lag_check_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok]->Increment(GloMyMon->replication_lag_check_OK - cur_replication_lag_check_ok);
-		const auto& cur_replication_lag_check_err { this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err]->Value() };
+		const auto& cur_replication_lag_check_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err]->Value();
 		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err]->Increment(GloMyMon->replication_lag_check_ERR - cur_replication_lag_check_err);
 	}
 }
@@ -709,66 +709,6 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 	}
 	db->execute("PRAGMA foreign_keys = ON");
 };
-
-void MySQL_Monitor::init_prometheus_counters() {
-	for (const auto& metric : std::get<mon_metrics_map_idx::counters>(mon_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->metrics.p_counter_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
-
-void MySQL_Monitor::init_prometheus_gauges() {
-	for (const auto& metric : std::get<mon_metrics_map_idx::gauges>(mon_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->metrics.p_gauge_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
 
 void * monitor_connect_thread(void *arg) {
 	mysql_close(mysql_init(NULL));

@@ -272,13 +272,10 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	}
 
 	for (const auto& id_endpoint : endpoints) {
-		const auto& endpoint_route { id_endpoint.first };
-		auto endpoint_fn { id_endpoint.second };
-		auto endpoint_res {
-			std::unique_ptr<httpserver::http_resource>(
-				new gen_get_endpoint(endpoint_fn)
-			)
-		};
+		const std::string& endpoint_route = id_endpoint.first;
+		auto endpoint_fn = id_endpoint.second;
+		std::unique_ptr<httpserver::http_resource> endpoint_res =
+			std::unique_ptr<httpserver::http_resource>(new gen_get_endpoint(endpoint_fn));
 
 		ws->register_resource(endpoint_route, endpoint_res.get(), true);
 		_endpoints.push_back({endpoint_route, std::move(endpoint_res)});

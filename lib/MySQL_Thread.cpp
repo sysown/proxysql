@@ -1,5 +1,6 @@
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
 #include "MySQL_HostGroups_Manager.h"
+#include "prometheus_helpers.h"
 #define MYSQL_THREAD_IMPLEMENTATION
 #include "proxysql.h"
 #include "cpp.h"
@@ -540,66 +541,6 @@ static char * mysql_thread_variables_names[]= {
 	NULL
 };
 
-void MySQL_Threads_Handler::init_prometheus_counters() {
-	for (const auto& metric : std::get<th_metrics_map_idx::counters>(th_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Counter>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildCounter()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->status_variables.p_counter_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
-
-void MySQL_Threads_Handler::init_prometheus_gauges() {
-	for (const auto& metric : std::get<th_metrics_map_idx::gauges>(th_metrics_map)) {
-		const auto& tg_metric { std::get<0>(metric) };
-		const auto& metric_name { std::get<1>(metric) };
-		const auto& metric_help { std::get<2>(metric) };
-		const auto& metric_tags { std::get<3>(metric) };
-		prometheus::Family<prometheus::Gauge>* metric_family { nullptr };
-
-		if (metric_help.empty()) {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Register(*GloVars.prometheus_registry)
-				);
-		} else {
-			metric_family =
-				std::addressof(
-					prometheus::BuildGauge()
-					.Name(metric_name)
-					.Help(metric_help)
-					.Register(*GloVars.prometheus_registry)
-				);
-		}
-
-		this->status_variables.p_gauge_array[tg_metric] =
-			std::addressof(metric_family->Add(metric_tags));
-	}
-}
-
 MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #ifdef DEBUG
 	if (glovars.has_debug==false) {
@@ -764,8 +705,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	MLM = new MySQL_Listeners_Manager();
 
 	// Initialize prometheus metrics
-	init_prometheus_counters();
-	init_prometheus_gauges();
+	init_prometheus_counter_array<th_metrics_map_idx, p_th_counter>(th_metrics_map, this->status_variables.p_counter_array);
+	init_prometheus_gauge_array<th_metrics_map_idx, p_th_gauge>(th_metrics_map, this->status_variables.p_gauge_array);
 }
 
 
@@ -5540,7 +5481,7 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_prepare() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_stmt_prepare,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_prepare]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_prepare]->Value();
 	this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_prepare]->Increment(q - cur_val);
 
 	return q;
@@ -5556,7 +5497,7 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_execute() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_stmt_execute,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_execute]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_execute]->Value();
 	this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_execute]->Increment(q - cur_val);
 
 	return q;
@@ -5572,7 +5513,7 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_close() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_stmt_close,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_close]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_close]->Value();
 	this->status_variables.p_counter_array[p_th_counter::com_backend_stmt_close]->Increment(q - cur_val);
 
 	return q;
@@ -5588,7 +5529,7 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_prepare() {
 				q+=__sync_fetch_and_add(&thr->status_variables.frontend_stmt_prepare,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_prepare]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_prepare]->Value();
 	this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_prepare]->Increment(q - cur_val);
 
 	return q;
@@ -5604,7 +5545,7 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_execute() {
 				q+=__sync_fetch_and_add(&thr->status_variables.frontend_stmt_execute,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_execute]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_execute]->Value();
 	this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_execute]->Increment(q - cur_val);
 
 	return q;
@@ -5620,7 +5561,7 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_close() {
 				q+=__sync_fetch_and_add(&thr->status_variables.frontend_stmt_close,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_close]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_close]->Value();
 	this->status_variables.p_counter_array[p_th_counter::com_frontend_stmt_close]->Increment(q - cur_val);
 
 	return q;
@@ -5635,7 +5576,7 @@ unsigned long long MySQL_Threads_Handler::get_total_queries() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::questions]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::questions]->Value();
 	this->status_variables.p_counter_array[p_th_counter::questions]->Increment(q - cur_val);
 
 	return q;
@@ -5651,7 +5592,7 @@ unsigned long long MySQL_Threads_Handler::get_slow_queries() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_slow,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::slow_queries]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::slow_queries]->Value();
 	this->status_variables.p_counter_array[p_th_counter::slow_queries]->Increment(q - cur_val);
 
 	return q;
@@ -5667,7 +5608,7 @@ unsigned long long MySQL_Threads_Handler::get_gtid_queries() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_gtid,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::gtid_consistent_queries]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::gtid_consistent_queries]->Value();
 	this->status_variables.p_counter_array[p_th_counter::gtid_consistent_queries]->Increment(q - cur_val);
 
 	return q;
@@ -5683,7 +5624,7 @@ unsigned long long MySQL_Threads_Handler::get_gtid_session_collected() {
 				q+=__sync_fetch_and_add(&thr->status_variables.gtid_session_collected,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::gtid_session_collected]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::gtid_session_collected]->Value();
 	this->status_variables.p_counter_array[p_th_counter::gtid_session_collected]->Increment(q - cur_val);
 
 	return q;
@@ -5699,7 +5640,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_recv() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_backends_bytes_recv,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::queries_backends_bytes_recv]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::queries_backends_bytes_recv]->Value();
 	this->status_variables.p_counter_array[p_th_counter::queries_backends_bytes_recv]->Increment(q - cur_val);
 
 	return q;
@@ -5715,7 +5656,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_sent() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_backends_bytes_sent,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_sent]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_sent]->Value();
 	this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_sent]->Increment(q - cur_val);
 
 	return q;
@@ -5731,7 +5672,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_recv() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_frontends_bytes_recv,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_recv]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_recv]->Value();
 	this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_recv]->Increment(q - cur_val);
 
 	return q;
@@ -5747,7 +5688,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_sent() {
 				q+=__sync_fetch_and_add(&thr->status_variables.queries_frontends_bytes_sent,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_sent]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_sent]->Value();
 	this->status_variables.p_counter_array[p_th_counter::queries_frontends_bytes_sent]->Increment(q - cur_val);
 
 	return q;
@@ -5797,7 +5738,7 @@ unsigned long long MySQL_Threads_Handler::get_query_processor_time() {
 				q+=__sync_fetch_and_add(&thr->status_variables.query_processor_time,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::query_processor_time_nsec]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::query_processor_time_nsec]->Value();
 	this->status_variables.p_counter_array[p_th_counter::query_processor_time_nsec]->Increment(q - cur_val);
 
 	return q;
@@ -5813,7 +5754,7 @@ unsigned long long MySQL_Threads_Handler::get_backend_query_time() {
 				q+=__sync_fetch_and_add(&thr->status_variables.backend_query_time,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::backend_query_time_nsec]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::backend_query_time_nsec]->Value();
 	this->status_variables.p_counter_array[p_th_counter::backend_query_time_nsec]->Increment(q - cur_val);
 
 	return q;
@@ -5829,7 +5770,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 				q+=__sync_fetch_and_add(&thr->status_variables.stvar[st_var_mysql_backend_buffers_bytes],0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Value();
 	this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Increment(q - cur_val);
 
 	return q;
@@ -6063,7 +6004,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_latency_awarenes
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_latency_awareness,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_latency_awareness]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_latency_awareness]->Value();
 	this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_latency_awareness]->Increment(q - cur_val);
 
 	return q;
@@ -6079,7 +6020,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_immediate,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_immediate]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_immediate]->Value();
 	this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_immediate]->Increment(q - cur_val);
 
 	return q;
@@ -6095,7 +6036,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_success() {
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_success,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_success]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_success]->Value();
 	this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_success]->Increment(q - cur_val);
 
 	return q;
@@ -6111,7 +6052,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_failure() {
 				q+=__sync_fetch_and_add(&thr->status_variables.ConnPool_get_conn_failure,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_failure]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_failure]->Value();
 	this->status_variables.p_counter_array[p_th_counter::connpool_get_conn_failure]->Increment(q - cur_val);
 
 	return q;
@@ -6127,7 +6068,7 @@ unsigned long long MySQL_Threads_Handler::get_generated_pkt_err() {
 				q+=__sync_fetch_and_add(&thr->status_variables.generated_pkt_err,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::generated_error_packets]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::generated_error_packets]->Value();
 	this->status_variables.p_counter_array[p_th_counter::generated_error_packets]->Increment(q - cur_val);
 
 	return q;
@@ -6143,7 +6084,7 @@ unsigned long long MySQL_Threads_Handler::get_max_connect_timeout() {
 				q+=__sync_fetch_and_add(&thr->status_variables.max_connect_timeout_err,0);
 		}
 	}
-	const auto& cur_val { this->status_variables.p_counter_array[p_th_counter::max_connect_timeouts]->Value() };
+	const auto& cur_val = this->status_variables.p_counter_array[p_th_counter::max_connect_timeouts]->Value();
 	this->status_variables.p_counter_array[p_th_counter::max_connect_timeouts]->Increment(q - cur_val);
 
 	return q;
@@ -6159,9 +6100,8 @@ unsigned long long MySQL_Threads_Handler::get_automatic_detected_sqli() {
 				q+=__sync_fetch_and_add(&thr->status_variables.automatic_detected_sqli,0);
 		}
 	}
-	const auto& cur_val {
-		this->status_variables.p_counter_array[p_th_counter::automatic_detected_sql_injection]->Value()
-	};
+	const auto& cur_val =
+		this->status_variables.p_counter_array[p_th_counter::automatic_detected_sql_injection]->Value();
 	this->status_variables.p_counter_array[p_th_counter::mysql_unexpected_frontend_packets]->Increment(q - cur_val);
 
 	return q;
@@ -6177,9 +6117,8 @@ unsigned long long MySQL_Threads_Handler::get_whitelisted_sqli_fingerprint() {
 				q+=__sync_fetch_and_add(&thr->status_variables.whitelisted_sqli_fingerprint,0);
 		}
 	}
-	const auto& cur_val {
-		this->status_variables.p_counter_array[p_th_counter::whitelisted_sqli_fingerprint]->Value()
-	};
+	const auto& cur_val =
+		this->status_variables.p_counter_array[p_th_counter::whitelisted_sqli_fingerprint]->Value();
 	this->status_variables.p_counter_array[p_th_counter::whitelisted_sqli_fingerprint]->Increment(q - cur_val);
 
 	return q;
@@ -6195,9 +6134,8 @@ unsigned long long MySQL_Threads_Handler::get_aws_aurora_replicas_skipped_during
 				q+=__sync_fetch_and_add(&thr->status_variables.aws_aurora_replicas_skipped_during_query,0);
 		}
 	}
-	const auto& cur_val {
-		this->status_variables.p_counter_array[p_th_counter::aws_aurora_replicas_skipped_during_query]->Value()
-	};
+	const auto& cur_val =
+		this->status_variables.p_counter_array[p_th_counter::aws_aurora_replicas_skipped_during_query]->Value();
 	this->status_variables.p_counter_array[p_th_counter::aws_aurora_replicas_skipped_during_query]->Increment(q - cur_val);
 
 	return q;

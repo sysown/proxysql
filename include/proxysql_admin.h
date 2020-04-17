@@ -8,6 +8,7 @@
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include <tuple>
 #include <vector>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
@@ -94,196 +95,197 @@ struct admin_metrics_map_idx {
 	};
 };
 
-using active_flag = bool;
 using metric_name = std::string;
 using metric_help = std::string;
 using metric_tags = std::map<std::string, std::string>;
 
-const static std::tuple<
-	std::vector<
-		std::tuple<
-			p_admin_counter::metric,
-			metric_name,
-			metric_help,
-			metric_tags
-		>
-	>,
-	std::vector<
-		std::tuple<
-			p_admin_gauge::metric,
-			metric_name,
-			metric_help,
-			metric_tags
-		>
-	>
->
-admin_metrics_map {
-	{
-		{
+using admin_counter_tuple =
+	std::tuple<
+		p_admin_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using admin_gauge_tuple =
+	std::tuple<
+		p_admin_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using admin_counter_vector = std::vector<admin_counter_tuple>;
+using admin_gauge_vector = std::vector<admin_gauge_tuple>;
+
+const static std::tuple<admin_counter_vector, admin_gauge_vector>
+admin_metrics_map = std::make_tuple(
+	admin_counter_vector {
+		std::make_tuple (
 			p_admin_counter::uptime,
 			"proxysql_uptime_seconds",
 			"The total uptime of ProxySQL.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_counter::jemalloc_allocated,
 			"proxysql_jemalloc_allocated",
 			"Bytes allocated by the application.",
-			{}
-		}
+			metric_tags {}
+		)
 	},
-	{
+	admin_gauge_vector {
 		// memory metrics
-		{
+		std::make_tuple (
 			p_admin_gauge::connpool_memory_bytes,
 			"proxysql_connpool_memory_bytes",
 			"Memory used by the connection pool to store connections metadata.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::sqlite3_memory_bytes,
 			"proxysql_sqlite3_memory_bytes",
 			"Memory used by SQLite.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::jemalloc_resident,
 			"proxysql_jemalloc_resident",
 			"Bytes in physically resident data pages mapped by the allocator.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::jemalloc_active,
 			"proxysql_jemalloc_active",
 			"Bytes in pages allocated by the application.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::jemalloc_mapped,
 			"proxysql_jemalloc_mapped",
 			"Bytes in extents mapped by the allocator.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::jemalloc_metadata,
 			"proxysql_jemalloc_metadata",
 			"Bytes dedicated to metadata.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::jemalloc_retained,
 			"proxysql_jemalloc_retained",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::query_digest_memory_bytes,
 			"proxysql_query_digest_memory_bytes",
 			"Memory used to store data related to stats_mysql_query_digest.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::auth_memory_bytes,
 			"proxysql_auth_memory_bytes",
 			"Memory used by the authentication module to store user credentials and attributes.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::mysql_query_rules_memory_bytes,
 			"proxysql_mysql_query_rules_memory_bytes",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::mysql_firewall_users_table,
 			"proxysql_mysql_firewall_users_table",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::mysql_firewall_users_config,
 			"proxysql_mysql_firewall_users_config",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::mysql_firewall_rules_table,
 			"proxysql_mysql_firewall_rules_table",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::mysql_firewall_rules_config,
 			"proxysql_mysql_firewall_rules_config",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::stack_memory_mysql_threads,
 			"proxysql_stack_memory_mysql_threads",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::stack_memory_admin_threads,
 			"proxysql_stack_memory_admin_threads",
 			"",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			// TODO: Add meaningful help
 			p_admin_gauge::stack_memory_cluster_threads,
 			"proxysql_stack_memory_cluster_threads",
 			"",
-			{}
-		},
+			metric_tags {}
+		),
 		// stmt metrics
-		{
+		std::make_tuple (
 			p_admin_gauge::stmt_client_active_total,
 			"proxysql_stmt_client_active_total",
 			"The total number of prepared statements that are in use by clients.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::stmt_client_active_unique,
 			"proxysql_stmt_client_active_unique",
 			"This variable tracks the number of unique prepared statements currently in use by clients.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::stmt_server_active_total,
 			"proxysql_stmt_server_active_total",
 			"The total number of prepared statements currently available across all backend connections.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::stmt_server_active_unique,
 			"proxysql_stmt_server_active_unique",
 			"The number of unique prepared statements currently available across all backend connections.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::stmt_max_stmt_id,
 			"proxysql_stmt_max_stmt_id",
 			"When a new global prepared statement is created, a new \"stmt_id\" is used. Stmt_Max_Stmt_id represents the maximum \"stmt_id\" ever used.",
-			{}
-		},
-		{
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_admin_gauge::stmt_cached,
 			"proxysql_stmt_cached",
 			"This is the number of global prepared statements for which proxysql has metadata.",
-			{}
-		}
+			metric_tags {}
+		)
 	}
-};
+);
 
 class ProxySQL_Admin {
 	private:
@@ -364,15 +366,6 @@ class ProxySQL_Admin {
 		std::array<prometheus::Counter*, p_admin_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_admin_gauge::__size> p_gauge_array {};
 	} metrics;
-
-	/**
-	 * @brief Initalizes the prometheus counters specified in admin_metrics_map.
-	 */
-	void init_prometheus_counters();
-	/**
-	 * @brief Initalizes the prometheus counters specified in admin_metrics_map.
-	 */
-	void init_prometheus_gauges();
 
 	ProxySQL_External_Scheduler *scheduler;
 
