@@ -3480,12 +3480,12 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 }
 
 void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
-	const auto& counter_id { m_map.find(endpoint_id) };
+	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
-		const auto& cur_val { counter_id->second->Value() };
+		const auto& cur_val = counter_id->second->Value();
 		counter_id->second->Increment(value - cur_val);
 	} else {
-		auto& new_counter { status.p_dyn_counter_array[idx] };
+		auto& new_counter = status.p_dyn_counter_array[idx];
 		m_map.insert(
 			{
 				endpoint_id,
@@ -3499,12 +3499,11 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::stri
 }
 
 void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
-	const auto& counter_id { m_map.find(endpoint_id) };
+	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
-		const auto& cur_val { counter_id->second->Value() };
 		counter_id->second->Set(value);
 	} else {
-		auto& new_counter { status.p_dyn_gauge_array[idx] };
+		auto& new_counter = status.p_dyn_gauge_array[idx];
 		m_map.insert(
 			{
 				endpoint_id,

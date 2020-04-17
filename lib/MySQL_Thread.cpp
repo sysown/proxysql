@@ -5802,7 +5802,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(enum MySQL_Thread_
 		}
 	}
 	if (m_idx != p_th_counter::__size) {
-		const auto& cur_val { status_variables.p_counter_array[m_idx]->Value() };
+		const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
 		status_variables.p_counter_array[m_idx]->Increment(q - cur_val);
 	}
 	return q;
