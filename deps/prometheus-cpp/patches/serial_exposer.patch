@@ -72,11 +72,11 @@ index 966d04a..17f7ef3 100644
 +
  }  // namespace prometheus
 diff --git a/pull/src/handler.cc b/pull/src/handler.cc
-index ea94365..15dc09e 100644
+index ea94365..d04758f 100644
 --- a/pull/src/handler.cc
 +++ b/pull/src/handler.cc
 @@ -150,5 +150,124 @@ std::vector<MetricFamily> MetricsHandler::CollectMetrics() const {
- 
+
    return collected_metrics;
  }
 +
@@ -153,10 +153,10 @@ index ea94365..15dc09e 100644
 +	headers.insert({ "Content-Type", "text/plain" });
 +
 +#ifdef HAVE_ZLIB
-+	auto acceptsGzip { IsEncodingAccepted(req_headers, "gzip") };
++	auto acceptsGzip = IsEncodingAccepted(req_headers, "gzip");
 +
 +	if (acceptsGzip) {
-+		auto compressed { GZipCompress(body) };
++		auto compressed = GZipCompress(body);
 +
 +		if (!compressed.empty()) {
 +			headers.insert({"Content-Encoding", "gzip"});
@@ -182,14 +182,14 @@ index ea94365..15dc09e 100644
 +	// Execute the callback updating the metrics
 +	this->update_callback_();
 +
-+	auto metrics { CollectMetrics() };
-+	auto serializer { std::unique_ptr<Serializer>{ new TextSerializer() } };
-+	auto headers_body { WriteResponse(req_headers, serializer->Serialize(metrics)) };
++	auto metrics = CollectMetrics();
++	auto serializer = std::unique_ptr<Serializer>{ new TextSerializer() };
++	auto headers_body = WriteResponse(req_headers, serializer->Serialize(metrics));
 +
-+	auto stop_time_of_request { std::chrono::steady_clock::now() };
-+	auto duration { std::chrono::duration_cast<std::chrono::microseconds>(
++	auto stop_time_of_request = std::chrono::steady_clock::now();
++	auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
 +		stop_time_of_request - start_time_of_request
-+	)};
++	);
 +
 +	request_latencies_.Observe(duration.count());
 +	bytes_transferred_.Increment(headers_body.second.size());
@@ -205,7 +205,7 @@ index 112267a..d603369 100644
 --- a/pull/src/handler.h
 +++ b/pull/src/handler.h
 @@ -2,8 +2,9 @@
- 
+
  #include <memory>
  #include <vector>
 -
